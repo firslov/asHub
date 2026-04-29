@@ -85,6 +85,21 @@ function persistReplayFrame(sessionId: string, frame: string): void {
 async function deleteSessionFiles(id: string): Promise<void> {
   try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.meta.json`)); } catch {}
   try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.replay.jsonl`)); } catch {}
+  try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.messages.json`)); } catch {}
+}
+
+async function saveSessionMessages(session: Session): Promise<void> {
+  try {
+    await ensureSessionsDir();
+    const snap = await session.bridge.snapshot();
+    if (snap.messages.length === 0) return;
+    await fs.promises.writeFile(
+      path.join(SESSIONS_DIR, `${session.id}.messages.json`),
+      JSON.stringify(snap.messages),
+    );
+  } catch {
+    // Ignore write errors
+  }
 }
 
 interface PersistedSession {
@@ -93,6 +108,7 @@ interface PersistedSession {
   model?: string;
   startedAt: number;
   replay: string[];
+  messages?: unknown[];
 }
 
 async function loadPersistedSessions(): Promise<PersistedSession[]> {
@@ -112,7 +128,13 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
           replay = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n");
           if (replay.length > REPLAY_LIMIT) replay = replay.slice(-REPLAY_LIMIT);
         } catch {}
-        results.push({ id: meta.id || id, cwd: meta.cwd, model: meta.model, startedAt: meta.startedAt, replay });
+        let messages: unknown[] | undefined;
+        try {
+          const msgRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, `${id}.messages.json`), "utf-8");
+          const parsed = JSON.parse(msgRaw);
+          if (Array.isArray(parsed)) messages = parsed;
+        } catch {}
+        results.push({ id: meta.id || id, cwd: meta.cwd, model: meta.model, startedAt: meta.startedAt, replay, messages });
       } catch {}
     }
     return results;
@@ -263,10 +285,10 @@ async function createSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
   cwd: string,
-  existing?: { id: string; replay: string[]; startedAt: number },
+  existing?: { id: string; replay: string[]; startedAt: number; messages?: unknown[] },
 ): Promise<Session> {
   const id = existing?.id ?? randomBytes(3).toString("hex");
-  const bridge = opts.makeBridge({ cwd });
+  const bridge = opts.makeBridge({ cwd, initialMessages: existing?.messages });
 
   const session: Session = {
     id,
@@ -306,7 +328,7 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
   console.error(`[hub] restoring ${persisted.length} session(s)…`);
   for (const p of persisted) {
     try {
-      await createSession(sessions, opts, p.cwd, { id: p.id, replay: p.replay, startedAt: p.startedAt });
+      await createSession(sessions, opts, p.cwd, { id: p.id, replay: p.replay, startedAt: p.startedAt, messages: p.messages });
       console.error(`[hub] restored session ${p.id} (cwd: ${p.cwd})`);
     } catch (err) {
       console.error(`[hub] failed to restore session ${p.id}:`, err);
@@ -556,6 +578,9 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       }
       flushSegment(session);
       pushFrame(session, "agent:processing-done", sseFrame(meta("agent:processing-done"), {}));
+      // Persist messages snapshot so restarted sessions restore their
+      // conversation state (not just SSE replay frames).
+      saveSessionMessages(session).catch(() => {});
     })
     .catch((err) => {
       pushFrame(session, "agent:error", sseFrame(meta("agent:error"), { message: String(err) }));

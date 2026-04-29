@@ -42,6 +42,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
   private queryQueue: string[] = [];
   private closed = false;
+  private seedMessages: unknown[] | null = null;
 
   constructor(opts: BridgeOpts) {
     super();
@@ -54,6 +55,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.core = core;
 
     this.wire(core);
+
+    // Signal to extensions (e.g. ember) that this session uses ephemeral
+    // history so they should not hijack history handlers to a file backend.
+    core.handlers.define("config:get-history-mode", () => "none");
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
     const settings = getSettings();
@@ -85,12 +90,24 @@ export class AshBridge extends EventEmitter implements Bridge {
       process.stderr.write(`[ash-bridge] ${err instanceof Error ? err.message : err}\n`);
     });
 
+    // AgentLoop (from agent-backend builtin) defines its own
+    // history:read-recent in its constructor, and ember may advise it.
+    // Stub both the read and the format renderer as the last step
+    // before core:extensions-loaded, so wire() sees empty history.
+    core.handlers.define("history:read-recent", () => []);
+    core.handlers.define("conversation:format-prior-history", () => null);
+
     core.bus.emit("core:extensions-loaded", {});
     core.activateBackend();
 
     if (this.opts.cwd) {
       core.bus.emit("shell:cwd-change", { cwd: path.resolve(this.opts.cwd) });
     }
+
+    // Cache initialMessages for injection into snapshot() — context:compact
+    // has async microtask races with other conversation mutations during
+    // init.  snapshot() injects them on first read instead.
+    this.seedMessages = this.opts.initialMessages?.length ? [...this.opts.initialMessages] : null;
   }
 
   private wire(core: AgentShellCore): void {
@@ -216,7 +233,13 @@ export class AshBridge extends EventEmitter implements Bridge {
       name: string,
       payload: ContextSnapshot,
     ) => ContextSnapshot;
-    return emitPipe("context:snapshot", { messages: [], contextWindow: 0, activeTokens: 0 });
+    const snap = emitPipe("context:snapshot", { messages: [], contextWindow: 0, activeTokens: 0 });
+    // Inject seed messages on first snapshot after session restore.
+    if (this.seedMessages) {
+      snap.messages = this.seedMessages;
+      this.seedMessages = null;
+    }
+    return snap;
   }
 
   async compact(strategy: ContextStrategy) {

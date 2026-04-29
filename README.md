@@ -1,34 +1,27 @@
 # Agent SH Hub
 
-A standalone desktop application that hosts one or more [agent-sh](https://github.com/guanyilun/agent-sh) sessions and serves them through a web UI on a single port. No terminal required: open the app, spawn a session, talk to the agent, drop into another session, edit the live context — all through a native desktop interface.
+A standalone desktop application that hosts one or more [agent-sh](https://github.com/guanyilun/agent-sh) sessions and serves them through a web UI on a single port.
 
-![Live session view](docs/live-session.png)
+## Features
 
-## Highlights
-
-- **Multi-session** — every session runs in isolation; sidebar lets you spawn (`+`), switch, and close (`×`) on the fly.
-- **Live streaming** — the same SSE event firehose ash uses internally, rendered in the browser. Markdown, syntax-highlighted code, file diffs, tool calls.
-- **Pluggable backend** — defaults to running ash's kernel in-process (`ash` bridge). Swap to `acp` to talk to any ACP-speaking agent (e.g. Claude Code's ACP server) with `--backend acp --cmd ...`.
-- **Context inspection** — `ctx` button opens a panel that lists every message in the live conversation with role, position, and token estimate. Tick a box, hit `drop`, watch consecutive runs collapse into a single in-place placeholder so the agent retains chronology while shedding tokens.
-- **Desktop native** — packaged as macOS (Apple Silicon) and Windows apps with native directory picker and auto-updater support.
+- **Multi-session** — sidebar lets you spawn (`+`), switch, and close (`×`) sessions on the fly.
+- **Live streaming** — SSE event stream with Markdown, syntax-highlighted code, file diffs, and tool calls.
+- **Pluggable backend** — `ash` (in-process) or `acp` (JSON-RPC subprocess).
+- **Context inspection** — `ctx` panel to view, drop, or rewind conversation messages.
+- **Desktop native** — packaged as macOS (Apple Silicon) and Windows apps.
 
 ## Install
 
 ### Pre-built Binaries
 
-Download the latest release from [GitHub Releases](https://github.com/firslov/agent-sh-hub/releases):
+Download from [GitHub Releases](https://github.com/firslov/agent-sh-hub/releases):
 
-- **macOS** (Apple Silicon): `Agent SH Hub-x.x.x-arm64.dmg` or `.zip`
-- **Windows** (x64): `Agent SH Hub Setup x.x.x.exe` or `.exe` (portable)
+- **macOS** (Apple Silicon): `.dmg` or `.zip`
+- **Windows** (x64): `.exe` (installer or portable)
 
-> **macOS Note:** This app is not signed with an Apple Developer ID. On first open, macOS may show "Agent SH Hub is damaged and can't be opened". This is Gatekeeper's stricter handling of unsigned apps. To fix:
+> **macOS Note:** The app is unsigned. If Gatekeeper blocks it:
 > ```bash
-> # Option 1: Remove the quarantine attribute (recommended)
 > xattr -dr com.apple.quarantine "/Applications/Agent SH Hub.app"
->
-> # Option 2: Allow the app in System Settings > Privacy & Security
-> # After attempting to open, go to System Settings > Privacy & Security > Security
-> # and click "Open Anyway" next to the blocked app.
 > ```
 
 ### From Source
@@ -43,20 +36,20 @@ cd agent-sh-hub && npm install && npm link
 ### Desktop App
 
 ```sh
-npm run electron:dev      # development mode with DevTools
-npm run electron:dist:mac # build macOS app (arm64)
-npm run electron:dist:win # build Windows app (x64)
+npm run electron:dev      # development mode
+npm run electron:dist:mac # build macOS app
+npm run electron:dist:win # build Windows app
 ```
 
 ### CLI / Server Mode
 
 ```sh
-agent-sh-hub                            # in-process ash, port 7878
+agent-sh-hub                            # default: in-process ash, port 7878
 agent-sh-hub --port 8080
 agent-sh-hub --backend acp --cmd "claude-code-acp"
 ```
 
-Open <http://127.0.0.1:7878/>. The first visit shows an empty sidebar — click `+` to spawn a session.
+Open <http://127.0.0.1:7878/>. Click `+` in the sidebar to spawn a session.
 
 ### Flags
 
@@ -72,8 +65,8 @@ Open <http://127.0.0.1:7878/>. The first visit shows an empty sidebar — click 
 
 ### Backends
 
-- **`ash`** — runs the agent-sh kernel directly in the hub process. Smallest moving parts; uses your `~/.agent-sh/settings.json`, providers, and user extensions (TUI-only ones are skipped automatically).
-- **`acp`** — spawns one JSON-RPC subprocess per session. Use this with any ACP-compatible agent. Permission requests auto-approve until the web UI grows a yes/no prompt.
+- **`ash`** — runs the agent-sh kernel in-process. Uses `~/.agent-sh/settings.json` and user extensions.
+- **`acp`** — spawns one JSON-RPC subprocess per session. Compatible with any ACP-speaking agent.
 
 ## Endpoints
 
@@ -94,16 +87,11 @@ Open <http://127.0.0.1:7878/>. The first visit shows an empty sidebar — click 
 
 ```
 browser ──HTTP/SSE──> hub ──Bridge──> agent (in-process or subprocess)
-                        │                  │
-                        │                  └── agent-sh kernel / ACP child
-                        │
-                        └── per-session: replay buffer, segment synthesis,
-                                         SSE fanout, context endpoints
 ```
 
-The **Bridge** interface (`src/bridges/types.ts`) is the seam: `submit`, `cancel`, `snapshot`, `compact`, plus event subscription. Drop a new file in `src/bridges/` to add another backend.
+The **Bridge** interface (`src/bridges/types.ts`) is the seam: `submit`, `cancel`, `snapshot`, `compact`, plus event subscription.
 
-## Adding a backend
+## Adding a Backend
 
 ```ts
 export class MyBridge extends EventEmitter implements Bridge {
@@ -117,20 +105,10 @@ export class MyBridge extends EventEmitter implements Bridge {
 
 Then wire it in `cli.ts`'s `makeFactory`.
 
-## Compatibility with custom agent-sh backends
-
-The `ash` bridge runs ash's kernel in-process and assumes the conventions of the kernel's default `agent-backend`. If you register a different backend via `agent:register-backend`, two contracts decide whether the hub's UI keeps working:
-
-**Bus events the UI renders.** The panel expects the standard event set — `agent:processing-start`/`-done`, `agent:response-chunk`, `agent:tool-started`/`-completed`, `agent:usage`, `agent:info`, `permission:request`. Custom backends that follow these (most do, since the TUI relies on the same shape) Just Work. A backend that skips `processing-done` will leave the spinner spinning; one that emits text via a custom event won't stream.
-
-**Context source of truth.** `GET /<id>/context` and the drop/rewind endpoints go through the kernel's `context:snapshot` and `context:compact` pipes, which read and mutate ash's `ConversationState`. Backends that share `ConversationState` (the default pattern) get accurate snapshots and working drops. Backends that keep a private message store will see the panel show *kernel-side* messages, not what the backend actually sends to its model — and `drop` will edit kernel state the backend ignores.
-
-If you ship a backend with its own context, advise the `context:snapshot` and `context:compact` handlers to read and write your own store. The seam already supports that.
-
 ## Extension Loading
 
-User extensions from `~/.agent-sh/extensions/` are automatically loaded on startup. Extensions that use `import.meta.dirname` (Node.js v20.11.0+) are fully supported. Extensions that would conflict with the hub (e.g. web-renderer binding port 7878) should check `process.env.AGENT_SH_UNDER_HUB` and bail early.
+User extensions from `~/.agent-sh/extensions/` are automatically loaded on startup. Extensions that would conflict with the hub should check `process.env.AGENT_SH_UNDER_HUB` and bail early.
 
 ## Status
 
-Beta. Localhost only by default. Auth, multi-host hubs, and a permission-prompt UI are future work.
+Beta. Localhost only by default.

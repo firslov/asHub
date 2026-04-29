@@ -10,6 +10,8 @@ files:
 
 asar: false
 
+npmRebuild: false
+
 extraResources:
   - from: web/
     to: web/

@@ -22,15 +22,15 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: TypeScript build
         run: npm run build
 
-      - name: Build Windows app (x64)
+      - name: Package Windows app (x64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run electron:dist:win
+        run: npx electron-builder --win --x64
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

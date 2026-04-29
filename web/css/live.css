@@ -184,6 +184,7 @@ body { min-height: 100vh; padding: 0; }
 }
 .session-list li a {
   flex: 1;
+  min-width: 0;
   display: block;
   padding: 0.45rem 1rem;
   color: var(--text-mid);

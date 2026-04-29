@@ -4,10 +4,11 @@ copyright: Copyright © 2024
 
 files:
   - dist/**/*
-  - web/**/*
   - electron/**/*
   - node_modules/**/*
   - package.json
+
+asar: false
 
 extraResources:
   - from: web/

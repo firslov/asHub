@@ -25,7 +25,10 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        # --ignore-scripts skips postinstall (electron-builder install-app-deps)
+        # which fails on node-pty native rebuild due to missing distutils.
+        # npmRebuild:false in electron-builder.yml prevents rebuild at pack time.
+        run: npm ci --ignore-scripts
 
       - name: Build & package (Windows x64)
         env:

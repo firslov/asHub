@@ -12,6 +12,8 @@
  */
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
@@ -102,6 +104,23 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     if (this.opts.cwd) {
       core.bus.emit("shell:cwd-change", { cwd: path.resolve(this.opts.cwd) });
+    }
+
+    // Inject global skills (~/.agents/skills/) alongside project skills.
+    // discoverProjectSkills stops at the git root and misses skills above
+    // it.  Scan the home .agents directory so both project and global
+    // skills are visible in the conversation.
+    const homeSkills = path.join(os.homedir(), ".agents", "skills");
+    try {
+      const names = fs.readdirSync(homeSkills, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name);
+      if (names.length > 0) {
+        core.handlers.call("conversation:inject-note",
+          `[Global skills available: ${names.join(", ")}. Use list_skills for details, read_file to load.]`);
+      }
+    } catch {
+      // Directory doesn't exist — ignore.
     }
 
     // Cache initialMessages for injection into snapshot() — context:compact

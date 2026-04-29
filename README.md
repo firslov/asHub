@@ -5,9 +5,11 @@ A standalone desktop application that hosts one or more [agent-sh](https://githu
 ## Features
 
 - **Multi-session** — sidebar lets you spawn (`+`), switch, and close (`×`) sessions on the fly.
+- **Session persistence** — conversations survive hub restarts; context panel restores full history.
 - **Live streaming** — SSE event stream with Markdown, syntax-highlighted code, file diffs, and tool calls.
 - **Pluggable backend** — `ash` (in-process) or `acp` (JSON-RPC subprocess).
 - **Context inspection** — `ctx` panel to view, drop, or rewind conversation messages.
+- **Global skills** — `~/.agents/skills/` skills are loaded for every session regardless of working directory.
 - **Desktop native** — packaged as macOS (Apple Silicon) and Windows apps.
 
 ## Install

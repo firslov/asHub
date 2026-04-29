@@ -21,6 +21,8 @@ export interface BridgeOpts {
   provider?: string;
   /** Backend-specific extras (e.g. spawn command/args for AcpBridge). */
   extra?: Record<string, unknown>;
+  /** Messages to seed into the conversation on startup (session restore). */
+  initialMessages?: unknown[];
 }
 
 export type ContextStrategy =

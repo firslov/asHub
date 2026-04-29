@@ -1,0 +1,32 @@
+{
+  "name": "agent-sh-hub",
+  "version": "0.1.0",
+  "description": "Standalone hub: spawn and supervise headless agent-sh ACP sessions, expose them through a web UI on a single port.",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "license": "MIT",
+  "bin": {
+    "agent-sh-hub": "./bin/agent-sh-hub.js"
+  },
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "electron:dev": "npm run build && electron .",
+    "electron:pack": "npm run build && electron-builder --dir",
+    "electron:dist:mac": "npm run build && electron-builder --mac",
+    "electron:dist:win": "npm run build && electron-builder --win",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "agent-sh": "^0.12.9",
+    "tsx": "^4.7.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "@types/node": "^20.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.3.0"
+  }
+}

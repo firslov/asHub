@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>agent-sh-hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/styles.css" />
+  <link rel="stylesheet" href="/css/live.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/atom-one-dark.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/lib/highlight.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <span class="sidebar-title">sessions</span>
+        <button id="new-session" class="sidebar-btn" title="new session (pick directory)">+</button>
+        <button id="sidebar-toggle" class="sidebar-btn sidebar-toggle" title="collapse sidebar">‹</button>
+      </div>
+      <form id="new-session-form" class="new-session-form" hidden>
+        <div class="new-session-input-wrap">
+          <input id="new-session-cwd" type="text" autocomplete="off" placeholder="cwd (path)" spellcheck="false" />
+          <ul class="autocomplete autocomplete-cwd" id="cwd-autocomplete" hidden></ul>
+        </div>
+        <div class="new-session-err" id="new-session-err" hidden></div>
+      </form>
+      <ul id="sessions" class="session-list"></ul>
+    </aside>
+
+    <main class="main">
+      <div class="terminal-wrap live-wrap">
+        <div class="terminal">
+          <div class="terminal-bar">
+            <span class="terminal-title" id="instance">agent-sh-hub</span>
+            <span class="live-dot"></span>
+            <span class="live-status" id="conn">connecting…</span>
+            <span class="spinner" id="spinner" hidden></span>
+            <span class="terminal-usage" id="usage"></span>
+            <button class="bar-btn" id="ctx-toggle" title="inspect context">ctx</button>
+            <button class="bar-btn" id="config-toggle" title="settings">⚙</button>
+          </div>
+          <div class="terminal-body" id="stream">
+            <div class="stream-empty" id="stream-empty">
+              <div class="stream-empty-title">ready when you are.</div>
+              <div class="stream-empty-hint">
+                ask a question below
+                <span class="kbd-hint"><kbd>⌘K</kbd> focus · <kbd>↑</kbd> recall · <kbd>Esc</kbd> cancel · <kbd>⌘\</kbd> context</span>
+              </div>
+            </div>
+          </div>
+          <button class="scroll-pill" id="scroll-pill" hidden>↓ new output</button>
+          <form class="live-input" id="form">
+            <span class="c-arrow">⟩</span>
+            <input id="query" type="text" autocomplete="off" placeholder="ask the agent… (type / for commands)" />
+            <ul class="autocomplete" id="autocomplete" hidden></ul>
+          </form>
+        </div>
+      </div>
+    </main>
+
+    <aside class="ctx-panel" id="ctx-panel" hidden>
+      <div class="ctx-head">
+        <span class="ctx-title">context</span>
+        <span class="ctx-meta" id="ctx-meta"></span>
+        <button class="bar-btn icon" id="ctx-refresh" title="refresh">↻</button>
+        <button class="bar-btn icon" id="ctx-close" title="close">×</button>
+      </div>
+      <div class="ctx-filters" id="ctx-filters">
+        <button class="ctx-chip" data-role="all" data-active="1">all</button>
+        <button class="ctx-chip" data-role="system"><span class="ctx-dot system"></span>system</button>
+        <button class="ctx-chip" data-role="user"><span class="ctx-dot user"></span>user</button>
+        <button class="ctx-chip" data-role="assistant"><span class="ctx-dot assistant"></span>assistant</button>
+        <button class="ctx-chip" data-role="tool"><span class="ctx-dot tool"></span>tool</button>
+      </div>
+      <div class="ctx-actions">
+        <button class="bar-btn" id="ctx-drop" title="drop selected messages" disabled>drop</button>
+      </div>
+      <div class="ctx-body" id="ctx-body"></div>
+    </aside>
+
+    <div class="config-overlay" id="config-overlay" hidden>
+      <div class="config-modal">
+        <div class="config-head">
+          <span class="config-title">settings</span>
+          <span class="config-path" id="config-path">~/.agent-sh/settings.json</span>
+          <div class="config-head-actions">
+            <button class="bar-btn icon" id="config-reset" title="reset to defaults">↺</button>
+            <button class="bar-btn icon" id="config-close" title="close">×</button>
+          </div>
+        </div>
+        <div class="config-body">
+          <div class="config-editor">
+            <textarea id="config-editor" class="config-textarea" spellcheck="false"></textarea>
+            <div class="config-editor-status">
+              <span class="config-status-valid" id="config-valid" hidden>✓ valid json</span>
+              <span class="config-status-invalid" id="config-invalid" hidden>✗ invalid json</span>
+            </div>
+          </div>
+          <div class="config-actions">
+            <button class="bar-btn config-btn-save" id="config-save">save & reload</button>
+            <button class="bar-btn" id="config-format">format</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/client.js" defer></script>
+</body>
+</html>

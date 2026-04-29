@@ -1,0 +1,57 @@
+appId: com.agent-sh.hub
+productName: Agent SH Hub
+copyright: Copyright © 2024
+
+files:
+  - dist/**/*
+  - web/**/*
+  - electron/**/*
+  - node_modules/**/*
+  - package.json
+
+extraResources:
+  - from: web/
+    to: web/
+    filter:
+      - "**/*"
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: electron/entitlements.mac.plist
+  entitlementsInherit: electron/entitlements.mac.plist
+  icon: electron/icon.icns
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: electron/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Agent SH Hub
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  category: Development
+
+directories:
+  output: release

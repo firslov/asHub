@@ -3,34 +3,34 @@ name: Build Windows (x64)
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - '.gitignore'
+    paths:
+      - 'src/**'
+      - 'electron/**'
+      - 'web/**'
+      - 'package.json'
+      - 'electron-builder.yml'
+      - 'tsconfig.json'
+      - '.github/workflows/build-win.yml'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: npm ci
 
-      - name: TypeScript build
-        run: npm run build
-
-      - name: Package Windows app (x64)
+      - name: Build & package (Windows x64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --x64
+        run: npm run electron:dist:win
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

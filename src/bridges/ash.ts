@@ -234,35 +234,18 @@ export class AshBridge extends EventEmitter implements Bridge {
       name: string,
       payload: ContextSnapshot,
     ) => ContextSnapshot;
+    const snap = emitPipe("context:snapshot", { messages: [], contextWindow: 0, activeTokens: 0 });
 
-    // On first snapshot after session restore, seed the previous
-    // conversation into the real ConversationState.  Must merge with
-    // any messages the current session has already produced (users can
-    // send messages before the context panel is ever opened).
+    // When restoring a session, seedMessages holds the persisted
+    // conversation. Prepend it to every snapshot so both the context
+    // panel and saveSessionMessages see the full history.  Filter out
+    // system notes from the live conversation (seed already has its own).
     if (this.seedMessages) {
-      const seed = this.seedMessages;
-      this.seedMessages = null;
-      const current = emitPipe("context:snapshot", { messages: [], contextWindow: 0, activeTokens: 0 });
-      // Keep only non-system messages from the current session (seed
-      // already carries its own system notes).  Append them after seed
-      // so chronology is preserved.
-      const currentNonSystem = (current.messages as Array<{ role?: string; isSystemNote?: boolean }>)
-        .filter((m) => !(m as { isSystemNote?: boolean }).isSystemNote);
-      const merged = [...seed, ...currentNonSystem];
-      try {
-        const emitPipeAsync = this.core.bus.emitPipeAsync.bind(this.core.bus) as unknown as (
-          name: string,
-          payload: { strategy: ContextStrategy; stats?: { before: number; after: number; evictedCount: number } },
-        ) => Promise<{ stats?: { before: number; after: number; evictedCount: number } }>;
-        await emitPipeAsync("context:compact", {
-          strategy: { kind: "replace", messages: merged },
-        });
-      } catch {
-        // If compact fails, return merged messages directly.
-      }
+      const cur = (snap.messages as Array<{ isSystemNote?: boolean }>)
+        .filter((m) => !m.isSystemNote);
+      snap.messages = [...this.seedMessages, ...cur];
     }
-
-    return emitPipe("context:snapshot", { messages: [], contextWindow: 0, activeTokens: 0 });
+    return snap;
   }
 
   async compact(strategy: ContextStrategy) {

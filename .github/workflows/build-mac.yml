@@ -3,34 +3,37 @@ name: Build macOS (Apple Silicon)
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - '.gitignore'
+    paths:
+      - 'src/**'
+      - 'electron/**'
+      - 'web/**'
+      - 'package.json'
+      - 'electron-builder.yml'
+      - 'tsconfig.json'
+      - '.github/workflows/build-mac.yml'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
 
+      - name: Install Python setuptools (node-gyp needs distutils)
+        run: python3 -m pip install setuptools --break-system-packages
+
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: npm ci
 
-      - name: TypeScript build
-        run: npm run build
-
-      - name: Package macOS app (arm64)
+      - name: Build & package (macOS arm64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --mac --arm64
+        run: npm run electron:dist:mac
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

@@ -12,10 +12,11 @@
 }
 .stream-empty[hidden] { display: none; }
 .stream-empty-title {
-  font-family: 'Instrument Serif', serif;
-  font-style: italic;
-  font-size: 1.4rem;
-  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 400;
+  font-size: 1rem;
+  color: var(--text-mid);
+  letter-spacing: 0.06em;
 }
 .stream-empty-hint {
   display: flex;

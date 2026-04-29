@@ -229,17 +229,40 @@ export class AshBridge extends EventEmitter implements Bridge {
   async snapshot(): Promise<ContextSnapshot> {
     await this.initPromise;
     if (!this.core) throw new Error("core not initialized");
+
     const emitPipe = this.core.bus.emitPipe.bind(this.core.bus) as unknown as (
       name: string,
       payload: ContextSnapshot,
     ) => ContextSnapshot;
-    const snap = emitPipe("context:snapshot", { messages: [], contextWindow: 0, activeTokens: 0 });
-    // Inject seed messages on first snapshot after session restore.
+
+    // On first snapshot after session restore, seed the previous
+    // conversation into the real ConversationState.  Must merge with
+    // any messages the current session has already produced (users can
+    // send messages before the context panel is ever opened).
     if (this.seedMessages) {
-      snap.messages = this.seedMessages;
+      const seed = this.seedMessages;
       this.seedMessages = null;
+      const current = emitPipe("context:snapshot", { messages: [], contextWindow: 0, activeTokens: 0 });
+      // Keep only non-system messages from the current session (seed
+      // already carries its own system notes).  Append them after seed
+      // so chronology is preserved.
+      const currentNonSystem = (current.messages as Array<{ role?: string; isSystemNote?: boolean }>)
+        .filter((m) => !(m as { isSystemNote?: boolean }).isSystemNote);
+      const merged = [...seed, ...currentNonSystem];
+      try {
+        const emitPipeAsync = this.core.bus.emitPipeAsync.bind(this.core.bus) as unknown as (
+          name: string,
+          payload: { strategy: ContextStrategy; stats?: { before: number; after: number; evictedCount: number } },
+        ) => Promise<{ stats?: { before: number; after: number; evictedCount: number } }>;
+        await emitPipeAsync("context:compact", {
+          strategy: { kind: "replace", messages: merged },
+        });
+      } catch {
+        // If compact fails, return merged messages directly.
+      }
     }
-    return snap;
+
+    return emitPipe("context:snapshot", { messages: [], contextWindow: 0, activeTokens: 0 });
   }
 
   async compact(strategy: ContextStrategy) {

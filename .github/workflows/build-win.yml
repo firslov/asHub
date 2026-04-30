@@ -1,45 +1,54 @@
+# Build Windows (x64) release
+# Triggered on pushes to main and manually via workflow_dispatch.
+#
+# Output: .exe (NSIS installer) and portable .exe artifacts,
+# published as a GitHub release on tag pushes.
+
 name: Build Windows (x64)
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'electron/**'
-      - 'web/**'
-      - 'package.json'
-      - 'electron-builder.yml'
-      - 'tsconfig.json'
-      - '.github/workflows/build-win.yml'
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        node-version: [22]
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          node-version: ${{ matrix.node-version }}
+          cache: npm
 
       - name: Install dependencies
-        # --ignore-scripts skips postinstall (electron-builder install-app-deps)
-        # which fails on node-pty native rebuild due to missing distutils.
-        # npmRebuild:false in electron-builder.yml prevents rebuild at pack time.
-        run: npm ci --ignore-scripts
+        run: npm ci
 
-      - name: Build & package (Windows x64)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: TypeScript build
+        run: npm run build
+
+      - name: Build Electron app (Windows x64)
         run: npm run electron:dist:win
+        env:
+          CI: true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: win-x64
-          path: |
-            release/*.exe
-            release/*.blockmap
+          name: agent-sh-hub-win-x64-${{ github.sha }}
+          path: release/
           if-no-files-found: error
+
+      - name: Create GitHub Release (tagged only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/**/*
+          generate_release_notes: true

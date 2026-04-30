@@ -853,6 +853,39 @@ body { min-height: 100vh; padding: 0; }
   box-shadow: 0 0 6px rgba(34, 197, 94, 0.1);
 }
 
+/* ── Cancel / interrupt button ─────────────────────────────────────── */
+
+.cancel-btn {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.45rem;
+  margin-left: 0.4rem;
+  color: var(--text-dim);
+  border-color: var(--border);
+  animation: none;
+  transition: all 0.2s ease;
+}
+.cancel-btn:not([hidden]) {
+  animation: cancel-pulse 2s ease-in-out infinite;
+}
+.cancel-btn:hover {
+  color: var(--red);
+  border-color: var(--red-dim);
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.25);
+  animation: none;
+}
+.cancel-btn:active {
+  color: var(--white);
+  background: var(--red-dim);
+  border-color: var(--red);
+  box-shadow: 0 0 14px rgba(244, 63, 94, 0.35);
+  transition: all 0.05s;
+}
+
+@keyframes cancel-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
 .ctx-panel {
   border-left: 1px solid var(--border);
   background: var(--bg2);

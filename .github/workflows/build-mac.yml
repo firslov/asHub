@@ -48,6 +48,7 @@ jobs:
         run: npm run electron:dist:mac
         env:
           CI: true
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

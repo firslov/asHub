@@ -9,7 +9,6 @@ A standalone desktop application that hosts one or more [agent-sh](https://githu
 - **Live streaming** — SSE event stream with Markdown, syntax-highlighted code, file diffs, and tool calls.
 - **Pluggable backend** — `ash` (in-process) or `acp` (JSON-RPC subprocess).
 - **Context inspection** — `ctx` panel to view, drop, or rewind conversation messages.
-- **Global skills** — `~/.agents/skills/` skills are loaded for every session regardless of working directory.
 - **Desktop native** — packaged as macOS (Apple Silicon) and Windows apps.
 
 ## Install

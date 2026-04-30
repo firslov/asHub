@@ -12,8 +12,6 @@
  */
 import { EventEmitter } from "node:events";
 import path from "node:path";
-import * as fs from "node:fs";
-import * as os from "node:os";
 import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
@@ -45,7 +43,6 @@ export class AshBridge extends EventEmitter implements Bridge {
   private queryQueue: string[] = [];
   private closed = false;
   private seedMessages: unknown[] | null = null;
-  private globalSkillsNote: string | null = null;
 
   constructor(opts: BridgeOpts) {
     super();
@@ -105,20 +102,6 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     if (this.opts.cwd) {
       core.bus.emit("shell:cwd-change", { cwd: path.resolve(this.opts.cwd) });
-    }
-
-    // Scan global skills (~/.agents/skills/) so they are visible in every
-    // session regardless of working directory / git-root boundary.
-    const homeSkills = path.join(os.homedir(), ".agents", "skills");
-    try {
-      const names = fs.readdirSync(homeSkills, { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => e.name);
-      if (names.length > 0) {
-        this.globalSkillsNote = `[Global skills available: ${names.join(", ")}. Use list_skills for details, read_file to load.]`;
-      }
-    } catch {
-      // Directory doesn't exist — ignore.
     }
 
     // Cache initialMessages for injection into snapshot() — context:compact
@@ -261,15 +244,6 @@ export class AshBridge extends EventEmitter implements Bridge {
       const cur = (snap.messages as Array<{ isSystemNote?: boolean }>)
         .filter((m) => !m.isSystemNote);
       snap.messages = [...this.seedMessages, ...cur];
-    }
-
-    // Prepend global skills note (~/.agents/skills/) so every session
-    // sees available skills regardless of working directory.
-    if (this.globalSkillsNote) {
-      snap.messages = [
-        { role: "user", content: this.globalSkillsNote, isSystemNote: true },
-        ...snap.messages,
-      ];
     }
 
     return snap;

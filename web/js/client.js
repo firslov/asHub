@@ -11,12 +11,14 @@
   const usageEl = document.getElementById("usage");
   const sessionList = document.getElementById("sessions");
   const spinner = document.getElementById("spinner");
+  const cancelBtn = document.getElementById("cancel-turn");
   let isProcessing = false;
   let isSubmitting = false;
 
   const setBusy = (b) => {
     isProcessing = b;
     if (spinner) spinner.hidden = !b;
+    if (cancelBtn) cancelBtn.hidden = !b;
   };
 
   const sessionId = (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1] ?? "";
@@ -1259,6 +1261,12 @@
         fetch(`/${sessionId}/cancel`, { method: "POST" }).catch(() => {});
       }
     }
+  });
+
+  // Interrupt / cancel button — visible while the agent is processing.
+  cancelBtn?.addEventListener("click", () => {
+    if (!sessionId) return;
+    fetch(`/${sessionId}/cancel`, { method: "POST" }).catch(() => {});
   });
 
   // ── Config panel ──────────────────────────────────────────────────

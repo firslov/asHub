@@ -57,7 +57,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agent-sh-hub-mac-arm64-${{ github.sha }}
-          path: release/
+          path: |
+            release/*.dmg
+            release/*.blockmap
           if-no-files-found: error
 
       - name: Create GitHub Release (tagged only)

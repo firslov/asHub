@@ -57,7 +57,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agent-sh-hub-win-x64-${{ github.sha }}
-          path: release/
+          path: |
+            release/*.exe
+            release/*.blockmap
           if-no-files-found: error
 
       - name: Create GitHub Release (tagged only)

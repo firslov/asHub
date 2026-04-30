@@ -20,6 +20,15 @@ Download from [GitHub Releases](https://github.com/firslov/agent-sh-hub/releases
 - **macOS** (Apple Silicon): `.dmg` or `.zip`
 - **Windows** (x64): `.exe` (installer or portable)
 
+> **Windows Note:** The app requires **PowerShell 7+** (`pwsh`) for shell command execution.
+> Windows 10/11 ships with PowerShell 5.1 (`powershell.exe`) which is not compatible.
+> Install PowerShell 7 before running the app:
+> ```powershell
+> winget install Microsoft.PowerShell
+> ```
+> If you already have Git Bash installed, the `bash` tool can serve as a fallback,
+> but PowerShell 7 is recommended for the best experience.
+
 > **macOS Note:** The app is unsigned. If Gatekeeper blocks it:
 > ```bash
 > xattr -dr com.apple.quarantine "/Applications/Agent SH Hub.app"

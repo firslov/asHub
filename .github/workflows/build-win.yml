@@ -28,6 +28,14 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install distutils
+        run: python3 -m pip install setuptools
+
       - name: Install dependencies
         run: npm ci
 

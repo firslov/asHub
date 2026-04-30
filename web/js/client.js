@@ -844,6 +844,7 @@
         });
       }
       input.value = "";
+      input.style.height = "";
       slashAc.close();
     } catch (e) {
       console.error("submit failed", e);
@@ -851,6 +852,18 @@
       isSubmitting = false;
       input.disabled = false;
       input.focus();
+    }
+  });
+
+  // Shift+Enter inserts a newline; Enter alone submits.
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      // Let the form submit handler take over, but only if autocomplete
+      // isn't open with a selection.
+      if (!slashAc.hasSelection()) {
+        ev.preventDefault();
+        form.dispatchEvent(new Event("submit", { cancelable: true }));
+      }
     }
   });
 
@@ -1240,13 +1253,20 @@
 
   // ── Keyboard shortcuts ───────────────────────────────────────────
   input?.addEventListener("keydown", (ev) => {
-    if (ev.key === "ArrowUp" && !input.value && lastQuery) {
+    if (ev.key === "ArrowUp" && !ev.shiftKey && !input.value && lastQuery) {
       ev.preventDefault();
       input.value = lastQuery;
       // Move caret to end.
       input.setSelectionRange(input.value.length, input.value.length);
     }
   });
+
+  // Auto-resize textarea as content grows
+  const autoResize = () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 12 * 16) + "px"; // 12em max
+  };
+  input?.addEventListener("input", autoResize);
 
   document.addEventListener("keydown", (ev) => {
     const meta = ev.metaKey || ev.ctrlKey;

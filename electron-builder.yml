@@ -23,9 +23,6 @@ mac:
     - target: dmg
       arch:
         - arm64
-    - target: zip
-      arch:
-        - arm64
   category: public.app-category.developer-tools
   hardenedRuntime: true
   gatekeeperAssess: false
@@ -36,9 +33,6 @@ mac:
 win:
   target:
     - target: nsis
-      arch:
-        - x64
-    - target: portable
       arch:
         - x64
   icon: electron/icon.ico

@@ -922,7 +922,7 @@ body { min-height: 100vh; padding: 0; }
   text-shadow: 0 0 14px rgba(34, 197, 94, 0.5);
   transform: scale(1.1);
 }
-.live-input input {
+.live-input textarea {
   flex: 1;
   background: transparent;
   border: none;
@@ -932,10 +932,17 @@ body { min-height: 100vh; padding: 0; }
   font-size: 0.9rem;
   caret-color: var(--green);
   transition: color 0.2s;
+  resize: none;
+  min-height: 1.5em;
+  max-height: 12em;
+  line-height: 1.5;
+  padding: 0;
+  overflow-y: auto;
+  field-sizing: content;
 }
-.live-input input::placeholder { color: var(--text-dim); transition: color 0.2s; }
-.live-input:focus-within input::placeholder { color: var(--text-dim); opacity: 0.6; }
-.live-input input:disabled { opacity: 0.5; }
+.live-input textarea::placeholder { color: var(--text-dim); transition: color 0.2s; }
+.live-input:focus-within textarea::placeholder { color: var(--text-dim); opacity: 0.6; }
+.live-input textarea:disabled { opacity: 0.5; }
 
 .bar-btn {
   background: transparent;

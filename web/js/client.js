@@ -70,6 +70,12 @@
     if (emptyState && !emptyState.hidden) emptyState.hidden = true;
   };
 
+  // Clicking the empty-state prompt pill focuses the input.
+  document.getElementById("stream-empty-prompt")?.addEventListener("click", () => {
+    const inp = document.getElementById("query");
+    if (inp) inp.focus();
+  });
+
   const append = (node) => {
     closeToolGroup();
     hideEmptyState();
@@ -1258,6 +1264,11 @@
       const configOverlay = document.getElementById("config-overlay");
       if (configOverlay && !configOverlay.hidden) { setConfigOpen(false); return; }
       if (spinner && !spinner.hidden && sessionId) {
+        // Brief flash feedback on cancel button
+        if (cancelBtn && !cancelBtn.hidden) {
+          cancelBtn.classList.add("flash");
+          setTimeout(() => cancelBtn.classList.remove("flash"), 200);
+        }
         fetch(`/${sessionId}/cancel`, { method: "POST" }).catch(() => {});
       }
     }
@@ -1266,6 +1277,8 @@
   // Interrupt / cancel button — visible while the agent is processing.
   cancelBtn?.addEventListener("click", () => {
     if (!sessionId) return;
+    cancelBtn.classList.add("flash");
+    setTimeout(() => cancelBtn.classList.remove("flash"), 200);
     fetch(`/${sessionId}/cancel`, { method: "POST" }).catch(() => {});
   });
 

@@ -728,8 +728,10 @@
       // finalize it as the tool body (overrides resultDisplay.body).
       if (liveToolOutput && liveToolOutput.callId === id) {
         if (liveToolOutput.rafPending) flushLiveOutput();
-        // Mark final and add copy + expand/collapse controls.
-        liveToolOutput.blockEl.classList.add("final");
+        // Capture references locally — liveToolOutput will be nulled below,
+        // but the toggle click handler (a closure) would otherwise throw.
+        const blockEl = liveToolOutput.blockEl;
+        blockEl.classList.add("final");
         const lines = liveToolOutput.lines;
         const all = lines.join("\n");
         const LIMIT = 6;
@@ -738,8 +740,8 @@
         const textEl = document.createElement("span");
         textEl.className = "tool-body-text";
         textEl.textContent = all;
-        liveToolOutput.blockEl.textContent = "";
-        liveToolOutput.blockEl.appendChild(textEl);
+        blockEl.textContent = "";
+        blockEl.appendChild(textEl);
 
         // Add controls bar (show more/less only; copy is overkill for tool output).
         const actions = document.createElement("div");
@@ -757,12 +759,12 @@
             toggle.textContent = expanded
               ? "show less"
               : `show ${lines.length - LIMIT} more`;
-            liveToolOutput.blockEl.classList.toggle("expanded", expanded);
+            blockEl.classList.toggle("expanded", expanded);
           });
           actions.appendChild(toggle);
         }
         if (actions.children.length > 0) {
-          liveToolOutput.blockEl.appendChild(actions);
+          blockEl.appendChild(actions);
         }
         liveToolOutput = null;
       } else {

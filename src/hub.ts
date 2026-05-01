@@ -491,7 +491,7 @@ async function generateTitleAsync(session: Session): Promise<void> {
     if (!resp.ok) return;
     const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const title = data?.choices?.[0]?.message?.content?.trim().replace(/^"|"$/g, "") ?? "";
-    if (title) await setSessionTitle(session, title);
+    if (title && session.title === session.id) await setSessionTitle(session, title);
   } catch {
     // Silently ignore — title generation is a best-effort feature
   } finally {

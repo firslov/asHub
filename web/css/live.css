@@ -1318,7 +1318,7 @@ body { min-height: 100vh; padding: 0; }
 }
 .ctx-dot.system    { background: var(--text-dim); }
 .ctx-dot.user      { background: var(--green); box-shadow: 0 0 3px rgba(91, 93, 239, 0.2); }
-.ctx-dot.assistant { background: var(--cyan); box-shadow: 0 0 3px rgba(12, 166, 120, 0.2); }
+.ctx-dot.assistant { background: var(--cyan); box-shadow: 0 0 3px rgba(13, 148, 136, 0.2); }
 .ctx-dot.tool      { background: var(--purple);   box-shadow: 0 0 3px rgba(121, 80, 242, 0.2); }
 
 .ctx-filters {
@@ -1658,7 +1658,7 @@ body { min-height: 100vh; padding: 0; }
 .tool-body-live:not(.final) {
   border-left-color: var(--cyan-dim);
   border-left-width: 2px;
-  background: rgba(12, 166, 120, 0.03);
+  background: rgba(13, 148, 136, 0.03);
 }
 .tool-body-live.final {
   border-left-color: var(--border-light);

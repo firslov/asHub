@@ -1,6 +1,6 @@
 {
   "name": "agent-sh-hub",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Standalone hub: spawn and supervise headless agent-sh ACP sessions, expose them through a web UI on a single port.",
   "type": "module",
   "main": "electron/main.cjs",
@@ -19,7 +19,7 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
-    "agent-sh": "^0.12.15",
+    "agent-sh": "^0.12.16",
     "tsx": "^4.7.0"
   },
   "devDependencies": {

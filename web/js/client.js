@@ -150,6 +150,24 @@
   let currentReply = null;
   let currentReplyText = "";
 
+  // Live tool output: buffer chunks between tool-started and tool-completed
+  // so long-running commands (bash, write_file diffs) show real-time progress.
+  let liveToolOutput = null;  // { callId, lines, blockEl, rafPending }
+  let completedTools = new Set(); // toolCallIds that have completed; ignore stray chunks
+  let thinkingBlock = null;   // dim block for agent:thinking-chunk streaming
+
+  const flushLiveOutput = () => {
+    if (!liveToolOutput) return;
+    liveToolOutput.rafPending = false;
+    liveToolOutput.blockEl.textContent = liveToolOutput.lines.join("\n");
+    maybeScroll();
+  };
+  const scheduleLiveOutput = () => {
+    if (!liveToolOutput || liveToolOutput.rafPending) return;
+    liveToolOutput.rafPending = true;
+    requestAnimationFrame(flushLiveOutput);
+  };
+
   // Streaming markdown is re-parsed on every chunk, which gets pricey for long
   // replies (O(N²) over the chunk count). RAF-coalesce so we re-render at most
   // once per frame regardless of how fast chunks arrive.
@@ -430,6 +448,13 @@
 
     "agent:query": (p) => {
       closeReply();
+      if (thinkingBlock) { thinkingBlock.remove(); thinkingBlock = null; }
+      if (liveToolOutput) {
+        if (liveToolOutput.rafPending) flushLiveOutput();
+        liveToolOutput.blockEl.classList.add("final");
+        liveToolOutput = null;
+      }
+      completedTools = new Set();
       stream.querySelectorAll(".queued-hint").forEach((el) => el.remove());
       renderTurnSep();
       const box = document.createElement("div");
@@ -446,6 +471,15 @@
     "agent:processing-start": () => {
       lastUsage = null;
       setBusy(true);
+      // Close any lingering thinking block from previous turn.
+      if (thinkingBlock) { thinkingBlock.remove(); thinkingBlock = null; }
+      // Close any lingering live tool output from previous turn.
+      if (liveToolOutput) {
+        if (liveToolOutput.rafPending) flushLiveOutput();
+        liveToolOutput.blockEl.classList.add("final");
+        liveToolOutput = null;
+      }
+      completedTools = new Set();
       showThinking();
     },
 
@@ -464,6 +498,8 @@
       const delta = blocks.map(blockToText).join("");
       if (!delta) return;
       hideThinking();
+      // Close the thinking block once real response text starts streaming.
+      if (thinkingBlock) { thinkingBlock.remove(); thinkingBlock = null; }
       if (!currentReply) {
         currentReply = document.createElement("div");
         currentReply.className = "agent-reply streaming";
@@ -487,6 +523,31 @@
       highlightWithin(block);
     },
 
+    // Streaming reasoning/thinking text — shown in a dim collapsible block
+    // during long pauses so the user can see the agent is still working.
+    "agent:thinking-chunk": (p) => {
+      const text = stripAnsi(p?.text ?? "");
+      if (!text) return;
+      hideThinking();
+      if (!thinkingBlock) {
+        thinkingBlock = document.createElement("div");
+        thinkingBlock.className = "thinking-block";
+        const head = document.createElement("div");
+        head.className = "thinking-block-head";
+        head.textContent = "thinking…";
+        head.addEventListener("click", () => {
+          thinkingBlock.classList.toggle("collapsed");
+        });
+        const body = document.createElement("div");
+        body.className = "thinking-block-body";
+        thinkingBlock.append(head, body);
+        append(thinkingBlock);
+      }
+      const body = thinkingBlock.querySelector(".thinking-block-body");
+      body.textContent = (body.textContent ?? "") + text;
+      maybeScroll();
+    },
+
     "agent:response-done": (p) => {
       // The full-turn response. In live, `currentReply` already has the
       // last segment's text. In replay, segments cover everything before
@@ -502,23 +563,43 @@
     "agent:processing-done": () => {
       closeReply();
       hideThinking();
+      if (thinkingBlock) { thinkingBlock.remove(); thinkingBlock = null; }
+      if (liveToolOutput) {
+        if (liveToolOutput.rafPending) flushLiveOutput();
+        liveToolOutput.blockEl.classList.add("final");
+        liveToolOutput = null;
+      }
       renderUsage();
       setBusy(false);
     },
     "agent:cancelled": () => {
       if (currentReply) {
-        currentReply.classList.add("err");
-        currentReplyText += " [cancelled]";
-        currentReply.textContent = currentReplyText;
+        currentReply.classList.add("cancelled");
+        const stamp = document.createElement("span");
+        stamp.className = "cancelled-stamp";
+        stamp.textContent = "cancelled";
+        currentReply.appendChild(stamp);
       }
       closeReply();
       hideThinking();
+      if (thinkingBlock) { thinkingBlock.remove(); thinkingBlock = null; }
+      if (liveToolOutput) {
+        if (liveToolOutput.rafPending) flushLiveOutput();
+        liveToolOutput.blockEl.classList.add("final");
+        liveToolOutput = null;
+      }
       setBusy(false);
     },
 
     "agent:error": (p) => {
       closeReply();
       hideThinking();
+      if (thinkingBlock) { thinkingBlock.remove(); thinkingBlock = null; }
+      if (liveToolOutput) {
+        if (liveToolOutput.rafPending) flushLiveOutput();
+        liveToolOutput.blockEl.classList.add("final");
+        liveToolOutput = null;
+      }
       append(renderErrorCard(p?.message ?? "", p?.detail ?? p?.stack));
       setBusy(false);
     },
@@ -528,7 +609,14 @@
     "agent:tool-started": (p) => {
       // Close the in-progress reply so the next text chunk opens a new one
       // — preserves text/tool/text interleaving from the agent's narrative.
+      // Also dismiss any dangling thinking block and finalize stale live output.
       closeReply();
+      if (thinkingBlock) { thinkingBlock.remove(); thinkingBlock = null; }
+      if (liveToolOutput) {
+        if (liveToolOutput.rafPending) flushLiveOutput();
+        liveToolOutput.blockEl.classList.add("final");
+        liveToolOutput = null;
+      }
       const row = document.createElement("div");
       row.className = "tool-row";
       if (p?.toolCallId) row.dataset.callId = p.toolCallId;
@@ -549,12 +637,55 @@
         if (raw.command) detail = `$ ${raw.command}`;
         else detail = raw.pattern ?? raw.query ?? raw.path ?? "";
       }
+
+      // Collapse long shell commands so they don't span 5+ lines in the tool row.
+      const CMD_COLLAPSE = 100;
+      let cmdCollapsed = false;
+      let cmdFull = "";
+      if (raw.command && typeof raw.command === "string" && raw.command.length > CMD_COLLAPSE) {
+        cmdCollapsed = true;
+        cmdFull = raw.command;
+        // Temporarily swap raw.command to a truncated version for renderToolDetail.
+        raw.command = raw.command.slice(0, CMD_COLLAPSE).trimEnd() + "…";
+      }
       const detailHtml = renderToolDetail(detail, raw);
+      // Restore full command so attaching it to the row works.
+      if (cmdCollapsed) raw.command = cmdFull;
+
       row.innerHTML =
         `<span class="tool-name">${escape(icon)} ${escape(title)}</span>` +
         (detailHtml ? ` ${detailHtml}` : "");
       appendToGroup(row);
+
+      // Attach expand/collapse for long commands.
+      if (cmdCollapsed && cmdFull) {
+        const detailEl = row.querySelector(".tool-detail");
+        if (detailEl) {
+          detailEl.classList.add("tool-cmd-collapsed");
+          detailEl.title = "click to expand command";
+          const toggleCmd = () => {
+            const expanded = detailEl.classList.toggle("tool-cmd-expanded");
+            if (expanded) {
+              detailEl.textContent = "$ " + cmdFull;
+              detailEl.title = "click to collapse command";
+            } else {
+              detailEl.textContent = "$ " + cmdFull.slice(0, CMD_COLLAPSE).trimEnd() + "…";
+              detailEl.title = "click to expand command";
+            }
+          };
+          detailEl.addEventListener("click", toggleCmd);
+          detailEl.style.cursor = "pointer";
+        }
+      }
+
       bumpToolCount();
+
+      // Re-show the animated thinking indicator in the body while the tool
+      // runs — the spinner is in the bar, but this gives local feedback if
+      // the user has scrolled down past the first few rows.
+      if (isProcessing && !currentReply && !thinkingBlock && !thinkingEl) {
+        showThinking();
+      }
     },
 
     "agent:tool-completed": (p) => {
@@ -570,14 +701,103 @@
       tail.textContent = (summary ? ` ${summary} ` : "  ") + mark;
       row.appendChild(tail);
 
-      const body = p?.resultDisplay?.body;
-      if (body?.kind === "lines" && Array.isArray(body.lines) && body.lines.length) {
-        const block = renderToolBody(body.lines);
-        row.parentNode.insertBefore(block, row.nextSibling);
-      } else if (body?.kind === "diff" && body.diff) {
-        const block = renderDiffBlock(body.diff, body.filePath);
-        row.parentNode.insertBefore(block, row.nextSibling);
+      // Track completed tools so stray output-chunk events after completion
+      // don't spawn orphaned live-output blocks.
+      if (id) completedTools.add(id);
+
+      // If we accumulated live output during the tool's execution,
+      // finalize it as the tool body (overrides resultDisplay.body).
+      if (liveToolOutput && liveToolOutput.callId === id) {
+        if (liveToolOutput.rafPending) flushLiveOutput();
+        // Mark final and add copy + expand/collapse controls.
+        liveToolOutput.blockEl.classList.add("final");
+        const lines = liveToolOutput.lines;
+        const all = lines.join("\n");
+        const LIMIT = 6;
+
+        // Use a dedicated text container so toggle doesn't wipe the buttons.
+        const textEl = document.createElement("span");
+        textEl.className = "tool-body-text";
+        textEl.textContent = all;
+        liveToolOutput.blockEl.textContent = "";
+        liveToolOutput.blockEl.appendChild(textEl);
+
+        // Add controls bar (show more/less only; copy is overkill for tool output).
+        const actions = document.createElement("div");
+        actions.className = "tool-body-actions";
+
+        if (lines.length > LIMIT) {
+          textEl.textContent = lines.slice(0, LIMIT).join("\n");
+          const toggle = document.createElement("button");
+          toggle.className = "tool-body-btn";
+          toggle.textContent = `show ${lines.length - LIMIT} more`;
+          let expanded = false;
+          toggle.addEventListener("click", () => {
+            expanded = !expanded;
+            textEl.textContent = expanded ? all : lines.slice(0, LIMIT).join("\n");
+            toggle.textContent = expanded
+              ? "show less"
+              : `show ${lines.length - LIMIT} more`;
+            liveToolOutput.blockEl.classList.toggle("expanded", expanded);
+          });
+          actions.appendChild(toggle);
+        }
+        if (actions.children.length > 0) {
+          liveToolOutput.blockEl.appendChild(actions);
+        }
+        liveToolOutput = null;
+      } else {
+        // No live streaming — use resultDisplay body if present.
+        const body = p?.resultDisplay?.body;
+        if (body?.kind === "lines" && Array.isArray(body.lines) && body.lines.length) {
+          const block = renderToolBody(body.lines);
+          row.parentNode.insertBefore(block, row.nextSibling);
+        } else if (body?.kind === "diff" && body.diff) {
+          const block = renderDiffBlock(body.diff, body.filePath);
+          row.parentNode.insertBefore(block, row.nextSibling);
+        }
       }
+    },
+
+    // Stream tool output in real-time — bash stdout, write_file diffs, etc.
+    // Replaces the "no progress" gap between tool-started and tool-completed.
+    // Note: agent:tool-output-chunk events do not include toolCallId, so we
+    // track output for whichever tool was most recently started.
+    "agent:tool-output-chunk": (p) => {
+      const chunk = p?.chunk ?? "";
+      if (!chunk) return;
+
+      // Row lookup: use the latest tool-row in the stream (most recent tool-started).
+      const rows = stream.querySelectorAll(".tool-row");
+      const row = rows.length > 0 ? rows[rows.length - 1] : null;
+      const callId = row?.dataset.callId ?? "";
+
+      // Ignore chunks for tools that already completed.
+      if (callId && completedTools.has(callId)) return;
+
+      if (!liveToolOutput || liveToolOutput.callId !== callId) {
+        // Start a new live output block for this tool.
+        const block = document.createElement("pre");
+        block.className = "tool-body tool-body-live";
+        liveToolOutput = { callId, lines: [], blockEl: block, rafPending: false };
+        // Insert after the tool row (or append to the current tool-group body).
+        const parent = row ? row.parentNode : null;
+        if (parent && row) {
+          parent.insertBefore(block, row.nextSibling);
+        }
+      }
+
+      // Split on newlines; last element is the partial line (may be "").
+      const parts = chunk.split("\n");
+      if (liveToolOutput.lines.length > 0) {
+        liveToolOutput.lines[liveToolOutput.lines.length - 1] += parts[0];
+      } else {
+        liveToolOutput.lines.push(parts[0]);
+      }
+      for (let i = 1; i < parts.length; i++) {
+        liveToolOutput.lines.push(parts[i]);
+      }
+      scheduleLiveOutput();
     },
 
     "permission:request": (p) => {

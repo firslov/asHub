@@ -125,7 +125,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "Agent SH Hub",
-    backgroundColor: "#0a0a0a",
+    backgroundColor: "#f7f8fa",
     show: false,
     webPreferences: {
       nodeIntegration: false,

@@ -26,6 +26,7 @@ export interface HubOpts {
 
 interface Session {
   id: string;
+  title: string;
   cwd: string;
   bridge: Bridge;
   replay: string[];
@@ -34,6 +35,10 @@ interface Session {
   sseClients: Set<http.ServerResponse>;
   model?: string;
   startedAt: number;
+  /** True once the first user→assistant turn has completed (for auto-title). */
+  firstTurnDone: boolean;
+  /** The first user query text, captured for auto-title generation. */
+  firstQuery?: string;
 }
 
 const REPLAY_LIMIT = 500;
@@ -55,6 +60,7 @@ const REPLAY_NAMES = new Set([
   "permission:request",
   "ui:info",
   "ui:error",
+  "session:title",
 ]);
 
 // ── Session persistence ──────────────────────────────────────────────
@@ -72,7 +78,7 @@ async function ensureSessionsDir(): Promise<void> {
 
 async function saveSessionMeta(session: Session): Promise<void> {
   await ensureSessionsDir();
-  const meta = { id: session.id, cwd: session.cwd, model: session.model, startedAt: session.startedAt };
+  const meta = { id: session.id, title: session.title, cwd: session.cwd, model: session.model, startedAt: session.startedAt };
   await fs.promises.writeFile(path.join(SESSIONS_DIR, `${session.id}.meta.json`), JSON.stringify(meta));
 }
 
@@ -106,6 +112,7 @@ async function saveSessionMessages(session: Session): Promise<void> {
 
 interface PersistedSession {
   id: string;
+  title?: string;
   cwd: string;
   model?: string;
   startedAt: number;
@@ -136,7 +143,7 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
           const parsed = JSON.parse(msgRaw);
           if (Array.isArray(parsed)) messages = parsed;
         } catch {}
-        results.push({ id: meta.id || id, cwd: meta.cwd, model: meta.model, startedAt: meta.startedAt, replay, messages });
+        results.push({ id: meta.id || id, title: meta.title, cwd: meta.cwd, model: meta.model, startedAt: meta.startedAt, replay, messages });
       } catch {}
     }
     return results;
@@ -180,6 +187,8 @@ export function startHub(opts: HubOpts): http.Server {
       if (rest === "/events") return openSse(req, res, session);
       if (req.method === "POST" && rest === "/submit") return submit(req, res, session);
       if (req.method === "POST" && rest === "/command") return execCommand(req, res, session);
+      if (req.method === "POST" && rest === "/title") return updateTitle(req, res, session);
+      if (req.method === "POST" && rest === "/generate-title") return generateTitle(req, res, session);
       if (req.method === "GET" && rest.startsWith("/autocomplete")) {
         const q = url.split("?")[1] ?? "";
         const params = new URLSearchParams(q);
@@ -290,13 +299,14 @@ async function createSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
   cwd: string,
-  existing?: { id: string; replay: string[]; startedAt: number; messages?: unknown[] },
+  existing?: { id: string; title?: string; replay: string[]; startedAt: number; messages?: unknown[] },
 ): Promise<Session> {
   const id = existing?.id ?? randomBytes(3).toString("hex");
   const bridge = opts.makeBridge({ cwd, initialMessages: existing?.messages });
 
   const session: Session = {
     id,
+    title: existing?.title ?? id,
     cwd,
     bridge,
     replay: existing?.replay ?? [],
@@ -304,6 +314,8 @@ async function createSession(
     segmentSeq: 0,
     sseClients: new Set(),
     startedAt: existing?.startedAt ?? Date.now(),
+    // If the session already has messages, the first turn was already done.
+    firstTurnDone: !!(existing?.messages?.length),
   };
 
   bridge.onEvent((e) => {
@@ -323,7 +335,17 @@ async function createSession(
 
   await bridge.ready();
   sessions.set(id, session);
-  if (!existing) await saveSessionMeta(session);
+  if (!existing) {
+    await saveSessionMeta(session);
+  } else if (!existing.title) {
+    // Legacy session without a title field — persist the default (id).
+    await saveSessionMeta(session);
+  }
+  // Push initial title into replay so reconnecting SSE clients see it.
+  pushFrame(session, "session:title", sseFrame(
+    { source: id, ts: Date.now(), id: `hub:${id}:title`, name: "session:title" },
+    { title: session.title },
+  ));
   return session;
 }
 
@@ -333,7 +355,7 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
   console.error(`[hub] restoring ${persisted.length} session(s)…`);
   for (const p of persisted) {
     try {
-      await createSession(sessions, opts, p.cwd, { id: p.id, replay: p.replay, startedAt: p.startedAt, messages: p.messages });
+      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, replay: p.replay, startedAt: p.startedAt, messages: p.messages });
       console.error(`[hub] restored session ${p.id} (cwd: ${p.cwd})`);
     } catch (err) {
       console.error(`[hub] failed to restore session ${p.id}:`, err);
@@ -412,11 +434,86 @@ function pushFrame(session: Session, name: string, frame: string): void {
   for (const r of session.sseClients) { try { r.write(frame); } catch {} }
 }
 
+// ── Session title management ─────────────────────────────────────────
+
+async function setSessionTitle(session: Session, title: string): Promise<void> {
+  const trimmed = title.trim().slice(0, 100);
+  if (!trimmed || trimmed === session.title) return;
+  session.title = trimmed;
+  await saveSessionMeta(session);
+  const frame = sseFrame(
+    { source: session.id, ts: Date.now(), id: `hub:${session.id}:title`, name: "session:title" },
+    { title: session.title },
+  );
+  pushFrame(session, "session:title", frame);
+}
+
+async function generateTitleAsync(session: Session): Promise<void> {
+  const query = session.firstQuery?.trim();
+  if (!query || session.title !== session.id) return; // already has a custom title
+  const settings = await readSettings();
+  const provider: string = (settings?.provider as string) ?? "openai";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const providers: any = settings?.providers ?? {};
+  const cfg = providers[provider] as { apiKey?: string; baseURL?: string } | undefined;
+  const apiKey = cfg?.apiKey;
+  if (!apiKey) return; // can't call LLM without a key
+
+  const model = settings?.model ?? "gpt-4o-mini";
+  const baseURL = cfg?.baseURL ?? "https://api.openai.com/v1";
+  const url = baseURL.replace(/\/+$/, "") + "/chat/completions";
+
+  const body = JSON.stringify({
+    model,
+    messages: [
+      { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 6 words, no quotes). Return ONLY the title text, nothing else." },
+      { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
+    ],
+    max_tokens: 30,
+    temperature: 0.3,
+  });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body,
+      signal: controller.signal,
+    });
+    if (!resp.ok) return;
+    const data = (await resp.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const title = data?.choices?.[0]?.message?.content?.trim().replace(/^"|"$/g, "") ?? "";
+    if (title) await setSessionTitle(session, title);
+  } catch (err) {
+    console.error(`[hub] generate-title HTTP error for ${session.id}:`, err instanceof Error ? err.message : err);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function readSettings(): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await fs.promises.readFile(settingsPath(), "utf-8");
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 // ── HTTP handlers ───────────────────────────────────────────────────
 
 function listSessions(res: http.ServerResponse, sessions: Map<string, Session>): void {
   const list = Array.from(sessions.values()).map((s) => ({
     instanceId: s.id,
+    title: s.title,
     model: s.model,
     cwd: s.cwd,
     startedAt: s.startedAt,
@@ -541,6 +638,36 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
   res.end(JSON.stringify({ ok: true }));
 }
 
+async function updateTitle(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  const body = await readBody(req);
+  let title = "";
+  try { title = ((JSON.parse(body) as { title?: string }).title ?? "").trim(); } catch {}
+  if (!title) { res.statusCode = 400; res.end("empty title"); return; }
+  await setSessionTitle(session, title);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, title: session.title }));
+}
+
+async function generateTitle(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  // Use the stored firstQuery, or accept one from the request body.
+  const body = await readBody(req);
+  let query = session.firstQuery?.trim() ?? "";
+  try {
+    const parsed = JSON.parse(body) as { query?: string };
+    if (parsed.query) query = parsed.query.trim();
+  } catch {}
+  if (!query) { res.statusCode = 400; res.end("no query to generate title from"); return; }
+  session.firstQuery = query;
+
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, generating: true }));
+
+  // Generate asynchronously — the title will arrive via SSE.
+  generateTitleAsync(session).catch((err) =>
+    console.error(`[hub] generate-title error for ${session.id}:`, err)
+  );
+}
+
 function openSse(req: http.IncomingMessage, res: http.ServerResponse, session: Session): void {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -569,6 +696,10 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     name,
   });
 
+  // Capture the first user query for auto-title generation.
+  const isFirstTurn = !session.firstTurnDone;
+  if (isFirstTurn) session.firstQuery = query;
+
   const queued = !!session.bridge.isProcessing?.();
   if (!queued) {
     pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query }));
@@ -586,6 +717,14 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       // Persist messages snapshot so restarted sessions restore their
       // conversation state (not just SSE replay frames).
       saveSessionMessages(session).catch(() => {});
+
+      // After the first turn completes, generate a title via the LLM.
+      if (isFirstTurn && !session.firstTurnDone) {
+        session.firstTurnDone = true;
+        generateTitleAsync(session).catch((err) =>
+          console.error(`[hub] auto-title failed for ${session.id}:`, err)
+        );
+      }
     })
     .catch((err) => {
       pushFrame(session, "agent:error", sseFrame(meta("agent:error"), { message: String(err) }));

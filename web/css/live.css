@@ -306,7 +306,7 @@ body { min-height: 100vh; padding: 0; }
   border-left: none;
   padding-left: calc(1rem - 2px);
 }
-.session-id {
+.session-title {
   color: var(--green);
   font-weight: 500;
 }
@@ -319,6 +319,51 @@ body { min-height: 100vh; padding: 0; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.session-edit {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  line-height: 1;
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.session-list li:hover .session-edit { opacity: 1; }
+.session-edit:hover {
+  color: var(--white);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.session-title-edit {
+  display: block;
+  width: calc(100% - 4.5rem);
+  background: var(--bg3);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  color: var(--white);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  padding: 0.15rem 0.35rem;
+  margin: 0.1rem 0;
+  outline: none;
+}
+.session-title-edit:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(76, 110, 245, 0.2);
 }
 
 .new-session-form {

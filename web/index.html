@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>agent-sh-hub</title>
+  <title>Agent SH Hub</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/css/styles.css" />
   <link rel="stylesheet" href="/css/live.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/lib/highlight.min.js"></script>
@@ -18,13 +18,22 @@
   <div class="app">
     <aside class="sidebar">
       <div class="sidebar-head">
-        <span class="sidebar-title">sessions</span>
-        <button id="new-session" class="sidebar-btn" title="new session (pick directory)">+</button>
-        <button id="sidebar-toggle" class="sidebar-btn sidebar-toggle" title="collapse sidebar">‹</button>
+        <span class="sidebar-title">Sessions</span>
+        <button id="new-session" class="sidebar-btn" title="New session">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="7" y1="2" x2="7" y2="12"></line>
+            <line x1="2" y1="7" x2="12" y2="7"></line>
+          </svg>
+        </button>
+        <button id="sidebar-toggle" class="sidebar-btn sidebar-toggle" title="Collapse sidebar">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="8 3 4 6 8 9"></polyline>
+          </svg>
+        </button>
       </div>
       <form id="new-session-form" class="new-session-form" hidden>
         <div class="new-session-input-wrap">
-          <input id="new-session-cwd" type="text" autocomplete="off" placeholder="cwd (path)" spellcheck="false" />
+          <input id="new-session-cwd" type="text" autocomplete="off" placeholder="Working directory path" spellcheck="false" />
           <ul class="autocomplete autocomplete-cwd" id="cwd-autocomplete" hidden></ul>
         </div>
         <div class="new-session-err" id="new-session-err" hidden></div>
@@ -40,24 +49,46 @@
             <span class="live-dot"></span>
             <span class="live-status" id="conn">connecting…</span>
             <span class="spinner" id="spinner" hidden></span>
-            <button class="bar-btn cancel-btn" id="cancel-turn" hidden title="interrupt response (Esc)">■</button>
+            <button class="bar-btn cancel-btn" id="cancel-turn" hidden title="Interrupt response (Esc)">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                <rect x="0" y="0" width="10" height="10" rx="1.5"></rect>
+              </svg>
+            </button>
             <span class="terminal-usage" id="usage"></span>
-            <button class="bar-btn" id="ctx-toggle" title="inspect context">ctx</button>
-            <button class="bar-btn" id="config-toggle" title="settings">⚙</button>
+            <button class="bar-btn" id="ctx-toggle" title="Inspect context">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                <rect x="1" y="1" width="12" height="12" rx="2"></rect>
+                <line x1="4" y1="5" x2="10" y2="5"></line>
+                <line x1="4" y1="8" x2="8" y2="8"></line>
+              </svg>
+            </button>
+            <button class="bar-btn" id="config-toggle" title="Settings">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                <circle cx="7" cy="7" r="2.2"></circle>
+                <path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13M2.8 2.8l1 1.2M10.2 10.2l1 1.2M2.8 11.2l1-1.2M10.2 3.8l1-1.2"></path>
+              </svg>
+            </button>
           </div>
           <div class="terminal-body" id="stream">
             <div class="stream-empty" id="stream-empty">
               <div class="stream-empty-title">ready when you are.</div>
               <div class="stream-empty-sub">ask anything — the agent can explore files, run commands, <em>reason</em>, and edit code.</div>
               <button class="stream-empty-prompt" id="stream-empty-prompt">
-                <span class="c-arrow">⟩</span> start typing below…
+                <span class="c-arrow">⟩</span>
+                <span>start typing below…</span>
               </button>
               <div class="stream-empty-hint">
                 <span class="kbd-hint"><kbd>⌘K</kbd> focus · <kbd>↑</kbd> recall · <kbd>Esc</kbd> cancel · <kbd>⌘\</kbd> context</span>
               </div>
             </div>
           </div>
-          <button class="scroll-pill" id="scroll-pill" hidden>↓ new output</button>
+          <button class="scroll-pill" id="scroll-pill" hidden>
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <line x1="5" y1="1" x2="5" y2="9"></line>
+              <polyline points="3 7 5 9 7 7"></polyline>
+            </svg>
+            new output
+          </button>
           <form class="live-input" id="form">
             <span class="c-arrow">⟩</span>
             <textarea id="query" autocomplete="off" placeholder="ask the agent…" rows="1"></textarea>
@@ -69,10 +100,20 @@
 
     <aside class="ctx-panel" id="ctx-panel" hidden>
       <div class="ctx-head">
-        <span class="ctx-title">context</span>
+        <span class="ctx-title">Context</span>
         <span class="ctx-meta" id="ctx-meta"></span>
-        <button class="bar-btn icon" id="ctx-refresh" title="refresh">↻</button>
-        <button class="bar-btn icon" id="ctx-close" title="close">×</button>
+        <button class="bar-btn icon" id="ctx-refresh" title="Refresh">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
+            <polyline points="9.5 1 12 1 12 3.5"></polyline>
+          </svg>
+        </button>
+        <button class="bar-btn icon" id="ctx-close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="2" y1="2" x2="10" y2="10"></line>
+            <line x1="10" y1="2" x2="2" y2="10"></line>
+          </svg>
+        </button>
       </div>
       <div class="ctx-filters" id="ctx-filters">
         <button class="ctx-chip" data-role="all" data-active="1">all</button>
@@ -82,7 +123,7 @@
         <button class="ctx-chip" data-role="tool"><span class="ctx-dot tool"></span>tool</button>
       </div>
       <div class="ctx-actions">
-        <button class="bar-btn" id="ctx-drop" title="drop selected messages" disabled>drop</button>
+        <button class="bar-btn" id="ctx-drop" title="Drop selected messages" disabled>drop</button>
       </div>
       <div class="ctx-body" id="ctx-body"></div>
     </aside>
@@ -90,11 +131,21 @@
     <div class="config-overlay" id="config-overlay" hidden>
       <div class="config-modal">
         <div class="config-head">
-          <span class="config-title">settings</span>
+          <span class="config-title">Settings</span>
           <span class="config-path" id="config-path">~/.agent-sh/settings.json</span>
           <div class="config-head-actions">
-            <button class="bar-btn icon" id="config-reset" title="reset to defaults">↺</button>
-            <button class="bar-btn icon" id="config-close" title="close">×</button>
+            <button class="bar-btn icon" id="config-reset" title="Reset to defaults">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
+                <polyline points="9.5 1 12 1 12 3.5"></polyline>
+              </svg>
+            </button>
+            <button class="bar-btn icon" id="config-close" title="Close">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <line x1="2" y1="2" x2="10" y2="10"></line>
+                <line x1="10" y1="2" x2="2" y2="10"></line>
+              </svg>
+            </button>
           </div>
         </div>
         <div class="config-body">

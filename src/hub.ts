@@ -210,10 +210,13 @@ export function startHub(opts: HubOpts): http.Server {
     return serveStatic(res, opts.webRoot, url.split("?")[0]!);
   });
 
-  server.listen(opts.port, opts.host, () => {
-    console.error(`agent-sh-hub listening on http://${opts.host}:${opts.port}/`);
-    restoreSessions(sessions, opts).catch((err) => {
-      console.error("[hub] session restore error:", err);
+  // Restore persisted sessions before starting the HTTP server so that
+  // the first /sessions request already sees the full list.
+  restoreSessions(sessions, opts).catch((err) => {
+    console.error("[hub] session restore error:", err);
+  }).finally(() => {
+    server.listen(opts.port, opts.host, () => {
+      console.error(`agent-sh-hub listening on http://${opts.host}:${opts.port}/`);
     });
   });
 

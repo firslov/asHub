@@ -120,11 +120,25 @@ export class AshBridge extends EventEmitter implements Bridge {
     // Track the latest cache-hit/miss tokens from raw LLM chunks so we can
     // enrich the forwarded `agent:usage` event (agent-sh core drops these
     // fields when it emits its own agent:usage).
+    //
+    // We accumulate across chunks because some providers (e.g. Anthropic)
+    // stream usage as partial updates across multiple chunks, not a single
+    // final chunk. We reset to zero at the start of each turn (agent:submit)
+    // and also after `agent:usage` is consumed so stale values don't leak
+    // into future turns.
     let lastCacheHit = 0;
     let lastCacheMiss = 0;
+    onAny("agent:submit", () => {
+      lastCacheHit = 0;
+      lastCacheMiss = 0;
+    });
     onAny("llm:chunk", (payload) => {
       const chunk = (payload as { chunk?: { usage?: { prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number } } })?.chunk;
       if (chunk?.usage) {
+        // Overwrite rather than accumulate: Anthropic's streaming usage is
+        // cumulative (not delta), and OpenAI SDK normally sends usage only
+        // in the final chunk. A later chunk may only contain one of the two
+        // fields, so we only update when the field is present.
         if (typeof chunk.usage.prompt_cache_hit_tokens === "number") {
           lastCacheHit = chunk.usage.prompt_cache_hit_tokens;
         }
@@ -137,15 +151,21 @@ export class AshBridge extends EventEmitter implements Bridge {
     for (const name of FORWARDED) {
       onAny(name, (payload) => {
         // Enrich agent:usage with cache fields that agent-sh core drops.
-        if (name === "agent:usage" && (lastCacheHit > 0 || lastCacheMiss > 0)) {
-          const enriched = {
-            ...(payload as Record<string, unknown>),
-            prompt_cache_hit_tokens: lastCacheHit,
-            prompt_cache_miss_tokens: lastCacheMiss,
-          };
-          this.emit("event", { name, payload: enriched } satisfies BusEvent);
-          // Reset after consumption so stale values don't leak into future
-          // turns if the next response lacks a usage chunk.
+        if (name === "agent:usage") {
+          // Always attach cache fields if we have accumulated any; this
+          // ensures the usage bar shows cache info even when one of the
+          // two counters happens to be zero. Reset immediately after so
+          // values never leak into the next turn.
+          if (lastCacheHit > 0 || lastCacheMiss > 0) {
+            const enriched = {
+              ...(payload as Record<string, unknown>),
+              prompt_cache_hit_tokens: lastCacheHit,
+              prompt_cache_miss_tokens: lastCacheMiss,
+            };
+            this.emit("event", { name, payload: enriched } satisfies BusEvent);
+          } else {
+            this.emit("event", { name, payload } satisfies BusEvent);
+          }
           lastCacheHit = 0;
           lastCacheMiss = 0;
           return;

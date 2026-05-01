@@ -68,16 +68,19 @@ export class Translator {
         }];
       }
       case "usage_update": {
-        return [{
-          name: "agent:usage",
-          payload: {
-            prompt_tokens: (update.inputTokens as number) ?? 0,
-            completion_tokens: (update.outputTokens as number) ?? 0,
-            total_tokens:
-              ((update.inputTokens as number) ?? 0) +
-              ((update.outputTokens as number) ?? 0),
-          },
-        }];
+        const payload: Record<string, number> = {
+          prompt_tokens: (update.inputTokens as number) ?? 0,
+          completion_tokens: (update.outputTokens as number) ?? 0,
+          total_tokens:
+            ((update.inputTokens as number) ?? 0) +
+            ((update.outputTokens as number) ?? 0),
+        };
+        // Forward cache fields if the ACP update provides them.
+        const cacheHit = (update.promptCacheHitTokens as number) ?? (update.prompt_cache_hit_tokens as number);
+        const cacheMiss = (update.promptCacheMissTokens as number) ?? (update.prompt_cache_miss_tokens as number);
+        if (typeof cacheHit === "number") payload.prompt_cache_hit_tokens = cacheHit;
+        if (typeof cacheMiss === "number") payload.prompt_cache_miss_tokens = cacheMiss;
+        return [{ name: "agent:usage", payload }];
       }
       default:
         return [];

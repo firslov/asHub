@@ -192,6 +192,7 @@
       pct = Math.round((inTok / contextWindow) * 100);
       ctxText = `${(inTok / 1000).toFixed(1)}k / ${(contextWindow / 1000).toFixed(0)}k`;
     }
+    const totalTok = lastUsage.total_tokens ?? (inTok + outTok);
     const cacheHtml = (cacheHit > 0 || cacheMiss > 0)
       ? `<span class="usage-chip usage-cache" title="cache hit / miss">` +
           `<span class="cache-dot hit"></span>${fmtNum(cacheHit)}` +
@@ -202,6 +203,7 @@
     usageEl.innerHTML =
       `<span class="usage-chip" title="input tokens">↑ ${fmtNum(inTok)}</span>` +
       `<span class="usage-chip" title="output tokens">↓ ${fmtNum(outTok)}</span>` +
+      `<span class="usage-chip" title="total tokens">Σ ${fmtNum(totalTok)}</span>` +
       cacheHtml +
       `<span class="usage-chip usage-ctx" title="context usage">` +
         (contextWindow > 0

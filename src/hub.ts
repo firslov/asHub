@@ -450,17 +450,18 @@ async function setSessionTitle(session: Session, title: string): Promise<void> {
 
 async function generateTitleAsync(session: Session): Promise<void> {
   const query = session.firstQuery?.trim();
-  if (!query || session.title !== session.id) return; // already has a custom title
+  if (!query || session.title !== session.id) return; // no query or already has custom title
+
   const settings = await readSettings();
-  const provider: string = (settings?.provider as string) ?? "openai";
+  const provider: string = (settings?.defaultProvider as string) || (settings?.provider as string) || "openai";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const providers: any = settings?.providers ?? {};
-  const cfg = providers[provider] as { apiKey?: string; baseURL?: string } | undefined;
-  const apiKey = cfg?.apiKey;
-  if (!apiKey) return; // can't call LLM without a key
+  const providerCfg = providers[provider] as { apiKey?: string; baseURL?: string; model?: string; defaultModel?: string } | undefined;
+  const apiKey = (providerCfg?.apiKey as string) || (settings?.apiKey as string);
+  if (!apiKey) return;
 
-  const model = settings?.model ?? "gpt-4o-mini";
-  const baseURL = cfg?.baseURL ?? "https://api.openai.com/v1";
+  const model = (providerCfg?.defaultModel ?? providerCfg?.model ?? settings?.model ?? "gpt-4o-mini") as string;
+  const baseURL = (providerCfg?.baseURL ?? settings?.baseURL ?? "https://api.openai.com/v1") as string;
   const url = baseURL.replace(/\/+$/, "") + "/chat/completions";
 
   const body = JSON.stringify({
@@ -469,8 +470,9 @@ async function generateTitleAsync(session: Session): Promise<void> {
       { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 6 words, no quotes). Return ONLY the title text, nothing else." },
       { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
     ],
-    max_tokens: 30,
+    max_tokens: 80,
     temperature: 0.3,
+    thinking: { type: "disabled" },
   });
 
   const controller = new AbortController();
@@ -487,13 +489,11 @@ async function generateTitleAsync(session: Session): Promise<void> {
       signal: controller.signal,
     });
     if (!resp.ok) return;
-    const data = (await resp.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
+    const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const title = data?.choices?.[0]?.message?.content?.trim().replace(/^"|"$/g, "") ?? "";
     if (title) await setSessionTitle(session, title);
-  } catch (err) {
-    console.error(`[hub] generate-title HTTP error for ${session.id}:`, err instanceof Error ? err.message : err);
+  } catch {
+    // Silently ignore — title generation is a best-effort feature
   } finally {
     clearTimeout(timeout);
   }

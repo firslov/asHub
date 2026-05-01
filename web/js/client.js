@@ -606,6 +606,25 @@
 
     "agent:usage": (p) => { lastUsage = p; },
 
+    // Session title changes arrive via SSE; update the sidebar inline
+    // without a full re-render to avoid disturbing in-progress edits.
+    "session:title": (p) => {
+      const title = p?.title ?? "";
+      if (!title) return;
+      // Update the sidebar item for this session
+      const sid = sessionId; // current session
+      const items = sessionList.querySelectorAll("li");
+      for (const li of items) {
+        const a = li.querySelector("a");
+        const href = a?.getAttribute("href") ?? "";
+        if (href === `/${sid}/`) {
+          const titleSpan = li.querySelector(".session-title");
+          if (titleSpan) titleSpan.textContent = title;
+          break;
+        }
+      }
+    },
+
     "agent:tool-started": (p) => {
       // Close the in-progress reply so the next text chunk opens a new one
       // — preserves text/tool/text interleaving from the agent's narrative.
@@ -883,10 +902,23 @@
         if (s.instanceId === sessionId) li.className = "current";
         const a = document.createElement("a");
         a.href = `/${s.instanceId}/`;
+        const title = escape(s.title || s.instanceId);
         const modelText = s.model ? ` <span class="session-model">${escape(s.model)}</span>` : "";
         const cwdText = s.cwd ? ` <span class="session-cwd" title="${escape(s.cwd)}">${escape(shortenCwd(s.cwd))}</span>` : "";
-        a.innerHTML = `<span class="session-id">${escape(s.instanceId)}</span>${modelText}${cwdText}`;
+        a.innerHTML = `<span class="session-title">${title}</span>${modelText}${cwdText}`;
         li.appendChild(a);
+
+        // Inline edit button
+        const editBtn = document.createElement("button");
+        editBtn.className = "session-edit";
+        editBtn.title = "edit title";
+        editBtn.textContent = "✎";
+        editBtn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          startTitleEdit(li, s.instanceId, s.title || s.instanceId);
+        });
+        li.appendChild(editBtn);
 
         const close = document.createElement("button");
         close.className = "session-close";
@@ -895,7 +927,7 @@
         close.addEventListener("click", async (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
-          if (!confirm(`Close session ${s.instanceId}?`)) return;
+          if (!confirm(`Close session ${escape(s.title || s.instanceId)}?`)) return;
           try {
             await fetch(`/${s.instanceId}/`, { method: "DELETE" });
           } catch {}
@@ -913,6 +945,48 @@
   };
   renderSessions();
   setInterval(renderSessions, 5000);
+
+  // ── Session title inline editing ────────────────────────────────────
+  const startTitleEdit = (li, instanceId, currentTitle) => {
+    // Remove any existing inline edit on other items
+    sessionList.querySelectorAll(".session-title-edit").forEach((el) => el.remove());
+    sessionList.querySelectorAll(".session-title").forEach((el) => el.hidden = false);
+
+    const titleSpan = li.querySelector(".session-title");
+    if (!titleSpan) return;
+    titleSpan.hidden = true;
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "session-title-edit";
+    input.value = currentTitle;
+    input.maxLength = 100;
+    titleSpan.insertAdjacentElement("afterend", input);
+    input.focus();
+    input.select();
+
+    const commit = async () => {
+      const val = input.value.trim();
+      input.remove();
+      titleSpan.hidden = false;
+      if (val && val !== currentTitle) {
+        titleSpan.textContent = val;
+        try {
+          await fetch(`/${instanceId}/title`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: val }),
+          });
+        } catch {}
+      }
+    };
+
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+      if (ev.key === "Escape") { input.value = currentTitle; input.blur(); }
+    });
+  };
 
   // ── New-session form ─────────────────────────────────────────────
   const LS_LAST_CWD = "ash.last-cwd";

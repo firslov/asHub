@@ -699,10 +699,13 @@ function buildKeptWithPlaceholders(messages: unknown[], drop: Set<number>): unkn
 }
 
 function makePlaceholder(dropped: unknown[]): { role: "user"; content: string } {
-  const lines = dropped.map(summarizeMessage);
+  // Deterministic placeholder: uses a fixed format regardless of the
+  // dropped messages' actual content. This preserves cache prefix stability
+  // — the same count of dropped messages always yields the exact same
+  // placeholder text, so subsequent model requests can hit KV cache.
   return {
     role: "user",
-    content: `[${dropped.length} message(s) elided — use conversation_recall to expand any item:\n${lines.map((l) => `- ${l}`).join("\n")}]`,
+    content: `[${dropped.length} message(s) elided]`,
   };
 }
 

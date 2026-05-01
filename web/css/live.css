@@ -691,6 +691,32 @@ body { min-height: 100vh; padding: 0; }
 .terminal-usage.hot .usage-ctx { color: var(--red); border-color: var(--red-dim); }
 .terminal-usage.hot .usage-bar > span { background: var(--red); }
 
+.usage-cache {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.usage-cache .cache-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 0.15rem;
+}
+.usage-cache .cache-dot.hit {
+  background: var(--green);
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
+}
+.usage-cache .cache-dot.miss {
+  background: var(--amber);
+  box-shadow: 0 0 4px rgba(245, 158, 11, 0.3);
+}
+.usage-cache .cache-sep {
+  color: var(--text-dim);
+  margin: 0 0.15rem;
+  font-size: 0.65rem;
+}
+
 .turn-sep {
   display: flex;
   align-items: center;

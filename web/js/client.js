@@ -184,15 +184,25 @@
     if (!lastUsage) return;
     const inTok = lastUsage.prompt_tokens ?? 0;
     const outTok = lastUsage.completion_tokens ?? 0;
+    const cacheHit = lastUsage.prompt_cache_hit_tokens ?? 0;
+    const cacheMiss = lastUsage.prompt_cache_miss_tokens ?? 0;
     let pct = 0;
     let ctxText = `${(inTok / 1000).toFixed(1)}k`;
     if (contextWindow > 0) {
       pct = Math.round((inTok / contextWindow) * 100);
       ctxText = `${(inTok / 1000).toFixed(1)}k / ${(contextWindow / 1000).toFixed(0)}k`;
     }
+    const cacheHtml = (cacheHit > 0 || cacheMiss > 0)
+      ? `<span class="usage-chip usage-cache" title="cache hit / miss">` +
+          `<span class="cache-dot hit"></span>${fmtNum(cacheHit)}` +
+          `<span class="cache-sep">/</span>` +
+          `<span class="cache-dot miss"></span>${fmtNum(cacheMiss)}` +
+        `</span>`
+      : "";
     usageEl.innerHTML =
       `<span class="usage-chip" title="input tokens">↑ ${fmtNum(inTok)}</span>` +
       `<span class="usage-chip" title="output tokens">↓ ${fmtNum(outTok)}</span>` +
+      cacheHtml +
       `<span class="usage-chip usage-ctx" title="context usage">` +
         (contextWindow > 0
           ? `<span class="usage-bar"><span style="width:${pct}%"></span></span>`

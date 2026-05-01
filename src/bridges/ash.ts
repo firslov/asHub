@@ -117,8 +117,39 @@ export class AshBridge extends EventEmitter implements Bridge {
     // so we cast through `any` rather than maintain a parallel union.
     const onAny = bus.on.bind(bus) as unknown as (name: string, fn: (p: unknown) => void) => void;
 
+    // Track the latest cache-hit/miss tokens from raw LLM chunks so we can
+    // enrich the forwarded `agent:usage` event (agent-sh core drops these
+    // fields when it emits its own agent:usage).
+    let lastCacheHit = 0;
+    let lastCacheMiss = 0;
+    onAny("llm:chunk", (payload) => {
+      const chunk = (payload as { chunk?: { usage?: { prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number } } })?.chunk;
+      if (chunk?.usage) {
+        if (typeof chunk.usage.prompt_cache_hit_tokens === "number") {
+          lastCacheHit = chunk.usage.prompt_cache_hit_tokens;
+        }
+        if (typeof chunk.usage.prompt_cache_miss_tokens === "number") {
+          lastCacheMiss = chunk.usage.prompt_cache_miss_tokens;
+        }
+      }
+    });
+
     for (const name of FORWARDED) {
       onAny(name, (payload) => {
+        // Enrich agent:usage with cache fields that agent-sh core drops.
+        if (name === "agent:usage" && (lastCacheHit > 0 || lastCacheMiss > 0)) {
+          const enriched = {
+            ...(payload as Record<string, unknown>),
+            prompt_cache_hit_tokens: lastCacheHit,
+            prompt_cache_miss_tokens: lastCacheMiss,
+          };
+          this.emit("event", { name, payload: enriched } satisfies BusEvent);
+          // Reset after consumption so stale values don't leak into future
+          // turns if the next response lacks a usage chunk.
+          lastCacheHit = 0;
+          lastCacheMiss = 0;
+          return;
+        }
         this.emit("event", { name, payload } satisfies BusEvent);
       });
     }
@@ -257,6 +288,17 @@ export class AshBridge extends EventEmitter implements Bridge {
       payload: { strategy: ContextStrategy; stats?: { before: number; after: number; evictedCount: number } },
     ) => Promise<{ stats?: { before: number; after: number; evictedCount: number } }>;
     const r = await emitPipeAsync("context:compact", { strategy });
+
+    // After a successful replace/rewind, the live conversation already
+    // contains the full (mutated) history.  Clear seedMessages so that
+    // subsequent snapshot() calls do NOT prepend the stale persisted
+    // messages again — that would duplicate history and break KV-cache
+    // prefix matching because the message sequence would differ from what
+    // the model actually saw.
+    if (this.seedMessages && (strategy.kind === "replace" || strategy.kind === "rewind")) {
+      this.seedMessages = null;
+    }
+
     return r.stats ?? null;
   }
 

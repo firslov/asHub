@@ -1,6 +1,6 @@
 {
   "name": "agent-sh-hub",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Standalone hub: spawn and supervise headless agent-sh ACP sessions, expose them through a web UI on a single port.",
   "type": "module",
   "main": "electron/main.cjs",

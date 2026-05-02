@@ -303,10 +303,10 @@ async function createSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
   cwd: string,
-  existing?: { id: string; title?: string; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string },
+  existing?: { id: string; title?: string; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string },
 ): Promise<Session> {
   const id = existing?.id ?? randomBytes(3).toString("hex");
-  const bridge = opts.makeBridge({ cwd, initialMessages: existing?.messages });
+  const bridge = opts.makeBridge({ cwd, initialMessages: existing?.messages, model: existing?.model });
 
   const session: Session = {
     id,
@@ -317,6 +317,7 @@ async function createSession(
     segmentText: "",
     segmentSeq: 0,
     sseClients: new Set(),
+    model: existing?.model,
     startedAt: existing?.startedAt ?? Date.now(),
     // If the session already has messages, the first turn was already done.
     firstTurnDone: !!(existing?.messages?.length),
@@ -361,7 +362,7 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
   console.error(`[hub] restoring ${persisted.length} session(s)…`);
   for (const p of persisted) {
     try {
-      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle });
+      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle, model: p.model });
       console.error(`[hub] restored session ${p.id} (cwd: ${p.cwd})`);
     } catch (err) {
       console.error(`[hub] failed to restore session ${p.id}:`, err);

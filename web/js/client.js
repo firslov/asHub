@@ -87,7 +87,7 @@
   // permission diff previews) accumulates into one `.tool-group`. The group
   // closes when text resumes, and once it holds 3+ tool rows it folds behind
   // a "▸ N tools" header (unless the user expanded it).
-  const TOOL_GROUP_COLLAPSE = 3;
+  const TOOL_GROUP_COLLAPSE = 2;
   const groupState = new WeakMap();
   let currentToolGroup = null;
 
@@ -231,6 +231,8 @@
       `</span>`;
     usageEl.classList.toggle("warm", pct >= 30 && pct < 70);
     usageEl.classList.toggle("hot", pct >= 70);
+    const strip = document.getElementById("usage-strip");
+    if (strip) strip.hidden = false;
   };
 
   const renderTurnSep = () => {
@@ -254,7 +256,11 @@
       `<span class="thinking-dot"></span>` +
       `<span class="thinking-dot"></span>` +
       `<span class="thinking-label">thinking…</span>`;
-    append(thinkingEl);
+    // Insert directly into stream — don't use append(), which would
+    // close the current tool group and break grouping of consecutive tools.
+    hideEmptyState();
+    stream.appendChild(thinkingEl);
+    maybeScroll();
   };
   const hideThinking = () => {
     if (!thinkingEl) return;
@@ -470,6 +476,8 @@
 
     "agent:processing-start": () => {
       lastUsage = null;
+      const strip = document.getElementById("usage-strip");
+      if (strip) strip.hidden = true;
       setBusy(true);
       // Close any lingering thinking block from previous turn.
       if (thinkingBlock) { thinkingBlock.remove(); thinkingBlock = null; }
@@ -541,10 +549,19 @@
         const body = document.createElement("div");
         body.className = "thinking-block-body";
         thinkingBlock.append(head, body);
-        append(thinkingBlock);
+        // Insert directly into stream — don't use append(), which would
+        // close the current tool group and break grouping of consecutive tools.
+        hideEmptyState();
+        stream.appendChild(thinkingBlock);
+        maybeScroll();
       }
       const body = thinkingBlock.querySelector(".thinking-block-body");
       body.textContent = (body.textContent ?? "") + text;
+      // The thinking-block-body has max-height: 14em with its own overflow,
+      // so stream-level scroll won't help once the cap is hit.  Keep the
+      // body's internal scroll pinned to the bottom so the latest reasoning
+      // text is always visible.
+      body.scrollTop = body.scrollHeight;
       maybeScroll();
     },
 
@@ -1555,6 +1572,36 @@
   sidebarToggle?.addEventListener("click", () => {
     setSidebarCollapsed(!app.classList.contains("sidebar-collapsed"));
   });
+
+  // ── Theme toggle ──────────────────────────────────────────────────
+  const LS_THEME = "ash-theme";
+  const themeToggle = document.getElementById("theme-toggle");
+  const themeIconSun = document.getElementById("theme-icon-sun");
+  const themeIconMoon = document.getElementById("theme-icon-moon");
+  const hljsDark = document.getElementById("hljs-dark");
+  const hljsLight = document.getElementById("hljs-light");
+
+  const setTheme = (theme) => {
+    document.documentElement.setAttribute("data-theme", theme);
+    if (hljsDark) hljsDark.disabled = theme === "light";
+    if (hljsLight) hljsLight.disabled = theme === "dark";
+    if (themeIconSun) themeIconSun.hidden = theme !== "light";
+    if (themeIconMoon) themeIconMoon.hidden = theme !== "dark";
+    try { localStorage.setItem(LS_THEME, theme); } catch {}
+  };
+
+  const toggleTheme = () => {
+    const current = document.documentElement.getAttribute("data-theme") || "dark";
+    setTheme(current === "dark" ? "light" : "dark");
+  };
+
+  // Init: respect stored preference, default dark
+  try {
+    const stored = localStorage.getItem(LS_THEME);
+    setTheme(stored === "light" ? "light" : "dark");
+  } catch { setTheme("dark"); }
+
+  themeToggle?.addEventListener("click", toggleTheme);
 
   ctxToggle?.addEventListener("click", () => setCtxOpen(ctxPanel.hasAttribute("hidden")));
   ctxClose?.addEventListener("click", () => setCtxOpen(false));

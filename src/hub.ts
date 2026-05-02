@@ -39,6 +39,8 @@ interface Session {
   firstTurnDone: boolean;
   /** The first user query text, captured for auto-title generation. */
   firstQuery?: string;
+  /** User-set title (empty = auto-generate). */
+  userTitle?: string;
 }
 
 const REPLAY_LIMIT = 500;
@@ -78,7 +80,7 @@ async function ensureSessionsDir(): Promise<void> {
 
 async function saveSessionMeta(session: Session): Promise<void> {
   await ensureSessionsDir();
-  const meta = { id: session.id, title: session.title, cwd: session.cwd, model: session.model, startedAt: session.startedAt };
+  const meta = { id: session.id, title: session.title, cwd: session.cwd, model: session.model, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle };
   await fs.promises.writeFile(path.join(SESSIONS_DIR, `${session.id}.meta.json`), JSON.stringify(meta));
 }
 
@@ -118,6 +120,8 @@ interface PersistedSession {
   startedAt: number;
   replay: string[];
   messages?: unknown[];
+  firstQuery?: string;
+  userTitle?: string;
 }
 
 async function loadPersistedSessions(): Promise<PersistedSession[]> {
@@ -143,7 +147,7 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
           const parsed = JSON.parse(msgRaw);
           if (Array.isArray(parsed)) messages = parsed;
         } catch {}
-        results.push({ id: meta.id || id, title: meta.title, cwd: meta.cwd, model: meta.model, startedAt: meta.startedAt, replay, messages });
+        results.push({ id: meta.id || id, title: meta.title, cwd: meta.cwd, model: meta.model, startedAt: meta.startedAt, replay, messages, firstQuery: meta.firstQuery, userTitle: meta.userTitle });
       } catch {}
     }
     return results;
@@ -299,7 +303,7 @@ async function createSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
   cwd: string,
-  existing?: { id: string; title?: string; replay: string[]; startedAt: number; messages?: unknown[] },
+  existing?: { id: string; title?: string; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string },
 ): Promise<Session> {
   const id = existing?.id ?? randomBytes(3).toString("hex");
   const bridge = opts.makeBridge({ cwd, initialMessages: existing?.messages });
@@ -316,6 +320,8 @@ async function createSession(
     startedAt: existing?.startedAt ?? Date.now(),
     // If the session already has messages, the first turn was already done.
     firstTurnDone: !!(existing?.messages?.length),
+    firstQuery: existing?.firstQuery,
+    userTitle: existing?.userTitle,
   };
 
   bridge.onEvent((e) => {
@@ -355,7 +361,7 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
   console.error(`[hub] restoring ${persisted.length} session(s)…`);
   for (const p of persisted) {
     try {
-      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, replay: p.replay, startedAt: p.startedAt, messages: p.messages });
+      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle });
       console.error(`[hub] restored session ${p.id} (cwd: ${p.cwd})`);
     } catch (err) {
       console.error(`[hub] failed to restore session ${p.id}:`, err);
@@ -450,7 +456,8 @@ async function setSessionTitle(session: Session, title: string): Promise<void> {
 
 async function generateTitleAsync(session: Session): Promise<void> {
   const query = session.firstQuery?.trim();
-  if (!query || session.title !== session.id) return; // no query or already has custom title
+  // Skip if no query captured, or if user already set a custom title manually.
+  if (!query || session.userTitle) return;
 
   const settings = await readSettings();
   const provider: string = (settings?.defaultProvider as string) || (settings?.provider as string) || "openai";
@@ -491,7 +498,7 @@ async function generateTitleAsync(session: Session): Promise<void> {
     if (!resp.ok) return;
     const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const title = data?.choices?.[0]?.message?.content?.trim().replace(/^"|"$/g, "") ?? "";
-    if (title && session.title === session.id) await setSessionTitle(session, title);
+    if (title && !session.userTitle) await setSessionTitle(session, title);
   } catch {
     // Silently ignore — title generation is a best-effort feature
   } finally {
@@ -643,6 +650,7 @@ async function updateTitle(req: http.IncomingMessage, res: http.ServerResponse, 
   let title = "";
   try { title = ((JSON.parse(body) as { title?: string }).title ?? "").trim(); } catch {}
   if (!title) { res.statusCode = 400; res.end("empty title"); return; }
+  session.userTitle = title;
   await setSessionTitle(session, title);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true, title: session.title }));

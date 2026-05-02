@@ -65,6 +65,81 @@
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ── Light theme ──────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg:           #fafaf7;
+  --bg2:          #f3f2ee;
+  --bg3:          #ebeae5;
+  --bg4:          #e2e1db;
+  --bg-elevated:  #efeeea;
+
+  --accent:       #b8860b;
+  --accent-dim:   #9a6f08;
+  --accent-glow:  rgba(184, 134, 11, 0.1);
+  --accent-soft:  rgba(184, 134, 11, 0.16);
+  --accent-border: rgba(184, 134, 11, 0.32);
+
+  --cyan:         #2d8a94;
+  --cyan-dim:     #23767f;
+  --cyan-glow:    rgba(45, 138, 148, 0.08);
+  --cyan-soft:    rgba(45, 138, 148, 0.14);
+
+  --green:        #4a8a5e;
+  --green-dim:    #3d7550;
+  --red:          #c0392b;
+  --red-dim:      #a93226;
+  --amber:        #b8860b;
+  --purple:       #6c5fa7;
+
+  --text:         #1d1d22;
+  --text-dim:     #6b6b75;
+  --text-mid:     #8e8e98;
+  --text-faint:   #b8b8c2;
+
+  --border:       rgba(0, 0, 0, 0.07);
+  --border-light: rgba(0, 0, 0, 0.04);
+  --border-mid:   rgba(0, 0, 0, 0.11);
+  --border-accent: rgba(184, 134, 11, 0.25);
+
+  --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-md:   0 4px 14px rgba(0, 0, 0, 0.06);
+  --shadow-lg:   0 8px 36px rgba(0, 0, 0, 0.07);
+  --shadow-glow: 0 0 40px rgba(184, 134, 11, 0.04);
+
+  --scrollbar-thumb: #c8c8d2;
+}
+
+[data-theme="light"] nav.scrolled {
+  background: rgba(250, 250, 247, 0.88);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .hero::before {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(184, 134, 11, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 80% 60%, rgba(45, 138, 148, 0.04) 0%, transparent 40%);
+}
+
+[data-theme="light"] .hero-glow {
+  background: radial-gradient(circle, rgba(184, 134, 11, 0.04) 0%, rgba(108, 95, 167, 0.02) 40%, transparent 65%);
+}
+
+[data-theme="light"] ::selection {
+  background: rgba(184, 134, 11, 0.2);
+  color: var(--text);
+}
+
+[data-theme="light"] .stream-empty {
+  background:
+    radial-gradient(ellipse at 50% 30%, rgba(184, 134, 11, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 95%, var(--bg) 0%, transparent 60%);
+}
+
+[data-theme="light"] .pl-git,
+[data-theme="light"] .pl-time {
+  color: #fafaf7;
+}
+
 /* ── Custom scrollbar ────────────────────────────────────────────── */
 * {
   scrollbar-width: thin;

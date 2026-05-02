@@ -85,7 +85,7 @@ Endpoints:
 
 function makeFactory(args: Args): BridgeFactory {
   if (args.backend === "ash") {
-    return (opts) => new AshBridge({ ...opts, model: args.model, provider: args.provider });
+    return (opts) => new AshBridge({ ...opts, model: opts.model ?? args.model, provider: opts.provider ?? args.provider });
   }
   const [command, ...spawnArgs] = args.cmd.split(/\s+/);
   return (opts) => new AcpBridge({

@@ -137,11 +137,12 @@ jobs:
         run: ls -la release/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          files: |
-            release/*.dmg
-            release/*.blockmap
-            release/*.exe
-          generate_release_notes: true
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            release/*.dmg \
+            release/*.blockmap \
+            release/*.exe \
+            --generate-notes \
+            --repo "${{ github.repository }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

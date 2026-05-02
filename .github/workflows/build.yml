@@ -140,13 +140,50 @@ jobs:
       - name: Create GitHub Release
         run: |
           set -x
+          TOKEN="${{ github.token }}"
+          
+          echo "=== Testing token ==="
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}")
+          echo "Repo access: HTTP $HTTP_CODE"
+          
           echo "=== Release assets ==="
           ls -la release/
+          
           echo "=== Creating release for tag: ${{ github.ref_name }} ==="
-          gh release create "${{ github.ref_name }}" \
-            release/*.dmg \
-            release/*.blockmap \
-            release/*.exe \
-            --generate-notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Create the release first
+          RESP=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/releases" \
+            -d "{\"tag_name\":\"${{ github.ref_name }}\",\"generate_release_notes\":true}")
+          
+          HTTP_CODE=$(echo "$RESP" | tail -1)
+          BODY=$(echo "$RESP" | sed '$d')
+          echo "Create release: HTTP $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "Error response: $BODY"
+            exit 1
+          fi
+          
+          # Get the upload URL
+          UPLOAD_URL=$(echo "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['upload_url'].replace('{?name,label}',''))")
+          
+          # Upload each asset
+          for f in release/*.dmg release/*.exe release/*.blockmap; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            echo "Uploading: $name"
+            curl -s --fail-with-body \
+              -X POST \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              "$UPLOAD_URL?name=$name" \
+              --data-binary "@$f"
+          done
+          
+          echo "=== Release created successfully ==="

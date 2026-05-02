@@ -1,5 +1,5 @@
 # Build Windows (x64) release
-# Triggered on pushes to main and manually via workflow_dispatch.
+# Triggered on version tags (v*) and manually via workflow_dispatch.
 #
 # Output: .exe (NSIS installer) and portable .exe artifacts,
 # published as a GitHub release on tag pushes.
@@ -8,7 +8,6 @@ name: Build Windows (x64)
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 

@@ -1,5 +1,5 @@
 # Build macOS (Apple Silicon) release
-# Triggered on pushes to main and manually via workflow_dispatch.
+# Triggered on version tags (v*) and manually via workflow_dispatch.
 #
 # Output: .dmg and .zip artifacts built on an ARM macOS runner,
 # published as a GitHub release on tag pushes.
@@ -8,7 +8,6 @@ name: Build macOS (ARM64)
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 

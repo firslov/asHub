@@ -63,6 +63,7 @@ jobs:
           path: |
             release/*.dmg
             release/*.blockmap
+            release/latest-mac.yml
           if-no-files-found: error
 
   build-win:
@@ -107,6 +108,7 @@ jobs:
           path: |
             release/*.exe
             release/*.blockmap
+            release/latest.yml
           if-no-files-found: error
 
   release:
@@ -196,7 +198,7 @@ jobs:
           UPLOAD_URL=$(echo "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['upload_url'].replace('{?name,label}',''))")
 
           # Upload each asset (with retry + backoff)
-          for f in release/*.dmg release/*.exe release/*.blockmap; do
+          for f in release/*.dmg release/*.exe release/*.blockmap release/latest-mac.yml release/latest.yml; do
             [ -f "$f" ] || continue
             name=$(basename "$f")
             enc_name=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$name")

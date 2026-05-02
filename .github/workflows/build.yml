@@ -199,6 +199,7 @@ jobs:
           for f in release/*.dmg release/*.exe release/*.blockmap; do
             [ -f "$f" ] || continue
             name=$(basename "$f")
+            enc_name=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$name")
             echo "Uploading: $name"
             uploaded=0
             delay=10
@@ -207,7 +208,7 @@ jobs:
                 -X POST \
                 -H "Authorization: Bearer $TOKEN" \
                 -H "Content-Type: application/octet-stream" \
-                "$UPLOAD_URL?name=$name" \
+                "$UPLOAD_URL?name=$enc_name" \
                 --data-binary "@$f")
               if [ "$HTTP_CODE" = "201" ]; then
                 echo "  ✓ $name"

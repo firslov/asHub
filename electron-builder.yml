@@ -50,5 +50,10 @@ linux:
         - x64
   category: Development
 
+publish:
+  provider: github
+  owner: firslov
+  repo: agent-sh-hub
+
 directories:
   output: release

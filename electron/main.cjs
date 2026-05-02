@@ -151,6 +151,68 @@ function createWindow() {
   }
 }
 
+const { autoUpdater } = require("electron-updater");
+
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = { info: console.log, warn: console.warn, error: console.error, debug: console.log };
+
+  autoUpdater.on("update-available", (info) => {
+    console.log("[updater] update available:", info.version);
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "发现新版本",
+        message: `Agent SH Hub ${info.version} 已发布`,
+        detail: "是否立即下载更新？",
+        buttons: ["下载更新", "稍后提醒"],
+        defaultId: 0,
+      }).then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.downloadUpdate();
+        }
+      });
+    }
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    if (mainWindow) {
+      mainWindow.setProgressBar(progress.percent / 100);
+    }
+  });
+
+  autoUpdater.on("update-downloaded", () => {
+    if (mainWindow) {
+      mainWindow.setProgressBar(-1);
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "更新已就绪",
+        message: "新版本已下载完成，重启应用即可安装。",
+        detail: "是否立即重启？",
+        buttons: ["立即重启", "稍后"],
+        defaultId: 0,
+      }).then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.quitAndInstall();
+        }
+      });
+    }
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    console.log("[updater] 当前已是最新版本");
+  });
+
+  autoUpdater.on("error", (err) => {
+    console.error("[updater] error:", err.message);
+    dialog.showErrorBox(
+      "更新检测失败",
+      `无法检查更新：\n\n${err.message}`
+    );
+  });
+}
+
 function setupIPC() {
   ipcMain.handle("pick-directory", async () => {
     if (!mainWindow) return { cancelled: true };
@@ -162,6 +224,15 @@ function setupIPC() {
       return { cancelled: true };
     }
     return { cwd: result.filePaths[0] };
+  });
+
+  ipcMain.handle("check-for-update", async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { updateAvailable: !!result?.updateInfo, version: result?.updateInfo?.version };
+    } catch (err) {
+      return { error: err.message };
+    }
   });
 }
 
@@ -244,6 +315,12 @@ if (!gotTheLock) {
   app.whenReady().then(() => {
     setupIPC();
     startServer();
+    if (!isDev) {
+      setupAutoUpdater();
+      autoUpdater.checkForUpdates().catch((err) => {
+        console.error("[updater] initial check failed:", err.message);
+      });
+    }
   });
 
   app.on("window-all-closed", () => {

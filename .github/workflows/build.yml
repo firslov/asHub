@@ -46,8 +46,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: TypeScript build
         run: npm run build
@@ -57,7 +55,6 @@ jobs:
         run: npx electron-builder --mac --arm64 --publish never
         env:
           CI: true
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -93,8 +90,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: TypeScript build
         run: npm run build
@@ -104,7 +99,6 @@ jobs:
         run: npx electron-builder --win --x64 --publish never
         env:
           CI: true
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -139,51 +133,96 @@ jobs:
 
       - name: Create GitHub Release
         run: |
-          set -x
+          set -euo pipefail
           TOKEN="${{ github.token }}"
-          
-          echo "=== Testing token ==="
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}")
-          echo "Repo access: HTTP $HTTP_CODE"
-          
+          REPO="${{ github.repository }}"
+          TAG="${{ github.ref_name }}"
+
+          # ── helpers ──────────────────────────────────────────────
+          api_call() {
+            # usage: api_call <method> <path> [data]
+            local method="$1" path="$2" data="${3:-}"
+            local extra_args=()
+            [ -n "$data" ] && extra_args=(-d "$data")
+            curl -s -w "\n%{http_code}" \
+              -X "$method" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${extra_args[@]}" \
+              "https://api.github.com/repos/$REPO/$path"
+          }
+
+          retry_with_backoff() {
+            local max_attempts=5 delay=10 attempt=1
+            local resp http_code body
+            while [ $attempt -le $max_attempts ]; do
+              resp=$(api_call "$1" "$2" "$3")
+              http_code=$(echo "$resp" | tail -1)
+              body=$(echo "$resp" | sed '$d')
+              if [ "$http_code" = "201" ] || [ "$http_code" = "200" ] || [ "$http_code" = "204" ]; then
+                echo "$body"
+                return 0
+              fi
+              if [ "$http_code" = "403" ] && echo "$body" | grep -q "rate limit"; then
+                echo "Rate limited (attempt $attempt/$max_attempts). Waiting ${delay}s…"
+                sleep "$delay"
+                delay=$((delay * 2))
+                attempt=$((attempt + 1))
+              else
+                echo "Create release: HTTP $http_code" >&2
+                echo "Error response: $body" >&2
+                return 1
+              fi
+            done
+            echo "Still rate limited after $max_attempts attempts" >&2
+            return 1
+          }
+
+          # ── check rate limit (from headers, no extra API call) ────
+          echo "=== Rate limit status ==="
+          curl -sI -H "Authorization: Bearer $TOKEN" \
+            "https://api.github.com/repos/$REPO" 2>/dev/null | \
+            grep -i '^x-ratelimit-' || true
+
           echo "=== Release assets ==="
           ls -la release/
-          
-          echo "=== Creating release for tag: ${{ github.ref_name }} ==="
-          # Create the release first
-          RESP=$(curl -s -w "\n%{http_code}" \
-            -X POST \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/releases" \
-            -d "{\"tag_name\":\"${{ github.ref_name }}\",\"generate_release_notes\":true}")
-          
-          HTTP_CODE=$(echo "$RESP" | tail -1)
-          BODY=$(echo "$RESP" | sed '$d')
-          echo "Create release: HTTP $HTTP_CODE"
-          
-          if [ "$HTTP_CODE" != "201" ]; then
-            echo "Error response: $BODY"
-            exit 1
-          fi
-          
+
+          echo "=== Creating release for tag: $TAG ==="
+          BODY=$(retry_with_backoff POST "releases" \
+            "{\"tag_name\":\"$TAG\",\"generate_release_notes\":true}") || exit 1
+
           # Get the upload URL
           UPLOAD_URL=$(echo "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['upload_url'].replace('{?name,label}',''))")
-          
-          # Upload each asset
+
+          # Upload each asset (with retry + backoff)
           for f in release/*.dmg release/*.exe release/*.blockmap; do
             [ -f "$f" ] || continue
             name=$(basename "$f")
             echo "Uploading: $name"
-            curl -s --fail-with-body \
-              -X POST \
-              -H "Authorization: Bearer $TOKEN" \
-              -H "Content-Type: application/octet-stream" \
-              "$UPLOAD_URL?name=$name" \
-              --data-binary "@$f"
+            uploaded=0
+            delay=10
+            for attempt in $(seq 1 5); do
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X POST \
+                -H "Authorization: Bearer $TOKEN" \
+                -H "Content-Type: application/octet-stream" \
+                "$UPLOAD_URL?name=$name" \
+                --data-binary "@$f")
+              if [ "$HTTP_CODE" = "201" ]; then
+                echo "  ✓ $name"
+                uploaded=1
+                break
+              elif [ "$HTTP_CODE" = "403" ]; then
+                echo "  Rate limited uploading $name (attempt $attempt/5), waiting ${delay}s…"
+                sleep "$delay"
+                delay=$((delay * 2))
+              else
+                echo "  ✗ $name (HTTP $HTTP_CODE)"
+                break
+              fi
+            done
+            [ "$uploaded" = "1" ] || { echo "  ✗ Failed to upload $name"; exit 1; }
           done
-          
+
           echo "=== Release created successfully ==="

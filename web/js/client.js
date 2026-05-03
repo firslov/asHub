@@ -1662,33 +1662,249 @@
   const configToggle = document.getElementById("config-toggle");
   const configClose = document.getElementById("config-close");
   const configReset = document.getElementById("config-reset");
+
+  // Simple mode elements
+  const configBodySimple = document.getElementById("config-body-simple");
+  const configProvider = document.getElementById("config-provider");
+  const configProviderDesc = document.getElementById("config-provider-desc");
+  const configApikey = document.getElementById("config-apikey");
+  const configApikeyToggle = document.getElementById("config-apikey-toggle");
+  const configSaveSimple = document.getElementById("config-save-simple");
+
+  // Advanced mode elements
+  const configBodyAdvanced = document.getElementById("config-body-advanced");
   const configEditor = document.getElementById("config-editor");
   const configSave = document.getElementById("config-save");
   const configFormat = document.getElementById("config-format");
   const configValid = document.getElementById("config-valid");
   const configInvalid = document.getElementById("config-invalid");
 
-  let originalConfig = "";
+  // Mode tabs
+  const configModeTabs = document.getElementById("config-mode-tabs");
 
+  let configMode = "simple";
+  let originalConfig = "";
+  let originalApiKey = "";
+
+  // ── Provider definitions ──────────────────────────────────────────
+  const PROVIDERS = {
+    deepseek: {
+      name: "DeepSeek",
+      description: "DeepSeek V4 models with 1M context window",
+      baseURL: "https://api.deepseek.com",
+      defaultModel: "deepseek-v4-flash",
+      models: [
+        {
+          id: "deepseek-v4-pro",
+          contextWindow: 1000000,
+          maxTokens: 300000,
+          echoReasoning: true,
+        },
+        {
+          id: "deepseek-v4-flash",
+          contextWindow: 1000000,
+          maxTokens: 300000,
+          echoReasoning: true,
+        },
+      ],
+    },
+  };
+
+  // ── Build config from simple form ───────────────────────────────
+  const buildConfig = () => {
+    const providerId = configProvider.value;
+    const apiKey = configApikey.value.trim();
+    const providerDef = PROVIDERS[providerId];
+    if (!providerDef) return null;
+
+    // Parse original config so we can preserve non-simple fields
+    // (extensions, defaultBackend, other providers, etc.)
+    let existing = {};
+    try { existing = JSON.parse(originalConfig || "{}"); } catch {}
+
+    const config = {
+      providers: {
+        [providerId]: {
+          baseURL: providerDef.baseURL,
+          apiKey: apiKey || "YOUR_API_KEY",
+          defaultModel: providerDef.defaultModel,
+          models: providerDef.models,
+        },
+      },
+      defaultProvider: providerId,
+    };
+
+    // Preserve all top-level fields from originalConfig that aren't
+    // providers/defaultProvider (e.g. extensions, defaultBackend, etc.)
+    for (const [key, val] of Object.entries(existing)) {
+      if (key !== "providers" && key !== "defaultProvider") {
+        config[key] = val;
+      }
+    }
+
+    // Merge providers from originalConfig that aren't the selected one
+    if (existing.providers && typeof existing.providers === "object") {
+      for (const [key, val] of Object.entries(existing.providers)) {
+        if (!(key in config.providers)) {
+          config.providers[key] = val;
+        }
+      }
+    }
+
+    return config;
+  };
+
+  // ── Parse existing config into simple form ──────────────────────
+  const parseConfigToSimple = (config) => {
+    if (!config || typeof config !== "object" || Object.keys(config).length === 0) {
+      configProvider.value = "deepseek";
+      configApikey.value = "";
+      return;
+    }
+
+    // Detect provider from defaultProvider or providers keys
+    const dp = config.defaultProvider;
+    let detectedProvider = null;
+    let detectedApiKey = "";
+
+    if (dp && PROVIDERS[dp]) {
+      detectedProvider = dp;
+    } else if (config.providers && typeof config.providers === "object") {
+      // Find the first known provider
+      for (const key of Object.keys(config.providers)) {
+        if (PROVIDERS[key]) {
+          detectedProvider = key;
+          break;
+        }
+      }
+    }
+
+    if (detectedProvider) {
+      configProvider.value = detectedProvider;
+      if (config.providers && config.providers[detectedProvider]) {
+        const p = config.providers[detectedProvider];
+        if (typeof p.apiKey === "string" && p.apiKey !== "YOUR_API_KEY") {
+          detectedApiKey = p.apiKey;
+        }
+      }
+    } else {
+      configProvider.value = "deepseek";
+    }
+
+    configApikey.value = detectedApiKey;
+  };
+
+  // ── Mode switching ───────────────────────────────────────────────
+  const switchConfigMode = (mode) => {
+    configMode = mode;
+
+    // Update tab active states
+    configModeTabs.querySelectorAll(".config-mode-tab").forEach((tab) => {
+      tab.classList.toggle("active", tab.dataset.mode === mode);
+    });
+
+    if (mode === "simple") {
+      configBodySimple.removeAttribute("hidden");
+      configBodyAdvanced.setAttribute("hidden", "");
+      // Parse current JSON editor content into simple form
+      try {
+        const parsed = JSON.parse(configEditor.value || "{}");
+        parseConfigToSimple(parsed);
+      } catch {
+        parseConfigToSimple({});
+      }
+      updateProviderDesc();
+    } else {
+      configBodySimple.setAttribute("hidden", "");
+      configBodyAdvanced.removeAttribute("hidden");
+      // buildConfig() already merges existing providers and preserves
+      // extensions / defaultBackend / other fields from originalConfig.
+      const config = buildConfig();
+      configEditor.value = config
+        ? JSON.stringify(config, null, 2)
+        : originalConfig || "{}";
+      validateJson();
+      configEditor.focus();
+    }
+  };
+
+  // ── Provider description ─────────────────────────────────────────
+  const updateProviderDesc = () => {
+    const providerId = configProvider.value;
+    const def = PROVIDERS[providerId];
+    if (def && configProviderDesc) {
+      configProviderDesc.textContent = def.description;
+    }
+  };
+
+  // ── Toggle API key visibility ────────────────────────────────────
+  let apiKeyVisible = false;
+  configApikeyToggle?.addEventListener("click", () => {
+    apiKeyVisible = !apiKeyVisible;
+    configApikey.type = apiKeyVisible ? "text" : "password";
+    configApikeyToggle.classList.toggle("showing", apiKeyVisible);
+  });
+
+  // ── Provider change ──────────────────────────────────────────────
+  configProvider?.addEventListener("change", () => {
+    updateProviderDesc();
+  });
+
+  // ── Open / close ─────────────────────────────────────────────────
   const setConfigOpen = async (on) => {
     if (on) {
       configOverlay.removeAttribute("hidden");
+      // Load existing config from server
+      let rawConfig = {};
       try {
         const r = await fetch("/api/config");
-        const data = await r.json();
-        originalConfig = JSON.stringify(data, null, 2);
-        configEditor.value = originalConfig;
-      } catch {
-        originalConfig = "{}";
-        configEditor.value = originalConfig;
+        rawConfig = await r.json();
+      } catch {}
+      originalConfig = JSON.stringify(rawConfig, null, 2);
+      configEditor.value = originalConfig;
+
+      // Preserve original API key in case user re-saves without re-entering it
+      originalApiKey = "";
+      if (rawConfig.providers && rawConfig.defaultProvider && rawConfig.providers[rawConfig.defaultProvider]) {
+        const pk = rawConfig.providers[rawConfig.defaultProvider].apiKey;
+        if (typeof pk === "string" && pk !== "YOUR_API_KEY") {
+          originalApiKey = pk;
+        }
       }
-      validateJson();
-      configEditor.focus();
+
+      // Detect mode: if there's more than just one known provider, go advanced
+      const hasExtraProviders = rawConfig.providers &&
+        typeof rawConfig.providers === "object" &&
+        Object.keys(rawConfig.providers).some((k) => !(k in PROVIDERS));
+      const hasExtensions = Array.isArray(rawConfig.extensions) && rawConfig.extensions.length > 0;
+      const hasExtraFields = Object.keys(rawConfig).some(
+        (k) => !["providers", "defaultProvider", "extensions", "defaultBackend"].includes(k)
+      );
+
+      if (hasExtraProviders || hasExtensions || hasExtraFields) {
+        switchConfigMode("advanced");
+      } else {
+        switchConfigMode("simple");
+      }
+
+      if (configMode === "simple") {
+        parseConfigToSimple(rawConfig);
+      } else {
+        validateJson();
+      }
     } else {
       configOverlay.setAttribute("hidden", "");
     }
   };
 
+  // ── Mode tab clicks ──────────────────────────────────────────────
+  configModeTabs?.addEventListener("click", (ev) => {
+    const tab = ev.target.closest(".config-mode-tab");
+    if (!tab) return;
+    switchConfigMode(tab.dataset.mode);
+  });
+
+  // ── Advanced: JSON validation ────────────────────────────────────
   const validateJson = () => {
     const val = configEditor.value;
     try {
@@ -1721,23 +1937,43 @@
     }
   });
 
-  configSave?.addEventListener("click", async () => {
-    if (!validateJson()) return;
-    const val = configEditor.value;
+  // ── Save (shared logic) ──────────────────────────────────────────
+  const doSave = async (jsonStr) => {
     try {
       const r = await fetch("/api/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: val,
+        body: jsonStr,
       });
       if (!r.ok) throw new Error(await r.text());
-      originalConfig = val;
+      originalConfig = jsonStr;
       setConfigOpen(false);
     } catch (e) {
       alert(`save failed: ${e.message ?? e}`);
     }
+  };
+
+  // ── Advanced: save button ────────────────────────────────────────
+  configSave?.addEventListener("click", async () => {
+    if (!validateJson()) return;
+    await doSave(configEditor.value);
   });
 
+  // ── Simple: save button ──────────────────────────────────────────
+  configSaveSimple?.addEventListener("click", async () => {
+    const config = buildConfig();
+    if (!config) return;
+
+    // Replace placeholder if user didn't enter a key but one already existed
+    if (!configApikey.value.trim() && originalApiKey) {
+      const providerId = configProvider.value;
+      config.providers[providerId].apiKey = originalApiKey;
+    }
+
+    await doSave(JSON.stringify(config, null, 2) + "\n");
+  });
+
+  // ── Advanced: format button ──────────────────────────────────────
   configFormat?.addEventListener("click", () => {
     try {
       const parsed = JSON.parse(configEditor.value);
@@ -1746,9 +1982,14 @@
     } catch {}
   });
 
+  // ── Reset ────────────────────────────────────────────────────────
   configReset?.addEventListener("click", () => {
-    configEditor.value = originalConfig;
-    validateJson();
+    if (configMode === "advanced") {
+      configEditor.value = originalConfig;
+      validateJson();
+    } else {
+      parseConfigToSimple(JSON.parse(originalConfig || "{}"));
+    }
   });
 
   configToggle?.addEventListener("click", () => setConfigOpen(configOverlay.hasAttribute("hidden")));

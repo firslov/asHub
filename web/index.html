@@ -153,6 +153,10 @@
       <div class="config-modal">
         <div class="config-head">
           <span class="config-title">Settings</span>
+          <div class="config-mode-tabs" id="config-mode-tabs">
+            <button class="config-mode-tab active" data-mode="simple">Simple</button>
+            <button class="config-mode-tab" data-mode="advanced">Advanced</button>
+          </div>
           <span class="config-path" id="config-path">~/.agent-sh/settings.json</span>
           <div class="config-head-actions">
             <button class="bar-btn icon" id="config-reset" title="Reset to defaults">
@@ -169,7 +173,39 @@
             </button>
           </div>
         </div>
-        <div class="config-body">
+        <!-- Simple config mode -->
+        <div class="config-body" id="config-body-simple">
+          <div class="config-field">
+            <label class="config-label" for="config-provider">Provider</label>
+            <div class="config-select-wrap">
+              <select id="config-provider" class="config-select">
+                <option value="deepseek">DeepSeek</option>
+              </select>
+              <svg class="config-select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="1 1 5 5 9 1"></polyline>
+              </svg>
+            </div>
+            <span class="config-hint" id="config-provider-desc">DeepSeek V4 models with 1M context window</span>
+          </div>
+          <div class="config-field">
+            <label class="config-label" for="config-apikey">API Key</label>
+            <div class="config-apikey-wrap">
+              <input id="config-apikey" class="config-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+              <button class="config-apikey-toggle" id="config-apikey-toggle" type="button" title="Show/hide API key">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/>
+                  <circle cx="8" cy="8" r="2"/>
+                </svg>
+              </button>
+            </div>
+            <span class="config-hint">Your API key is stored locally in ~/.agent-sh/settings.json</span>
+          </div>
+          <div class="config-actions">
+            <button class="bar-btn config-btn-save" id="config-save-simple">save & reload</button>
+          </div>
+        </div>
+        <!-- Advanced config mode (JSON editor) -->
+        <div class="config-body" id="config-body-advanced" hidden>
           <div class="config-editor">
             <textarea id="config-editor" class="config-textarea" spellcheck="false"></textarea>
             <div class="config-editor-status">

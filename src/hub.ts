@@ -715,8 +715,23 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     pushFrame(session, "agent:processing-start", sseFrame(meta("agent:processing-start"), {}));
   }
 
-  session.bridge.submit(query)
+  // Safety timeout: if the bridge never settles (e.g. agent backend not
+  // registered, internal deadlock), force-push an error frame so the UI
+  // doesn't spin forever. 5 minutes is generous for LLM + tool chains.
+  const SUBMIT_TIMEOUT_MS = 5 * 60 * 1000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try { session.bridge.cancel(); } catch {}
+      reject(new Error("Request timed out — the agent may be stuck."));
+    }, SUBMIT_TIMEOUT_MS);
+  });
+
+  const cleanup = () => { if (timer !== undefined) clearTimeout(timer); };
+
+  Promise.race([session.bridge.submit(query), timeout])
     .then((result) => {
+      cleanup();
       if (result.stopReason === "queued") {
         pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query }));
         return;
@@ -736,6 +751,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       }
     })
     .catch((err) => {
+      cleanup();
       pushFrame(session, "agent:error", sseFrame(meta("agent:error"), { message: String(err) }));
     });
 

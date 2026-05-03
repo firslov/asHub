@@ -43,6 +43,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private queryQueue: string[] = [];
   private closed = false;
   private seedMessages: unknown[] | null = null;
+  private backendRegistered = false;
 
   constructor(opts: BridgeOpts) {
     super();
@@ -174,6 +175,10 @@ export class AshBridge extends EventEmitter implements Bridge {
       });
     }
 
+    // Track whether any agent backend registered. Without one, submit()
+    // must reject so the UI doesn't spin forever (e.g. missing API key).
+    onAny("agent:register-backend", () => { this.backendRegistered = true; });
+
     // Turn boundaries — consumed internally to resolve submit() promises;
     // NOT forwarded as BusEvents. The hub synthesizes its own
     // processing-start/done frames around submit() so the start/done pair
@@ -222,6 +227,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   async submit(text: string): Promise<{ stopReason: string }> {
     await this.initPromise;
     if (!this.core) throw new Error("core not initialized");
+    if (!this.backendRegistered) throw new Error("No agent backend configured. Check your API key and model in Settings.");
     if (this.pendingTurn || this.queryQueue.length > 0) {
       this.queryQueue.push(text);
       return { stopReason: "queued" };
@@ -250,6 +256,19 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   cancel(): void {
     this.core?.bus.emit("agent:cancel-request", {});
+    // If no agent backend is registered (e.g. missing API key), the
+    // cancel-request has no listener and pendingTurn would never settle.
+    // Force-resolve so the hub can push a processing-done frame and the
+    // UI stops showing the spinner.
+    if (!this.backendRegistered) {
+      const t = this.pendingTurn;
+      if (t) {
+        this.pendingTurn = null;
+        this.emit("event", { name: "agent:cancelled", payload: {} } satisfies BusEvent);
+        t.resolve({ stopReason: "cancelled" });
+        this.queryQueue.length = 0;
+      }
+    }
   }
 
   execCommand(name: string, args: string): void {

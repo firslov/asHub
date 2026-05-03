@@ -1895,6 +1895,183 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
   box-shadow: 0 4px 16px var(--accent-glow);
 }
 
+/* ── Config mode tabs ─────────────────────────────────────────────── */
+.config-mode-tabs {
+  display: flex;
+  gap: 0;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  border: 1px solid var(--border);
+}
+
+.config-mode-tab {
+  padding: 0.3rem 0.7rem;
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 1px);
+  cursor: pointer;
+  transition: all 0.2s;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.config-mode-tab:hover {
+  color: var(--text);
+  background: var(--bg3);
+}
+
+.config-mode-tab.active {
+  color: var(--accent);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Simple config form ──────────────────────────────────────────── */
+#config-body-simple,
+#config-body-advanced {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 1.2rem 1.4rem;
+  gap: 1rem;
+}
+
+#config-body-simple[hidden],
+#config-body-advanced[hidden] {
+  display: none;
+}
+
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.config-label {
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.config-select-wrap {
+  position: relative;
+}
+
+.config-select {
+  width: 100%;
+  padding: 0.6rem 2rem 0.6rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: 'Geist', 'Inter', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 500;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.config-select:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.config-select option {
+  background: var(--bg2);
+  color: var(--text);
+  padding: 0.5rem;
+}
+
+.config-select-chevron {
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-mid);
+  pointer-events: none;
+  transition: transform 0.2s;
+}
+
+.config-select:focus + .config-select-chevron {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.config-hint {
+  font-family: 'Geist', 'Inter', sans-serif;
+  font-size: 0.75rem;
+  color: var(--text-mid);
+  line-height: 1.4;
+}
+
+.config-apikey-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.config-input {
+  width: 100%;
+  padding: 0.6rem 2.5rem 0.6rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.84rem;
+  transition: all 0.2s;
+}
+
+.config-input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.config-input::placeholder {
+  color: var(--text-faint);
+}
+
+.config-apikey-toggle {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-mid);
+  cursor: pointer;
+  transition: all 0.15s;
+  padding: 0;
+}
+
+.config-apikey-toggle:hover {
+  color: var(--text);
+  background: var(--bg3);
+}
+
+.config-apikey-toggle.showing {
+  color: var(--accent);
+}
+
+/* ── Config preview ───────────────────────────────────────────────── */
 /* ── Thinking block ─────────────────────────────────────────────── */
 .thinking-block {
   margin: 0.4rem 0;

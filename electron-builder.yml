@@ -19,6 +19,7 @@ extraResources:
       - "**/*"
 
 mac:
+  artifactName: Agent-SH-Hub-${version}-${arch}.${ext}
   target:
     - target: dmg
       arch:
@@ -34,6 +35,7 @@ mac:
   icon: electron/icon.icns
 
 win:
+  artifactName: Agent-SH-Hub-Setup-${version}.${ext}
   target:
     - target: nsis
       arch:

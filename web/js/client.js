@@ -482,9 +482,9 @@
         <button class="msg-action-btn" data-action="edit" title="Edit message">✎</button>
         <button class="msg-action-btn" data-action="regen" title="Regenerate response">↻</button>
         <button class="msg-action-btn danger" data-action="delete" title="Delete turn">✕</button>`;
-      actions.querySelector('[data-action="edit"]').addEventListener("click", () => editUserMsg(box));
-      actions.querySelector('[data-action="regen"]').addEventListener("click", () => regenTurn(box));
-      actions.querySelector('[data-action="delete"]').addEventListener("click", () => deleteTurn(box));
+      actions.querySelector('[data-action="edit"]')?.addEventListener("click", () => editUserMsg(box));
+      actions.querySelector('[data-action="regen"]')?.addEventListener("click", () => regenTurn(box));
+      actions.querySelector('[data-action="delete"]')?.addEventListener("click", () => deleteTurn(box));
       box.appendChild(actions);
       // Store original query text for edit/regen
       box._queryText = p?.query ?? "";
@@ -2067,6 +2067,7 @@
     if (isProcessing) return;
     const turn = Number(el.dataset.turn);
     if (!Number.isInteger(turn) || turn < 0) return;
+    if (!confirm("Delete this turn and everything after it?")) return;
     try {
       await rewindToTurn(turn);
       location.reload();
@@ -2082,16 +2083,23 @@
     const turn = Number(box.dataset.turn);
     const query = box._queryText;
     if (!Number.isInteger(turn) || turn < 0 || !query) return;
+
+    // Phase 1: rewind.  If this fails, nothing changed — stay on page.
     try {
       await rewindToTurn(turn);
-      await submitAndReload(query);
     } catch (e) {
       alert(`Regenerate failed: ${e.message ?? e}`);
-    } finally {
-      // Always reload so the UI reflects the actual context state,
-      // even if submit failed after a successful rewind.
-      location.reload();
+      return; // don't reload — context is unchanged
     }
+
+    // Phase 2: resubmit.  Context was already rewound, so we always
+    // reload afterwards to keep the UI consistent.
+    try {
+      await submitAndReload(query);
+    } catch (e) {
+      alert(`Regenerate: message resubmit failed.\n${e.message ?? e}`);
+    }
+    location.reload();
   };
 
   // ── Action: edit user message ───────────────────────────────────────
@@ -2100,6 +2108,7 @@
   const editUserMsg = (box) => {
     if (isProcessing) return;
     if (box.classList.contains("editing")) return;
+    if (box._editingLocked) return;
 
     const qText = box.querySelector(".q-text");
     if (!qText) return;
@@ -2110,8 +2119,8 @@
       actions.innerHTML = `
         <button class="msg-action-btn" data-action="save" title="Save (Enter)">✓</button>
         <button class="msg-action-btn" data-action="cancel" title="Cancel (Esc)">✗</button>`;
-      actions.querySelector('[data-action="save"]').addEventListener("click", () => saveEdit(box));
-      actions.querySelector('[data-action="cancel"]').addEventListener("click", () => cancelEdit(box));
+      actions.querySelector('[data-action="save"]')?.addEventListener("click", () => saveEdit(box));
+      actions.querySelector('[data-action="cancel"]')?.addEventListener("click", () => cancelEdit(box));
     }
 
     // Switch to edit mode
@@ -2147,50 +2156,64 @@
   };
 
   const cancelEdit = (box) => {
-    const qText = box.querySelector(".q-text");
-    if (qText && box._oldQTextHTML != null) qText.innerHTML = box._oldQTextHTML;
-    box.classList.remove("editing");
-    box._oldQTextHTML = null;
-    // Restore original action buttons
-    const actions = box.querySelector(".msg-actions");
-    if (actions) {
-      actions.innerHTML = `
-        <button class="msg-action-btn" data-action="edit" title="Edit message">✎</button>
-        <button class="msg-action-btn" data-action="regen" title="Regenerate response">↻</button>
-        <button class="msg-action-btn danger" data-action="delete" title="Delete turn">✕</button>`;
-      actions.querySelector('[data-action="edit"]').addEventListener("click", () => editUserMsg(box));
-      actions.querySelector('[data-action="regen"]').addEventListener("click", () => regenTurn(box));
-      actions.querySelector('[data-action="delete"]').addEventListener("click", () => deleteTurn(box));
+    if (box._editingLocked) return;
+    box._editingLocked = true;
+    try {
+      const qText = box.querySelector(".q-text");
+      if (qText && box._oldQTextHTML != null) qText.innerHTML = box._oldQTextHTML;
+      box.classList.remove("editing");
+      box._oldQTextHTML = null;
+      // Restore original action buttons
+      const actions = box.querySelector(".msg-actions");
+      if (actions) {
+        actions.innerHTML = `
+          <button class="msg-action-btn" data-action="edit" title="Edit message">✎</button>
+          <button class="msg-action-btn" data-action="regen" title="Regenerate response">↻</button>
+          <button class="msg-action-btn danger" data-action="delete" title="Delete turn">✕</button>`;
+        actions.querySelector('[data-action="edit"]')?.addEventListener("click", () => editUserMsg(box));
+        actions.querySelector('[data-action="regen"]')?.addEventListener("click", () => regenTurn(box));
+        actions.querySelector('[data-action="delete"]')?.addEventListener("click", () => deleteTurn(box));
+      }
+    } finally {
+      box._editingLocked = false;
     }
   };
 
   const saveEdit = async (box) => {
     if (isProcessing) return;
+    if (box._editingLocked) return;
     const textarea = box.querySelector(".msg-edit-area");
     const newText = textarea?.value?.trim() ?? "";
     if (!newText) {
       // Show feedback that empty input is not allowed
       if (textarea) {
-        textarea.style.borderColor = "var(--red)";
-        textarea.style.boxShadow = "0 0 0 2px rgba(192,57,43,0.15)";
-        setTimeout(() => {
-          textarea.style.borderColor = "";
-          textarea.style.boxShadow = "";
-        }, 800);
+        textarea.classList.add("error");
+        setTimeout(() => textarea.classList.remove("error"), 800);
       }
       return;
     }
     const turn = Number(box.dataset.turn);
     if (!Number.isInteger(turn) || turn < 0) return;
+
+    box._editingLocked = true;
+
+    // Phase 1: rewind.  If this fails, stay in edit mode.
     try {
       await rewindToTurn(turn);
+    } catch (e) {
+      box._editingLocked = false;
+      alert(`Edit failed: ${e.message ?? e}`);
+      return; // don't reload — context is unchanged, keep edit state
+    }
+
+    // Phase 2: resubmit.  Context was already rewound, so we always
+    // reload afterwards to keep the UI consistent.
+    try {
       await submitAndReload(newText);
     } catch (e) {
-      alert(`Edit failed: ${e.message ?? e}`);
-    } finally {
-      // Always reload so the UI reflects the actual context state.
-      location.reload();
+      alert(`Edit: message resubmit failed.\n${e.message ?? e}`);
     }
+    location.reload();
   };
 
   // ── External link interception ────────────────────────────────────────

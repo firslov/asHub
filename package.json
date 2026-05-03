@@ -1,6 +1,6 @@
 {
   "name": "ashub",
-  "version": "0.10.7",
+  "version": "0.10.8",
   "description": "asHub: spawn and supervise headless agent-sh ACP sessions, expose them through a web UI on a single port.",
   "type": "module",
   "main": "electron/main.cjs",

@@ -959,6 +959,42 @@ function snippet(text: string, max: number): string {
   return cleaned.slice(0, max) + "…";
 }
 
+/**
+ * Truncate the session replay buffer so that reconnecting SSE clients don't
+ * see deleted messages reappear.  Must be called after the bridge context has
+ * been compacted (so snapshot() reflects the new message count).
+ */
+async function truncateReplayAfterCompact(session: Session): Promise<void> {
+  try {
+    const snap = await session.bridge.snapshot();
+    const messages = snap.messages as Array<{ role?: string }>;
+    const remainingUserMsgs = messages.filter((m) => m?.role === "user").length;
+    let agentQueryCount = 0;
+    let truncateAt = session.replay.length;
+    for (let i = 0; i < session.replay.length; i++) {
+      const frame = session.replay[i]!;
+      let name = "";
+      try {
+        const inner = JSON.parse(frame.replace(/^data:\s*/, "").trimEnd());
+        name = (inner?.meta?.name ?? "") as string;
+      } catch { /* malformed frame — skip */ }
+      if (name === "agent:query") {
+        if (agentQueryCount >= remainingUserMsgs) {
+          truncateAt = i;
+          break;
+        }
+        agentQueryCount++;
+      }
+    }
+    if (truncateAt < session.replay.length) {
+      session.replay.length = truncateAt;
+      persistReplayFile(session.id, session.replay);
+    }
+  } catch {
+    // If replay truncation fails, the rewind is still valid.
+  }
+}
+
 async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   const body = await readBody(req);
   let toIndex: number;
@@ -973,39 +1009,7 @@ async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse
   }
   try {
     const stats = await session.bridge.compact({ kind: "rewind", toIndex });
-
-    // Truncate replay buffer to match the compacted context so that
-    // reconnecting SSE clients don't see deleted messages reappear.
-    try {
-      const snap = await session.bridge.snapshot();
-      const remainingUserMsgs = (snap.messages as Array<{ role?: string }>)
-        .filter((m) => m?.role === "user").length;
-      let agentQueryCount = 0;
-      let truncateAt = session.replay.length;
-      for (let i = 0; i < session.replay.length; i++) {
-        const frame = session.replay[i]!;
-        let name = "";
-        try {
-          // Parse JSONL frame: "data: {...json...}\n\n"
-          const inner = JSON.parse(frame.replace(/^data:\s*/, "").trimEnd());
-          name = (inner?.meta?.name ?? "") as string;
-        } catch { /* malformed frame — skip */ }
-        if (name === "agent:query") {
-          if (agentQueryCount >= remainingUserMsgs) {
-            truncateAt = i;
-            break;
-          }
-          agentQueryCount++;
-        }
-      }
-      if (truncateAt < session.replay.length) {
-        session.replay.length = truncateAt;
-        persistReplayFile(session.id, session.replay);
-      }
-    } catch {
-      // If snapshot/replay truncation fails, still return rewind success.
-    }
-
+    await truncateReplayAfterCompact(session);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, stats }));
   } catch (err) {
@@ -1048,37 +1052,7 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
       return;
     }
     const stats = await session.bridge.compact({ kind: "rewind", toIndex });
-
-    // Truncate replay buffer to match the compacted context.
-    try {
-      const snap2 = await session.bridge.snapshot();
-      const remainingUserMsgs = (snap2.messages as Array<{ role?: string }>)
-        .filter((m) => m?.role === "user").length;
-      let agentQueryCount = 0;
-      let truncateAt = session.replay.length;
-      for (let i = 0; i < session.replay.length; i++) {
-        const frame = session.replay[i]!;
-        let name = "";
-        try {
-          const inner = JSON.parse(frame.replace(/^data:\s*/, "").trimEnd());
-          name = (inner?.meta?.name ?? "") as string;
-        } catch { /* skip */ }
-        if (name === "agent:query") {
-          if (agentQueryCount >= remainingUserMsgs) {
-            truncateAt = i;
-            break;
-          }
-          agentQueryCount++;
-        }
-      }
-      if (truncateAt < session.replay.length) {
-        session.replay.length = truncateAt;
-        persistReplayFile(session.id, session.replay);
-      }
-    } catch {
-      // If snapshot/replay truncation fails, still return rewind success.
-    }
-
+    await truncateReplayAfterCompact(session);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, stats }));
   } catch (err) {

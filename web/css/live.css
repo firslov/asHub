@@ -635,7 +635,7 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
 }
 
 .live-wrap .terminal-body > *:not(.stream-empty) {
-  max-width: 86ch;
+  max-width: 48rem;
 }
 
 .live-wrap .agent-reply pre {
@@ -816,6 +816,11 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
 .msg-edit-area:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.msg-edit-area.error {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px rgba(192,57,43,0.15);
 }
 
 .agent-reply .md-inline {

@@ -757,6 +757,67 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
   text-decoration-color: var(--cyan);
 }
 
+/* ── Message action buttons ────────────────────────────────────────── */
+.agent-box, .agent-reply { position: relative; }
+
+.msg-actions {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.5rem;
+  display: flex;
+  gap: 0.2rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 5;
+  pointer-events: none;
+}
+.agent-box:hover .msg-actions,
+.agent-box.editing .msg-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.msg-action-btn {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  line-height: 1.4;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.msg-action-btn:hover {
+  color: var(--text);
+  border-color: var(--border-mid);
+  background: var(--bg3);
+}
+.msg-action-btn.danger:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.msg-edit-area {
+  width: 100%;
+  min-height: 2.4em;
+  padding: 0.4rem 0.6rem;
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.92em;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-xs);
+  resize: vertical;
+  outline: none;
+  line-height: 1.6;
+}
+.msg-edit-area:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
 .agent-reply .md-inline {
   background: var(--bg3);
   padding: 0.08rem 0.55rem;

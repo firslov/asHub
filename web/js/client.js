@@ -14,6 +14,7 @@
   const cancelBtn = document.getElementById("cancel-turn");
   let isProcessing = false;
   let isSubmitting = false;
+  let currentTurn = -1;       // incremented on each agent:query, used to tag DOM elements
 
   const setBusy = (b) => {
     isProcessing = b;
@@ -462,15 +463,31 @@
       }
       completedTools = new Set();
       stream.querySelectorAll(".queued-hint").forEach((el) => el.remove());
+      currentTurn++;
       renderTurnSep();
       const box = document.createElement("div");
       box.className = "agent-box";
+      box.dataset.turn = String(currentTurn);
+      const queryText = escape(p?.query ?? "");
       box.innerHTML = `
         <div class="agent-box-head">
           <span class="abh-l">&gt;</span>
           <span class="abh-r">you</span>
         </div>
-        <div class="q-text">${escape(p?.query ?? "")}</div>`;
+        <div class="q-text">${queryText}</div>`;
+      // Action buttons: edit, regenerate, delete
+      const actions = document.createElement("div");
+      actions.className = "msg-actions";
+      actions.innerHTML = `
+        <button class="msg-action-btn" data-action="edit" title="Edit message">✎</button>
+        <button class="msg-action-btn" data-action="regen" title="Regenerate response">↻</button>
+        <button class="msg-action-btn danger" data-action="delete" title="Delete turn">✕</button>`;
+      actions.querySelector('[data-action="edit"]').addEventListener("click", () => editUserMsg(box));
+      actions.querySelector('[data-action="regen"]').addEventListener("click", () => regenTurn(box));
+      actions.querySelector('[data-action="delete"]').addEventListener("click", () => deleteTurn(box));
+      box.appendChild(actions);
+      // Store original query text for edit/regen
+      box._queryText = p?.query ?? "";
       append(box);
     },
 
@@ -511,6 +528,7 @@
       if (!currentReply) {
         currentReply = document.createElement("div");
         currentReply.className = "agent-reply streaming";
+        currentReply.dataset.turn = String(currentTurn);
         append(currentReply);
       }
       currentReplyText += stripAnsi(delta);
@@ -526,6 +544,7 @@
       if (!p?.text) return;
       const block = document.createElement("div");
       block.className = "agent-reply";
+      block.dataset.turn = String(currentTurn);
       block.innerHTML = mdToHtml(stripAnsi(p.text));
       append(block);
       highlightWithin(block);
@@ -1636,6 +1655,9 @@
       return;
     }
     if (ev.key === "Escape") {
+      // Dismiss any open inline edit
+      const editingBox = stream.querySelector(".agent-box.editing");
+      if (editingBox && editingBox._cancelEdit) { editingBox._cancelEdit(); return; }
       const configOverlay = document.getElementById("config-overlay");
       if (configOverlay && !configOverlay.hidden) { setConfigOpen(false); return; }
       if (spinner && !spinner.hidden && sessionId) {
@@ -1998,7 +2020,180 @@
     if (ev.target === configOverlay) setConfigOpen(false);
   });
 
-  // ── External link interception ────────────────────────────────────
+  // ── Message action helpers ──────────────────────────────────────────
+  // All turn-targeting operations use the atomic /context/rewind-to-turn
+  // endpoint so the snapshot→rewind gap is server-side and race-free.
+
+  // Rewind to before a given turn number (atomic server-side operation).
+  const rewindToTurn = async (turn) => {
+    const res = await fetch(`/${sessionId}/context/rewind-to-turn`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turn }),
+    });
+    if (!res.ok) {
+      const msg = await res.text();
+      throw new Error(msg || `rewind failed (${res.status})`);
+    }
+  };
+
+  // Submit a query string (routes /slash commands correctly).
+  const submitAndReload = async (text) => {
+    const trimmed = text.trim();
+    let endpoint, body;
+    if (trimmed.startsWith("/")) {
+      const space = trimmed.indexOf(" ");
+      endpoint = `/${sessionId}/command`;
+      body = JSON.stringify({
+        name: space === -1 ? trimmed : trimmed.slice(0, space),
+        args: space === -1 ? "" : trimmed.slice(space + 1),
+      });
+    } else {
+      endpoint = submitUrl;
+      body = JSON.stringify({ query: trimmed });
+    }
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+    if (!res.ok) throw new Error(await res.text());
+  };
+
+  // ── Action: delete turn ─────────────────────────────────────────────
+  // Rewinds to before the turn's user message, dropping it and everything
+  // after.  Uses the atomic server-side endpoint.
+  const deleteTurn = async (el) => {
+    if (isProcessing) return;
+    const turn = Number(el.dataset.turn);
+    if (!Number.isInteger(turn) || turn < 0) return;
+    try {
+      await rewindToTurn(turn);
+      location.reload();
+    } catch (e) {
+      alert(`Delete failed: ${e.message ?? e}`);
+    }
+  };
+
+  // ── Action: regenerate response ─────────────────────────────────────
+  // Rewinds to before the turn, then resubmits the original query.
+  const regenTurn = async (box) => {
+    if (isProcessing) return;
+    const turn = Number(box.dataset.turn);
+    const query = box._queryText;
+    if (!Number.isInteger(turn) || turn < 0 || !query) return;
+    try {
+      await rewindToTurn(turn);
+      await submitAndReload(query);
+    } catch (e) {
+      alert(`Regenerate failed: ${e.message ?? e}`);
+    } finally {
+      // Always reload so the UI reflects the actual context state,
+      // even if submit failed after a successful rewind.
+      location.reload();
+    }
+  };
+
+  // ── Action: edit user message ───────────────────────────────────────
+  // Replaces the q-text with an inline textarea.  On save: rewinds to
+  // before this message, submits the edited text, and reloads.
+  const editUserMsg = (box) => {
+    if (isProcessing) return;
+    if (box.classList.contains("editing")) return;
+
+    const qText = box.querySelector(".q-text");
+    if (!qText) return;
+
+    // Replace action buttons with save/cancel
+    const actions = box.querySelector(".msg-actions");
+    if (actions) {
+      actions.innerHTML = `
+        <button class="msg-action-btn" data-action="save" title="Save (Enter)">✓</button>
+        <button class="msg-action-btn" data-action="cancel" title="Cancel (Esc)">✗</button>`;
+      actions.querySelector('[data-action="save"]').addEventListener("click", () => saveEdit(box));
+      actions.querySelector('[data-action="cancel"]').addEventListener("click", () => cancelEdit(box));
+    }
+
+    // Switch to edit mode
+    box.classList.add("editing");
+    const orig = box._queryText ?? "";
+    const textarea = document.createElement("textarea");
+    textarea.className = "msg-edit-area";
+    textarea.value = orig;
+    textarea.rows = Math.max(1, Math.min(12, orig.split("\n").length));
+
+    // Store the old content for cancel
+    const oldHTML = qText.innerHTML;
+    box._oldQTextHTML = oldHTML;
+
+    qText.innerHTML = "";
+    qText.appendChild(textarea);
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+    // Enter saves, Shift+Enter inserts newline, Escape cancels
+    textarea.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") { ev.preventDefault(); cancelEdit(box); }
+      if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); saveEdit(box); }
+    });
+
+    // Auto-resize as user types
+    const resize = () => {
+      textarea.style.height = "auto";
+      textarea.style.height = textarea.scrollHeight + "px";
+    };
+    textarea.addEventListener("input", resize);
+    resize();
+  };
+
+  const cancelEdit = (box) => {
+    const qText = box.querySelector(".q-text");
+    if (qText && box._oldQTextHTML != null) qText.innerHTML = box._oldQTextHTML;
+    box.classList.remove("editing");
+    box._oldQTextHTML = null;
+    // Restore original action buttons
+    const actions = box.querySelector(".msg-actions");
+    if (actions) {
+      actions.innerHTML = `
+        <button class="msg-action-btn" data-action="edit" title="Edit message">✎</button>
+        <button class="msg-action-btn" data-action="regen" title="Regenerate response">↻</button>
+        <button class="msg-action-btn danger" data-action="delete" title="Delete turn">✕</button>`;
+      actions.querySelector('[data-action="edit"]').addEventListener("click", () => editUserMsg(box));
+      actions.querySelector('[data-action="regen"]').addEventListener("click", () => regenTurn(box));
+      actions.querySelector('[data-action="delete"]').addEventListener("click", () => deleteTurn(box));
+    }
+  };
+
+  const saveEdit = async (box) => {
+    if (isProcessing) return;
+    const textarea = box.querySelector(".msg-edit-area");
+    const newText = textarea?.value?.trim() ?? "";
+    if (!newText) {
+      // Show feedback that empty input is not allowed
+      if (textarea) {
+        textarea.style.borderColor = "var(--red)";
+        textarea.style.boxShadow = "0 0 0 2px rgba(192,57,43,0.15)";
+        setTimeout(() => {
+          textarea.style.borderColor = "";
+          textarea.style.boxShadow = "";
+        }, 800);
+      }
+      return;
+    }
+    const turn = Number(box.dataset.turn);
+    if (!Number.isInteger(turn) || turn < 0) return;
+    try {
+      await rewindToTurn(turn);
+      await submitAndReload(newText);
+    } catch (e) {
+      alert(`Edit failed: ${e.message ?? e}`);
+    } finally {
+      // Always reload so the UI reflects the actual context state.
+      location.reload();
+    }
+  };
+
+  // ── External link interception ────────────────────────────────────────
   // Agent responses may contain hyperlinks. Clicks on external URLs
   // must never navigate the app window away — instead open them in the
   // system default browser (Electron) or a new tab (browser).

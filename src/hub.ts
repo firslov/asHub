@@ -41,6 +41,8 @@ interface Session {
   firstQuery?: string;
   /** User-set title (empty = auto-generate). */
   userTitle?: string;
+  /** Timestamp of last agent activity — used by idle-timeout heartbeat. */
+  lastActivity: number;
 }
 
 const REPLAY_LIMIT = 500;
@@ -63,6 +65,16 @@ const REPLAY_NAMES = new Set([
   "ui:info",
   "ui:error",
   "session:title",
+]);
+
+/** Agent events that indicate forward progress (reset idle timeout). */
+const ACTIVITY_EVENTS = new Set([
+  "agent:response-chunk",
+  "agent:thinking-chunk",
+  "agent:tool-started",
+  "agent:tool-completed",
+  "agent:tool-output-chunk",
+  "agent:usage",
 ]);
 
 // ── Session persistence ──────────────────────────────────────────────
@@ -89,6 +101,17 @@ function persistReplayFrame(sessionId: string, frame: string): void {
     fs.appendFileSync(path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`), frame);
   } catch {
     // Ignore write errors (e.g. disk full)
+  }
+}
+
+function persistReplayFile(sessionId: string, frames: string[]): void {
+  try {
+    // Use fully synchronous I/O to avoid a race with persistReplayFrame's
+    // appendFileSync — both touch the same file and must be serialised.
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`), frames.join(""));
+  } catch {
+    // Ignore write errors
   }
 }
 
@@ -206,6 +229,7 @@ export function startHub(opts: HubOpts): http.Server {
       }
       if (req.method === "GET" && rest === "/context") return getContext(res, session);
       if (req.method === "POST" && rest === "/context/rewind") return rewindContext(req, res, session);
+      if (req.method === "POST" && rest === "/context/rewind-to-turn") return rewindToTurn(req, res, session);
       if (req.method === "POST" && rest === "/context/drop") return dropContext(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
 
@@ -323,6 +347,7 @@ async function createSession(
     firstTurnDone: !!(existing?.messages?.length),
     firstQuery: existing?.firstQuery,
     userTitle: existing?.userTitle,
+    lastActivity: Date.now(),
   };
 
   bridge.onEvent((e) => {
@@ -383,6 +408,14 @@ function routeEvent(session: Session, e: BusEvent): void {
     id: `hub:${session.id}:${session.segmentSeq}`,
     name: e.name,
   };
+
+  // ── Activity heartbeat ──────────────────────────────────────────
+  // These events indicate the agent is making progress; bump the idle
+  // timestamp so the inactivity timeout in submit() doesn't fire while
+  // the agent is legitimately working (e.g. long reasoning, slow tools).
+  if (ACTIVITY_EVENTS.has(e.name)) {
+    session.lastActivity = Date.now();
+  }
 
   if (e.name === "agent:response-chunk") {
     const blocks = (e.payload as { blocks?: Array<{ type: string; text?: string }> })?.blocks ?? [];
@@ -715,19 +748,35 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     pushFrame(session, "agent:processing-start", sseFrame(meta("agent:processing-start"), {}));
   }
 
-  // Safety timeout: if the bridge never settles (e.g. agent backend not
-  // registered, internal deadlock), force-push an error frame so the UI
-  // doesn't spin forever. 5 minutes is generous for LLM + tool chains.
-  const SUBMIT_TIMEOUT_MS = 5 * 60 * 1000;
+  // Safety timeout: if no agent activity (chunks, tool events) is seen for
+  // the idle window, the agent is considered stuck and we force-push an error.
+  // Large reasoning models (DeepSeek v4, o1-pro) can legitimately think for
+  // many minutes, so a fixed wall-clock timeout is too aggressive. Instead we
+  // use an idle timeout that resets on every activity signal.
+  const IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 3 min idle = stuck
+  let done = false;
+  let rejectTimeout: ((err: Error) => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      try { session.bridge.cancel(); } catch {}
-      reject(new Error("Request timed out — the agent may be stuck."));
-    }, SUBMIT_TIMEOUT_MS);
-  });
+  const timeout = new Promise<never>((_, reject) => { rejectTimeout = reject; });
+  session.lastActivity = Date.now();
 
-  const cleanup = () => { if (timer !== undefined) clearTimeout(timer); };
+  const checkIdle = () => {
+    if (done) return; // prevent reschedule after cleanup
+    const elapsed = Date.now() - session.lastActivity;
+    if (elapsed >= IDLE_TIMEOUT_MS) {
+      done = true;
+      try { session.bridge.cancel(); } catch {}
+      rejectTimeout!(new Error("Request timed out — the agent may be stuck."));
+    } else {
+      timer = setTimeout(checkIdle, IDLE_TIMEOUT_MS - elapsed + 500);
+    }
+  };
+  timer = setTimeout(checkIdle, IDLE_TIMEOUT_MS);
+
+  const cleanup = () => {
+    done = true;
+    if (timer !== undefined) clearTimeout(timer);
+  };
 
   Promise.race([session.bridge.submit(query), timeout])
     .then((result) => {
@@ -924,11 +973,117 @@ async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse
   }
   try {
     const stats = await session.bridge.compact({ kind: "rewind", toIndex });
+
+    // Truncate replay buffer to match the compacted context so that
+    // reconnecting SSE clients don't see deleted messages reappear.
+    try {
+      const snap = await session.bridge.snapshot();
+      const remainingUserMsgs = (snap.messages as Array<{ role?: string }>)
+        .filter((m) => m?.role === "user").length;
+      let agentQueryCount = 0;
+      let truncateAt = session.replay.length;
+      for (let i = 0; i < session.replay.length; i++) {
+        const frame = session.replay[i]!;
+        let name = "";
+        try {
+          // Parse JSONL frame: "data: {...json...}\n\n"
+          const inner = JSON.parse(frame.replace(/^data:\s*/, "").trimEnd());
+          name = (inner?.meta?.name ?? "") as string;
+        } catch { /* malformed frame — skip */ }
+        if (name === "agent:query") {
+          if (agentQueryCount >= remainingUserMsgs) {
+            truncateAt = i;
+            break;
+          }
+          agentQueryCount++;
+        }
+      }
+      if (truncateAt < session.replay.length) {
+        session.replay.length = truncateAt;
+        persistReplayFile(session.id, session.replay);
+      }
+    } catch {
+      // If snapshot/replay truncation fails, still return rewind success.
+    }
+
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, stats }));
   } catch (err) {
     res.statusCode = 500;
     res.end(`rewind failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
+ * Atomically find a user message by its turn number and rewind the context
+ * to drop everything from that message onward.  This avoids the TOCTOU race
+ * where the client fetches context then rewinds in two separate requests.
+ */
+async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  const body = await readBody(req);
+  let turn: number;
+  try {
+    const parsed = JSON.parse(body) as { turn?: number };
+    turn = Number(parsed.turn);
+  } catch {
+    res.statusCode = 400; res.end("invalid body"); return;
+  }
+  if (!Number.isInteger(turn) || turn < 0) {
+    res.statusCode = 400; res.end("turn must be a non-negative integer"); return;
+  }
+  try {
+    const snap = await session.bridge.snapshot();
+    const msgs = snap.messages as Array<{ role?: string }>;
+    let seen = 0;
+    let toIndex = -1;
+    for (let i = 0; i < msgs.length; i++) {
+      if (msgs[i]?.role === "user") {
+        if (seen === turn) { toIndex = i; break; }
+        seen++;
+      }
+    }
+    if (toIndex === -1) {
+      res.statusCode = 404;
+      res.end(`turn ${turn} not found in context`);
+      return;
+    }
+    const stats = await session.bridge.compact({ kind: "rewind", toIndex });
+
+    // Truncate replay buffer to match the compacted context.
+    try {
+      const snap2 = await session.bridge.snapshot();
+      const remainingUserMsgs = (snap2.messages as Array<{ role?: string }>)
+        .filter((m) => m?.role === "user").length;
+      let agentQueryCount = 0;
+      let truncateAt = session.replay.length;
+      for (let i = 0; i < session.replay.length; i++) {
+        const frame = session.replay[i]!;
+        let name = "";
+        try {
+          const inner = JSON.parse(frame.replace(/^data:\s*/, "").trimEnd());
+          name = (inner?.meta?.name ?? "") as string;
+        } catch { /* skip */ }
+        if (name === "agent:query") {
+          if (agentQueryCount >= remainingUserMsgs) {
+            truncateAt = i;
+            break;
+          }
+          agentQueryCount++;
+        }
+      }
+      if (truncateAt < session.replay.length) {
+        session.replay.length = truncateAt;
+        persistReplayFile(session.id, session.replay);
+      }
+    } catch {
+      // If snapshot/replay truncation fails, still return rewind success.
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, stats }));
+  } catch (err) {
+    res.statusCode = 500;
+    res.end(`rewind-to-turn failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 

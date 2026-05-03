@@ -3,6 +3,8 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
 process.env.ASHUB_UNDER = "1";
+// Legacy compat: extensions may still check the old variable name.
+process.env.AGENT_SH_UNDER_HUB = "1";
 
 // =============================================================================
 // CRITICAL FIX: Pre-load tsx and patch module system before ANY imports

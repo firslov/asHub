@@ -333,9 +333,37 @@
     return out.join("\n");
   };
 
+  const HLJS_LANG_BY_EXT = {
+    js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
+    ts: "typescript", tsx: "typescript",
+    py: "python", rb: "ruby", rs: "rust", go: "go",
+    java: "java", kt: "kotlin", swift: "swift",
+    c: "c", h: "c", cpp: "cpp", cc: "cpp", hpp: "cpp", cxx: "cpp",
+    cs: "csharp", php: "php", lua: "lua", pl: "perl", r: "r",
+    sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
+    json: "json", yaml: "yaml", yml: "yaml", toml: "ini", ini: "ini",
+    xml: "xml", html: "xml", htm: "xml", svg: "xml",
+    css: "css", scss: "scss", less: "less",
+    md: "markdown", sql: "sql", dockerfile: "dockerfile",
+    vue: "xml", svelte: "xml",
+  };
+  const langForPath = (path) => {
+    if (!path) return null;
+    const base = path.split(/[\\/]/).pop() ?? "";
+    if (base.toLowerCase() === "dockerfile") return "dockerfile";
+    const ext = base.includes(".") ? base.split(".").pop().toLowerCase() : "";
+    return HLJS_LANG_BY_EXT[ext] ?? null;
+  };
+  const highlightDiffLine = (text, lang) => {
+    if (!lang || !window.hljs || !text) return escape(text ?? "");
+    try { return window.hljs.highlight(text, { language: lang, ignoreIllegals: true }).value; }
+    catch { return escape(text); }
+  };
+
   const renderDiffBlock = (diff, filePath) => {
     const wrap = document.createElement("div");
     wrap.className = "diff-block";
+    const lang = langForPath(filePath);
     const head = document.createElement("div");
     head.className = "diff-head";
     const sign = `+${diff.added ?? 0} -${diff.removed ?? 0}`;
@@ -353,6 +381,12 @@
     head.querySelector(".diff-copy").addEventListener("click", (ev) => {
       copyToClipboard(diffToText(diff, filePath), ev.currentTarget);
     });
+    const body = document.createElement("div");
+    body.className = "diff-body";
+    const rows = document.createElement("div");
+    rows.className = "diff-rows";
+    body.appendChild(rows);
+    wrap.appendChild(body);
     const hunks = Array.isArray(diff.hunks) ? diff.hunks : [];
     for (let h = 0; h < hunks.length; h++) {
       const hunk = hunks[h];
@@ -360,7 +394,7 @@
         const sep = document.createElement("div");
         sep.className = "diff-sep";
         sep.textContent = "⋯";
-        wrap.appendChild(sep);
+        rows.appendChild(sep);
       }
       for (const line of hunk.lines ?? []) {
         const row = document.createElement("div");
@@ -372,8 +406,8 @@
           `<span class="diff-no diff-old">${oldNo}</span>` +
           `<span class="diff-no diff-new">${newNo}</span>` +
           `<span class="diff-sign">${sign}</span>` +
-          `<span class="diff-text">${escape(line.text ?? "")}</span>`;
-        wrap.appendChild(row);
+          `<span class="diff-text hljs">${highlightDiffLine(line.text, lang)}</span>`;
+        rows.appendChild(row);
       }
     }
     return wrap;

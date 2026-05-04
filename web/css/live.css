@@ -1011,6 +1011,8 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
 
 .diff-block.wrapped .diff-line { white-space: pre-wrap; word-break: break-word; }
 .diff-block.wrapped .diff-text { white-space: pre-wrap; }
+.diff-block.wrapped .diff-rows { min-width: 0; }
+.diff-block.wrapped .diff-line { grid-template-columns: 3em 3em 1.5em 1fr; }
 .diff-path { color: var(--text); }
 .diff-stat { color: var(--cyan); margin-left: 0.5rem; }
 .diff-sep {
@@ -1021,11 +1023,17 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
   font-size: 0.7rem;
 }
 
+.diff-body { overflow-x: auto; }
+.diff-rows {
+  display: flex;
+  flex-direction: column;
+  min-width: max-content;
+}
+
 .diff-line {
   display: grid;
-  grid-template-columns: 3em 3em 1.5em 1fr;
+  grid-template-columns: 3em 3em 1.5em max-content;
   white-space: pre;
-  overflow-x: auto;
 }
 
 .diff-no {
@@ -1040,17 +1048,16 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
 .diff-text { padding-right: 0.6rem; }
 
 .diff-context { background: transparent; }
-.diff-context .diff-text { color: var(--text); }
 
 .diff-added { background: rgba(90, 158, 111, 0.1); }
-.diff-added .diff-sign,
-.diff-added .diff-text { color: var(--green); }
+.diff-added .diff-sign { color: var(--green); }
 .diff-added .diff-new { color: var(--green); }
 
 .diff-removed { background: rgba(199, 106, 100, 0.1); }
-.diff-removed .diff-sign,
-.diff-removed .diff-text { color: var(--red); }
+.diff-removed .diff-sign { color: var(--red); }
 .diff-removed .diff-old { color: var(--red); }
+
+.diff-text.hljs { background: transparent; padding: 0; }
 
 .diff-block.diff-preview { border-color: var(--amber); }
 

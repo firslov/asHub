@@ -14,7 +14,8 @@ Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent
 Download from [GitHub Releases](https://github.com/firslov/ashub/releases).
 
 > **macOS:** `xattr -dr com.apple.quarantine "/Applications/asHub.app"`
-> **Windows:** Requires PowerShell 7+ (`winget install Microsoft.PowerShell`).
+>
+> **Windows:** Requires PowerShell 5.1 or later (built into Windows 10/11).
 
 ## Dev
 

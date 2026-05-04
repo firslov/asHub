@@ -203,7 +203,9 @@
   const flushLiveOutput = () => {
     if (!liveToolOutput) return;
     liveToolOutput.rafPending = false;
-    liveToolOutput.blockEl.textContent = liveToolOutput.lines.join("\n");
+    const el = liveToolOutput.blockEl;
+    el.textContent = liveToolOutput.lines.join("\n");
+    el.scrollTop = el.scrollHeight;
     maybeScroll();
   };
   const scheduleLiveOutput = () => {

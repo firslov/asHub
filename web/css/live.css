@@ -934,6 +934,12 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
   margin: 0;
   font: inherit;
   color: inherit;
+  display: block;
+}
+
+.tool-body:not(.tool-body-live) > .tool-body-text {
+  max-height: 24em;
+  overflow-y: auto;
 }
 
 .tool-body-actions {
@@ -2245,7 +2251,8 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
   line-height: 1.55;
   background: var(--bg3);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  overflow-x: auto;
+  max-height: 24em;
+  overflow: auto;
   position: relative;
 }
 

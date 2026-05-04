@@ -1264,18 +1264,7 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
 
 .tool-group:not(.collapsed) .tool-group-head { color: var(--text-dim); }
 
-.tool-group-body {
-  max-height: 1000px;
-  opacity: 1;
-  overflow: hidden;
-  transition: max-height 0.3s var(--ease-out-expo), opacity 0.2s;
-}
-
-.tool-group.collapsed .tool-group-body {
-  max-height: 0;
-  opacity: 0;
-}
-
+.tool-group.collapsed .tool-group-body { display: none; }
 .tool-group.collapsed .tool-group-head { margin-bottom: 0; }
 
 /* ── Tool detail ─────────────────────────────────────────────────── */

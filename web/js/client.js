@@ -49,8 +49,11 @@
     stream.scrollHeight - stream.scrollTop - stream.clientHeight <= SCROLL_SLOP;
   const pill = document.getElementById("scroll-pill");
   let stickToBottom = true;
+  const jumpToBottom = () => {
+    stream.scrollTo({ top: stream.scrollHeight, behavior: "instant" });
+  };
   const scrollToBottom = () => {
-    stream.scrollTop = stream.scrollHeight;
+    stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
     stickToBottom = true;
     if (pill) pill.hidden = true;
   };
@@ -61,7 +64,7 @@
   pill?.addEventListener("click", scrollToBottom);
   const maybeScroll = () => {
     if (stickToBottom) {
-      stream.scrollTop = stream.scrollHeight;
+      jumpToBottom();
     } else if (pill) {
       pill.hidden = false;
     }
@@ -849,6 +852,7 @@
           row.parentNode.insertBefore(block, row.nextSibling);
         }
       }
+      maybeScroll();
     },
 
     // Stream tool output in real-time — bash stdout, write_file diffs, etc.

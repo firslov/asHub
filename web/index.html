@@ -98,6 +98,30 @@
           </div>
           <div class="terminal-body" id="stream">
             <div class="stream-empty" id="stream-empty">
+              <div class="stream-empty-brand">
+                <div class="stream-empty-logo">
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                      <linearGradient id="lg" x1="0" y1="0" x2="0.5" y2="1">
+                        <stop offset="0%" stop-color="#1a1a1f"/>
+                        <stop offset="100%" stop-color="#252528"/>
+                      </linearGradient>
+                      <filter id="empty-logo-glow" x="-4" y="-4" width="56" height="56" filterUnits="userSpaceOnUse">
+                        <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/>
+                        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                      </filter>
+                    </defs>
+                    <rect x="1" y="1" width="46" height="46" rx="14" fill="url(#lg)" stroke="var(--logo-border)" stroke-width="1.5"/>
+                    <rect x="4" y="4" width="40" height="40" rx="11" stroke="var(--accent-soft)" stroke-width="0.5" opacity="0.5"/>
+                    <g filter="url(#empty-logo-glow)">
+                      <path d="M14 16 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/>
+                      <path d="M14 16 L28 24 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      <rect x="30" y="19" width="3" height="10" rx="1.5" fill="var(--cyan)"/>
+                    </g>
+                  </svg>
+                </div>
+                <div class="stream-empty-line"></div>
+              </div>
               <div class="stream-empty-title">ready when you are.</div>
               <div class="stream-empty-sub">ask anything — the agent can explore files, run commands, <em>reason</em>, and edit code.</div>
               <button class="stream-empty-prompt" id="stream-empty-prompt">

@@ -59,6 +59,10 @@
   --scrollbar-thumb: #c8c8d2;
   --scrollbar-track: transparent;
 
+  /* Logo / brand */
+  --logo-bg:      linear-gradient(135deg, #1a1a1f 0%, #252528 100%);
+  --logo-border:  rgba(184, 134, 11, 0.14);
+
   /* Transitions */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -107,6 +111,9 @@
   --shadow-glow: 0 0 40px rgba(212, 168, 83, 0.06);
 
   --scrollbar-thumb: #484854;
+
+  --logo-bg:      linear-gradient(135deg, #2a2a30 0%, #32323a 100%);
+  --logo-border:  rgba(212, 168, 83, 0.22);
 }
 
 [data-theme="dark"] nav.scrolled {
@@ -131,7 +138,8 @@
 
 [data-theme="dark"] .stream-empty {
   background:
-    radial-gradient(ellipse at 50% 30%, rgba(212, 168, 83, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse 70% 40% at 50% 25%, rgba(212, 168, 83, 0.06) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 30% at 30% 65%, rgba(77, 184, 196, 0.05) 0%, transparent 50%),
     radial-gradient(ellipse at 50% 95%, var(--bg) 0%, transparent 60%);
 }
 

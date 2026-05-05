@@ -7,6 +7,7 @@ Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent
 - **Multi-session** — sidebar to spawn, switch, and close sessions
 - **Session persistence** — conversations survive restarts
 - **Live streaming** — SSE with Markdown, syntax-highlighted code, diff views, and tool calls
+- **Reasoning compaction** — consecutive think→tool rounds auto-collapse into a single expandable block
 - **Desktop native** — packaged for macOS (Apple Silicon) and Windows (x64)
 
 ## Install

@@ -44,6 +44,8 @@ interface Session {
   userTitle?: string;
   /** Timestamp of last agent activity — used by idle-timeout heartbeat. */
   lastActivity: number;
+  /** How many tools are currently running (tracked via agent:tool-started / agent:tool-completed). */
+  toolsRunning: number;
 }
 
 const REPLAY_LIMIT = 500;
@@ -57,6 +59,7 @@ const REPLAY_NAMES = new Set([
   "agent:processing-done",
   "agent:tool-started",
   "agent:tool-completed",
+  "agent:tool-batch",
   "agent:cancelled",
   "agent:error",
   "agent:queued",
@@ -72,6 +75,7 @@ const REPLAY_NAMES = new Set([
 const ACTIVITY_EVENTS = new Set([
   "agent:response-chunk",
   "agent:thinking-chunk",
+  "agent:tool-batch",
   "agent:tool-started",
   "agent:tool-completed",
   "agent:tool-output-chunk",
@@ -419,6 +423,7 @@ async function createSession(
     firstQuery: existing?.firstQuery,
     userTitle: existing?.userTitle,
     lastActivity: Date.now(),
+    toolsRunning: 0,
   };
 
   bridge.onEvent((e) => {
@@ -487,6 +492,14 @@ function routeEvent(session: Session, e: BusEvent): void {
   if (ACTIVITY_EVENTS.has(e.name)) {
     session.lastActivity = Date.now();
   }
+
+  // ── Tool-running tracking ────────────────────────────────────────
+  // File-modifying tools (write_file, edit_file) don't emit output-chunk
+  // events during execution (the permission diff preview suppresses them),
+  // so the idle timeout must tolerate longer tool execution windows.
+  // Track how many tools are in-flight and use a dynamic idle window.
+  if (e.name === "agent:tool-started") session.toolsRunning++;
+  if (e.name === "agent:tool-completed" && session.toolsRunning > 0) session.toolsRunning--;
 
   if (e.name === "agent:response-chunk") {
     const blocks = (e.payload as { blocks?: Array<{ type: string; text?: string }> })?.blocks ?? [];
@@ -865,7 +878,11 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   // Large reasoning models (DeepSeek v4, o1-pro) can legitimately think for
   // many minutes, so a fixed wall-clock timeout is too aggressive. Instead we
   // use an idle timeout that resets on every activity signal.
-  const IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 3 min idle = stuck
+  //
+  // File-modifying tools (write_file, edit_file) suppress output-chunk events
+  // during execution (the diff preview is shown up-front), so tool execution
+  // can be a long idle stretch.  When tools are running the idle window is
+  // widened to 10 min so large writes don't false-trigger.
   let done = false;
   let rejectTimeout: ((err: Error) => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -875,15 +892,16 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   const checkIdle = () => {
     if (done) return; // prevent reschedule after cleanup
     const elapsed = Date.now() - session.lastActivity;
-    if (elapsed >= IDLE_TIMEOUT_MS) {
+    const windowMs = (session.toolsRunning > 0 ? 10 : 3) * 60 * 1000;
+    if (elapsed >= windowMs) {
       done = true;
       try { session.bridge.cancel(); } catch {}
       rejectTimeout!(new Error("Request timed out — the agent may be stuck."));
     } else {
-      timer = setTimeout(checkIdle, IDLE_TIMEOUT_MS - elapsed + 500);
+      timer = setTimeout(checkIdle, windowMs - elapsed + 500);
     }
   };
-  timer = setTimeout(checkIdle, IDLE_TIMEOUT_MS);
+  timer = setTimeout(checkIdle, 3 * 60 * 1000); // always start with 3-min check
 
   const cleanup = () => {
     done = true;

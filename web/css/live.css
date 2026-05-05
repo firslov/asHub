@@ -2428,6 +2428,67 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
   opacity: 0;
 }
 
+/* ── Reasoning phase (consecutive thought + tool rounds) ─────────── */
+.reasoning-phase {
+  margin: 0.5rem 0;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-dim, #a78bfa66);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg2);
+}
+
+.reasoning-phase-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  user-select: none;
+  text-align: left;
+}
+.reasoning-phase-head:hover {
+  color: var(--text-mid);
+  background: var(--bg4);
+}
+
+.reasoning-phase .rp-arrow {
+  font-size: 0.65rem;
+  width: 0.85rem;
+  flex-shrink: 0;
+}
+.reasoning-phase .rp-label {
+  font-weight: 500;
+  color: var(--text-mid);
+}
+.reasoning-phase .rp-stat {
+  color: var(--text-dim);
+  background: var(--bg3);
+  padding: 0.1rem 0.45rem;
+  border-radius: 3px;
+  font-size: 0.72rem;
+}
+.reasoning-phase .rp-kind {
+  color: var(--text-faded);
+  font-style: italic;
+  margin-left: auto;
+}
+
+.reasoning-phase-body {
+  border-top: 1px solid var(--border);
+  padding: 0.35rem 0.55rem;
+}
+.reasoning-phase-body .thinking-block,
+.reasoning-phase-body .tool-group {
+  margin: 0.15rem 0;
+}
+
 /* ── Live tool output ────────────────────────────────────────────── */
 .tool-body-live {
   color: var(--text-mid);

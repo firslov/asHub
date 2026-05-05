@@ -24,6 +24,7 @@ const FORWARDED = [
   "agent:info",
   "agent:response-chunk",
   "agent:thinking-chunk",
+  "agent:tool-batch",
   "agent:tool-started",
   "agent:tool-completed",
   "agent:tool-output-chunk",

@@ -20,6 +20,7 @@ import {
 import { createUserBox } from "./actions.js";
 import { updateSessionTitle } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
+import { compactReasoning } from "./stream/compact.js";
 
 const stream = document.getElementById("stream");
 const conn = document.getElementById("conn");
@@ -124,6 +125,7 @@ const handlers = {
     finalizeLiveOutput();
     renderUsage();
     setBusy(false);
+    compactReasoning(stream);
   },
 
   "agent:cancelled": () => {
@@ -132,6 +134,7 @@ const handlers = {
     finalizeThinking();
     finalizeLiveOutput();
     setBusy(false);
+    compactReasoning(stream);
   },
 
   "agent:error": (p) => {
@@ -141,6 +144,7 @@ const handlers = {
     finalizeLiveOutput();
     append(renderErrorCard(p?.message ?? "", p?.detail ?? p?.stack));
     setBusy(false);
+    compactReasoning(stream);
   },
 
   "agent:usage": (p) => { state.lastUsage = p; },

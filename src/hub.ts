@@ -280,6 +280,7 @@ export function startHub(opts: HubOpts): http.Server {
         res.end(JSON.stringify({ ok: true }));
         return;
       }
+      if (req.method === "GET" && rest === "/files") return listFiles(res, session);
       if (req.method === "GET" && rest === "/context") return getContext(res, session);
       if (req.method === "POST" && rest === "/context/rewind") return rewindContext(req, res, session);
       if (req.method === "POST" && rest === "/context/rewind-to-turn") return rewindToTurn(req, res, session);
@@ -746,6 +747,30 @@ async function listDirs(res: http.ServerResponse, prefix: string): Promise<void>
 
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ items }));
+}
+
+async function listFiles(res: http.ServerResponse, session: Session): Promise<void> {
+  const cwd = session.cwd;
+  let entries: fs.Dirent[];
+  try { entries = await fs.promises.readdir(cwd, { withFileTypes: true }); }
+  catch {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ cwd, files: [] }));
+    return;
+  }
+  const files: Array<{ name: string; size: number; kind: "file" | "dir" }> = [];
+  for (const e of entries) {
+    if (e.name.startsWith(".")) continue;
+    files.push({ name: e.name, size: 0, kind: e.isDirectory() ? "dir" : "file" });
+    if (files.length >= 200) break;
+  }
+  // Sort: dirs first, then files; alphabetical within each group.
+  files.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ cwd, files }));
 }
 
 function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, id: string): void {

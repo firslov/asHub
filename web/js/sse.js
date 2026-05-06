@@ -53,13 +53,15 @@ const handlers = {
     finalizeLiveOutput();
     resetCompletedTools();
     startNewSegment();
-    stream.querySelectorAll(".queued-hint").forEach((el) => el.remove());
     const queryText = p?.query ?? "";
-    const pending = stream.querySelector(".agent-box.pending");
-    if (pending && pending._queryText === queryText) {
+    let matched = null;
+    for (const pb of stream.querySelectorAll(".agent-box.pending")) {
+      if (pb._queryText === queryText) { matched = pb; break; }
+    }
+    if (matched) {
       state.currentTurn++;
-      pending.dataset.turn = String(state.currentTurn);
-      pending.classList.remove("pending");
+      matched.dataset.turn = String(state.currentTurn);
+      matched.classList.remove("pending");
       return;
     }
     state.currentTurn++;
@@ -80,16 +82,6 @@ const handlers = {
     showThinking();
   },
 
-  "agent:queued": (p) => {
-    const row = document.createElement("div");
-    row.className = "ui-info queued-hint";
-    const q = p?.query ?? "";
-    row.textContent = q
-      ? `queued: "${q.length > 60 ? q.slice(0, 57) + "…" : q}"`
-      : "queued — will send after current response";
-    append(row);
-  },
-
   "agent:response-chunk": (p) => {
     const blocks = Array.isArray(p?.blocks) ? p.blocks : [];
     const delta = blocks.map(blockToText).join("");
@@ -103,6 +95,8 @@ const handlers = {
   "agent:response-segment": (p) => {
     if (hasReply() || sawLiveSegment()) return;
     if (!p?.text) return;
+    hideThinking();
+    finalizeThinking();
     const block = document.createElement("div");
     block.className = "agent-reply";
     block.dataset.turn = String(state.currentTurn);
@@ -135,6 +129,7 @@ const handlers = {
     hideThinking();
     finalizeThinking();
     finalizeLiveOutput();
+    stream.querySelectorAll(".agent-box.pending").forEach((el) => el.remove());
     setBusy(false);
     compactReasoning(stream);
   },
@@ -157,13 +152,14 @@ const handlers = {
 
   "agent:tool-started": (p) => {
     closeReply();
+    hideThinking();
     finalizeThinking();
     finalizeLiveOutput();
     startNewSegment();
     appendToGroup(buildToolRow(p));
     bumpToolCount();
     // Local "working…" hint for users scrolled past the bar spinner.
-    if (state.isProcessing && !hasReply() && !hasThinkingBlock() && !hasThinkingDots()) {
+    if (state.isProcessing && !hasReply() && !hasThinkingBlock()) {
       showThinking();
     }
   },

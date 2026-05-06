@@ -48,7 +48,7 @@ interface Session {
   toolsRunning: number;
 }
 
-const REPLAY_LIMIT = 500;
+const REPLAY_LIMIT = 5000;
 const REPLAY_NAMES = new Set([
   "agent:info",
   "agent:query",

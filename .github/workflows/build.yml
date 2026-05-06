@@ -154,12 +154,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgtk-3-dev \
             libnotify-dev \
-            libgconf-2-4 \
             libnss3 \
-            libxss1 \
-            libasound2 \
+            libasound2t64 \
             libxtst6 \
-            xdg-utils
+            xdg-utils \
+            libfuse2
 
       - name: Install dependencies
         run: npm ci --ignore-scripts

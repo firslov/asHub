@@ -537,6 +537,50 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* ── Session status indicator (streaming / unread) ───────────────── */
+.session-status {
+  flex-shrink: 0;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  margin: 0 0.65rem 0 0.35rem;
+  opacity: 0;
+  transition: opacity 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Streaming: pulsing cyan dot */
+.session-streaming .session-status {
+  opacity: 1;
+  background: var(--cyan, #4cc9f0);
+  box-shadow: 0 0 6px var(--cyan, #4cc9f0);
+  animation: session-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes session-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--cyan, #4cc9f0); }
+  50% { opacity: 0.5; box-shadow: 0 0 10px var(--cyan, #4cc9f0); }
+}
+
+/* Unread: subtle amber dot */
+.session-unread .session-status {
+  opacity: 1;
+  background: var(--amber, #f0a060);
+  box-shadow: 0 0 4px rgba(240, 160, 96, 0.5);
+}
+
+/* Current session + streaming: more prominent dot */
+.session-list li.current.session-streaming .session-status {
+  width: 0.5rem;
+  height: 0.5rem;
+  box-shadow: 0 0 8px var(--cyan, #4cc9f0);
+}
+
+/* Current session + unread: slightly larger */
+.session-list li.current.session-unread .session-status {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
 /* ── New session form ────────────────────────────────────────────── */
 .new-session-form {
   padding: 0 0.65rem 0.75rem;

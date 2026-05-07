@@ -48,6 +48,10 @@ interface Session {
   toolsRunning: number;
   /** Timestamp of most recent modification (create, title change, new turn, command). */
   lastModified: number;
+  /** Whether the agent is currently processing a turn. */
+  isProcessing: boolean;
+  /** Whether the session has new output since the user last viewed it. */
+  hasUnread: boolean;
 }
 
 const REPLAY_LIMIT = 5000;
@@ -419,6 +423,8 @@ async function createSession(
     lastActivity: Date.now(),
     toolsRunning: 0,
     lastModified: existing?.lastModified ?? existing?.startedAt ?? Date.now(),
+    isProcessing: false,
+    hasUnread: false,
   };
 
   bridge.onEvent((e) => {
@@ -509,6 +515,8 @@ function routeEvent(session: Session, e: BusEvent): void {
 
   if (e.name === "agent:queued-submit") {
     session.lastModified = Date.now();
+    session.isProcessing = true;
+    session.hasUnread = false;
     const query = (e.payload as { query?: string })?.query ?? "";
     pushFrame(session, "agent:query", sseFrame({ ...meta, name: "agent:query" }, { query }));
     pushFrame(session, "agent:processing-start", sseFrame({ ...meta, name: "agent:processing-start" }, {}));
@@ -517,6 +525,8 @@ function routeEvent(session: Session, e: BusEvent): void {
 
   if (e.name === "agent:queued-done") {
     flushSegment(session);
+    session.isProcessing = false;
+    session.hasUnread = true;
     pushFrame(session, "agent:processing-done", sseFrame({ ...meta, name: "agent:processing-done" }, {}));
     // Mirror submit()'s .then() handler for queued turns: persist messages
     // so restarted sessions restore their state, and auto-generate a title
@@ -537,6 +547,10 @@ function routeEvent(session: Session, e: BusEvent): void {
   if (e.name === "agent:info") {
     const info = e.payload as { model?: string } | undefined;
     if (info?.model) session.model = info.model;
+  }
+
+  if (e.name === "agent:cancelled") {
+    session.isProcessing = false;
   }
 
   pushFrame(session, e.name, sseFrame(meta, e.payload));
@@ -655,6 +669,8 @@ function listSessions(res: http.ServerResponse, sessions: Map<string, Session>):
       model: s.model,
       cwd: s.cwd,
       startedAt: s.startedAt,
+      isProcessing: s.isProcessing,
+      hasUnread: s.hasUnread,
     }));
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify(list));
@@ -850,6 +866,8 @@ async function generateTitle(req: http.IncomingMessage, res: http.ServerResponse
 }
 
 function openSse(req: http.IncomingMessage, res: http.ServerResponse, session: Session): void {
+  // User is viewing this session — clear unread indicator.
+  session.hasUnread = false;
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -889,6 +907,8 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
 
   const queued = !!session.bridge.isProcessing?.();
   if (!queued) {
+    session.isProcessing = true;
+    session.hasUnread = false;
     pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query }));
     pushFrame(session, "agent:processing-start", sseFrame(meta("agent:processing-start"), {}));
   }
@@ -950,6 +970,8 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
         return;
       }
       flushSegment(session);
+      session.isProcessing = false;
+      session.hasUnread = true;
       pushFrame(session, "agent:processing-done", sseFrame(meta("agent:processing-done"), {}));
       // Persist messages snapshot so restarted sessions restore their
       // conversation state (not just SSE replay frames).
@@ -967,6 +989,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     })
     .catch((err) => {
       cleanup();
+      session.isProcessing = false;
       pushFrame(session, "agent:error", sseFrame(meta("agent:error"), { message: String(err) }));
     });
 

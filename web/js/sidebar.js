@@ -21,6 +21,22 @@ const shortenCwd = (cwd) => {
   return (path.startsWith("~") ? "~/…/" : "…/") + parts.slice(-2).join("/");
 };
 
+/**
+ * Update the status indicator on the current session's tab.
+ * Called from sse.js on processing-start / processing-done.
+ */
+export const setCurrentSessionStatus = (status) => {
+  const items = sessionList.querySelectorAll("li");
+  for (const li of items) {
+    if (li.classList.contains("current")) {
+      // Remove all status classes first
+      li.classList.remove("session-streaming", "session-unread");
+      if (status) li.classList.add(status);
+      return;
+    }
+  }
+};
+
 const startTitleEdit = (li, instanceId, currentTitle) => {
   sessionList.querySelectorAll(".session-title-edit").forEach((el) => el.remove());
   sessionList.querySelectorAll(".session-title").forEach((el) => el.style.display = "");
@@ -77,6 +93,10 @@ const renderSessions = async () => {
       const li = document.createElement("li");
       const isCurrent = s.instanceId === sessionId;
       if (isCurrent) li.className = "current";
+      // Apply status indicator classes from server data
+      if (s.isProcessing) li.classList.add("session-streaming");
+      else if (s.hasUnread) li.classList.add("session-unread");
+
       const a = document.createElement("a");
       a.href = `/${s.instanceId}/`;
       if (isCurrent) a.addEventListener("click", (ev) => ev.preventDefault());
@@ -85,6 +105,11 @@ const renderSessions = async () => {
       const cwdText = s.cwd ? ` <span class="session-cwd" title="${escape(s.cwd)}">${escape(shortenCwd(s.cwd))}</span>` : "";
       a.innerHTML = `<span class="session-title">${title}</span>${modelText}${cwdText}`;
       li.appendChild(a);
+
+      // Status indicator dot
+      const statusDot = document.createElement("span");
+      statusDot.className = "session-status";
+      li.appendChild(statusDot);
 
       const editBtn = document.createElement("button");
       editBtn.className = "session-edit";

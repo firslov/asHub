@@ -19,7 +19,7 @@ import {
   absorbAsToolBody, trackToolRow,
 } from "./stream/live-output.js";
 import { createUserBox } from "./actions.js";
-import { updateSessionTitle } from "./sidebar.js";
+import { updateSessionTitle, setCurrentSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
 import { compactReasoning } from "./stream/compact.js";
 
@@ -108,6 +108,7 @@ const handlers = {
     state.lastUsage = null;
     hideUsage();
     setBusy(true);
+    setCurrentSessionStatus("session-streaming");
     finalizeThinking();
     finalizeLiveOutput();
     resetCompletedTools();
@@ -155,6 +156,7 @@ const handlers = {
     finalizeLiveOutput();
     renderUsage();
     setBusy(false);
+    setCurrentSessionStatus("session-unread");
     // Defer reasoning compaction during replay batching — the exit hook
     // runs compactReasoning once on the whole stream.
     if (!state.replaying) compactReasoning(stream);
@@ -168,6 +170,7 @@ const handlers = {
     finalizeLiveOutput();
     stream.querySelectorAll(".agent-box.pending").forEach((el) => el.remove());
     setBusy(false);
+    setCurrentSessionStatus("");
     if (!state.replaying) compactReasoning(stream);
     scheduleReplayFlush();
   },
@@ -179,6 +182,7 @@ const handlers = {
     finalizeLiveOutput();
     append(renderErrorCard(p?.message ?? "", p?.detail ?? p?.stack));
     setBusy(false);
+    setCurrentSessionStatus("");
     if (!state.replaying) compactReasoning(stream);
     scheduleReplayFlush();
   },

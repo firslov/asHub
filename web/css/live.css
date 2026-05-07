@@ -551,28 +551,28 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
 /* Streaming: pulsing cyan dot */
 .session-streaming .session-status {
   opacity: 1;
-  background: var(--cyan, #4cc9f0);
-  box-shadow: 0 0 6px var(--cyan, #4cc9f0);
+  background: var(--cyan);
+  box-shadow: 0 0 6px var(--cyan-glow);
   animation: session-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes session-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--cyan, #4cc9f0); }
-  50% { opacity: 0.5; box-shadow: 0 0 10px var(--cyan, #4cc9f0); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--cyan-glow); }
+  50% { opacity: 0.5; box-shadow: 0 0 12px var(--cyan-glow); }
 }
 
 /* Unread: subtle amber dot */
 .session-unread .session-status {
   opacity: 1;
-  background: var(--amber, #f0a060);
-  box-shadow: 0 0 4px rgba(240, 160, 96, 0.5);
+  background: var(--amber);
+  box-shadow: 0 0 5px var(--accent-glow);
 }
 
-/* Current session + streaming: more prominent dot */
+/* Current session + streaming: more prominent glow */
 .session-list li.current.session-streaming .session-status {
   width: 0.5rem;
   height: 0.5rem;
-  box-shadow: 0 0 8px var(--cyan, #4cc9f0);
+  box-shadow: 0 0 10px var(--cyan-soft);
 }
 
 /* Current session + unread: slightly larger */

@@ -103,16 +103,6 @@ async function saveSessionMeta(session: Session): Promise<void> {
   await fs.promises.writeFile(path.join(SESSIONS_DIR, `${session.id}.meta.json`), JSON.stringify(meta));
 }
 
-// ── Batched replay persistence ─────────────────────────────────────────
-// Writing synchronously on every SSE frame (appendFileSync per token) causes
-// UI jank during streaming at 10–50 tokens/sec.  Instead we accumulate frames
-// in memory and flush them in batches with async I/O.
-//
-// persistReplayFile (bulk overwrite on context compaction) drains the buffer
-// first so the file is never corrupted by interleaved writes.  A per-session
-// write-lock (Promise) tracks in-flight async flushes so drain() can await
-// their completion before truncating.
-
 const _writeBufs = new Map<string, { frames: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 const _writeLocks = new Map<string, Promise<void>>();
 const BATCH_FLUSH_MS = 2000;
@@ -122,31 +112,19 @@ function _flushBuf(sessionId: string): void {
   if (!buf || buf.frames.length === 0) return;
   if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
   const frames = buf.frames.splice(0);
-  // Ensure the sessions directory exists (mkdirSync is cheap when the dir
-  // already exists, which it almost always does after the first write).
-  try { fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch { /* ignore */ }
-  const p = new Promise<void>((resolve) => {
+  try { fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch {}
+  const prev = _writeLocks.get(sessionId) ?? Promise.resolve();
+  const p = prev.then(() => new Promise<void>((resolve) => {
     fs.appendFile(
       path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`),
       frames.join(""),
-      () => { _writeLocks.delete(sessionId); resolve(); },
+      () => {
+        if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
+        resolve();
+      },
     );
-  });
+  }));
   _writeLocks.set(sessionId, p);
-}
-
-async function _drainBuf(sessionId: string): Promise<void> {
-  // Wait for any in-flight async flush to complete before touching the file.
-  const lock = _writeLocks.get(sessionId);
-  if (lock) await lock;
-  const buf = _writeBufs.get(sessionId);
-  if (!buf || buf.frames.length === 0) return;
-  if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
-  const frames = buf.frames.splice(0);
-  try {
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.appendFileSync(path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`), frames.join(""));
-  } catch { /* ignore */ }
 }
 
 function persistReplayFrame(sessionId: string, frame: string): void {
@@ -161,16 +139,26 @@ function persistReplayFrame(sessionId: string, frame: string): void {
   }
 }
 
-async function persistReplayFile(sessionId: string, frames: string[]): Promise<void> {
-  // Drain any buffered frames and wait for in-flight async writes before
-  // overwriting so the file is never corrupted.
-  await _drainBuf(sessionId);
-  try {
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.writeFileSync(path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`), frames.join(""));
-  } catch {
-    // Ignore write errors
+function persistReplayFile(sessionId: string, frames: string[]): Promise<void> {
+  const buf = _writeBufs.get(sessionId);
+  if (buf) {
+    if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
+    buf.frames.length = 0;
   }
+  try { fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch {}
+  const prev = _writeLocks.get(sessionId) ?? Promise.resolve();
+  const p = prev.then(() => new Promise<void>((resolve) => {
+    fs.writeFile(
+      path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`),
+      frames.join(""),
+      () => {
+        if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
+        resolve();
+      },
+    );
+  }));
+  _writeLocks.set(sessionId, p);
+  return p;
 }
 
 async function deleteSessionFiles(id: string): Promise<void> {
@@ -804,14 +792,15 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
     try { s.bridge.close(); } catch {}
     sessions.delete(id);
   }
-  // Drop any pending buffered frames and release the in-memory write-buffer
-  // / lock entries for this session.  (The replay file is deleted below, so
-  // flushing would be wasted I/O.)
   const buf = _writeBufs.get(id);
-  if (buf?.timer) { clearTimeout(buf.timer); }
+  if (buf?.timer) { clearTimeout(buf.timer); buf.timer = null; }
   _writeBufs.delete(id);
+  const lock = _writeLocks.get(id);
   _writeLocks.delete(id);
-  deleteSessionFiles(id);
+  void (async () => {
+    if (lock) { try { await lock; } catch {} }
+    await deleteSessionFiles(id);
+  })();
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }
@@ -1126,11 +1115,6 @@ function snippet(text: string, max: number): string {
   return cleaned.slice(0, max) + "…";
 }
 
-/**
- * Truncate the session replay buffer so that reconnecting SSE clients don't
- * see deleted messages reappear.  Must be called after the bridge context has
- * been compacted (so snapshot() reflects the new message count).
- */
 async function truncateReplayAfterCompact(session: Session): Promise<void> {
   try {
     const snap = await session.bridge.snapshot();
@@ -1144,7 +1128,7 @@ async function truncateReplayAfterCompact(session: Session): Promise<void> {
       try {
         const inner = JSON.parse(frame.replace(/^data:\s*/, "").trimEnd());
         name = (inner?.meta?.name ?? "") as string;
-      } catch { /* malformed frame — skip */ }
+      } catch {}
       if (name === "agent:query") {
         if (agentQueryCount >= remainingUserMsgs) {
           truncateAt = i;
@@ -1155,11 +1139,9 @@ async function truncateReplayAfterCompact(session: Session): Promise<void> {
     }
     if (truncateAt < session.replay.length) {
       session.replay.length = truncateAt;
-      await persistReplayFile(session.id, session.replay);
+      void persistReplayFile(session.id, session.replay).catch(() => {});
     }
-  } catch {
-    // If replay truncation fails, the rewind is still valid.
-  }
+  } catch {}
 }
 
 async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {

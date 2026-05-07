@@ -122,16 +122,18 @@ function _flushBuf(sessionId: string): void {
   if (!buf || buf.frames.length === 0) return;
   if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
   const frames = buf.frames.splice(0);
-  // Ensure the sessions directory exists (mkdirSync is cheap when the dir
-  // already exists, which it almost always does after the first write).
-  try { fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch { /* ignore */ }
-  const p = new Promise<void>((resolve) => {
+  try { fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch {}
+  const prev = _writeLocks.get(sessionId) ?? Promise.resolve();
+  const p = prev.then(() => new Promise<void>((resolve) => {
     fs.appendFile(
       path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`),
       frames.join(""),
-      () => { _writeLocks.delete(sessionId); resolve(); },
+      () => {
+        if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
+        resolve();
+      },
     );
-  });
+  }));
   _writeLocks.set(sessionId, p);
 }
 
@@ -804,14 +806,15 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
     try { s.bridge.close(); } catch {}
     sessions.delete(id);
   }
-  // Drop any pending buffered frames and release the in-memory write-buffer
-  // / lock entries for this session.  (The replay file is deleted below, so
-  // flushing would be wasted I/O.)
   const buf = _writeBufs.get(id);
-  if (buf?.timer) { clearTimeout(buf.timer); }
+  if (buf?.timer) { clearTimeout(buf.timer); buf.timer = null; }
   _writeBufs.delete(id);
+  const lock = _writeLocks.get(id);
   _writeLocks.delete(id);
-  deleteSessionFiles(id);
+  void (async () => {
+    if (lock) { try { await lock; } catch {} }
+    await deleteSessionFiles(id);
+  })();
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }

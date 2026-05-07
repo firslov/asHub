@@ -43,6 +43,18 @@
     </aside>
 
     <main class="main">
+      <div class="page-loader" id="page-loader">
+        <div class="page-loader-inner">
+          <svg class="page-loader-logo" width="40" height="40" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="1" y="1" width="46" height="46" rx="14" stroke="var(--accent-soft)" stroke-width="1.5" opacity="0.6"/>
+            <rect x="4" y="4" width="40" height="40" rx="11" stroke="var(--accent)" stroke-width="0.5" opacity="0.3"/>
+            <path d="M14 16 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.5"/>
+            <path d="M14 16 L28 24 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <rect x="30" y="19" width="3" height="10" rx="1.5" fill="var(--cyan)"/>
+          </svg>
+          <span class="page-loader-text">Loading…</span>
+        </div>
+      </div>
       <div class="terminal-wrap live-wrap">
         <div class="terminal">
           <div class="terminal-bar">

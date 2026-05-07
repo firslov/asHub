@@ -263,6 +263,11 @@
 /* ── App layout ─────────────────────────────────────────────────── */
 body { min-height: 100vh; padding: 0; font-size: 15px; }
 
+body.exiting .app {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
 .app {
   display: grid;
   grid-template-columns: 260px 1fr;
@@ -1267,6 +1272,55 @@ body { min-height: 100vh; padding: 0; font-size: 15px; }
 .diff-text.hljs { background: transparent; padding: 0; }
 
 .diff-block.diff-preview { border-color: var(--amber); }
+
+/* ── Page loader overlay ─────────────────────────────────────────── */
+.page-loader {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  transition: opacity 0.35s ease, visibility 0.35s ease;
+  opacity: 1;
+  visibility: visible;
+}
+
+.page-loader.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.page-loader-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2rem;
+}
+
+.page-loader-logo {
+  animation: loader-pulse 2s ease-in-out infinite;
+}
+
+@keyframes loader-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.08); }
+}
+
+.page-loader-text {
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  animation: loader-text-fade 1.6s ease-in-out infinite;
+}
+
+@keyframes loader-text-fade {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.8; }
+}
 
 /* ── Spinner ─────────────────────────────────────────────────────── */
 .spinner {

@@ -28,6 +28,18 @@ const stream = document.getElementById("stream");
 const conn = document.getElementById("conn");
 const dot = document.querySelector(".live-dot");
 const instanceLabel = document.getElementById("instance");
+const pageLoader = document.getElementById("page-loader");
+
+const hidePageLoader = () => {
+  if (pageLoader) pageLoader.classList.add("hidden");
+};
+
+// Safety fallback: hide loader after 8s if SSE never connects
+setTimeout(() => {
+  if (pageLoader && !pageLoader.classList.contains("hidden")) {
+    hidePageLoader();
+  }
+}, 8000);
 
 // Track connection state so langchange can refresh the correct text
 let connState = "connecting"; // "connecting" | "connected" | "reconnecting" | "nosession"
@@ -309,6 +321,7 @@ const handlers = {
 const connect = () => {
   const es = new EventSource(eventsUrl);
   es.onopen = () => {
+    hidePageLoader();
     conn.textContent = "";
     connState = "connected";
     dot.classList.remove("stale");
@@ -343,6 +356,7 @@ connState = "connecting";
 if (sessionId) {
   connect();
 } else {
+  hidePageLoader();
   conn.textContent = t("no.session");
   connState = "nosession";
   dot.classList.add("stale");

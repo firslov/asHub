@@ -100,7 +100,13 @@ const renderSessions = async () => {
 
       const a = document.createElement("a");
       a.href = `/${s.instanceId}/`;
-      if (isCurrent) a.addEventListener("click", (ev) => ev.preventDefault());
+      if (isCurrent) {
+        a.addEventListener("click", (ev) => ev.preventDefault());
+      } else {
+        a.addEventListener("click", () => {
+          document.body.classList.add("exiting");
+        });
+      }
       const title = escape(s.title || s.instanceId);
       const modelText = s.model ? ` <span class="session-model">${escape(s.model)}</span>` : "";
       const cwdText = s.cwd ? ` <span class="session-cwd" title="${escape(s.cwd)}">${escape(shortenCwd(s.cwd))}</span>` : "";

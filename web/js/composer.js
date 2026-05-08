@@ -4,6 +4,7 @@ import { appendAfterPending } from "./stream/tool-group.js";
 import { createUserBox } from "./actions.js";
 import { attachAutocomplete } from "./autocomplete.js";
 import { attachPromptAutocomplete } from "./prompt-manager.js";
+import { attachAtMentionAutocomplete } from "./at-mention.js";
 
 const form = document.getElementById("form");
 const input = document.getElementById("query");
@@ -46,9 +47,11 @@ const slashAc = attachAutocomplete({
 });
 
 const promptAc = attachPromptAutocomplete(input);
+const atAc = attachAtMentionAutocomplete(input);
 
-const hasAcSelection = () => slashAc.hasSelection() || promptAc.hasSelection();
+const hasAcSelection = () => slashAc.hasSelection() || promptAc.hasSelection() || atAc.hasSelection();
 const acceptAc = () => {
+  if (atAc.hasSelection()) { atAc.acceptCurrent(); return true; }
   if (promptAc.hasSelection()) { promptAc.acceptCurrent(); return true; }
   if (slashAc.hasSelection()) { slashAc.acceptCurrent(); return true; }
   return false;
@@ -67,6 +70,7 @@ form?.addEventListener("submit", async (ev) => {
   input.style.height = "";
   slashAc.close();
   promptAc.close();
+  atAc.close();
   let optimisticBox = null;
   let optimisticSep = null;
   if (!query.startsWith("/")) {

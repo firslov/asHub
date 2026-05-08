@@ -39,6 +39,9 @@ const makeEntryEl = (f, basePath) => {
   el.dataset.name = f.name;
   el.dataset.path = basePath ? basePath + "/" + f.name : f.name;
 
+  const depth = basePath ? basePath.split("/").length : 0;
+  if (depth > 0) el.style.paddingLeft = `${1 + depth * 1.2}rem`;
+
   // Expand/collapse chevron for directories
   if (f.kind === "dir") {
     const chevron = document.createElement("span");
@@ -67,15 +70,14 @@ const makeEntryEl = (f, basePath) => {
   el.appendChild(icon);
   el.appendChild(name);
   el.appendChild(kb);
-  el.title = t("files.dblclick.hint", { name: f.name });
+  el.title = t("files.dblclick.hint", { name: "@" + el.dataset.path });
 
-  // Double-click: paste name into query input
   el.addEventListener("dblclick", () => {
     const inp = document.getElementById("query");
     if (!inp) return;
     const current = inp.value.trim();
     const sep = current.length > 0 ? " " : "";
-    inp.value = current + sep + f.name;
+    inp.value = current + sep + "@" + el.dataset.path;
     inp.focus();
     inp.setSelectionRange(inp.value.length, inp.value.length);
   });

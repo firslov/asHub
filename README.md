@@ -4,6 +4,8 @@
 
 Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent-sh sessions and exposes them through a browser UI.
 
+![asHub demo](docs/demo.gif)
+
 ## Features
 
 - **Multi-session** — sidebar to spawn, switch, and close sessions
@@ -55,6 +57,8 @@ Beta. Localhost only by default.
 [English](#ashub) | [简体中文](#ashub-中文)
 
 [agent-sh](https://github.com/guanyilun/agent-sh) 的桌面应用 —— 运行 agent-sh 会话并通过浏览器界面进行交互。
+
+![asHub 演示](docs/demo.gif)
 
 ## 功能特性
 

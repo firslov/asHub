@@ -2715,6 +2715,32 @@ body.exiting .app {
   color: var(--accent);
 }
 
+.config-model-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.config-model-wrap .config-input {
+  padding-right: 0.75rem;
+}
+
+#config-model-refresh {
+  flex-shrink: 0;
+  height: 32px;
+  width: 32px;
+}
+
+#config-model-refresh.loading svg {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* ── Config preview ───────────────────────────────────────────────── */
 /* ── Thinking block ─────────────────────────────────────────────── */
 .thinking-block {

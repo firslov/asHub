@@ -13,6 +13,11 @@ const configProviderDesc = document.getElementById("config-provider-desc");
 const configApikey = document.getElementById("config-apikey");
 const configApikeyToggle = document.getElementById("config-apikey-toggle");
 const configSaveSimple = document.getElementById("config-save-simple");
+const configModelField = document.getElementById("config-model-field");
+const configModelInput = document.getElementById("config-model");
+const configModelList = document.getElementById("config-model-list");
+const configModelRefresh = document.getElementById("config-model-refresh");
+const configModelHint = document.getElementById("config-model-hint");
 
 const configBodyAdvanced = document.getElementById("config-body-advanced");
 const configEditor = document.getElementById("config-editor");
@@ -60,7 +65,19 @@ const PROVIDERS = {
       { id: "glm-4.7", contextWindow: 204800, maxTokens: 131072 },
     ],
   },
+  openrouter: {
+    name: "OpenRouter",
+    description: "Aggregator — pick any model in the OpenRouter catalog",
+    baseURL: "https://openrouter.ai/api/v1",
+    defaultModel: "",
+    models: [],
+    dynamicModels: true,
+  },
 };
+
+const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+let openrouterCatalog = null;
+let openrouterFetchPromise = null;
 
 const buildConfig = () => {
   const providerId = configProvider.value;
@@ -86,6 +103,18 @@ const buildConfig = () => {
     defaultModel: prev.defaultModel ?? providerDef.defaultModel,
     models: prev.models ?? providerDef.models,
   };
+
+  if (providerDef.dynamicModels) {
+    const typed = configModelInput?.value.trim();
+    if (typed) {
+      providerCfg.defaultModel = typed;
+      const known = Array.isArray(prev.models) ? prev.models : [];
+      const meta = openrouterCatalog?.find((m) => m.id === typed);
+      const merged = known.filter((m) => m && m.id !== typed);
+      merged.unshift(meta || { id: typed });
+      providerCfg.models = merged;
+    }
+  }
 
   // Carry over any extra fields on the existing provider that aren't
   // part of the standard template (e.g. contextWindow, reasoningShape).
@@ -166,6 +195,87 @@ const updateProviderDesc = () => {
   }
 };
 
+const renderOpenrouterDatalist = () => {
+  if (!configModelList) return;
+  const items = openrouterCatalog || [];
+  configModelList.innerHTML = items
+    .map((m) => {
+      const label = m.name && m.name !== m.id ? `${m.id} — ${m.name}` : m.id;
+      return `<option value="${m.id}" label="${label.replace(/"/g, "&quot;")}"></option>`;
+    })
+    .join("");
+};
+
+const fetchOpenrouterCatalog = async ({ force = false } = {}) => {
+  if (openrouterCatalog && !force) {
+    renderOpenrouterDatalist();
+    return openrouterCatalog;
+  }
+  if (openrouterFetchPromise && !force) return openrouterFetchPromise;
+
+  if (configModelHint) configModelHint.textContent = t("model.loading");
+  configModelRefresh?.classList.add("loading");
+
+  openrouterFetchPromise = (async () => {
+    try {
+      const r = await fetch(OPENROUTER_MODELS_URL);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const list = Array.isArray(data?.data) ? data.data : [];
+      openrouterCatalog = list
+        .map((m) => ({
+          id: m.id,
+          name: m.name,
+          contextWindow: m.context_length,
+          maxTokens: m.top_provider?.max_completion_tokens ?? undefined,
+        }))
+        .filter((m) => m.id);
+      renderOpenrouterDatalist();
+      if (configModelHint) configModelHint.textContent = t("model.hint");
+      return openrouterCatalog;
+    } catch (err) {
+      console.error("[openrouter] models fetch failed:", err);
+      if (configModelHint) configModelHint.textContent = t("model.load.failed");
+      return null;
+    } finally {
+      configModelRefresh?.classList.remove("loading");
+      openrouterFetchPromise = null;
+    }
+  })();
+
+  return openrouterFetchPromise;
+};
+
+const updateModelField = () => {
+  if (!configModelField) return;
+  const providerId = configProvider.value;
+  const def = PROVIDERS[providerId];
+  const dynamic = !!def?.dynamicModels;
+  configModelField.hidden = !dynamic;
+  if (!dynamic) return;
+
+  let saved = "";
+  try {
+    const cfg = JSON.parse(originalConfig || serverConfig || "{}");
+    const p = cfg.providers?.[providerId];
+    if (p?.defaultModel) saved = p.defaultModel;
+    else if (Array.isArray(p?.models) && p.models[0]?.id) saved = p.models[0].id;
+  } catch {}
+  if (configModelInput) configModelInput.value = saved;
+
+  // Seed from cached provider models so the datalist works offline first.
+  try {
+    const cfg = JSON.parse(originalConfig || serverConfig || "{}");
+    const cached = cfg.providers?.[providerId]?.models;
+    if (Array.isArray(cached) && cached.length && !openrouterCatalog) {
+      openrouterCatalog = cached.map((m) => ({ id: m.id, name: m.id, ...m }));
+      renderOpenrouterDatalist();
+    }
+  } catch {}
+
+  fetchOpenrouterCatalog();
+};
+
 const validateJson = () => {
   const val = configEditor.value;
   try {
@@ -206,6 +316,7 @@ const switchConfigMode = (mode) => {
       parseConfigToSimple({});
     }
     updateProviderDesc();
+    updateModelField();
   } else {
     configBodySimple.setAttribute("hidden", "");
     configBodyAdvanced.removeAttribute("hidden");
@@ -235,6 +346,7 @@ configApikeyToggle?.addEventListener("click", () => {
 
 configProvider?.addEventListener("change", () => {
   updateProviderDesc();
+  updateModelField();
   // When switching providers in simple mode, populate the API key
   // input with the stored key for the newly selected provider (if any).
   try {
@@ -377,9 +489,16 @@ configReset?.addEventListener("click", () => {
 configToggle?.addEventListener("click", () => setConfigOpen(configOverlay.hasAttribute("hidden")));
 configClose?.addEventListener("click", () => setConfigOpen(false));
 
+configModelRefresh?.addEventListener("click", () => {
+  fetchOpenrouterCatalog({ force: true });
+});
+
 // Refresh provider description when language changes while panel is open
 document.addEventListener("langchange", () => {
   if (configOverlay && !configOverlay.hasAttribute("hidden")) {
     updateProviderDesc();
+    if (configModelHint && !configModelField?.hidden) {
+      configModelHint.textContent = t("model.hint");
+    }
   }
 });

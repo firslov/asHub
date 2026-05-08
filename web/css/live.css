@@ -1732,7 +1732,7 @@ body.exiting .app {
 .live-input {
   position: relative;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.55rem;
   padding: 0.9rem 1.15rem;
   border-top: 1px solid var(--border);
@@ -1751,6 +1751,10 @@ body.exiting .app {
 .live-input .c-arrow {
   color: var(--accent);
   font-size: 1.15rem;
+  display: inline-flex;
+  align-items: center;
+  height: calc(0.92rem * 1.5);
+  line-height: 1;
   transition: all 0.3s var(--ease-out-expo);
 }
 

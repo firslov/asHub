@@ -111,7 +111,64 @@ form?.addEventListener("submit", async (ev) => {
   }
 });
 
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+
+const killRange = (start, end) => {
+  if (start === end) return;
+  input.setSelectionRange(start, end);
+  if (document.execCommand && document.execCommand("delete")) return;
+  const v = input.value;
+  input.value = v.slice(0, start) + v.slice(end);
+  input.setSelectionRange(start, start);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+};
+
 input?.addEventListener("keydown", (ev) => {
+  if (isMac && ev.altKey && !ev.metaKey && !ev.ctrlKey && (ev.code === "KeyB" || ev.code === "KeyF")) {
+    ev.preventDefault();
+    const forward = ev.code === "KeyF";
+    const v = input.value;
+    const dir = input.selectionDirection;
+    const active = dir === "backward" ? input.selectionStart : input.selectionEnd;
+    let i = ev.shiftKey ? active : (forward ? input.selectionEnd : input.selectionStart);
+    if (forward) {
+      while (i < v.length && /\s/.test(v[i])) i++;
+      while (i < v.length && /\S/.test(v[i])) i++;
+    } else {
+      while (i > 0 && /\s/.test(v[i - 1])) i--;
+      while (i > 0 && /\S/.test(v[i - 1])) i--;
+    }
+    if (!ev.shiftKey) { input.setSelectionRange(i, i); return; }
+    const anchor = dir === "backward" ? input.selectionEnd : input.selectionStart;
+    if (i < anchor) input.setSelectionRange(i, anchor, "backward");
+    else input.setSelectionRange(anchor, i, "forward");
+    return;
+  }
+  if (ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
+    const k = ev.key.toLowerCase();
+    const isKill = k === "k" || (isMac && (k === "u" || k === "w"));
+    if (isKill) {
+      ev.preventDefault();
+      const v = input.value;
+      const s = input.selectionStart, e = input.selectionEnd;
+      if (s !== e) { killRange(s, e); return; }
+      if (k === "k") {
+        let lineEnd = v.indexOf("\n", s);
+        if (lineEnd === -1) lineEnd = v.length;
+        const target = lineEnd === s && lineEnd < v.length ? lineEnd + 1 : lineEnd;
+        killRange(s, target);
+      } else if (k === "u") {
+        const lineStart = v.lastIndexOf("\n", s - 1) + 1;
+        killRange(lineStart, s);
+      } else {
+        let i = s;
+        while (i > 0 && /\s/.test(v[i - 1])) i--;
+        while (i > 0 && /\S/.test(v[i - 1])) i--;
+        killRange(i, s);
+      }
+      return;
+    }
+  }
   if (ev.shiftKey) return;
   if (ev.key === "Enter" && !hasAcSelection()) {
     ev.preventDefault();
@@ -131,6 +188,7 @@ input?.addEventListener("input", () => {
 document.addEventListener("keydown", (ev) => {
   const meta = ev.metaKey || ev.ctrlKey;
   if (meta && (ev.key === "k" || ev.key === "K")) {
+    if (document.activeElement === input) return;
     ev.preventDefault();
     input?.focus();
   }

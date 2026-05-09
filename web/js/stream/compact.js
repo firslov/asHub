@@ -52,15 +52,17 @@ export function compactReasoning(stream) {
 
     const phase = document.createElement("div");
     phase.className = "reasoning-phase";
+    phase.dataset.pairs = pairs;
+    phase.dataset.totalTools = totalTools;
 
     const head = document.createElement("button");
     head.type = "button";
     head.className = "reasoning-phase-head";
     head.innerHTML =
       `<span class="rp-arrow">▸</span>` +
+      `<span class="rp-icon">💭</span>` +
       `<span class="rp-label">${t("n.reasoning.rounds", { n: pairs })}</span>` +
-      `<span class="rp-stat">${t("n.tools.compact", { n: totalTools })}</span>` +
-      `<span class="rp-kind">${t("thought")}</span>`;
+      `<span class="rp-stat">${t("n.tools.compact", { n: totalTools })}</span>`;
     phase.appendChild(head);
 
     const body = document.createElement("div");
@@ -82,3 +84,17 @@ export function compactReasoning(stream) {
     });
   }
 }
+
+// Refresh translated labels on language change
+document.addEventListener("langchange", () => {
+  document.querySelectorAll(".reasoning-phase").forEach((phase) => {
+    const head = phase.querySelector(".reasoning-phase-head");
+    if (!head) return;
+    const label = head.querySelector(".rp-label");
+    const stat = head.querySelector(".rp-stat");
+    const pairs = parseInt(phase.dataset.pairs) || 0;
+    const totalTools = parseInt(phase.dataset.totalTools) || 0;
+    if (label) label.textContent = t("n.reasoning.rounds", { n: pairs });
+    if (stat) stat.textContent = t("n.tools.compact", { n: totalTools });
+  });
+});

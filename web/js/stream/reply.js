@@ -26,6 +26,17 @@ export const hasReply = () => currentReply != null;
 export const sawLiveSegment = () => liveSegment;
 export const startNewSegment = () => { liveSegment = false; };
 
+/** Save/restore for infinite-scroll replay processing */
+export const getReplyState = () => ({
+  currentReply, currentReplyText, pendingChunkRender, liveSegment,
+});
+export const setReplyState = (s) => {
+  currentReply = s.currentReply ?? null;
+  currentReplyText = s.currentReplyText ?? "";
+  pendingChunkRender = s.pendingChunkRender ?? false;
+  liveSegment = s.liveSegment ?? false;
+};
+
 // RAF-coalesce: marked.parse on every chunk is O(N²) over chunk count.
 export const appendReplyChunk = (delta) => {
   if (!delta) return;

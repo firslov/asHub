@@ -30,10 +30,23 @@ export const insertStreamNode = (node) => {
 
 const toolCount = (g) => g.querySelectorAll(".tool-row").length;
 
+const rebuildGroupState = (g) => {
+  const head = g.querySelector(".tool-group-head");
+  const body = g.querySelector(".tool-group-body");
+  if (head && body) groupState.set(g, { head, body });
+};
+
+/** Save/restore for infinite-scroll replay processing */
+export const getToolGroupState = () => ({ currentToolGroup });
+export const setToolGroupState = (s) => {
+  currentToolGroup = s.currentToolGroup ?? null;
+  // Rebuild WeakMap from DOM for restored tool-group elements
+  document.querySelectorAll(".tool-group").forEach(rebuildGroupState);
+};
+
 const updateToolGroupHead = (g) => {
   const { head } = groupState.get(g);
-  const arrow = g.classList.contains("collapsed") ? "▸" : "▾";
-  head.textContent = `${arrow} ${t("n.tools", { n: toolCount(g) })}`;
+  head.textContent = `🔧 ${t("n.tools", { n: toolCount(g) })}`;
 };
 
 const openToolGroup = () => {
@@ -104,3 +117,13 @@ export const appendAfterPending = (node) => {
   stream.appendChild(node);
   maybeScroll();
 };
+
+// Refresh translated labels on language change
+document.addEventListener("langchange", () => {
+  document.querySelectorAll(".tool-group-head").forEach((head) => {
+    const g = head.closest(".tool-group");
+    if (!g) return;
+    const n = g.querySelectorAll(".tool-row").length;
+    head.textContent = `🔧 ${t("n.tools", { n })}`;
+  });
+});

@@ -60,7 +60,7 @@ const translations = {
     "prompts.delete": "Delete",
     "prompts.empty": "No quick prompts yet — add one below.",
     "prompts.name.placeholder": "Prompt name (shown in list)",
-    "prompts.content.placeholder": "Prompt content (inserted on //Tab)",
+    "prompts.content.placeholder": "Prompt content (inserted on #Tab)",
 
     // ── Sidebar ────────────────────────────────────────────────────
     "edit.title": "edit title",
@@ -210,7 +210,7 @@ const translations = {
     "prompts.delete": "删除",
     "prompts.empty": "还没有快捷提示词 — 在下方添加一个吧。",
     "prompts.name.placeholder": "提示词名称（列表中显示）",
-    "prompts.content.placeholder": "提示词内容（输入 //Tab 时插入）",
+    "prompts.content.placeholder": "提示词内容（输入 #Tab 时插入）",
 
     // ── Sidebar ────────────────────────────────────────────────────
     "edit.title": "编辑标题",

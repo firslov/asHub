@@ -112,3 +112,14 @@ export const absorbAsToolBody = (callId) => {
 export const trackToolRow = (row) => {
   if (row) lastToolRow = row;
 };
+
+/** Save/restore for infinite-scroll replay processing */
+export const getLiveOutputState = () => ({
+  lastToolRow, liveToolOutput, completedTools: new Set(completedTools),
+});
+export const setLiveOutputState = (s) => {
+  lastToolRow = s.lastToolRow ?? null;
+  liveToolOutput = s.liveToolOutput ?? null;
+  completedTools.clear();
+  if (s.completedTools) for (const id of s.completedTools) completedTools.add(id);
+};

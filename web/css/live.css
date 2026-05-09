@@ -1491,39 +1491,8 @@ body.exiting .app {
   40% { opacity: 1; transform: scale(1.2); }
 }
 
-/* ── Tool group ──────────────────────────────────────────────────── */
-.tool-group {
-  margin: 0.3rem 0;
-}
-
-.tool-group-head {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-mid);
-  font: inherit;
-  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.78rem;
-  padding: 0.4rem 0.85rem;
-  margin-bottom: 0.25rem;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
+/* ── Tool group (see unified card below for shared styles) ─────── */
 .tool-group-head[hidden] { display: none; }
-.tool-group-head:hover {
-  color: var(--accent);
-  border-color: var(--accent-border);
-  background: var(--accent-glow);
-}
-
-.tool-group:not(.collapsed) .tool-group-head { color: var(--text-dim); }
-
-.tool-group.collapsed .tool-group-body { display: none; }
-.tool-group.collapsed .tool-group-head { margin-bottom: 0; }
 
 /* ── Tool detail ─────────────────────────────────────────────────── */
 .tool-detail.tool-cmd {
@@ -2746,55 +2715,97 @@ body.exiting .app {
 }
 
 /* ── Config preview ───────────────────────────────────────────────── */
-/* ── Thinking block ─────────────────────────────────────────────── */
-.thinking-block {
-  margin: 0.4rem 0;
+/* ── Unified card: thinking-block & tool-group ─────────────────── */
+.thinking-block,
+.tool-group {
+  margin: 0.5rem 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
-  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.78rem;
-  background: var(--bg3);
+  font-family: 'Geist', 'Inter', -apple-system, sans-serif;
+  font-size: 0.8rem;
+  background: var(--bg2);
   box-shadow: var(--shadow-sm);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.thinking-block:hover,
+.tool-group:hover {
+  border-color: var(--border-mid);
+  box-shadow: var(--shadow-md);
 }
 
-.thinking-block-head {
-  padding: 0.4rem 0.85rem;
-  color: var(--text-dim);
-  cursor: pointer;
-  user-select: none;
-  border-bottom: 1px solid var(--border);
+.thinking-block-head,
+.tool-group-head {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  font-style: italic;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.9rem;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-light);
+  cursor: pointer;
+  user-select: none;
+  text-align: left;
   transition: all 0.15s;
 }
-
-.thinking-block-head:hover { color: var(--text-mid); background: var(--bg4); }
-.thinking-block-head::before {
-  content: '▾';
-  font-size: 0.65rem;
-  transition: transform 0.15s;
+.thinking-block-head {
+  /* div, not button — ensure no default styling */
+}
+.tool-group-head {
+  /* button reset — buttons add letter-spacing in some browsers */
+  letter-spacing: inherit;
 }
 
-.thinking-block.collapsed .thinking-block-head::before { transform: rotate(-90deg); }
-.thinking-block-body {
+.thinking-block-head:hover,
+.tool-group-head:hover {
+  color: var(--text);
+  background: var(--bg3);
+}
+
+/* Collapse chevron — shared by both cards */
+.thinking-block-head::after,
+.tool-group-head::after {
+  content: '▾';
+  font-size: 0.6rem;
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.45;
+  transition: transform 0.2s var(--ease-out-expo);
+}
+.thinking-block.collapsed .thinking-block-head::after,
+.tool-group.collapsed .tool-group-head::after {
+  transform: rotate(-90deg);
+}
+
+.thinking-block-body,
+.tool-group-body {
   opacity: 1;
   overflow: hidden;
   transition: max-height 0.3s var(--ease-out-expo), opacity 0.2s;
 }
-.thinking-block-inner {
-  padding: 0.45rem 0.85rem;
-  color: var(--text-dim);
-  white-space: pre-wrap;
-  line-height: 1.55;
-  max-height: 14em;
-  overflow-y: auto;
+.tool-group-body {
+  padding: 0.35rem 0.9rem;
 }
-.thinking-block.collapsed .thinking-block-body {
+.thinking-block.collapsed .thinking-block-body,
+.tool-group.collapsed .tool-group-body {
   max-height: 0;
   opacity: 0;
+}
+
+.thinking-block-inner {
+  padding: 0.55rem 0.9rem;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  line-height: 1.6;
+  max-height: 14em;
+  overflow-y: auto;
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
 }
 
 /* ── Reasoning phase (consecutive thought + tool rounds) ─────────── */
@@ -2832,6 +2843,11 @@ body.exiting .app {
   width: 0.85rem;
   flex-shrink: 0;
 }
+.reasoning-phase .rp-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
 .reasoning-phase .rp-label {
   font-weight: 500;
   color: var(--text-mid);
@@ -2842,10 +2858,6 @@ body.exiting .app {
   padding: 0.1rem 0.45rem;
   border-radius: 3px;
   font-size: 0.72rem;
-}
-.reasoning-phase .rp-kind {
-  color: var(--text-faded);
-  font-style: italic;
   margin-left: auto;
 }
 
@@ -2855,7 +2867,8 @@ body.exiting .app {
 }
 .reasoning-phase-body .thinking-block,
 .reasoning-phase-body .tool-group {
-  margin: 0.15rem 0;
+  margin: 0.25rem 0;
+  box-shadow: none;
 }
 
 /* ── Live tool output ────────────────────────────────────────────── */

@@ -81,6 +81,13 @@ const exitReplayMode = () => {
 // Merge non-empty fields so a partial replay event doesn't blank known values.
 const agentInfo = { name: "", model: "" };
 
+/** Save/restore for infinite-scroll replay processing */
+export const getAgentInfoState = () => ({ name: agentInfo.name, model: agentInfo.model });
+export const setAgentInfoState = (s) => {
+  agentInfo.name = s?.name ?? "";
+  agentInfo.model = s?.model ?? "";
+};
+
 const handlers = {
   "agent:info": (p) => {
     if (p?.name === "web-renderer") return;

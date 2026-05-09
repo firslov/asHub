@@ -2,7 +2,7 @@
  * Quick Prompts Manager
  * - Persists prompts in localStorage
  * - Manages prompt list panel (add / edit / delete)
- * - Attaches "//" autocomplete to the input
+ * - Attaches "#" autocomplete to the input
  */
 import { t } from "./i18n.js";
 import { attachAutocomplete } from "./autocomplete.js";
@@ -215,9 +215,9 @@ promptEditorContent?.addEventListener("keydown", (ev) => {
   }
 });
 
-// ── "//" autocomplete integration ─────────────────────────────────
+// ── "#" autocomplete integration ──────────────────────────────────
 /**
- * Attach the "//" quick-prompt autocomplete to the input element.
+ * Attach the "#" quick-prompt autocomplete to the input element.
  * Call this from composer.js after the existing slash autocomplete is set up.
  */
 export const attachPromptAutocomplete = (inputEl) => {
@@ -226,12 +226,12 @@ export const attachPromptAutocomplete = (inputEl) => {
     listEl: document.getElementById("autocomplete"),
     shouldOpen: (b) => {
       const trimmed = b.trimStart();
-      return trimmed.startsWith("//") && prompts.length > 0;
+      return trimmed.startsWith("#") && prompts.length > 0;
     },
     fetcher: async (buffer) => {
       const trimmed = buffer.trimStart();
-      // Show all prompts that match what user typed after "//"
-      const query = trimmed.slice(2).toLowerCase();
+      // Show all prompts that match what user typed after "#"
+      const query = trimmed.slice(1).toLowerCase();
       return prompts
         .filter((p) => p.name.toLowerCase().includes(query) || p.content.toLowerCase().includes(query))
         .map((p) => ({

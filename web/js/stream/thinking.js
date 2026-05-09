@@ -8,6 +8,13 @@ let thinkingBlock = null;
 export const hasThinkingDots = () => thinkingEl != null;
 export const hasThinkingBlock = () => thinkingBlock != null;
 
+/** Save/restore for infinite-scroll replay processing */
+export const getThinkingState = () => ({ thinkingEl, thinkingBlock });
+export const setThinkingState = (s) => {
+  thinkingEl = s.thinkingEl ?? null;
+  thinkingBlock = s.thinkingBlock ?? null;
+};
+
 export const showThinking = () => {
   if (thinkingEl) return;
   thinkingEl = document.createElement("div");
@@ -62,7 +69,7 @@ export const appendThinkingChunk = (text) => {
     thinkingBlock = block;
     const head = document.createElement("div");
     head.className = "thinking-block-head";
-    head.textContent = t("thinking");
+    head.textContent = `💭 ${t("thinking")}`;
     head.addEventListener("click", () => {
       setThinkingCollapsed(block, !block.classList.contains("collapsed"));
     });
@@ -87,8 +94,22 @@ export const finalizeThinking = () => {
     thinkingBlock.remove();
   } else {
     const head = thinkingBlock.querySelector(".thinking-block-head");
-    if (head) head.textContent = t("thought");
+    if (head) head.textContent = `💭 ${t("thought")}`;
     setThinkingCollapsed(thinkingBlock, true);
   }
   thinkingBlock = null;
 };
+
+// Refresh translated labels on language change
+document.addEventListener("langchange", () => {
+  // Thinking block heads
+  document.querySelectorAll(".thinking-block-head").forEach((head) => {
+    const block = head.closest(".thinking-block");
+    const isCollapsed = block?.classList?.contains("collapsed") ?? false;
+    head.textContent = `💭 ${t(isCollapsed ? "thought" : "thinking")}`;
+  });
+  // Thinking dots label
+  document.querySelectorAll(".thinking-label").forEach((label) => {
+    label.textContent = t("thinking");
+  });
+});

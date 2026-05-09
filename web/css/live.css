@@ -2597,6 +2597,10 @@ body.exiting .app {
   gap: 0.35rem;
 }
 
+.config-field[hidden] {
+  display: none;
+}
+
 .config-label {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
   font-size: 0.72rem;

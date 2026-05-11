@@ -72,6 +72,19 @@ const onScroll = () => {
 
 stream.addEventListener("scroll", onScroll, { passive: true });
 
+/**
+ * If the rendered content doesn't overflow the viewport, no scroll event
+ * can ever fire and infinite-scroll never triggers — leaving truncated
+ * history permanently invisible.  Eagerly fetch older frames until either
+ * the viewport overflows or pagination is exhausted.  Called after the
+ * initial replay flush and after each successful older-frames load.
+ */
+export const maybeAutoLoadOlder = () => {
+  if (loading || exhausted || !firstContentId) return;
+  if (stream.scrollHeight > stream.clientHeight + SCROLL_THRESHOLD) return;
+  loadOlderFrames();
+};
+
 // ── Fetch & process older frames ─────────────────────────────────────
 
 const loadOlderFrames = async () => {
@@ -288,4 +301,5 @@ const loadOlderFrames = async () => {
   } finally {
     loading = false;
   }
+  maybeAutoLoadOlder();
 };

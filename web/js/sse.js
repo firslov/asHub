@@ -24,7 +24,7 @@ import { createUserBox } from "./actions.js";
 import { updateSessionTitle, setCurrentSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
 import { compactReasoning } from "./stream/compact.js";
-import { bindHandlers, setTruncationState } from "./infinite-scroll.js";
+import { bindHandlers, setTruncationState, maybeAutoLoadOlder } from "./infinite-scroll.js";
 
 const stream = document.getElementById("stream");
 const conn = document.getElementById("conn");
@@ -92,6 +92,7 @@ const exitReplayMode = () => {
   compactReasoning(stream);
   highlightWithin(stream);  // cheap no-op if no code blocks exist
   forceScrollBottom();
+  maybeAutoLoadOlder();
 };
 
 /** Cancel any pending replay-flush timer (used by infinite-scroll). */

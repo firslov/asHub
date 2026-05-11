@@ -1,11 +1,7 @@
 // Math extraction & rendering.
 //
-// Supports four delimiter pairs, with pandoc-style rules for $...$ to avoid
-// false positives on prices and other plain-text dollar signs:
-//
-//   Inline  : $...$        — strict: opener not followed by space/digit,
-//                            closer not preceded by space, not followed by
-//                            digit, content stays on one line, non-empty.
+// Delimiter pairs supported:
+//   Inline  : $...$        — pandoc-strict pairing rules (see below).
 //   Inline  : \( ... \)    — permissive.
 //   Display : $$ ... $$    — permissive (may span lines).
 //   Display : \[ ... \]    — permissive (may span lines).
@@ -14,10 +10,32 @@
 //
 // Pipeline:
 //   1. extractMath(raw) replaces each math span with an empty placeholder
-//      span/div carrying the LaTeX source in a data-tex attribute.
-//      Placeholders survive marked + DOMPurify untouched.
-//   2. renderMathIn(root) walks the DOM, runs katex.renderToString into each
-//      placeholder.  KaTeX output is trusted (trust:false sandboxes it).
+//      <span class="math-tex" data-tex="...">.  Placeholders survive marked
+//      + DOMPurify untouched (no markdown-significant chars in attributes).
+//   2. renderMathIn(root) walks the DOM and substitutes KaTeX HTML.
+//
+// Pairing rules for $...$:
+//   - Opener `$`:  char before must NOT be alphanumeric/underscore (rules
+//                  out `0.31$)` becoming a stray opener after a real
+//                  closer).  Char after must NOT be whitespace (pandoc).
+//                  (Pandoc also forbids digit-after, but that drops
+//                  legit math like `$0.87 \pm 0.31$`; we let KaTeX
+//                  validation be the arbiter instead.)
+//   - Closer `$`:  char before must NOT be whitespace (pandoc).
+//                  Char after must NOT be a digit (pandoc).
+//   - Content on one line, non-empty, ≤ MAX_INLINE_LEN chars.
+//
+// To prevent stray `$` symbols from swallowing prose into "math", every
+// candidate is validated by KaTeX (throwOnError: true).  If KaTeX rejects
+// the content the candidate is dropped and the leading `$` is emitted as
+// literal text — the walker then re-tries the remaining input, so a real
+// math span later in the same line still gets a chance to match.
+//
+// Validation results are cached so chunk-by-chunk streaming doesn't pay
+// the render cost on every frame.
+
+const MAX_INLINE_LEN = 250;
+const MAX_DISPLAY_LEN = 2000;
 
 const escapeAttr = (s) => String(s)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -82,6 +100,43 @@ const skipFencedCode = (src, i) => {
   return { text: src.slice(runStart, j), next: j };
 };
 
+// Cache key: "D|<tex>" or "I|<tex>".  Value: rendered HTML string, or null
+// (KaTeX rejected the input — treat as not-math).
+const renderCache = new Map();
+
+const cacheKey = (tex, display) => (display ? "D|" : "I|") + tex;
+
+// Returns: html string on success, null on KaTeX rejection, undefined if
+// KaTeX is not available (caller may decide whether to accept without
+// validation — used by unit tests in node).
+const tryRender = (tex, display) => {
+  if (typeof window === "undefined" || !window.katex) return undefined;
+  const key = cacheKey(tex, display);
+  if (renderCache.has(key)) return renderCache.get(key);
+  let html;
+  try {
+    html = window.katex.renderToString(tex, {
+      displayMode: display,
+      throwOnError: true,
+      strict: "ignore",
+      trust: false,
+      output: "htmlAndMathml",
+    });
+  } catch {
+    html = null;
+  }
+  renderCache.set(key, html);
+  return html;
+};
+
+const validateCandidate = (tex, display) => {
+  const maxLen = display ? MAX_DISPLAY_LEN : MAX_INLINE_LEN;
+  if (tex.length === 0 || tex.length > maxLen) return false;
+  const result = tryRender(tex, display);
+  if (result === undefined) return true;  // no validator available — accept
+  return result !== null;
+};
+
 export const extractMath = (src) => {
   if (!src) return "";
   let out = "";
@@ -103,17 +158,23 @@ export const extractMath = (src) => {
       if (next === "(") {
         const end = findCloseEscape(src, i + 2, ")");
         if (end !== -1) {
-          out += inlinePlaceholder(src.slice(i + 2, end));
-          i = end + 2;
-          continue;
+          const content = src.slice(i + 2, end);
+          if (validateCandidate(content, false)) {
+            out += inlinePlaceholder(content);
+            i = end + 2;
+            continue;
+          }
         }
       }
       if (next === "[") {
         const end = findCloseEscape(src, i + 2, "]");
         if (end !== -1) {
-          out += displayPlaceholder(src.slice(i + 2, end));
-          i = end + 2;
-          continue;
+          const content = src.slice(i + 2, end);
+          if (validateCandidate(content, true)) {
+            out += displayPlaceholder(content);
+            i = end + 2;
+            continue;
+          }
         }
       }
       out += ch;
@@ -125,18 +186,29 @@ export const extractMath = (src) => {
       if (src[i + 1] === "$") {
         const end = findCloseDollarDollar(src, i + 2);
         if (end !== -1) {
-          out += displayPlaceholder(src.slice(i + 2, end));
-          i = end + 2;
-          continue;
+          const content = src.slice(i + 2, end);
+          if (validateCandidate(content, true)) {
+            out += displayPlaceholder(content);
+            i = end + 2;
+            continue;
+          }
         }
       }
+      const before = src[i - 1];
       const after = src[i + 1];
-      if (after && after !== "$" && !/\s/.test(after) && !/\d/.test(after)) {
+      const openerOk =
+        after && after !== "$" &&
+        !/\s/.test(after) &&
+        !/[A-Za-z0-9_]/.test(before || "");
+      if (openerOk) {
         const end = findCloseInlineDollar(src, i + 1);
         if (end !== -1) {
-          out += inlinePlaceholder(src.slice(i + 1, end));
-          i = end + 1;
-          continue;
+          const content = src.slice(i + 1, end);
+          if (validateCandidate(content, false)) {
+            out += inlinePlaceholder(content);
+            i = end + 1;
+            continue;
+          }
         }
       }
       out += ch;
@@ -152,20 +224,35 @@ export const extractMath = (src) => {
 };
 
 export const renderMathIn = (root) => {
-  if (!root || !window.katex) return;
+  if (!root || typeof window === "undefined" || !window.katex) return;
   const nodes = root.querySelectorAll(".math-tex[data-tex]");
   for (const node of nodes) {
     if (node.dataset.rendered === "1") continue;
     const tex = node.dataset.tex || "";
     const display = node.dataset.display === "1";
+    const cached = renderCache.get(cacheKey(tex, display));
+    if (typeof cached === "string") {
+      node.innerHTML = cached;
+      node.dataset.rendered = "1";
+      continue;
+    }
+    if (cached === null) {
+      // Validator rejected — extractMath shouldn't have emitted a
+      // placeholder.  Bail to literal as a defensive fallback.
+      node.classList.add("math-error");
+      node.textContent = display ? `$$${tex}$$` : `$${tex}$`;
+      continue;
+    }
     try {
-      node.innerHTML = window.katex.renderToString(tex, {
+      const html = window.katex.renderToString(tex, {
         displayMode: display,
         throwOnError: false,
         strict: "ignore",
         trust: false,
         output: "htmlAndMathml",
       });
+      renderCache.set(cacheKey(tex, display), html);
+      node.innerHTML = html;
       node.dataset.rendered = "1";
     } catch {
       node.classList.add("math-error");

@@ -17,35 +17,23 @@ import { getToolGroupState, setToolGroupState } from "./stream/tool-group.js";
 import { getLiveOutputState, setLiveOutputState } from "./stream/live-output.js";
 import { getScrollState, setScrollState } from "./stream/scroll.js";
 import { cancelReplayFlush } from "./sse.js";
+import { activeSession } from "./session-manager.js";
 
-// ── Module-level pagination state ────────────────────────────────────
-let firstContentId = null;   // frame id of the earliest rendered frame
-let totalFrames = 0;
-let loading = false;         // guard against concurrent fetches
-let exhausted = false;       // true after the server returns no more frames
-let loadGeneration = 0;      // bumped on reset to abort stale fetch completions
-
-const SCROLL_THRESHOLD = 300; // px from top before fetch triggers
-
-// ── State save/restore (avoid corrupting live state when processing older frames) ──
+const sess = () => activeSession.peek();
+const SCROLL_THRESHOLD = 300;
 
 let _handlersRef = null;
 
-/**
- * Called once by sse.js after its handlers object is ready so we can borrow
- * the handler functions without creating a circular dependency.
- */
 export const bindHandlers = (handlers) => {
   _handlersRef = handlers;
 };
 
-/**
- * Called from sse.js when it receives hub:replay-truncated during SSE connection.
- */
 export const setTruncationState = (beforeId, total) => {
-  firstContentId = beforeId ?? null;
-  totalFrames = total ?? 0;
-  exhausted = !firstContentId;
+  const is = sess()?.infiniteScroll;
+  if (!is) return;
+  is.firstContentId = beforeId ?? null;
+  is.totalFrames = total ?? 0;
+  is.exhausted = !is.firstContentId;
 };
 
 /**
@@ -53,19 +41,20 @@ export const setTruncationState = (beforeId, total) => {
  * from the previous session don't trigger loads for the new one.
  */
 export const resetPaginationState = () => {
-  firstContentId = null;
-  totalFrames = 0;
-  exhausted = true;
-  loading = false;
-  loadGeneration++;
+  const is = sess()?.infiniteScroll;
+  if (!is) return;
+  is.firstContentId = null;
+  is.totalFrames = 0;
+  is.exhausted = true;
+  is.loading = false;
+  is.loadGeneration++;
 };
-
-// ── Scroll detection ──────────────────────────────────────────────────
 
 const stream = document.getElementById("stream");
 
 const onScroll = () => {
-  if (loading || exhausted || !firstContentId) return;
+  const is = sess()?.infiniteScroll;
+  if (!is || is.loading || is.exhausted || !is.firstContentId) return;
   if (stream.scrollTop > SCROLL_THRESHOLD) return;
   loadOlderFrames();
 };
@@ -75,24 +64,25 @@ stream.addEventListener("scroll", onScroll, { passive: true });
 // ── Fetch & process older frames ─────────────────────────────────────
 
 const loadOlderFrames = async () => {
-  if (loading || exhausted || !firstContentId || !sessionId) return;
-  loading = true;
-  const gen = loadGeneration;
+  const session = sess();
+  const is = session?.infiniteScroll;
+  if (!is || is.loading || is.exhausted || !is.firstContentId || !sessionId) return;
+  is.loading = true;
+  const gen = is.loadGeneration;
 
   // Declared outside try so catch block can access it to restore the
   // replaying flag on error (let inside try is block-scoped to try).
   let wasReplaying = false;
 
   try {
-    const url = `/${sessionId}/replay-before/${encodeURIComponent(firstContentId)}?turns=3`;
+    const url = `/${sessionId}/replay-before/${encodeURIComponent(is.firstContentId)}?turns=3`;
     const r = await fetch(url);
-    // Abort if the session changed while we were fetching.
-    if (gen !== loadGeneration) return;
-    if (!r.ok) { exhausted = true; return; }
+    if (gen !== is.loadGeneration) return;
+    if (!r.ok) { is.exhausted = true; return; }
     const data = await r.json();
-    if (gen !== loadGeneration) return;
+    if (gen !== is.loadGeneration) return;
     const rawFrames = data.frames ?? [];
-    if (rawFrames.length === 0) { exhausted = true; return; }
+    if (rawFrames.length === 0) { is.exhausted = true; return; }
 
     // Save current stream children so we can re-append them after processing
     // older frames into the (temporarily cleared) stream.
@@ -272,20 +262,17 @@ const loadOlderFrames = async () => {
     // ↑ This assignment triggers a synchronous 'scroll' event that
     //   recomputes stickToBottom based on the real final position.
 
-    // Update pagination cursor (only if the session hasn't changed).
-    if (gen !== loadGeneration) return;
+    if (gen !== is.loadGeneration) return;
     if (data.firstContentId) {
-      firstContentId = data.firstContentId;
+      is.firstContentId = data.firstContentId;
     } else {
-      exhausted = true;
+      is.exhausted = true;
     }
   } catch (e) {
     console.error("infinite-scroll fetch failed", e);
-    if (gen === loadGeneration) exhausted = true;
-    // Restore replaying flag even on error, otherwise streaming stays
-    // permanently broken (maybeScroll suppressed, sidebar dead).
+    if (gen === is.loadGeneration) is.exhausted = true;
     state.replaying = wasReplaying;
   } finally {
-    loading = false;
+    is.loading = false;
   }
 };

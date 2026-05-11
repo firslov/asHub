@@ -1,11 +1,12 @@
 import { state } from "../state.js";
+import { activeSession } from "../session-manager.js";
 
 const stream = document.getElementById("stream");
 const pill = document.getElementById("scroll-pill");
 const emptyState = document.getElementById("stream-empty");
 
 const SCROLL_SLOP = 40;
-let stickToBottom = true;
+const sess = () => activeSession.peek();
 
 const isAtBottom = () =>
   stream.scrollHeight - stream.scrollTop - stream.clientHeight <= SCROLL_SLOP;
@@ -16,38 +17,39 @@ const jumpToBottom = () => {
 
 const scrollToBottom = () => {
   stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
-  stickToBottom = true;
+  const s = sess(); if (s) s.scroll.stickToBottom = true;
   if (pill) pill.hidden = true;
 };
 
 /** Force-scroll to bottom immediately (used after replay flush). */
 export const forceScrollBottom = () => {
   jumpToBottom();
-  stickToBottom = true;
+  const s = sess(); if (s) s.scroll.stickToBottom = true;
   if (pill) pill.hidden = true;
 };
 
 stream.addEventListener("scroll", () => {
-  stickToBottom = isAtBottom();
-  if (pill && stickToBottom) pill.hidden = true;
+  const s = sess();
+  const stick = isAtBottom();
+  if (s) s.scroll.stickToBottom = stick;
+  if (pill && stick) pill.hidden = true;
 });
 pill?.addEventListener("click", scrollToBottom);
 
 /** Save/restore for infinite-scroll replay (prevents scroll-state corruption). */
 export const getScrollState = () => ({
-  stickToBottom,
+  stickToBottom: sess()?.scroll.stickToBottom ?? true,
   pillHidden: pill?.hidden ?? true,
 });
 export const setScrollState = (s) => {
-  stickToBottom = s.stickToBottom ?? true;
+  const session = sess();
+  if (session) session.scroll.stickToBottom = s.stickToBottom ?? true;
   if (pill) pill.hidden = s.pillHidden ?? true;
 };
 
 export const maybeScroll = () => {
-  // During SSE replay batching, skip scroll to avoid hundreds of forced
-  // layouts — the replay exit code will scroll once at the end.
   if (state.replaying) return;
-  if (stickToBottom) {
+  if (sess()?.scroll.stickToBottom ?? true) {
     jumpToBottom();
   } else if (pill) {
     pill.hidden = false;

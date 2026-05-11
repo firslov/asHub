@@ -1,5 +1,6 @@
 import { bootSession } from "./sse.js";
 import { registerSession, unregisterSession } from "./session-manager.js";
+import { STATE_DEFAULTS } from "./state.js";
 
 const parseId = () =>
   (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1] ?? "";
@@ -9,6 +10,8 @@ class SessionView extends HTMLElement {
     this.id = this.getAttribute("session-id") || parseId();
     this.controller = new AbortController();
 
+    this.state = { ...STATE_DEFAULTS };
+    this.agentInfo = { name: "", model: "" };
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };
     this.thinking = { el: null, block: null };
     this.toolGroup = { current: null };

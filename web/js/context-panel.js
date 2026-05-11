@@ -70,16 +70,21 @@ const messageText = (m) => {
   return JSON.stringify(m ?? {});
 };
 
-const selected = new Set();
-const activeRoles = new Set(["all"]);
-let currentMsgs = [];
-let currentGroups = [];
+import { activeSession } from "./session-manager.js";
+
+const ctx = () => activeSession.peek()?.context;
+const selectedSet = () => ctx()?.selected ?? new Set();
+const activeRolesSet = () => ctx()?.activeRoles ?? new Set(["all"]);
+const currentMsgsArr = () => ctx()?.currentMsgs ?? [];
+const currentGroupsArr = () => ctx()?.currentGroups ?? [];
 
 const updateDropButton = () => {
+  const selected = selectedSet();
   ctxDrop.disabled = selected.size === 0;
   if (selected.size > 0) {
     let tok = 0;
-    for (const i of selected) tok += tokensOf(currentMsgs[i]);
+    const msgs = currentMsgsArr();
+    for (const i of selected) tok += tokensOf(msgs[i]);
     ctxDrop.textContent = `${t("ctx.drop.n", { n: selected.size })} · ~${fmtTok(tok)}`;
   } else {
     ctxDrop.textContent = t("drop");
@@ -87,8 +92,10 @@ const updateDropButton = () => {
 };
 
 const setGroupSelected = (group, on) => {
-  for (let i = 0; i < currentGroups.length; i++) {
-    if (currentGroups[i] !== group) continue;
+  const selected = selectedSet();
+  const groups = currentGroupsArr();
+  for (let i = 0; i < groups.length; i++) {
+    if (groups[i] !== group) continue;
     if (on) selected.add(i); else selected.delete(i);
     const row = ctxBody.querySelector(`[data-idx="${i}"]`);
     const cb = row?.querySelector('input[type="checkbox"]');
@@ -99,15 +106,17 @@ const setGroupSelected = (group, on) => {
 };
 
 const applyCtxFilter = () => {
-  const all = activeRoles.has("all");
+  const roles = activeRolesSet();
+  const all = roles.has("all");
   ctxBody.querySelectorAll(".ctx-msg").forEach((el) => {
     const role = el.dataset.role ?? "";
-    el.hidden = !all && !activeRoles.has(role);
+    el.hidden = !all && !roles.has(role);
   });
 };
 
 const renderContext = async () => {
-  selected.clear();
+  const c = ctx();
+  if (c) c.selected.clear();
   if (!sessionId) { ctxBody.innerHTML = `<div class="ctx-empty">${t("ctx.no.session")}</div>`; updateDropButton(); return; }
   ctxBody.innerHTML = `<div class="ctx-empty">${t("ctx.loading")}</div>`;
   let data;
@@ -121,8 +130,11 @@ const renderContext = async () => {
     return;
   }
   const msgs = Array.isArray(data.messages) ? data.messages : [];
-  currentMsgs = msgs;
-  currentGroups = computeGroups(msgs);
+  if (c) {
+    c.currentMsgs = msgs;
+    c.currentGroups = computeGroups(msgs);
+  }
+  const groups = currentGroupsArr();
   ctxMeta.textContent = `${t("ctx.n.msgs", { n: msgs.length })} · ${fmtTok(data.activeTokens ?? 0)}/${fmtTok(data.contextWindow ?? 0)}`;
 
   ctxBody.innerHTML = "";
@@ -132,13 +144,13 @@ const renderContext = async () => {
     return;
   }
   const groupSizes = new Map();
-  for (const g of currentGroups) groupSizes.set(g, (groupSizes.get(g) ?? 0) + 1);
+  for (const g of groups) groupSizes.set(g, (groupSizes.get(g) ?? 0) + 1);
 
   msgs.forEach((m, i) => {
     const wrap = document.createElement("div");
     wrap.className = "ctx-msg";
     wrap.dataset.idx = String(i);
-    if ((groupSizes.get(currentGroups[i]) ?? 1) > 1) wrap.classList.add("paired");
+    if ((groupSizes.get(groups[i]) ?? 1) > 1) wrap.classList.add("paired");
     const role = String(m?.role ?? "?");
     const text = messageText(m);
     const tok = tokensOf(m);
@@ -149,7 +161,7 @@ const renderContext = async () => {
     head.className = "ctx-msg-head";
     const cb = document.createElement("input");
     cb.type = "checkbox";
-    cb.addEventListener("change", () => setGroupSelected(currentGroups[i], cb.checked));
+    cb.addEventListener("change", () => setGroupSelected(groups[i], cb.checked));
     const left = document.createElement("span");
     left.appendChild(cb);
     const dot = document.createElement("span");
@@ -199,6 +211,7 @@ const renderContext = async () => {
 };
 
 ctxDrop?.addEventListener("click", async () => {
+  const selected = selectedSet();
   if (selected.size === 0) return;
   const indices = [...selected].sort((a, b) => a - b);
   try {
@@ -221,17 +234,18 @@ ctxFilters?.addEventListener("click", (ev) => {
   const btn = ev.target.closest(".ctx-chip");
   if (!btn) return;
   const role = btn.dataset.role;
+  const roles = activeRolesSet();
   if (role === "all") {
-    activeRoles.clear();
-    activeRoles.add("all");
+    roles.clear();
+    roles.add("all");
   } else {
-    activeRoles.delete("all");
-    if (activeRoles.has(role)) activeRoles.delete(role);
-    else activeRoles.add(role);
-    if (activeRoles.size === 0) activeRoles.add("all");
+    roles.delete("all");
+    if (roles.has(role)) roles.delete(role);
+    else roles.add(role);
+    if (roles.size === 0) roles.add("all");
   }
   ctxFilters.querySelectorAll(".ctx-chip").forEach((c) => {
-    c.dataset.active = activeRoles.has(c.dataset.role) ? "1" : "0";
+    c.dataset.active = roles.has(c.dataset.role) ? "1" : "0";
   });
   applyCtxFilter();
 });

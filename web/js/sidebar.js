@@ -18,9 +18,15 @@ export const setSessionTopic = (title) => {
   sessionTopic.dataset.empty = t("untitled");
 };
 
+const homeRelativeCwd = (cwd) => {
+  if (!cwd) return "";
+  if (state.homeDir && cwd.startsWith(state.homeDir)) return "~" + cwd.slice(state.homeDir.length);
+  return cwd;
+};
+
 export const setSessionCwd = (cwd) => {
   if (!sessionCwdMeta) return;
-  sessionCwdMeta.textContent = cwd ? shortenCwd(cwd) : "";
+  sessionCwdMeta.textContent = homeRelativeCwd(cwd);
   if (cwd) sessionCwdMeta.title = cwd;
 };
 

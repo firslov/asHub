@@ -1,4 +1,4 @@
-import { sessionId, submitUrl, state } from "./state.js";
+import { sessionId, submitUrl, state, queryHistory } from "./state.js";
 import { escape } from "./utils.js";
 import { appendAfterPending } from "./stream/tool-group.js";
 import { createUserBox } from "./actions.js";
@@ -65,6 +65,7 @@ form?.addEventListener("submit", async (ev) => {
   if (!query) return;
   if (state.isSubmitting) return;
   state.lastQuery = query;
+  queryHistory.push(query);
   state.isSubmitting = true;
   input.value = "";
   input.style.height = "";
@@ -124,6 +125,11 @@ const killRange = (start, end) => {
 };
 
 input?.addEventListener("keydown", (ev) => {
+  // Reset history navigation when user starts modifying the recalled text
+  if (queryHistory._index !== -1 && ev.key !== "ArrowUp" && ev.key !== "ArrowDown"
+      && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    queryHistory.reset();
+  }
   if (isMac && ev.altKey && !ev.metaKey && !ev.ctrlKey && (ev.code === "KeyB" || ev.code === "KeyF")) {
     ev.preventDefault();
     const forward = ev.code === "KeyF";
@@ -173,10 +179,20 @@ input?.addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && !hasAcSelection()) {
     ev.preventDefault();
     form.dispatchEvent(new Event("submit", { cancelable: true }));
-  } else if (ev.key === "ArrowUp" && !input.value && state.lastQuery) {
+  } else if (ev.key === "ArrowUp" && !input.value && queryHistory.hasItems) {
     ev.preventDefault();
-    input.value = state.lastQuery;
-    input.setSelectionRange(input.value.length, input.value.length);
+    const recalled = queryHistory.recallUp(input.value);
+    if (recalled !== null) {
+      input.value = recalled;
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  } else if (ev.key === "ArrowDown" && queryHistory._index !== -1) {
+    ev.preventDefault();
+    const recalled = queryHistory.recallDown();
+    if (recalled !== null) {
+      input.value = recalled;
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
   }
 });
 

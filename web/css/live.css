@@ -3448,3 +3448,14 @@ body.exiting .app {
 .prompt-add-btn:hover svg {
   transform: rotate(90deg);
 }
+
+/* ── Reduced motion ────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

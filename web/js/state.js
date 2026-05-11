@@ -1,6 +1,17 @@
-export const sessionId = (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1] ?? "";
-export const eventsUrl = `/${sessionId}/events?tail=50`;
-export const submitUrl = `/${sessionId}/submit`;
+const SESSION_PATH_RE = /^\/([0-9a-f]{4,32})\/?$/;
+
+export const parseSessionId = (path) =>
+  (path.match(SESSION_PATH_RE) ?? [])[1] ?? "";
+
+export let sessionId = parseSessionId(location.pathname);
+export let eventsUrl = `/${sessionId}/events?tail=50`;
+export let submitUrl = `/${sessionId}/submit`;
+
+export const setSessionId = (id) => {
+  sessionId = id;
+  eventsUrl = `/${id}/events?tail=50`;
+  submitUrl = `/${id}/submit`;
+};
 
 export const state = {
   isProcessing: false,
@@ -21,6 +32,16 @@ export const getAgentInfoState = () => ({ name: agentInfo.name, model: agentInfo
 export const setAgentInfoState = (s) => {
   agentInfo.name = s?.name ?? "";
   agentInfo.model = s?.model ?? "";
+};
+
+export const resetSessionState = () => {
+  state.isProcessing = false;
+  state.isSubmitting = false;
+  state.currentTurn = -1;
+  state.cwd = "";
+  state.lastQuery = "";
+  state.lastUsage = null;
+  state.replaying = false;
 };
 
 const spinner = document.getElementById("spinner");

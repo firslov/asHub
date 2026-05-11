@@ -1,6 +1,7 @@
 import { escape } from "./utils.js";
 import { sessionId, state } from "./state.js";
 import { attachAutocomplete } from "./autocomplete.js";
+import { switchTo } from "./session-switcher.js";
 import { t } from "./i18n.js";
 
 const sessionList = document.getElementById("sessions");
@@ -100,15 +101,12 @@ const renderSessions = async () => {
 
       const a = document.createElement("a");
       a.href = `/${s.instanceId}/`;
-      if (isCurrent) {
-        a.addEventListener("click", (ev) => ev.preventDefault());
-      } else {
-        a.addEventListener("click", (ev) => {
-          // Skip exit transition for new-tab/window opens
-          if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
-          document.body.classList.add("exiting");
-        });
-      }
+      a.addEventListener("click", (ev) => {
+        if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+        ev.preventDefault();
+        if (s.instanceId === sessionId) return;
+        switchTo(s.instanceId);
+      });
       const title = escape(s.title || s.instanceId);
       const modelText = s.model ? ` <span class="session-model">${escape(s.model)}</span>` : "";
       const cwdText = s.cwd ? ` <span class="session-cwd" title="${escape(s.cwd)}">${escape(shortenCwd(s.cwd))}</span>` : "";
@@ -157,11 +155,6 @@ const renderSessions = async () => {
 
 renderSessions();
 setInterval(renderSessions, 5000);
-
-// Clean up exit transition class on bfcache restore (Back button)
-window.addEventListener("pageshow", (ev) => {
-  if (ev.persisted) document.body.classList.remove("exiting");
-});
 
 // Force re-render on language switch so tooltips update immediately
 document.addEventListener("langchange", () => {

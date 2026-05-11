@@ -87,6 +87,11 @@ export const appendThinkingChunk = (text) => {
   maybeScroll();
 };
 
+export const resetThinkingState = () => {
+  thinkingEl = null;
+  thinkingBlock = null;
+};
+
 export const finalizeThinking = () => {
   if (!thinkingBlock) return;
   const inner = thinkingBlock.querySelector(".thinking-block-inner");

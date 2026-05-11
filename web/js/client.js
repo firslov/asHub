@@ -8,6 +8,7 @@ import "./sidebar.js";
 import "./context-panel.js";
 import "./files-panel.js";
 import "./sse.js";
+import "./session-switcher.js";
 
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;

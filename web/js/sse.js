@@ -1,5 +1,5 @@
 import { escape, stripAnsi, mdToHtml, highlightWithin, blockToText } from "./utils.js";
-import { sessionId, eventsUrl, state, setBusy, agentInfo } from "./state.js";
+import { sessionId, eventsUrl, state, setBusy, agentInfo, setAgentInfoState } from "./state.js";
 import { t } from "./i18n.js";
 import { maybeScroll, forceScrollBottom } from "./stream/scroll.js";
 import { append, appendToGroup, bumpToolCount } from "./stream/tool-group.js";
@@ -45,6 +45,8 @@ setTimeout(() => {
 // Track connection state so langchange can refresh the correct text
 let connState = "connecting"; // "connecting" | "connected" | "reconnecting" | "nosession"
 
+let currentEs = null;
+
 // ── Replay batching ───────────────────────────────────────────────────
 // When SSE connects it replays buffered frames synchronously.  We run
 // expensive operations (scroll, compactReasoning, highlightWithin) only
@@ -82,6 +84,11 @@ const exitReplayMode = () => {
 /** Cancel any pending replay-flush timer (used by infinite-scroll). */
 export const cancelReplayFlush = () => {
   if (replayFlushTimer) { clearTimeout(replayFlushTimer); replayFlushTimer = null; }
+};
+
+const resetAgentInfo = () => {
+  setAgentInfoState({ name: "", model: "" });
+  if (instanceLabel) instanceLabel.textContent = "asHub";
 };
 
 // Merge non-empty fields so a partial replay event doesn't blank known values.
@@ -335,6 +342,7 @@ bindHandlers(handlers);
 
 const connect = () => {
   const es = new EventSource(eventsUrl);
+  currentEs = es;
   es.onopen = () => {
     conn.textContent = "";
     connState = "connected";
@@ -367,6 +375,35 @@ const connect = () => {
 // Set initial connection status with i18n (HTML has fallback text)
 conn.textContent = t("connecting");
 connState = "connecting";
+
+export const connectSse = () => {
+  if (currentEs) return;
+  if (!sessionId) {
+    hidePageLoader();
+    conn.textContent = t("no.session");
+    connState = "nosession";
+    dot.classList.add("stale");
+    return;
+  }
+  conn.textContent = t("connecting");
+  connState = "connecting";
+  dot.classList.remove("stale");
+  connect();
+};
+
+export const disconnectSse = () => {
+  if (currentEs) {
+    try { currentEs.close(); } catch {}
+    currentEs = null;
+  }
+  if (replayFlushTimer) {
+    clearTimeout(replayFlushTimer);
+    replayFlushTimer = null;
+  }
+  state.replaying = false;
+  resetAgentInfo();
+  setBusy(false);
+};
 
 if (sessionId) {
   connect();

@@ -263,11 +263,6 @@
 /* ── App layout ─────────────────────────────────────────────────── */
 body { min-height: 100vh; padding: 0; font-size: 15px; }
 
-body.exiting .app {
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
 .app {
   display: grid;
   grid-template-columns: 260px 1fr;

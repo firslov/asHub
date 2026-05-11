@@ -1,50 +1,56 @@
 import { maybeScroll } from "./scroll.js";
 import { t } from "../i18n.js";
+import { activeSession } from "../session-manager.js";
 
-let lastToolRow = null;  // cached ref to the most recent tool-row, avoids DOM scan
-let liveToolOutput = null;  // { callId, lines, blockEl, rafPending }
-const completedTools = new Set();
+const sess = () => activeSession.peek();
 
 const flushLiveOutput = () => {
-  if (!liveToolOutput) return;
-  liveToolOutput.rafPending = false;
-  const el = liveToolOutput.blockEl;
-  el.textContent = liveToolOutput.lines.join("\n");
+  const session = sess();
+  const lo = session?.liveOutput.output;
+  if (!lo) return;
+  lo.rafPending = false;
+  const el = lo.blockEl;
+  el.textContent = lo.lines.join("\n");
   el.scrollTop = el.scrollHeight;
   maybeScroll();
 };
 
 const scheduleLiveOutput = () => {
-  if (!liveToolOutput || liveToolOutput.rafPending) return;
-  liveToolOutput.rafPending = true;
+  const lo = sess()?.liveOutput.output;
+  if (!lo || lo.rafPending) return;
+  lo.rafPending = true;
   requestAnimationFrame(flushLiveOutput);
 };
 
 export const finalizeLiveOutput = () => {
-  if (!liveToolOutput) return;
-  if (liveToolOutput.rafPending) flushLiveOutput();
-  liveToolOutput.blockEl.classList.add("final");
-  liveToolOutput = null;
+  const session = sess();
+  const lo = session?.liveOutput.output;
+  if (!lo) return;
+  if (lo.rafPending) flushLiveOutput();
+  lo.blockEl.classList.add("final");
+  session.liveOutput.output = null;
 };
 
 export const resetCompletedTools = () => {
-  completedTools.clear();
+  sess()?.liveOutput.completed.clear();
 };
 
 // Output-chunk events have no toolCallId; attach to the latest tool-row.
-// Uses a cached row reference (set by sse.js on agent:tool-started) so we
-// never scan the growing DOM tree.
 export const appendLiveOutputChunk = (chunk) => {
   if (!chunk) return;
-  const row = lastToolRow;
+  const session = sess();
+  if (!session) return;
+  const row = session.liveOutput.lastRow;
   const callId = row?.dataset.callId ?? "";
 
-  if (callId && completedTools.has(callId)) return;
+  if (callId && session.liveOutput.completed.has(callId)) return;
 
-  if (!liveToolOutput || liveToolOutput.callId !== callId) {
+  let lo = session.liveOutput.output;
+  if (!lo || lo.callId !== callId) {
     const block = document.createElement("pre");
     block.className = "tool-body tool-body-live";
-    liveToolOutput = { callId, lines: [], blockEl: block, rafPending: false };
+    lo = { callId, lines: [], blockEl: block, rafPending: false };
+    session.liveOutput.output = lo;
     const parent = row ? row.parentNode : null;
     if (parent && row) {
       parent.insertBefore(block, row.nextSibling);
@@ -52,24 +58,27 @@ export const appendLiveOutputChunk = (chunk) => {
   }
 
   const parts = chunk.split("\n");
-  if (liveToolOutput.lines.length > 0) {
-    liveToolOutput.lines[liveToolOutput.lines.length - 1] += parts[0];
+  if (lo.lines.length > 0) {
+    lo.lines[lo.lines.length - 1] += parts[0];
   } else {
-    liveToolOutput.lines.push(parts[0]);
+    lo.lines.push(parts[0]);
   }
   for (let i = 1; i < parts.length; i++) {
-    liveToolOutput.lines.push(parts[i]);
+    lo.lines.push(parts[i]);
   }
   scheduleLiveOutput();
 };
 
 export const absorbAsToolBody = (callId) => {
-  if (callId) completedTools.add(callId);
-  if (!liveToolOutput || liveToolOutput.callId !== callId) return false;
-  if (liveToolOutput.rafPending) flushLiveOutput();
-  const blockEl = liveToolOutput.blockEl;
+  const session = sess();
+  if (!session) return false;
+  if (callId) session.liveOutput.completed.add(callId);
+  const lo = session.liveOutput.output;
+  if (!lo || lo.callId !== callId) return false;
+  if (lo.rafPending) flushLiveOutput();
+  const blockEl = lo.blockEl;
   blockEl.classList.add("final");
-  const lines = liveToolOutput.lines;
+  const lines = lo.lines;
   const all = lines.join("\n");
   const LIMIT = 6;
 
@@ -101,7 +110,7 @@ export const absorbAsToolBody = (callId) => {
   if (actions.children.length > 0) {
     blockEl.appendChild(actions);
   }
-  liveToolOutput = null;
+  session.liveOutput.output = null;
   return true;
 };
 
@@ -110,16 +119,25 @@ export const absorbAsToolBody = (callId) => {
  * can use a cached reference instead of scanning the entire stream DOM.
  */
 export const trackToolRow = (row) => {
-  if (row) lastToolRow = row;
+  const session = sess();
+  if (session && row) session.liveOutput.lastRow = row;
 };
 
 /** Save/restore for infinite-scroll replay processing */
-export const getLiveOutputState = () => ({
-  lastToolRow, liveToolOutput, completedTools: new Set(completedTools),
-});
+export const getLiveOutputState = () => {
+  const session = sess();
+  if (!session) return { lastToolRow: null, liveToolOutput: null, completedTools: new Set() };
+  return {
+    lastToolRow: session.liveOutput.lastRow,
+    liveToolOutput: session.liveOutput.output,
+    completedTools: new Set(session.liveOutput.completed),
+  };
+};
 export const setLiveOutputState = (s) => {
-  lastToolRow = s.lastToolRow ?? null;
-  liveToolOutput = s.liveToolOutput ?? null;
-  completedTools.clear();
-  if (s.completedTools) for (const id of s.completedTools) completedTools.add(id);
+  const session = sess();
+  if (!session) return;
+  session.liveOutput.lastRow = s.lastToolRow ?? null;
+  session.liveOutput.output = s.liveToolOutput ?? null;
+  session.liveOutput.completed.clear();
+  if (s.completedTools) for (const id of s.completedTools) session.liveOutput.completed.add(id);
 };

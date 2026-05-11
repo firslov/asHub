@@ -3,83 +3,96 @@ import { state } from "../state.js";
 import { append } from "./tool-group.js";
 import { maybeScroll } from "./scroll.js";
 import { t } from "../i18n.js";
+import { activeSession } from "../session-manager.js";
 
-let currentReply = null;
-let currentReplyText = "";
-let pendingChunkRender = false;
-let liveSegment = false;
+const sess = () => activeSession.peek();
 
 const flushReply = () => {
-  pendingChunkRender = false;
-  if (!currentReply) return;
-  currentReply.innerHTML = mdToHtml(currentReplyText);
+  const session = sess();
+  const r = session?.reply;
+  if (!r) return;
+  r.pendingChunkRender = false;
+  if (!r.current) return;
+  r.current.innerHTML = mdToHtml(r.text);
   maybeScroll();
 };
 
 const scheduleReplyRender = () => {
-  if (pendingChunkRender) return;
-  pendingChunkRender = true;
+  const r = sess()?.reply;
+  if (!r || r.pendingChunkRender) return;
+  r.pendingChunkRender = true;
   requestAnimationFrame(flushReply);
 };
 
-export const hasReply = () => currentReply != null;
-export const sawLiveSegment = () => liveSegment;
-export const startNewSegment = () => { liveSegment = false; };
+export const hasReply = () => (sess()?.reply.current ?? null) != null;
+export const sawLiveSegment = () => sess()?.reply.liveSegment ?? false;
+export const startNewSegment = () => { const r = sess()?.reply; if (r) r.liveSegment = false; };
 
 /** Save/restore for infinite-scroll replay processing */
-export const getReplyState = () => ({
-  currentReply, currentReplyText, pendingChunkRender, liveSegment,
-});
+export const getReplyState = () => {
+  const r = sess()?.reply;
+  return {
+    currentReply: r?.current ?? null,
+    currentReplyText: r?.text ?? "",
+    pendingChunkRender: r?.pendingChunkRender ?? false,
+    liveSegment: r?.liveSegment ?? false,
+  };
+};
 export const setReplyState = (s) => {
-  currentReply = s.currentReply ?? null;
-  currentReplyText = s.currentReplyText ?? "";
-  pendingChunkRender = s.pendingChunkRender ?? false;
-  liveSegment = s.liveSegment ?? false;
+  const r = sess()?.reply;
+  if (!r) return;
+  r.current = s.currentReply ?? null;
+  r.text = s.currentReplyText ?? "";
+  r.pendingChunkRender = s.pendingChunkRender ?? false;
+  r.liveSegment = s.liveSegment ?? false;
 };
 
-// RAF-coalesce: marked.parse on every chunk is O(N²) over chunk count.
 export const appendReplyChunk = (delta) => {
   if (!delta) return;
-  if (!currentReply) {
-    currentReply = document.createElement("div");
-    currentReply.className = "agent-reply streaming";
-    currentReply.dataset.turn = String(state.currentTurn);
-    append(currentReply);
+  const session = sess();
+  if (!session) return;
+  const r = session.reply;
+  if (!r.current) {
+    r.current = document.createElement("div");
+    r.current.className = "agent-reply streaming";
+    r.current.dataset.turn = String(state.currentTurn);
+    append(r.current);
   }
-  currentReplyText += stripAnsi(delta);
-  liveSegment = true;
+  r.text += stripAnsi(delta);
+  r.liveSegment = true;
   scheduleReplyRender();
 };
 
-// Replay-only: covers trailing text the response-segment events miss.
 export const fillFinalReply = (text) => {
-  if (!currentReply || currentReplyText !== "") return;
-  currentReplyText = stripAnsi(text);
-  currentReply.innerHTML = mdToHtml(currentReplyText);
+  const r = sess()?.reply;
+  if (!r?.current || r.text !== "") return;
+  r.text = stripAnsi(text);
+  r.current.innerHTML = mdToHtml(r.text);
 };
 
 export const closeReply = () => {
-  if (!currentReply) return;
-  if (pendingChunkRender) flushReply();
-  currentReply.classList.remove("streaming");
-  if (currentReplyText === "") {
-    currentReply.remove();
+  const session = sess();
+  const r = session?.reply;
+  if (!r?.current) return;
+  if (r.pendingChunkRender) flushReply();
+  r.current.classList.remove("streaming");
+  if (r.text === "") {
+    r.current.remove();
   } else if (!state.replaying) {
-    // Defer syntax highlighting during SSE replay batching — the replay
-    // exit code runs highlightWithin once on the whole stream.
-    highlightWithin(currentReply);
+    highlightWithin(r.current);
   }
-  currentReply = null;
-  currentReplyText = "";
+  r.current = null;
+  r.text = "";
 };
 
 export const cancelReply = () => {
-  if (currentReply) {
-    currentReply.classList.add("cancelled");
+  const r = sess()?.reply;
+  if (r?.current) {
+    r.current.classList.add("cancelled");
     const stamp = document.createElement("span");
     stamp.className = "cancelled-stamp";
     stamp.textContent = t("cancelled");
-    currentReply.appendChild(stamp);
+    r.current.appendChild(stamp);
   }
   closeReply();
 };

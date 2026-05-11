@@ -1,38 +1,47 @@
 import { hideEmptyState, maybeScroll } from "./scroll.js";
 import { append, insertStreamNode } from "./tool-group.js";
 import { t } from "../i18n.js";
+import { activeSession } from "../session-manager.js";
 
-let thinkingEl = null;
-let thinkingBlock = null;
+const sess = () => activeSession.peek();
 
-export const hasThinkingDots = () => thinkingEl != null;
-export const hasThinkingBlock = () => thinkingBlock != null;
+export const hasThinkingDots = () => (sess()?.thinking.el ?? null) != null;
+export const hasThinkingBlock = () => (sess()?.thinking.block ?? null) != null;
 
 /** Save/restore for infinite-scroll replay processing */
-export const getThinkingState = () => ({ thinkingEl, thinkingBlock });
+export const getThinkingState = () => {
+  const t = sess()?.thinking;
+  return { thinkingEl: t?.el ?? null, thinkingBlock: t?.block ?? null };
+};
 export const setThinkingState = (s) => {
-  thinkingEl = s.thinkingEl ?? null;
-  thinkingBlock = s.thinkingBlock ?? null;
+  const t = sess()?.thinking;
+  if (!t) return;
+  t.el = s.thinkingEl ?? null;
+  t.block = s.thinkingBlock ?? null;
 };
 
 export const showThinking = () => {
-  if (thinkingEl) return;
-  thinkingEl = document.createElement("div");
-  thinkingEl.className = "thinking";
-  thinkingEl.innerHTML =
+  const session = sess();
+  if (!session || session.thinking.el) return;
+  const el = document.createElement("div");
+  el.className = "thinking";
+  el.innerHTML =
     `<span class="thinking-dot"></span>` +
     `<span class="thinking-dot"></span>` +
     `<span class="thinking-dot"></span>` +
     `<span class="thinking-label">${t("thinking")}</span>`;
   hideEmptyState();
-  insertStreamNode(thinkingEl);
+  insertStreamNode(el);
+  session.thinking.el = el;
   maybeScroll();
 };
 
 export const hideThinking = () => {
-  if (!thinkingEl) return;
-  thinkingEl.remove();
-  thinkingEl = null;
+  const session = sess();
+  const el = session?.thinking.el;
+  if (!el) return;
+  el.remove();
+  session.thinking.el = null;
 };
 
 /**
@@ -43,8 +52,9 @@ export const hideThinking = () => {
  */
 export const sweepOrphanThinking = (stream) => {
   if (!stream) return;
+  const live = sess()?.thinking.el ?? null;
   for (const el of stream.querySelectorAll(".thinking")) {
-    if (el !== thinkingEl) el.remove();
+    if (el !== live) el.remove();
   }
 };
 
@@ -75,11 +85,13 @@ const setThinkingCollapsed = (block, collapsed) => {
 
 export const appendThinkingChunk = (text) => {
   if (!text) return;
+  const session = sess();
+  if (!session) return;
   hideThinking();
-  if (!thinkingBlock) {
+  if (!session.thinking.block) {
     const block = document.createElement("div");
     block.className = "thinking-block";
-    thinkingBlock = block;
+    session.thinking.block = block;
     const head = document.createElement("div");
     head.className = "thinking-block-head";
     head.textContent = `💭 ${t("thinking")}`;
@@ -91,26 +103,28 @@ export const appendThinkingChunk = (text) => {
     const inner = document.createElement("div");
     inner.className = "thinking-block-inner";
     body.appendChild(inner);
-    thinkingBlock.append(head, body);
-    append(thinkingBlock);
+    block.append(head, body);
+    append(block);
   }
-  const inner = thinkingBlock.querySelector(".thinking-block-inner");
+  const inner = session.thinking.block.querySelector(".thinking-block-inner");
   inner.textContent = (inner.textContent ?? "") + text;
   inner.scrollTop = inner.scrollHeight;
   maybeScroll();
 };
 
 export const finalizeThinking = () => {
-  if (!thinkingBlock) return;
-  const inner = thinkingBlock.querySelector(".thinking-block-inner");
+  const session = sess();
+  const block = session?.thinking.block;
+  if (!block) return;
+  const inner = block.querySelector(".thinking-block-inner");
   if (!inner || !inner.textContent?.trim()) {
-    thinkingBlock.remove();
+    block.remove();
   } else {
-    const head = thinkingBlock.querySelector(".thinking-block-head");
+    const head = block.querySelector(".thinking-block-head");
     if (head) head.textContent = `💭 ${t("thought")}`;
-    setThinkingCollapsed(thinkingBlock, true);
+    setThinkingCollapsed(block, true);
   }
-  thinkingBlock = null;
+  session.thinking.block = null;
 };
 
 // Refresh translated labels on language change

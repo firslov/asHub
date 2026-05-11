@@ -1,11 +1,12 @@
 import { hideEmptyState, maybeScroll } from "./scroll.js";
 import { t } from "../i18n.js";
+import { activeSession } from "../session-manager.js";
 
 const stream = document.getElementById("stream");
 
 const TOOL_GROUP_COLLAPSE = 2;
 const groupState = new WeakMap();
-let currentToolGroup = null;
+const sess = () => activeSession.peek();
 
 /**
  * Insert a node into the stream, before any trailing pending user-boxes.
@@ -37,9 +38,10 @@ const rebuildGroupState = (g) => {
 };
 
 /** Save/restore for infinite-scroll replay processing */
-export const getToolGroupState = () => ({ currentToolGroup });
+export const getToolGroupState = () => ({ currentToolGroup: sess()?.toolGroup.current ?? null });
 export const setToolGroupState = (s) => {
-  currentToolGroup = s.currentToolGroup ?? null;
+  const session = sess();
+  if (session) session.toolGroup.current = s.currentToolGroup ?? null;
   // Rebuild WeakMap from DOM for restored tool-group elements
   document.querySelectorAll(".tool-group").forEach(rebuildGroupState);
 };
@@ -50,7 +52,8 @@ const updateToolGroupHead = (g) => {
 };
 
 const openToolGroup = () => {
-  if (currentToolGroup) return currentToolGroup;
+  const session = sess();
+  if (session?.toolGroup.current) return session.toolGroup.current;
   const g = document.createElement("div");
   g.className = "tool-group";
   const head = document.createElement("button");
@@ -68,7 +71,7 @@ const openToolGroup = () => {
   groupState.set(g, { head, body });
   hideEmptyState();
   insertStreamNode(g);
-  currentToolGroup = g;
+  if (session) session.toolGroup.current = g;
   maybeScroll();
   return g;
 };
@@ -89,9 +92,10 @@ export const bumpToolCount = () => {
 
 // Collapse here, not in bumpToolCount, so rows stay visible while running.
 const closeToolGroup = () => {
-  const g = currentToolGroup;
+  const session = sess();
+  const g = session?.toolGroup.current;
   if (!g) return;
-  currentToolGroup = null;
+  session.toolGroup.current = null;
   if (groupState.get(g).body.children.length === 0) { g.remove(); return; }
   if (toolCount(g) >= TOOL_GROUP_COLLAPSE) {
     if (!g.dataset.userToggled) g.classList.add("collapsed");

@@ -1,3 +1,22 @@
+/* ── Global monospace typography ──────────────────────────────────── */
+/* All monospace elements inherit refined rendering */
+[class*="session-"],
+.sidebar-title, .sidebar-btn, .toolbar,
+.ctx-head, .ctx-role, .ctx-chip,
+.files-head, .files-entry,
+.config-head,
+.prompt-head, .prompt-item-name,
+.bar-btn, .terminal-bar, .live-status,
+.agent-reply pre, .agent-reply code, .agent-reply .md-code,
+.tool-row, .tool-body, .tool-name,
+.diff-block, .turn-sep, .thinking,
+.err-card, .ui-info, .usage-chip,
+.terminal-usage, .version-label, .page-loader-text,
+.new-session-form, .autocomplete, .kbd-hint kbd {
+  font-feature-settings: "calt" 1, "liga" 1, "kern" 1, "ss01" 0;
+  font-variant-ligatures: contextual common-ligatures;
+}
+
 /* ── Empty state ──────────────────────────────────────────────────── */
 .stream-empty {
   display: flex;
@@ -70,18 +89,19 @@
 /* ── Title ─────────────────────────────────────────────────────── */
 .stream-empty-title {
   font-family: 'Geist', 'Inter', -apple-system, sans-serif;
-  font-weight: 600;
-  font-size: 2rem;
+  font-weight: 500;
+  font-size: 2.05rem;
   color: var(--text);
-  letter-spacing: -0.025em;
-  background: linear-gradient(135deg, var(--text) 0%, var(--text-dim) 100%);
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  background: linear-gradient(135deg, var(--text) 10%, var(--text-dim) 70%, var(--text-mid) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 [data-theme="dark"] .stream-empty-title {
-  background: linear-gradient(135deg, #e8e8ec 0%, #b8b8c4 100%);
+  background: linear-gradient(135deg, #f0f0f4 0%, #d0d0d8 50%, #a8a8b4 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -90,21 +110,22 @@
 /* ── Subtitle ──────────────────────────────────────────────────── */
 .stream-empty-sub {
   font-family: 'Geist', 'Inter', sans-serif;
-  font-weight: 400;
-  font-size: 0.95rem;
+  font-weight: 380;
+  font-size: 0.92rem;
   color: var(--text-dim);
-  max-width: 36ch;
-  line-height: 1.7;
-  margin-top: 0.9rem;
+  max-width: 38ch;
+  line-height: 1.75;
+  margin-top: 1rem;
+  letter-spacing: -0.005em;
 }
 
 .stream-empty-sub em {
-  background: linear-gradient(135deg, var(--accent) 0%, var(--cyan) 100%);
+  background: linear-gradient(135deg, var(--accent) 20%, var(--cyan) 80%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
   font-style: normal;
-  font-weight: 500;
+  font-weight: 550;
 }
 
 /* ── CTA prompt button ─────────────────────────────────────────── */
@@ -113,10 +134,13 @@
   align-items: center;
   gap: 0.75rem;
   margin-top: 2.25rem;
-  padding: 0.6rem 1.5rem;
+  padding: 0.65rem 1.6rem;
   border: 1px solid var(--border-mid);
   border-radius: var(--radius-pill);
-  font-size: 0.84rem;
+  font-family: 'Geist', 'Inter', -apple-system, sans-serif;
+  font-size: 0.82rem;
+  font-weight: 420;
+  letter-spacing: -0.005em;
   color: var(--text-mid);
   cursor: pointer;
   transition: all 0.35s var(--ease-out-expo);
@@ -165,7 +189,7 @@
   font-size: 0.8rem;
   margin-top: 0.9rem;
 }
-.kbd-hint { font-size: 0.72rem; color: var(--text-faint); letter-spacing: 0.02em; }
+.kbd-hint { font-size: 0.7rem; color: var(--text-faint); letter-spacing: 0.03em; font-weight: 400; }
 .kbd-hint kbd {
   display: inline-block;
   padding: 0.1rem 0.45rem;
@@ -176,8 +200,9 @@
   background: var(--bg3);
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 0.68rem;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  font-size: 0.66rem;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.12);
 }
 
 /* ── Responsive ───────────────────────────────────────────────────── */
@@ -219,12 +244,13 @@
   color: #1a1a1e;
   border: none;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 500;
-  padding: 0.5rem 1rem;
+  letter-spacing: 0.04em;
+  padding: 0.52rem 1.05rem;
   border-radius: var(--radius-pill);
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(212, 168, 83, 0.25), 0 2px 6px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 18px rgba(184, 134, 11, 0.22), 0 2px 6px rgba(0,0,0,0.15);
   z-index: 5;
   transition: all 0.25s var(--ease-out-back);
   animation: pill-in 0.4s var(--ease-out-back);
@@ -238,26 +264,27 @@
 .scroll-pill[hidden] { display: none; animation: none; }
 .scroll-pill:hover {
   transform: translateY(-3px);
-  box-shadow: 0 8px 28px rgba(212, 168, 83, 0.35), 0 4px 12px rgba(0,0,0,0.25);
+  box-shadow: 0 8px 30px rgba(184, 134, 11, 0.32), 0 4px 14px rgba(0,0,0,0.22);
 }
-.scroll-pill:active { transform: translateY(0) scale(0.97); }
+.scroll-pill:active { transform: translateY(0) scale(0.96); }
 
 /* ── Code blocks ─────────────────────────────────────────────────── */
 .agent-reply pre code.hljs {
   background: transparent;
   padding: 0;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.88rem;
+  font-size: 0.86rem;
+  line-height: 1.6;
 }
 
 .agent-reply pre {
   background: var(--bg3);
-  padding: 1rem 1.25rem;
+  padding: 1.1rem 1.3rem;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   overflow-x: auto;
   border-left: 2px solid var(--accent-border);
-  box-shadow: inset 0 1px 3px rgba(0,0,0,0.08);
+  box-shadow: inset 0 1px 4px rgba(0,0,0,0.06);
 }
 
 /* ── App layout ─────────────────────────────────────────────────── */
@@ -349,11 +376,21 @@ body.exiting .app {
   flex-shrink: 0;
 }
 
+.toolbar-btn::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 4px;
+  background: transparent;
+  transition: background 0.2s var(--ease-out-expo);
+}
+
 .toolbar-btn:hover {
   color: var(--accent);
   background: var(--accent-glow);
   border-color: var(--accent-border);
   transform: translateY(-1px);
+  box-shadow: 0 2px 12px var(--accent-glow);
 }
 
 .toolbar-btn:active {
@@ -427,9 +464,9 @@ body.exiting .app {
 
 .sidebar-title {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 500;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-dim);
   margin-right: auto;
@@ -495,19 +532,20 @@ body.exiting .app {
   flex: 1;
   min-width: 0;
   display: block;
-  padding: 0.6rem 0.8rem 0.6rem 1.2rem;
+  padding: 0.62rem 0.8rem 0.62rem 1.25rem;
   color: var(--text-dim);
   text-decoration: none;
   transition: all 0.2s var(--ease-out-expo);
-  font-size: 0.88rem;
-  font-weight: 400;
+  font-size: 0.86rem;
+  font-weight: 420;
   border-left: 2px solid transparent;
+  letter-spacing: -0.005em;
 }
 
 .session-list li:hover { background: var(--bg3); }
 .session-list li:hover a {
   color: var(--text);
-  padding-left: calc(1.2rem + 2px);
+  padding-left: calc(1.25rem + 2px);
   border-left-color: var(--accent-border);
 }
 
@@ -550,7 +588,7 @@ body.exiting .app {
 
 .session-list li.current a {
   color: var(--text);
-  padding-left: calc(1.2rem - 2px);
+  padding-left: calc(1.25rem - 2px);
   border-left: 2px solid var(--accent);
 }
 
@@ -558,23 +596,24 @@ body.exiting .app {
   color: var(--text);
   font-weight: 500;
   display: block;
-  font-size: 0.88rem;
-  line-height: 1.25;
+  font-size: 0.86rem;
+  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  letter-spacing: -0.005em;
 }
-.session-list li.current .session-title { color: var(--accent); font-weight: 600; }
+.session-list li.current .session-title { color: var(--accent); font-weight: 580; }
 
 .session-meta {
   display: flex;
   align-items: baseline;
   gap: 0.65rem;
-  margin-top: 0.2rem;
-  font-size: 0.73rem;
+  margin-top: 0.22rem;
+  font-size: 0.72rem;
   color: var(--text-dim);
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.015em;
 }
 .session-list li:hover .session-time { opacity: 0; transition: opacity 0.12s; }
 
@@ -584,28 +623,30 @@ body.exiting .app {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0.7;
+  opacity: 0.65;
 }
 
 .session-time {
   flex-shrink: 0;
   font-family: 'Geist', 'Inter', -apple-system, sans-serif;
-  font-weight: 400;
+  font-weight: 380;
   color: var(--text-mid);
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-group-head {
-  padding: 0.7rem 1.2rem 0.3rem;
+  padding: 0.75rem 1.25rem 0.3rem;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   color: var(--text-faint);
   pointer-events: none;
   user-select: none;
 }
-.session-group-head:first-child { padding-top: 0.4rem; }
+.session-group-head:first-child { padding-top: 0.45rem; }
 .session-list li.session-group-head:hover { background: transparent; }
 
 /* ── Session title edit ───────────────────────────────────────────── */
@@ -735,7 +776,9 @@ body.exiting .app {
   color: var(--text);
   font: inherit;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.78rem;
+  font-size: 0.76rem;
+  font-weight: 420;
+  letter-spacing: 0.01em;
   padding: 0.45rem 0.6rem;
   border-radius: var(--radius-sm);
   box-sizing: border-box;
@@ -826,18 +869,19 @@ body.exiting .app {
 
 .live-status {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   color: var(--text-mid);
-  letter-spacing: 0.04em;
-  font-weight: 400;
+  letter-spacing: 0.05em;
+  font-weight: 420;
 }
 
 /* ── Version label ─────────────────────────────────────────────────── */
 .version-label {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
+  font-weight: 420;
   color: var(--text-faint);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   margin-left: auto;
   padding: 0.15rem 0.55rem;
   border-radius: var(--radius-pill);
@@ -965,14 +1009,14 @@ body.exiting .app {
 }
 .session-topic {
   font-family: 'Geist', 'Inter', -apple-system, sans-serif;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   font-weight: 500;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 1.25;
-  letter-spacing: -0.01em;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
 }
 .session-topic:empty::before {
   content: attr(data-empty);
@@ -1002,7 +1046,7 @@ body.exiting .app {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 1.6rem 1.9rem;
+  padding: 1.8rem 2rem;
   position: relative;
   scroll-behavior: smooth;
 }
@@ -1103,29 +1147,30 @@ body.exiting .app {
 }
 
 .agent-reply p { margin: 0; line-height: 1.8; }
-.agent-reply p + p { margin-top: 1rem; }
+.agent-reply p + p { margin-top: 1.05rem; }
 .agent-reply > *:first-child { margin-top: 0; }
 .agent-reply > *:last-child { margin-bottom: 0; }
 .agent-reply ul, .agent-reply ol { margin: 0.65rem 0 0.65rem 1.6rem; padding: 0; }
-.agent-reply li { margin: 0.2rem 0; }
+.agent-reply li { margin: 0.22rem 0; line-height: 1.65; }
 .agent-reply h1, .agent-reply h2, .agent-reply h3 {
   font-size: 1em;
   font-weight: 600;
   color: var(--text);
-  margin: 1rem 0 0.35rem;
-  letter-spacing: -0.01em;
+  margin: 1.1rem 0 0.4rem;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
 }
 .agent-reply pre { margin: 0.85rem 0; }
 
 .agent-reply strong { color: var(--text); font-weight: 600; }
-.agent-reply em { color: var(--text); font-style: italic; }
+.agent-reply em { color: var(--text); font-style: italic; font-weight: 450; }
 .agent-reply a {
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
   text-decoration-color: var(--accent-border);
-  transition: all 0.15s;
+  transition: all 0.18s;
 }
 .agent-reply a:hover {
   color: var(--cyan);
@@ -1201,36 +1246,39 @@ body.exiting .app {
 
 .agent-reply .md-inline {
   background: var(--bg3);
-  padding: 0.08rem 0.55rem;
+  padding: 0.1rem 0.55rem;
   border-radius: var(--radius-xs);
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.88em;
-  color: var(--accent);
+  font-size: 0.86em;
+  color: var(--accent-dim);
   border: 1px solid var(--border);
+  font-weight: 450;
 }
 
 .agent-reply .md-code {
   background: var(--bg3);
-  padding: 0.85rem 1.1rem;
+  padding: 0.9rem 1.15rem;
   border-radius: var(--radius-md);
-  margin: 0.65rem 0;
+  margin: 0.7rem 0;
   overflow-x: auto;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.86rem;
+  font-size: 0.84rem;
   color: var(--text);
   border-left: 2px solid var(--accent-border);
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.06);
+  line-height: 1.6;
 }
 
 /* ── Tool rows ───────────────────────────────────────────────────── */
 .tool-row {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.85rem;
+  font-size: 0.83rem;
   color: var(--text-mid);
   padding: 0.35rem 0;
   display: flex;
   align-items: baseline;
   gap: 0.35rem;
+  letter-spacing: -0.005em;
 }
 
 .tool-row.ok { color: var(--green); }
@@ -1244,6 +1292,7 @@ body.exiting .app {
   gap: 0.35rem;
   flex-shrink: 0;
   white-space: nowrap;
+  letter-spacing: 0.01em;
 }
 
 .tool-detail { color: var(--text); }
@@ -1305,9 +1354,9 @@ body.exiting .app {
 /* ── Diff blocks ─────────────────────────────────────────────────── */
 .diff-block {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.82rem;
-  line-height: 1.5;
-  margin: 0.55rem 0 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin: 0.6rem 0 0.9rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -1317,13 +1366,15 @@ body.exiting .app {
 
 .diff-head {
   background: var(--bg3);
-  padding: 0.5rem 0.85rem;
+  padding: 0.55rem 0.9rem;
   border-bottom: 1px solid var(--border);
   color: var(--text-mid);
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  font-weight: 450;
+  letter-spacing: 0.01em;
 }
 
 .diff-actions {
@@ -1455,14 +1506,15 @@ body.exiting .app {
 /* ── Spinner ─────────────────────────────────────────────────────── */
 .spinner {
   display: inline-block;
-  width: 0.8rem;
-  height: 0.8rem;
+  width: 0.75rem;
+  height: 0.75rem;
   margin-left: 0.55rem;
   border: 1.5px solid var(--border-mid);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  box-shadow: 0 0 4px var(--accent-glow);
+  animation: spin 0.65s linear infinite;
+  box-shadow: 0 0 6px var(--accent-glow);
+  opacity: 0.8;
 }
 
 .spinner[hidden] { display: none; }
@@ -1476,9 +1528,10 @@ body.exiting .app {
   align-items: center;
   gap: 0.5rem;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   color: var(--text-dim);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  font-weight: 420;
 }
 
 .usage-chip {
@@ -1548,11 +1601,12 @@ body.exiting .app {
   display: flex;
   align-items: center;
   gap: 0.85rem;
-  margin: 2.2rem 0 1.1rem;
+  margin: 2.4rem 0 1.2rem;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.68rem;
+  font-size: 0.67rem;
   color: var(--text-faint);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  font-weight: 420;
   opacity: 0;
   animation: turn-sep-in 0.5s var(--ease-out-expo) 0.1s forwards;
 }
@@ -1595,11 +1649,12 @@ body.exiting .app {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.65rem 0;
+  padding: 0.7rem 0;
   color: var(--text-dim);
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.8rem;
-  letter-spacing: 0.03em;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  font-weight: 400;
 }
 
 .thinking-dot {
@@ -1614,7 +1669,7 @@ body.exiting .app {
 
 .thinking-dot:nth-child(2) { animation-delay: 0.18s; }
 .thinking-dot:nth-child(3) { animation-delay: 0.36s; }
-.thinking-label { margin-left: 0.4rem; font-style: italic; color: var(--text-mid); }
+.thinking-label { margin-left: 0.4rem; font-style: italic; color: var(--text-mid); font-weight: 400; }
 
 @keyframes think {
   0%, 80%, 100% { opacity: 0.2; transform: scale(0.85); }
@@ -1736,12 +1791,15 @@ body.exiting .app {
 /* ── UI info ─────────────────────────────────────────────────────── */
 .ui-info {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
+  font-weight: 400;
   color: var(--text-mid);
-  padding: 0.4rem 0 0.4rem 0.75rem;
+  padding: 0.45rem 0 0.45rem 0.8rem;
   border-left: 2px solid var(--border);
-  margin: 0.45rem 0;
+  margin: 0.5rem 0;
   white-space: pre-wrap;
+  letter-spacing: 0.01em;
+  line-height: 1.55;
 }
 
 .queued-hint {
@@ -1757,17 +1815,19 @@ body.exiting .app {
   right: 1.1rem;
   bottom: calc(100% + 6px);
   margin: 0;
-  padding: 0.4rem 0;
+  padding: 0.35rem 0;
   list-style: none;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-lg), 0 0 0 1px var(--border-light);
   max-height: 14rem;
   overflow-y: auto;
   z-index: 10;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 420;
+  letter-spacing: 0.01em;
   animation: ac-slide-up 0.2s var(--ease-out-back);
 }
 
@@ -1871,19 +1931,21 @@ body.exiting .app {
   color: var(--text);
   font: inherit;
   font-size: 0.92rem;
+  font-weight: 420;
+  letter-spacing: -0.005em;
   caret-color: var(--accent);
   transition: color 0.2s;
   resize: none;
   min-height: 1.5em;
   max-height: 12em;
-  line-height: 1.5;
+  line-height: 1.55;
   padding: 0;
   overflow-y: auto;
   field-sizing: content;
 }
 
-.live-input textarea::placeholder { color: var(--text-faint); }
-.live-input:focus-within textarea::placeholder { opacity: 0.5; }
+.live-input textarea::placeholder { color: var(--text-faint); font-weight: 380; }
+.live-input:focus-within textarea::placeholder { opacity: 0.4; }
 .live-input textarea:disabled { opacity: 0.4; }
 .live-input textarea:focus { outline: none; }
 
@@ -1894,9 +1956,9 @@ body.exiting .app {
   color: var(--text-mid);
   font: inherit;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.72rem;
-  font-weight: 400;
-  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+  font-weight: 420;
+  letter-spacing: 0.06em;
   padding: 0.32rem 0.75rem;
   margin-left: 0;
   border-radius: var(--radius-sm);
@@ -2020,7 +2082,7 @@ body.exiting .app {
 .ctx-title {
   color: var(--text-dim);
   font-weight: 500;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
 }
 .ctx-meta {
   flex: 1;
@@ -2064,10 +2126,11 @@ body.exiting .app {
 /* ── Context messages ────────────────────────────────────────────── */
 .ctx-msg {
   border-left: 2px solid var(--border-mid);
-  padding: 0.6rem 0.85rem 0.6rem 1.15rem;
+  padding: 0.65rem 0.85rem 0.65rem 1.2rem;
   margin: 0;
   font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  font-size: 0.88rem;
+  font-size: 0.86rem;
+  font-weight: 400;
   position: relative;
   transition: all 0.15s var(--ease-out-expo);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
@@ -2103,13 +2166,13 @@ body.exiting .app {
   justify-content: space-between;
   align-items: center;
   color: var(--text-dim);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 500;
-  letter-spacing: 0.02em;
-  margin-bottom: 0.2rem;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.22rem;
 }
 
-.ctx-role { color: var(--text-mid); font-family: 'Geist Mono', 'JetBrains Mono', monospace; }
+.ctx-role { color: var(--text-mid); font-family: 'Geist Mono', 'JetBrains Mono', monospace; font-size: 0.7rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
 .ctx-role.system    { color: var(--text-dim); }
 .ctx-role.user      { color: var(--green); }
 .ctx-role.assistant { color: var(--cyan); }
@@ -2147,8 +2210,9 @@ body.exiting .app {
   border: 1px solid var(--border);
   color: var(--text-faint);
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.66rem;
-  font-weight: 400;
+  font-size: 0.64rem;
+  font-weight: 420;
+  letter-spacing: 0.04em;
   padding: 0.22rem 0.7rem;
   border-radius: var(--radius-pill);
   cursor: pointer;
@@ -2179,7 +2243,8 @@ body.exiting .app {
   word-break: break-word;
   color: var(--text);
   font-weight: 400;
-  line-height: 1.45;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
 }
 
 .ctx-text:not(.expanded) .ctx-text-inner {
@@ -2293,7 +2358,7 @@ body.exiting .app {
 .files-title {
   color: var(--text-dim);
   font-weight: 500;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
 }
 
 .files-cwd {
@@ -2319,9 +2384,10 @@ body.exiting .app {
   color: var(--text-dim);
   padding: 2.5rem 1.5rem;
   text-align: center;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-family: 'Geist', 'Inter', sans-serif;
-  line-height: 1.6;
+  line-height: 1.65;
+  font-weight: 400;
 }
 
 .files-empty-sub {
@@ -2570,7 +2636,7 @@ body.exiting .app {
 .config-title {
   color: var(--text-dim);
   font-weight: 500;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
 }
 
 .config-path {
@@ -2613,13 +2679,15 @@ body.exiting .app {
   border-radius: var(--radius-md);
   color: var(--text);
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.82rem;
-  line-height: 1.55;
-  padding: 0.75rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.6;
+  padding: 0.8rem 0.95rem;
   resize: vertical;
   box-sizing: border-box;
   tab-size: 2;
   transition: all 0.2s;
+  letter-spacing: 0.01em;
 }
 
 .config-textarea:focus {
@@ -2672,9 +2740,9 @@ body.exiting .app {
 }
 
 .config-mode-tab {
-  padding: 0.3rem 0.7rem;
+  padding: 0.3rem 0.75rem;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-weight: 500;
   color: var(--text-dim);
   background: transparent;
@@ -2682,7 +2750,7 @@ body.exiting .app {
   border-radius: calc(var(--radius-sm) - 1px);
   cursor: pointer;
   transition: all 0.2s;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
   white-space: nowrap;
 }
 
@@ -2725,10 +2793,10 @@ body.exiting .app {
 
 .config-label {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 500;
   color: var(--text-dim);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -2780,9 +2848,11 @@ body.exiting .app {
 
 .config-hint {
   font-family: 'Geist', 'Inter', sans-serif;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 400;
   color: var(--text-mid);
   line-height: 1.4;
+  letter-spacing: -0.005em;
 }
 
 .config-apikey-wrap {
@@ -3167,7 +3237,7 @@ body.exiting .app {
   box-sizing: border-box;
 }
 
-.prompt-title { color: var(--text-dim); flex: 1; font-weight: 500; letter-spacing: 0.12em; }
+.prompt-title { color: var(--text-dim); flex: 1; font-weight: 500; letter-spacing: 0.14em; }
 .prompt-head-actions { display: flex; gap: 0.4rem; }
 
 /* ── Prompt list ──────────────────────────────────────────────────── */
@@ -3222,19 +3292,22 @@ body.exiting .app {
 
 .prompt-item-name {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   font-weight: 500;
   color: var(--cyan);
+  letter-spacing: 0.02em;
 }
 
 .prompt-item-preview {
   font-family: 'Geist', 'Inter', sans-serif;
-  font-size: 0.73rem;
+  font-size: 0.72rem;
+  font-weight: 400;
   color: var(--text-mid);
-  line-height: 1.4;
+  line-height: 1.45;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  letter-spacing: -0.005em;
 }
 
 .prompt-item-actions {

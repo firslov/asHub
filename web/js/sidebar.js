@@ -165,9 +165,10 @@ const renderSessions = async () => {
 const renderSessionItem = (s) => {
   const li = document.createElement("li");
   const isCurrent = s.instanceId === sessionId;
+  const hasTitle = s.title && s.title !== s.instanceId;
   if (isCurrent) {
     li.className = "current";
-    setSessionTopic(s.title);
+    setSessionTopic(hasTitle ? s.title : "");
     setSessionCwd(s.cwd);
   }
   if (s.isProcessing) li.classList.add("session-streaming");
@@ -181,7 +182,7 @@ const renderSessionItem = (s) => {
     if (s.instanceId === sessionId) return;
     switchTo(s.instanceId);
   });
-  const title = escape(s.title || t("untitled"));
+  const title = escape(hasTitle ? s.title : t("untitled"));
   const cwdText = s.cwd ? `<span class="session-cwd" title="${escape(s.cwd)}">${escape(shortenCwd(s.cwd))}</span>` : "";
   const timeText = s.startedAt ? `<span class="session-time" title="${escape(new Date(s.startedAt).toLocaleString())}">${escape(relativeTime(s.startedAt))}</span>` : "";
   a.innerHTML = `<span class="session-title" title="${title}">${title}</span><span class="session-meta">${cwdText}${timeText}</span>`;

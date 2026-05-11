@@ -433,7 +433,7 @@ async function createSession(
 
   const session: Session = {
     id,
-    title: existing?.title ?? id,
+    title: existing?.title ?? "",
     cwd,
     bridge,
     replay: existing?.replay ?? [],

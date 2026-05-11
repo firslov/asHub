@@ -90,7 +90,7 @@ export const cancelReplayFlush = () => {
 
 const resetAgentInfo = () => {
   setAgentInfoState({ name: "", model: "" });
-  if (instanceLabel) instanceLabel.textContent = "asHub";
+  if (instanceLabel) instanceLabel.textContent = "";
 };
 
 // Merge non-empty fields so a partial replay event doesn't blank known values.
@@ -100,7 +100,7 @@ const handlers = {
     if (p?.name) agentInfo.name = p.name;
     if (p?.model) agentInfo.model = p.model;
     const bits = [agentInfo.name, agentInfo.model && `[${agentInfo.model}]`].filter(Boolean);
-    if (bits.length) instanceLabel.textContent = "agent-sh · " + bits.join(" ");
+    if (bits.length) instanceLabel.textContent = bits.join(" ");
     if (typeof p?.contextWindow === "number" && p.contextWindow > 0) {
       state.contextWindow = p.contextWindow;
     }

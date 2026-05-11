@@ -5,10 +5,24 @@ import { switchTo } from "./session-switcher.js";
 import { t } from "./i18n.js";
 
 const sessionList = document.getElementById("sessions");
+const sessionTopic = document.getElementById("session-topic");
+const sessionCwdMeta = document.getElementById("session-cwd-meta");
 const newForm = document.getElementById("new-session-form");
 const newCwd = document.getElementById("new-session-cwd");
 const newErr = document.getElementById("new-session-err");
 const newBtn = document.getElementById("new-session");
+
+export const setSessionTopic = (title) => {
+  if (!sessionTopic) return;
+  sessionTopic.textContent = title ?? "";
+  sessionTopic.dataset.empty = t("untitled");
+};
+
+export const setSessionCwd = (cwd) => {
+  if (!sessionCwdMeta) return;
+  sessionCwdMeta.textContent = cwd ? shortenCwd(cwd) : "";
+  if (cwd) sessionCwdMeta.title = cwd;
+};
 
 const LS_LAST_CWD = "ash.last-cwd";
 
@@ -145,7 +159,11 @@ const renderSessions = async () => {
 const renderSessionItem = (s) => {
   const li = document.createElement("li");
   const isCurrent = s.instanceId === sessionId;
-  if (isCurrent) li.className = "current";
+  if (isCurrent) {
+    li.className = "current";
+    setSessionTopic(s.title);
+    setSessionCwd(s.cwd);
+  }
   if (s.isProcessing) li.classList.add("session-streaming");
   else if (s.hasUnread) li.classList.add("session-unread");
 
@@ -212,6 +230,7 @@ document.addEventListener("langchange", () => {
 // Inline update — a full re-render would clobber an in-progress title edit.
 export const updateSessionTitle = (sid, title) => {
   if (!title) return;
+  if (sid === sessionId) setSessionTopic(title);
   const items = sessionList.querySelectorAll("li");
   for (const li of items) {
     const a = li.querySelector("a");

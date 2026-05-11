@@ -6,6 +6,7 @@ import { resetReplyState } from "./stream/reply.js";
 import { resetToolGroupState } from "./stream/tool-group.js";
 import { resetThinkingState } from "./stream/thinking.js";
 import { resetLiveOutputState } from "./stream/live-output.js";
+import { setSessionTopic, setSessionCwd } from "./sidebar.js";
 
 const stream = document.getElementById("stream");
 const conn = document.getElementById("conn");
@@ -50,6 +51,8 @@ export const switchTo = (newId, { push = true } = {}) => {
   resetStreamModules();
   resetSessionState();
   clearStreamContent();
+  setSessionTopic("");
+  setSessionCwd("");
 
   if (push) {
     history.pushState({ sessionId: newId }, "", `/${newId}/`);
@@ -60,6 +63,11 @@ export const switchTo = (newId, { push = true } = {}) => {
   if (dot) dot.classList.remove("stale");
 
   updateSidebarHighlight(newId);
+  const curLi = sessionList?.querySelector(`li.current`);
+  const curTitle = curLi?.querySelector(".session-title");
+  const curCwd = curLi?.querySelector(".session-cwd");
+  if (curTitle) setSessionTopic(curTitle.textContent);
+  if (curCwd) setSessionCwd(curCwd.getAttribute("title") ?? "");
   connectSse();
 };
 

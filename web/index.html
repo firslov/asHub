@@ -60,16 +60,22 @@
       <div class="terminal-wrap live-wrap">
         <div class="terminal">
           <div class="terminal-bar">
-            <span class="terminal-title" id="instance">asHub</span>
-            <span class="live-dot"></span>
-            <span class="live-status" id="conn">connecting…</span>
-            <span class="version-label" id="version-label" title="checking for updates…"></span>
-            <span class="spinner" id="spinner" hidden></span>
-            <button class="bar-btn cancel-btn" id="cancel-turn" hidden data-i18n-title="interrupt" title="Interrupt response (Esc)">
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                <rect x="0" y="0" width="10" height="10" rx="1.5"></rect>
-              </svg>
-            </button>
+            <span class="session-head">
+              <span class="session-topic" id="session-topic"></span>
+              <span class="session-cwd-meta" id="session-cwd-meta"></span>
+            </span>
+            <span class="bar-right">
+              <span class="terminal-title" id="instance"></span>
+              <span class="live-dot"></span>
+              <span class="live-status" id="conn">connecting…</span>
+              <span class="version-label" id="version-label" title="checking for updates…"></span>
+              <span class="spinner" id="spinner" hidden></span>
+              <button class="bar-btn cancel-btn" id="cancel-turn" hidden data-i18n-title="interrupt" title="Interrupt response (Esc)">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                  <rect x="0" y="0" width="10" height="10" rx="1.5"></rect>
+                </svg>
+              </button>
+            </span>
           </div>
           <div class="terminal-body" id="stream">
             <div class="stream-empty" id="stream-empty">

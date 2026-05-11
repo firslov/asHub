@@ -299,11 +299,11 @@ export function startHub(opts: HubOpts): http.Server {
         return;
       }
       if (req.method === "GET" && rest.startsWith("/replay-before/")) {
-        const rawId = rest.slice("/replay-before/".length);
-        const frameId = decodeURIComponent(rawId);
+        const raw = rest.slice("/replay-before/".length);
+        const firstShown = parseInt(raw, 10);
         const q = url.split("?")[1] ?? "";
         const params = new URLSearchParams(q);
-        return replayBefore(res, session, frameId, parseInt(params.get("turns") ?? "3", 10));
+        return replayBefore(res, session, firstShown, parseInt(params.get("turns") ?? "3", 10));
       }
       if (req.method === "GET" && rest.startsWith("/files")) {
         const params = new URLSearchParams(rawRest.split("?")[1] ?? "");
@@ -938,15 +938,9 @@ function openSse(req: http.IncomingMessage, res: http.ServerResponse, session: S
   const replay = session.replay;
   if (tailCount > 0 && tailCount < replay.length) {
     const splitAt = replay.length - tailCount;
-    // Extract the frame ID that marks the truncation boundary so the client
-    // can request older frames starting from this cursor.
-    let beforeId = "";
-    try {
-      const frame = JSON.parse(replay[splitAt]!.replace(/^data:\s*/, "").trimEnd());
-      beforeId = (frame?.meta?.id ?? "") as string;
-    } catch { /* keep empty */ }
-
-    try { res.write(`data: ${JSON.stringify({ meta: { name: "hub:replay-truncated", ts: Date.now() }, payload: { beforeId, total: replay.length } })}\n\n`); } catch { return; }
+    // Tell the client where in the on-disk replay the rendered slice starts,
+    // so it can request older frames as `/replay-before/<firstShown>`.
+    try { res.write(`data: ${JSON.stringify({ meta: { name: "hub:replay-truncated", ts: Date.now() }, payload: { firstShown: splitAt, total: replay.length } })}\n\n`); } catch { return; }
 
     for (let i = splitAt; i < replay.length; i++) {
       try { res.write(replay[i]!); } catch { return; }
@@ -1271,13 +1265,13 @@ async function truncateReplayAfterCompact(session: Session): Promise<void> {
 async function replayBefore(
   res: http.ServerResponse,
   session: Session,
-  frameId: string,
+  firstShown: number,
   maxTurns: number,
 ): Promise<void> {
   maxTurns = Math.max(1, maxTurns || 3);
 
-  // Read the full replay file from disk (session.replay is already trimmed
-  // for active use, but the on-disk file has the complete history).
+  // Read the full replay file from disk (session.replay is trimmed to
+  // REPLAY_LIMIT for active use, but the on-disk file has the complete history).
   let allFrames: string[];
   try {
     const raw = await fs.promises.readFile(
@@ -1287,20 +1281,15 @@ async function replayBefore(
     allFrames = raw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n");
   } catch {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ frames: [] }));
+    res.end(JSON.stringify({ frames: [], firstShown: 0 }));
     return;
   }
 
-  // Find the target frame by its meta.id
-  let targetIdx = allFrames.length;
-  for (let i = 0; i < allFrames.length; i++) {
-    try {
-      const frame = JSON.parse(allFrames[i]!.replace(/^data:\s*/, "").trimEnd());
-      if ((frame?.meta?.id ?? "") === frameId) { targetIdx = i; break; }
-    } catch { /* skip malformed frames */ }
-  }
+  // Clamp the cursor: a stale request after a compact/rewind may name an
+  // index beyond the now-shorter file, in which case there's nothing older.
+  const targetIdx = Math.max(0, Math.min(firstShown, allFrames.length));
 
-  // Walk backwards from targetIdx, counting turns (agent:query events)
+  // Walk backwards from targetIdx, counting turns (agent:query events).
   let turnCount = 0;
   let startIdx = targetIdx;
   for (let i = targetIdx - 1; i >= 0; i--) {
@@ -1313,20 +1302,11 @@ async function replayBefore(
       }
     } catch {}
   }
-  // If we didn't reach maxTurns, start from the beginning
   if (turnCount < maxTurns) startIdx = 0;
 
   const frames = allFrames.slice(startIdx, targetIdx);
-  let firstContentId = "";
-  if (startIdx > 0) {
-    try {
-      const frame = JSON.parse(allFrames[startIdx]!.replace(/^data:\s*/, "").trimEnd());
-      firstContentId = (frame?.meta?.id ?? "") as string;
-    } catch {}
-  }
-
   res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ frames, firstContentId }));
+  res.end(JSON.stringify({ frames, firstShown: startIdx }));
 }
 
 async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {

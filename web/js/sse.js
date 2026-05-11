@@ -344,7 +344,7 @@ const handlers = {
   // Hub sentinel: replay was truncated because the session is large.
   // The client will lazy-load older frames via infinite-scroll.
   "hub:replay-truncated": (p) => {
-    setTruncationState(p?.beforeId ?? null, p?.total ?? 0);
+    setTruncationState(p?.firstShown ?? 0, p?.total ?? 0);
   },
 };
 

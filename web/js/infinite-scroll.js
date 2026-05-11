@@ -19,13 +19,16 @@ import { getScrollState, setScrollState } from "./stream/scroll.js";
 import { cancelReplayFlush } from "./sse.js";
 
 // ── Module-level pagination state ────────────────────────────────────
-let firstContentId = null;   // frame id of the earliest rendered frame
+// firstShown: index in the on-disk replay of the earliest rendered frame;
+// 0 means the entire session is rendered.  The /replay-before/<n> endpoint
+// returns the slice [startIdx, n) and the new firstShown for the next page.
+let firstShown = 0;
 let totalFrames = 0;
-let loading = false;         // guard against concurrent fetches
-let exhausted = false;       // true after the server returns no more frames
-let loadGeneration = 0;      // bumped on reset to abort stale fetch completions
+let loading = false;
+let exhausted = false;
+let loadGeneration = 0;
 
-const SCROLL_THRESHOLD = 300; // px from top before fetch triggers
+const SCROLL_THRESHOLD = 300;
 
 // ── State save/restore (avoid corrupting live state when processing older frames) ──
 
@@ -42,10 +45,10 @@ export const bindHandlers = (handlers) => {
 /**
  * Called from sse.js when it receives hub:replay-truncated during SSE connection.
  */
-export const setTruncationState = (beforeId, total) => {
-  firstContentId = beforeId ?? null;
+export const setTruncationState = (firstShownIdx, total) => {
+  firstShown = Number(firstShownIdx) || 0;
   totalFrames = total ?? 0;
-  exhausted = !firstContentId;
+  exhausted = firstShown <= 0;
 };
 
 /**
@@ -53,7 +56,7 @@ export const setTruncationState = (beforeId, total) => {
  * from the previous session don't trigger loads for the new one.
  */
 export const resetPaginationState = () => {
-  firstContentId = null;
+  firstShown = 0;
   totalFrames = 0;
   exhausted = true;
   loading = false;
@@ -65,22 +68,18 @@ export const resetPaginationState = () => {
 const stream = document.getElementById("stream");
 
 const onScroll = () => {
-  if (loading || exhausted || !firstContentId) return;
+  if (loading || exhausted) return;
   if (stream.scrollTop > SCROLL_THRESHOLD) return;
   loadOlderFrames();
 };
 
 stream.addEventListener("scroll", onScroll, { passive: true });
 
-/**
- * If the rendered content doesn't overflow the viewport, no scroll event
- * can ever fire and infinite-scroll never triggers — leaving truncated
- * history permanently invisible.  Eagerly fetch older frames until either
- * the viewport overflows or pagination is exhausted.  Called after the
- * initial replay flush and after each successful older-frames load.
- */
+// If the rendered content doesn't overflow the viewport, no scroll event
+// can ever fire and the loader stays idle — load older frames eagerly
+// until the viewport overflows or pagination is exhausted.
 export const maybeAutoLoadOlder = () => {
-  if (loading || exhausted || !firstContentId) return;
+  if (loading || exhausted) return;
   if (stream.scrollHeight > stream.clientHeight + SCROLL_THRESHOLD) return;
   loadOlderFrames();
 };
@@ -88,7 +87,7 @@ export const maybeAutoLoadOlder = () => {
 // ── Fetch & process older frames ─────────────────────────────────────
 
 const loadOlderFrames = async () => {
-  if (loading || exhausted || !firstContentId || !sessionId) return;
+  if (loading || exhausted || !sessionId) return;
   loading = true;
   const gen = loadGeneration;
 
@@ -97,7 +96,7 @@ const loadOlderFrames = async () => {
   let wasReplaying = false;
 
   try {
-    const url = `/${sessionId}/replay-before/${encodeURIComponent(firstContentId)}?turns=3`;
+    const url = `/${sessionId}/replay-before/${firstShown}?turns=3`;
     const r = await fetch(url);
     // Abort if the session changed while we were fetching.
     if (gen !== loadGeneration) return;
@@ -287,9 +286,11 @@ const loadOlderFrames = async () => {
 
     // Update pagination cursor (only if the session hasn't changed).
     if (gen !== loadGeneration) return;
-    if (data.firstContentId) {
-      firstContentId = data.firstContentId;
+    const next = Number(data.firstShown);
+    if (Number.isFinite(next) && next > 0) {
+      firstShown = next;
     } else {
+      firstShown = 0;
       exhausted = true;
     }
   } catch (e) {

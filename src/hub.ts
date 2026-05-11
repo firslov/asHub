@@ -52,6 +52,7 @@ interface Session {
   isProcessing: boolean;
   /** Whether the session has new output since the user last viewed it. */
   hasUnread: boolean;
+  lastAgentInfo: Record<string, unknown> | null;
 }
 
 const REPLAY_LIMIT = 5000;
@@ -451,6 +452,7 @@ async function createSession(
     lastModified: existing?.lastModified ?? existing?.startedAt ?? Date.now(),
     isProcessing: false,
     hasUnread: false,
+    lastAgentInfo: null,
   };
 
   bridge.onEvent((e) => {
@@ -596,8 +598,14 @@ function routeEvent(session: Session, e: BusEvent): void {
   if (e.name === "agent:tool-started") flushSegment(session);
 
   if (e.name === "agent:info") {
-    const info = e.payload as { model?: string } | undefined;
-    if (info?.model) session.model = info.model;
+    const info = e.payload as Record<string, unknown> | undefined;
+    if (info && typeof info === "object") {
+      session.lastAgentInfo ??= {};
+      for (const [k, v] of Object.entries(info)) {
+        if (v !== undefined && v !== null && v !== "") session.lastAgentInfo[k] = v;
+      }
+      if (typeof info.model === "string" && info.model) session.model = info.model;
+    }
   }
 
   if (e.name === "agent:cancelled") {
@@ -955,6 +963,11 @@ function openSse(req: http.IncomingMessage, res: http.ServerResponse, session: S
     for (const line of replay) {
       try { res.write(line); } catch { return; }
     }
+  }
+
+  if (session.lastAgentInfo) {
+    const meta = { source: session.id, ts: Date.now(), id: `hub:${session.id}:reemit:agent:info`, name: "agent:info" };
+    try { res.write(`data: ${JSON.stringify({ meta, payload: session.lastAgentInfo })}\n\n`); } catch { return; }
   }
 
   // Sentinel so the client knows replay is done and can exit batching

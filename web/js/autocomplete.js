@@ -12,6 +12,10 @@ export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpe
     for (let i = 0; i < lis.length; i++) {
       lis[i].classList.toggle("active", i === state.index);
     }
+    const active = lis[state.index];
+    if (active) {
+      active.scrollIntoView({ block: "nearest" });
+    }
   };
 
   const render = () => {

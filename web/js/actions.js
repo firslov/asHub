@@ -1,10 +1,10 @@
 import { escape } from "./utils.js";
-import { sessionId, submitUrl, state } from "./state.js";
+import { currentSessionId, state } from "./state.js";
 import { t } from "./i18n.js";
 
 // Atomic server-side rewind — keeps the snapshot→rewind gap race-free.
 const rewindToTurn = async (turn) => {
-  const res = await fetch(`/${sessionId}/context/rewind-to-turn`, {
+  const res = await fetch(`/${currentSessionId()}/context/rewind-to-turn`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ turn }),
@@ -17,16 +17,17 @@ const rewindToTurn = async (turn) => {
 
 const submitAndReload = async (text) => {
   const trimmed = text.trim();
+  const sid = currentSessionId();
   let endpoint, body;
   if (trimmed.startsWith("/")) {
     const space = trimmed.indexOf(" ");
-    endpoint = `/${sessionId}/command`;
+    endpoint = `/${sid}/command`;
     body = JSON.stringify({
       name: space === -1 ? trimmed : trimmed.slice(0, space),
       args: space === -1 ? "" : trimmed.slice(space + 1),
     });
   } else {
-    endpoint = submitUrl;
+    endpoint = `/${sid}/submit`;
     body = JSON.stringify({ query: trimmed });
   }
   const res = await fetch(endpoint, {

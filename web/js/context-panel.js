@@ -1,5 +1,5 @@
 import { escape } from "./utils.js";
-import { sessionId } from "./state.js";
+import { currentSessionId } from "./state.js";
 import { setFilesOpen } from "./files-panel.js";
 import { setConfigOpen } from "./config-panel.js";
 import { t } from "./i18n.js";
@@ -117,11 +117,12 @@ const applyCtxFilter = () => {
 const renderContext = async () => {
   const c = ctx();
   if (c) c.selected.clear();
-  if (!sessionId) { ctxBody.innerHTML = `<div class="ctx-empty">${t("ctx.no.session")}</div>`; updateDropButton(); return; }
+  const sid = currentSessionId();
+  if (!sid) { ctxBody.innerHTML = `<div class="ctx-empty">${t("ctx.no.session")}</div>`; updateDropButton(); return; }
   ctxBody.innerHTML = `<div class="ctx-empty">${t("ctx.loading")}</div>`;
   let data;
   try {
-    const res = await fetch(`/${sessionId}/context`);
+    const res = await fetch(`/${sid}/context`);
     if (!res.ok) throw new Error(await res.text());
     data = await res.json();
   } catch (e) {
@@ -215,7 +216,7 @@ ctxDrop?.addEventListener("click", async () => {
   if (selected.size === 0) return;
   const indices = [...selected].sort((a, b) => a - b);
   try {
-    const res = await fetch(`/${sessionId}/context/drop`, {
+    const res = await fetch(`/${currentSessionId()}/context/drop`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ indices }),

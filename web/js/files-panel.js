@@ -1,4 +1,4 @@
-import { sessionId } from "./state.js";
+import { currentSessionId } from "./state.js";
 import { setCtxOpen } from "./context-panel.js";
 import { setConfigOpen } from "./config-panel.js";
 import { t } from "./i18n.js";
@@ -87,7 +87,7 @@ const makeEntryEl = (f, basePath) => {
 
 // Fetch subdirectory contents from the server
 const fetchSubdir = async (subdirPath) => {
-  const resp = await fetch(`/${sessionId}/files?subdir=${encodeURIComponent(subdirPath)}`);
+  const resp = await fetch(`/${currentSessionId()}/files?subdir=${encodeURIComponent(subdirPath)}`);
   if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
   return resp.json();
 };
@@ -187,12 +187,13 @@ filesBody?.addEventListener("click", (e) => {
 
 const fetchFiles = async () => {
   if (!filesBody || !filesCwd || !filesEmpty) return;
-  if (!sessionId) { showFilesEmpty(t("files.no.session"), t("files.no.session.hint")); return; }
+  const sid = currentSessionId();
+  if (!sid) { showFilesEmpty(t("files.no.session"), t("files.no.session.hint")); return; }
   showFilesEmpty(t("files.loading"));
   filesBody.querySelectorAll(":scope > .files-entry, :scope > .files-children").forEach((el) => el.remove());
   expandedDirs().clear();
   try {
-    const resp = await fetch(`/${sessionId}/files`);
+    const resp = await fetch(`/${sid}/files`);
     const data = await resp.json();
     filesCwd.textContent = data.cwd || "";
     filesCwd.title = data.cwd || "";

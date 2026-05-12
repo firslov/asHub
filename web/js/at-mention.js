@@ -1,4 +1,4 @@
-import { sessionId } from "./state.js";
+import { currentSessionId } from "./state.js";
 import { attachAutocomplete } from "./autocomplete.js";
 
 const getActiveAtToken = (el) => {
@@ -21,9 +21,10 @@ const getActiveAtToken = (el) => {
 };
 
 const fetchEntries = async (subdir) => {
+  const sid = currentSessionId();
   const url = subdir
-    ? `/${sessionId}/files?subdir=${encodeURIComponent(subdir)}`
-    : `/${sessionId}/files`;
+    ? `/${sid}/files?subdir=${encodeURIComponent(subdir)}`
+    : `/${sid}/files`;
   const r = await fetch(url);
   if (!r.ok) return [];
   const data = await r.json();
@@ -35,7 +36,7 @@ export const attachAtMentionAutocomplete = (inputEl) => {
     inputEl,
     listEl: document.getElementById("autocomplete"),
     shouldOpen: () => {
-      if (!sessionId) return false;
+      if (!currentSessionId()) return false;
       if (inputEl.value.trimStart().startsWith("/")) return false;
       return getActiveAtToken(inputEl) != null;
     },

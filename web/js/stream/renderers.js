@@ -5,14 +5,21 @@ import {
 import { state } from "../state.js";
 import { append } from "./tool-group.js";
 import { t } from "../i18n.js";
+import { activeSession } from "../session-manager.js";
 
-const usageEl = document.getElementById("usage");
-const usageStrip = document.getElementById("usage-strip");
+const sess = () => activeSession.peek();
 
-export const hideUsage = () => { if (usageStrip) usageStrip.hidden = true; };
+export const hideUsage = () => {
+  const strip = sess()?.usageStripEl;
+  if (strip) strip.hidden = true;
+};
 
 export const renderUsage = () => {
   if (!state.lastUsage) return;
+  const session = sess();
+  const usageEl = session?.usageEl;
+  const usageStrip = session?.usageStripEl;
+  if (!usageEl) return;
   const inTok = state.lastUsage.prompt_tokens ?? 0;
   const outTok = state.lastUsage.completion_tokens ?? 0;
   const cacheHit = state.lastUsage.prompt_cache_hit_tokens ?? 0;

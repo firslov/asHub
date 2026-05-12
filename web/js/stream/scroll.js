@@ -1,54 +1,33 @@
 import { state } from "../state.js";
 import { activeSession } from "../session-manager.js";
 
-const stream = document.getElementById("stream");
-const pill = document.getElementById("scroll-pill");
-const emptyState = document.getElementById("stream-empty");
-
-const SCROLL_SLOP = 40;
 const sess = () => activeSession.peek();
 
-const isAtBottom = () =>
-  stream.scrollHeight - stream.scrollTop - stream.clientHeight <= SCROLL_SLOP;
-
-const jumpToBottom = () => {
-  stream.scrollTo({ top: stream.scrollHeight, behavior: "instant" });
-};
-
-const scrollToBottom = () => {
-  stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
-  const s = sess(); if (s) s.scroll.stickToBottom = true;
-  if (pill) pill.hidden = true;
+const jumpToBottom = (streamEl) => {
+  streamEl.scrollTo({ top: streamEl.scrollHeight, behavior: "instant" });
 };
 
 /** Force-scroll to bottom immediately (used after replay flush). */
 export const forceScrollBottom = () => {
-  jumpToBottom();
-  const s = sess(); if (s) s.scroll.stickToBottom = true;
-  if (pill) pill.hidden = true;
-};
-
-stream.addEventListener("scroll", () => {
   const s = sess();
-  const stick = isAtBottom();
-  if (s) s.scroll.stickToBottom = stick;
-  if (pill && stick) pill.hidden = true;
-});
-pill?.addEventListener("click", scrollToBottom);
+  if (!s?.streamEl) return;
+  jumpToBottom(s.streamEl);
+  s.scroll.stickToBottom = true;
+  if (s.pillEl) s.pillEl.hidden = true;
+};
 
 export const maybeScroll = () => {
   if (state.replaying) return;
-  if (sess()?.scroll.stickToBottom ?? true) {
-    jumpToBottom();
-  } else if (pill) {
-    pill.hidden = false;
+  const s = sess();
+  if (!s) return;
+  if (s.scroll.stickToBottom ?? true) {
+    if (s.streamEl) jumpToBottom(s.streamEl);
+  } else if (s.pillEl) {
+    s.pillEl.hidden = false;
   }
 };
 
 export const hideEmptyState = () => {
-  if (emptyState && !emptyState.hidden) emptyState.hidden = true;
+  const el = sess()?.emptyStateEl;
+  if (el && !el.hidden) el.hidden = true;
 };
-
-document.getElementById("stream-empty-prompt")?.addEventListener("click", () => {
-  document.getElementById("query")?.focus();
-});

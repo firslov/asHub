@@ -2,8 +2,6 @@ import { hideEmptyState, maybeScroll } from "./scroll.js";
 import { t } from "../i18n.js";
 import { activeSession } from "../session-manager.js";
 
-const stream = document.getElementById("stream");
-
 const TOOL_GROUP_COLLAPSE = 2;
 const groupState = new WeakMap();
 const sess = () => activeSession.peek();
@@ -21,6 +19,8 @@ const sess = () => activeSession.peek();
  * pending boxes keep their relative submission order.
  */
 export const insertStreamNode = (node) => {
+  const stream = sess()?.streamEl;
+  if (!stream) return;
   const firstPending = stream.querySelector(".agent-box.pending");
   if (firstPending) {
     stream.insertBefore(node, firstPending);
@@ -103,7 +103,7 @@ export const append = (node) => {
 export const appendAfterPending = (node) => {
   closeToolGroup();
   hideEmptyState();
-  stream.appendChild(node);
+  sess()?.streamEl?.appendChild(node);
   maybeScroll();
 };
 

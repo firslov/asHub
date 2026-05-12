@@ -25,8 +25,11 @@ import { createUserBox } from "./actions.js";
 import { updateSessionTitle, setCurrentSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
 import { compactReasoning } from "./stream/compact.js";
+import { activeSession } from "./session-manager.js";
 
-const stream = document.getElementById("stream");
+const sess = () => activeSession.peek();
+const streamEl = () => sess()?.streamEl ?? null;
+
 const conn = document.getElementById("conn");
 const dot = document.querySelector(".live-dot");
 const instanceLabel = document.getElementById("instance");
@@ -89,10 +92,13 @@ const exitReplayMode = () => {
   // Content is fully rendered — hide the page loader.
   hidePageLoader();
   // Run all deferred heavy work in one pass.
-  sweepOrphanThinking(stream);
-  compactReasoning(stream);
-  highlightWithin(stream);  // cheap no-op if no code blocks exist
-  renderMathIn(stream);     // cheap no-op if no math placeholders exist
+  const stream = streamEl();
+  if (stream) {
+    sweepOrphanThinking(stream);
+    compactReasoning(stream);
+    highlightWithin(stream);  // cheap no-op if no code blocks exist
+    renderMathIn(stream);     // cheap no-op if no math placeholders exist
+  }
   forceScrollBottom();
 };
 
@@ -124,7 +130,8 @@ const handlers = {
     startNewSegment();
     const queryText = p?.query ?? "";
     let matched = null;
-    for (const pb of stream.querySelectorAll(".agent-box.pending")) {
+    const stream = streamEl();
+    for (const pb of stream?.querySelectorAll(".agent-box.pending") ?? []) {
       if (pb._queryText === queryText) { matched = pb; break; }
     }
     if (matched) {
@@ -146,7 +153,8 @@ const handlers = {
     setBusy(true);
     if (!state.replaying) setCurrentSessionStatus("session-streaming");
     hideThinking();
-    sweepOrphanThinking(stream);
+    const stream = streamEl();
+    if (stream) sweepOrphanThinking(stream);
     finalizeThinking();
     finalizeLiveOutput();
     resetCompletedTools();
@@ -198,7 +206,7 @@ const handlers = {
     if (!state.replaying) setCurrentSessionStatus("");
     // Defer reasoning compaction during replay batching — the exit hook
     // runs compactReasoning once on the whole stream.
-    if (!state.replaying) compactReasoning(stream);
+    if (!state.replaying) { const s = streamEl(); if (s) compactReasoning(s); }
     scheduleReplayFlush();
   },
 
@@ -207,10 +215,11 @@ const handlers = {
     hideThinking();
     finalizeThinking();
     finalizeLiveOutput();
-    stream.querySelectorAll(".agent-box.pending").forEach((el) => el.remove());
+    const stream = streamEl();
+    stream?.querySelectorAll(".agent-box.pending").forEach((el) => el.remove());
     setBusy(false);
     if (!state.replaying) setCurrentSessionStatus("");
-    if (!state.replaying) compactReasoning(stream);
+    if (!state.replaying && stream) compactReasoning(stream);
     scheduleReplayFlush();
   },
 
@@ -222,7 +231,7 @@ const handlers = {
     append(renderErrorCard(p?.message ?? "", p?.detail ?? p?.stack));
     setBusy(false);
     if (!state.replaying) setCurrentSessionStatus("");
-    if (!state.replaying) compactReasoning(stream);
+    if (!state.replaying) { const s = streamEl(); if (s) compactReasoning(s); }
     scheduleReplayFlush();
   },
 
@@ -250,7 +259,7 @@ const handlers = {
 
   "agent:tool-completed": (p) => {
     const id = p?.toolCallId ?? "";
-    const row = id ? stream.querySelector(`.tool-row[data-call-id="${CSS.escape(id)}"]`) : null;
+    const row = id ? streamEl()?.querySelector(`.tool-row[data-call-id="${CSS.escape(id)}"]`) : null;
     if (!row) return;
     const ok = p?.exitCode === 0 || p?.exitCode == null;
     row.classList.add(ok ? "ok" : "err");

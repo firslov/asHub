@@ -201,7 +201,28 @@ const renderSessionItem = (s) => {
     try {
       await fetch(`/${s.instanceId}/`, { method: "DELETE" });
     } catch {}
-    if (s.instanceId === activeSessionId.peek()) {
+    const closingActive = s.instanceId === activeSessionId.peek();
+    if (closingActive && spaEnabled()) {
+      // Pick another session to land on. Prefer one we've already preloaded,
+      // otherwise the first item in the sidebar that isn't being deleted.
+      let nextId = null;
+      for (const id of sessions.keys()) {
+        if (id && id !== s.instanceId) { nextId = id; break; }
+      }
+      if (!nextId) {
+        for (const li of sessionList.querySelectorAll("li[data-session-id]")) {
+          const id = li.dataset.sessionId;
+          if (id && id !== s.instanceId) { nextId = id; break; }
+        }
+      }
+      if (nextId) {
+        switchTo(nextId);
+        sessions.get(s.instanceId)?.remove();
+        renderSessions();
+      } else {
+        window.location.href = "/";
+      }
+    } else if (closingActive) {
       window.location.href = "/";
     } else {
       sessions.get(s.instanceId)?.remove();

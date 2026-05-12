@@ -17,7 +17,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent } from "./bridges/types.js";
 import { LlmClient } from "agent-sh";
-import { resolveProvider, getSettings } from "agent-sh/settings";
+import { resolveProvider, getSettings, getProviderNames } from "agent-sh/settings";
 
 export interface HubOpts {
   port: number;
@@ -210,6 +210,19 @@ interface PersistedSession {
   lastModified?: number;
 }
 
+// Backfill for pre-#21 sessions: meta.json lacks `provider`. Look up
+// which registered provider's catalog contains the persisted model.
+function inferProviderForModel(model: string | undefined): string | undefined {
+  if (!model) return undefined;
+  for (const name of getProviderNames()) {
+    const p = resolveProvider(name);
+    if (!p) continue;
+    if (p.defaultModel === model) return name;
+    if (p.models?.includes(model)) return name;
+  }
+  return undefined;
+}
+
 async function loadPersistedSessions(): Promise<PersistedSession[]> {
   try {
     await ensureSessionsDir();
@@ -236,6 +249,26 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
         results.push({ id: meta.id || id, title: meta.title, cwd: meta.cwd, model: meta.model, provider: meta.provider, startedAt: meta.startedAt, replay, messages, firstQuery: meta.firstQuery, userTitle: meta.userTitle, lastModified: meta.lastModified });
       } catch {}
     }
+
+    // Build a model→provider observation table from sessions that already have
+    // both fields persisted (post-#21). This covers dynamic-provider models
+    // (e.g. ollama-cloud) that won't appear in any static catalog.
+    const observed = new Map<string, string>();
+    for (const s of results) {
+      if (s.model && s.provider) observed.set(s.model, s.provider);
+    }
+
+    // Backfill missing provider on legacy sessions using observations first,
+    // then fall back to the static catalog lookup.
+    for (const s of results) {
+      if (s.provider || !s.model) continue;
+      const inferred = observed.get(s.model) ?? inferProviderForModel(s.model);
+      if (inferred) {
+        s.provider = inferred;
+        console.log(`[hub] backfilled provider="${inferred}" for legacy session ${s.id} (model=${s.model})`);
+      }
+    }
+
     return results;
   } catch {
     return [];

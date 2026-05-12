@@ -100,25 +100,10 @@ export const agentInfo = new Proxy(/** @type {any} */ ({}), {
   },
 });
 
-export const getAgentInfoState = () => {
-  const s = activeSession.peek();
-  return { name: s?.agentInfo.name ?? "", model: s?.agentInfo.model ?? "", provider: s?.agentInfo.provider ?? "" };
-};
-export const setAgentInfoState = (s) => {
-  const session = activeSession.peek();
-  if (!session) return;
-  session.agentInfo.name = s?.name ?? "";
-  session.agentInfo.model = s?.model ?? "";
-  session.agentInfo.provider = s?.provider ?? "";
-};
-
 const spinner = document.getElementById("spinner");
 const cancelBtn = document.getElementById("cancel-turn");
 
-/**
- * Set busy state on the given session and, if it's the active one, update
- * the shared chrome.  Background sessions update only their own state.
- */
+// Background sessions update their own state; chrome reflects active only.
 export const setBusy = (session, b) => {
   if (session) session.state.isProcessing = b;
   if (session === activeSession.peek()) {

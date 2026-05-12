@@ -27,15 +27,16 @@ import { refreshFilesIfOpen } from "./files-panel.js";
 import { compactReasoning } from "./stream/compact.js";
 import { activeSession } from "./session-manager.js";
 
-// ── Shared chrome (page-level singletons reflecting the active session) ──
+// Shared page chrome — reflects the active session, not whatever frame just arrived.
 const conn = document.getElementById("conn");
 const dot = document.querySelector(".live-dot");
 const instanceLabel = document.getElementById("instance");
+const spinnerEl = document.getElementById("spinner");
+const cancelBtnEl = document.getElementById("cancel-turn");
 const pageLoader = document.getElementById("page-loader");
 const loaderBar = document.getElementById("page-loader-bar");
 const loaderBarFill = document.getElementById("page-loader-bar-fill");
 
-// Progress bar: animate to 90% over 4s, leave 100% for actual connection
 if (loaderBar) loaderBar.classList.add("visible");
 if (loaderBarFill) {
   setTimeout(() => { loaderBarFill.style.width = "30%"; }, 100);
@@ -50,7 +51,6 @@ export const hidePageLoader = () => {
   }, 200);
 };
 
-// Reflect the active session's connection status onto the shared chrome.
 effect(() => {
   const cs = activeSession.value?.connState.value ?? "nosession";
   if (conn) switch (cs) {
@@ -62,32 +62,25 @@ effect(() => {
   if (dot) dot.classList.toggle("stale", cs !== "connected");
 });
 
-const renderInstanceLabel = () => {
+export const renderInstanceLabel = () => {
   if (!instanceLabel) return;
   const ai = activeSession.peek()?.agentInfo;
-  if (!ai) { instanceLabel.textContent = ""; return; }
-  const modelTag = ai.model ? `[${ai.model}]` : "";
-  const bits = [ai.name, modelTag].filter(Boolean);
-  instanceLabel.textContent = bits.join(" ");
+  const modelTag = ai?.model ? `[${ai.model}]` : "";
+  instanceLabel.textContent = [ai?.name, modelTag].filter(Boolean).join(" ");
 };
 
-// Re-render chrome whenever the active session changes (Phase 3 switching).
+// On active-session switch, chrome catches up to the new session's state.
 effect(() => {
   const s = activeSession.value;
   renderInstanceLabel();
-  // Reflect the active session's busy state.
-  const spinnerEl = document.getElementById("spinner");
-  const cancelEl = document.getElementById("cancel-turn");
   const busy = !!s?.state.isProcessing;
   if (spinnerEl) spinnerEl.hidden = !busy;
-  if (cancelEl) cancelEl.hidden = !busy;
+  if (cancelBtnEl) cancelBtnEl.hidden = !busy;
 });
 
 export const REPLAY_FLUSH_DELAY = 12;  // ms
 
-// Handlers run with `this` bound to the owning SessionView. Mutations go on
-// `this.state` / `this.agentInfo`; chrome updates only fire when this is
-// also the active session.
+// Handlers run with `this` bound to the owning SessionView.
 export const handlers = {
   "agent:info"(p) {
     if (p?.name === "web-renderer") return;

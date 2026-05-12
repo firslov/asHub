@@ -348,6 +348,7 @@ body.exiting .app {
 .sidebar { grid-column: 1; }
 .main { grid-column: 2; }
 session-view { display: contents; }
+session-view[hidden] { display: none; }
 .app.sidebar-collapsed .session-list,
 .app.sidebar-collapsed .sidebar-title { display: none; }
 .app.sidebar-collapsed .sidebar-head {

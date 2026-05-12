@@ -17,3 +17,18 @@ export const unregisterSession = (view) => {
   sessions.delete(view.id);
   if (activeSessionId.value === view.id) activeSessionId.value = "";
 };
+
+// Construct a hidden <session-view> next to the active one. The element's
+// connectedCallback opens its own EventSource and registers itself.
+export const preloadSession = (id) => {
+  if (!id) throw new Error("preloadSession: id required");
+  if (sessions.has(id)) return sessions.get(id);
+  const host = document.querySelector("session-view")?.parentElement ?? document.body;
+  const el = document.createElement("session-view");
+  el.setAttribute("session-id", id);
+  el.hidden = true;
+  host.appendChild(el);
+  return el;
+};
+
+window.__ash = { preload: preloadSession, sessions, activeSessionId };

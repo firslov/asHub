@@ -11,7 +11,7 @@ class SessionView extends HTMLElement {
     this.controller = new AbortController();
 
     this.state = { ...STATE_DEFAULTS };
-    this.agentInfo = { name: "", model: "" };
+    this.agentInfo = { name: "", model: "", provider: "" };
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };
     this.thinking = { el: null, block: null };
     this.toolGroup = { current: null };

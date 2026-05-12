@@ -35,6 +35,7 @@ interface Session {
   segmentSeq: number;
   sseClients: Set<http.ServerResponse>;
   model?: string;
+  provider?: string;
   startedAt: number;
   /** True once the first user→assistant turn has completed (for auto-title). */
   firstTurnDone: boolean;
@@ -103,7 +104,7 @@ async function ensureSessionsDir(): Promise<void> {
 
 async function saveSessionMeta(session: Session): Promise<void> {
   await ensureSessionsDir();
-  const meta = { id: session.id, title: session.title, cwd: session.cwd, model: session.model, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified };
+  const meta = { id: session.id, title: session.title, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified };
   await fs.promises.writeFile(path.join(SESSIONS_DIR, `${session.id}.meta.json`), JSON.stringify(meta));
 }
 
@@ -197,6 +198,7 @@ interface PersistedSession {
   title?: string;
   cwd: string;
   model?: string;
+  provider?: string;
   startedAt: number;
   replay: string[];
   messages?: unknown[];
@@ -228,7 +230,7 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
           const parsed = JSON.parse(msgRaw);
           if (Array.isArray(parsed)) messages = parsed;
         } catch {}
-        results.push({ id: meta.id || id, title: meta.title, cwd: meta.cwd, model: meta.model, startedAt: meta.startedAt, replay, messages, firstQuery: meta.firstQuery, userTitle: meta.userTitle, lastModified: meta.lastModified });
+        results.push({ id: meta.id || id, title: meta.title, cwd: meta.cwd, model: meta.model, provider: meta.provider, startedAt: meta.startedAt, replay, messages, firstQuery: meta.firstQuery, userTitle: meta.userTitle, lastModified: meta.lastModified });
       } catch {}
     }
     return results;
@@ -426,10 +428,10 @@ async function createSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
   cwd: string,
-  existing?: { id: string; title?: string; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; lastModified?: number },
+  existing?: { id: string; title?: string; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; lastModified?: number },
 ): Promise<Session> {
   const id = existing?.id ?? randomBytes(3).toString("hex");
-  const bridge = opts.makeBridge({ cwd, initialMessages: existing?.messages, model: existing?.model });
+  const bridge = opts.makeBridge({ cwd, initialMessages: existing?.messages, model: existing?.model, provider: existing?.provider });
 
   const session: Session = {
     id,
@@ -441,6 +443,7 @@ async function createSession(
     segmentSeq: 0,
     sseClients: new Set(),
     model: existing?.model,
+    provider: existing?.provider,
     startedAt: existing?.startedAt ?? Date.now(),
     // If the session already has messages, the first turn was already done.
     firstTurnDone: !!(existing?.messages?.length),
@@ -516,7 +519,7 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
   console.error(`[hub] restoring ${persisted.length} session(s)…`);
   for (const p of persisted) {
     try {
-      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle, model: p.model, lastModified: p.lastModified });
+      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle, model: p.model, provider: p.provider, lastModified: p.lastModified });
       console.error(`[hub] restored session ${p.id} (cwd: ${p.cwd})`);
     } catch (err) {
       console.error(`[hub] failed to restore session ${p.id}:`, err);
@@ -596,8 +599,9 @@ function routeEvent(session: Session, e: BusEvent): void {
   if (e.name === "agent:tool-started") flushSegment(session);
 
   if (e.name === "agent:info") {
-    const info = e.payload as { model?: string } | undefined;
+    const info = e.payload as { model?: string; provider?: string } | undefined;
     if (info?.model) session.model = info.model;
+    if (info?.provider) session.provider = info.provider;
   }
 
   if (e.name === "agent:cancelled") {
@@ -718,6 +722,7 @@ function listSessions(res: http.ServerResponse, sessions: Map<string, Session>):
       instanceId: s.id,
       title: s.title,
       model: s.model,
+      provider: s.provider,
       cwd: s.cwd,
       startedAt: s.startedAt,
       lastModified: s.lastModified,

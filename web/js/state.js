@@ -102,13 +102,14 @@ export const agentInfo = new Proxy(/** @type {any} */ ({}), {
 
 export const getAgentInfoState = () => {
   const s = activeSession.peek();
-  return { name: s?.agentInfo.name ?? "", model: s?.agentInfo.model ?? "" };
+  return { name: s?.agentInfo.name ?? "", model: s?.agentInfo.model ?? "", provider: s?.agentInfo.provider ?? "" };
 };
 export const setAgentInfoState = (s) => {
   const session = activeSession.peek();
   if (!session) return;
   session.agentInfo.name = s?.name ?? "";
   session.agentInfo.model = s?.model ?? "";
+  session.agentInfo.provider = s?.provider ?? "";
 };
 
 const spinner = document.getElementById("spinner");

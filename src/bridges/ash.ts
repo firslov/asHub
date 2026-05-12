@@ -70,7 +70,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       "overlay-agent",
       ...(settings.disabledBuiltins ?? []),
     ];
-    await loadBuiltinExtensions(extCtx, headlessDisabled);
+    const builtinNames = await loadBuiltinExtensions(extCtx, headlessDisabled);
 
     // In Electron (ASHUB_UNDER), tsx's module.register() spawns a
     // worker thread that can race with Chromium init.  Yield once so the
@@ -83,13 +83,14 @@ export class AshBridge extends EventEmitter implements Bridge {
     // would conflict with the hub (e.g. web-renderer binding 7878) should
     // check `process.env.ASHUB_UNDER` and bail early.
     const TIMEOUT_MS = 10_000;
-    await Promise.race([
+    const userNames = await Promise.race([
       loadExtensions(extCtx),
-      new Promise<void>((_, reject) =>
+      new Promise<string[]>((_, reject) =>
         setTimeout(() => reject(new Error(`extension load timeout (${TIMEOUT_MS}ms)`)), TIMEOUT_MS),
       ),
     ]).catch((err) => {
       process.stderr.write(`[ash-bridge] ${err instanceof Error ? err.message : err}\n`);
+      return [] as string[];
     });
 
     // AgentLoop (from agent-backend builtin) defines its own
@@ -99,7 +100,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.handlers.define("history:read-recent", () => []);
     core.handlers.define("conversation:format-prior-history", () => null);
 
-    core.bus.emit("core:extensions-loaded", {});
+    core.bus.emit("core:extensions-loaded", { names: [...builtinNames, ...userNames] });
     core.activateBackend();
 
     if (this.opts.cwd) {

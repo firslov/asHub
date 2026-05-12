@@ -9,7 +9,7 @@
  */
 
 import { sessionId, state, getAgentInfoState, setAgentInfoState } from "./state.js";
-import { highlightWithin } from "./utils.js";
+import { highlightWithin, renderMathIn } from "./utils.js";
 import { compactReasoning } from "./stream/compact.js";
 import { getReplyState, setReplyState } from "./stream/reply.js";
 import { getThinkingState, setThinkingState, sweepOrphanThinking } from "./stream/thinking.js";
@@ -253,6 +253,7 @@ const loadOlderFrames = async () => {
     sweepOrphanThinking(stream);
     compactReasoning(stream);
     highlightWithin(stream);
+    renderMathIn(stream);
 
     // Restore scroll module state (pill.hidden, stickToBottom baseline)
     // BEFORE the scrollTop assignment so the synchronous scroll event

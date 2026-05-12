@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { extractMath, renderMathIn } from "./math.js";
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -7,7 +8,10 @@ export const escape = (s) => String(s ?? "")
 
 export const stripAnsi = (s) => String(s ?? "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 
-export const mdToHtml = (raw) => DOMPurify.sanitize(marked.parse(String(raw ?? "")));
+export const mdToHtml = (raw) =>
+  DOMPurify.sanitize(marked.parse(extractMath(String(raw ?? ""))));
+
+export { renderMathIn };
 
 export const highlightWithin = (root) => {
   if (!window.hljs || !root) return;

@@ -1,4 +1,4 @@
-import { mdToHtml, highlightWithin, stripAnsi } from "../utils.js";
+import { mdToHtml, highlightWithin, renderMathIn, stripAnsi } from "../utils.js";
 import { state } from "../state.js";
 import { append } from "./tool-group.js";
 import { maybeScroll } from "./scroll.js";
@@ -13,6 +13,7 @@ const flushReply = () => {
   pendingChunkRender = false;
   if (!currentReply) return;
   currentReply.innerHTML = mdToHtml(currentReplyText);
+  renderMathIn(currentReply);
   maybeScroll();
 };
 
@@ -56,6 +57,7 @@ export const fillFinalReply = (text) => {
   if (!currentReply || currentReplyText !== "") return;
   currentReplyText = stripAnsi(text);
   currentReply.innerHTML = mdToHtml(currentReplyText);
+  renderMathIn(currentReply);
 };
 
 export const closeReply = () => {

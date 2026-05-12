@@ -59,6 +59,9 @@ interface Session {
 }
 
 const REPLAY_LIMIT = 5000;
+
+let frameSeq = 0;
+const frameIdRe = /^id: (\d+)/;
 const REPLAY_NAMES = new Set([
   "agent:info",
   "agent:query",
@@ -305,7 +308,7 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
-      return openSseMulti(req, res, sessions, params.get("subs") ?? "");
+      return openSseMulti(req, res, sessions, params.get("subs") ?? "", params.get("since") ?? "");
     }
     if (req.method === "GET" && url.startsWith("/fs")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -558,6 +561,17 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
   // Sort by lastModified descending so the most recently active sessions
   // appear first in the sidebar — mirroring listSessions.
   persisted.sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
+  // Restart safety: client's Last-Event-ID stays valid because we keep growing
+  // past the highest persisted id.
+  for (const p of persisted) {
+    for (const line of p.replay) {
+      const m = line.match(frameIdRe);
+      if (m) {
+        const n = Number(m[1]);
+        if (n > frameSeq) frameSeq = n;
+      }
+    }
+  }
   console.error(`[hub] restoring ${persisted.length} session(s)…`);
   for (const p of persisted) {
     try {
@@ -673,7 +687,7 @@ function flushSegment(session: Session): void {
 }
 
 function sseFrame(meta: object, payload: unknown): string {
-  return `data: ${JSON.stringify({ meta, payload })}\n\n`;
+  return `id: ${++frameSeq}\ndata: ${JSON.stringify({ meta, payload })}\n\n`;
 }
 
 function pushFrame(session: Session, name: string, frame: string): void {
@@ -952,18 +966,26 @@ async function generateTitle(req: http.IncomingMessage, res: http.ServerResponse
   );
 }
 
-// subs=A:50,B:0 — each entry is sessionId:tail. tail>0 replays the last
-// `tail` frames; tail=0 attaches for live frames only.
+// subs=A:50,B:0 — sessionId:tail. tail>0 fresh-replays; tail=0 + since
+// catches up missed frames via the monotonic id stream.
 function openSseMulti(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   sessions: Map<string, Session>,
   subsParam: string,
+  sinceParam: string,
 ): void {
   const subs = subsParam.split(",").map((s) => {
     const [id, tailStr] = s.split(":");
     return { id: id ?? "", tail: Math.max(0, Number(tailStr ?? "50") || 0) };
   }).filter((s) => s.id);
+
+  const headerLast = req.headers["last-event-id"];
+  const since = Math.max(
+    0,
+    Number(Array.isArray(headerLast) ? headerLast[0] : headerLast ?? "") || 0,
+    Number(sinceParam) || 0,
+  );
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -983,10 +1005,17 @@ function openSseMulti(
       }
       if (session.lastAgentInfo) {
         const meta = { source: id, ts: Date.now(), id: `hub:${id}:reemit:agent:info`, name: "agent:info" };
-        try { res.write(`data: ${JSON.stringify({ meta, payload: session.lastAgentInfo })}\n\n`); } catch { return; }
+        try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta, payload: session.lastAgentInfo })}\n\n`); } catch { return; }
       }
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
-      try { res.write(`data: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
+      try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
+    } else if (since > 0) {
+      for (const line of session.replay) {
+        const m = line.match(frameIdRe);
+        if (m && Number(m[1]) > since) {
+          try { res.write(line); } catch { return; }
+        }
+      }
     }
     session.sseClients.add(res);
   }

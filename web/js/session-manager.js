@@ -36,6 +36,7 @@ export const globalConnState = signal(
 const subState = new Map();
 let es = null;
 let reopenScheduled = false;
+let lastSeenId = 0;
 
 const buildSubsParam = () => {
   const parts = [];
@@ -52,7 +53,10 @@ const reopen = () => {
     return;
   }
   globalConnState.value = "connecting";
-  const next = new EventSource(`/events?subs=${encodeURIComponent(buildSubsParam())}`);
+  // since= recovers frames emitted in the close/reattach gap.
+  const params = new URLSearchParams({ subs: buildSubsParam() });
+  if (lastSeenId > 0) params.set("since", String(lastSeenId));
+  const next = new EventSource(`/events?${params}`);
   es = next;
   next.onopen = () => {
     globalConnState.value = "connected";
@@ -60,6 +64,8 @@ const reopen = () => {
   };
   next.onerror = () => { globalConnState.value = "reconnecting"; };
   next.onmessage = (ev) => {
+    const id = Number(ev.lastEventId);
+    if (id > lastSeenId) lastSeenId = id;
     let frame;
     try { frame = JSON.parse(ev.data); } catch { return; }
     sessions.get(frame?.meta?.source)?.receiveFrame?.(frame);

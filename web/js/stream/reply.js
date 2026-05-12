@@ -40,8 +40,11 @@ export const appendReplyChunk = (session, delta) => {
 
 export const fillFinalReply = (session, text) => {
   const r = session?.reply;
-  if (!r?.current || r.text !== "") return;
-  r.text = stripAnsi(text);
+  if (!r?.current || !text) return;
+  const full = stripAnsi(text);
+  if (full === r.text) return;
+  // Final payload wins over accumulated chunks — heals gaps from SSE reopens.
+  r.text = full;
   r.current.innerHTML = mdToHtml(r.text);
   renderMathIn(r.current);
 };

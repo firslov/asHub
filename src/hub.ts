@@ -62,6 +62,15 @@ const REPLAY_LIMIT = 5000;
 
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;
+
+function parseFrameName(frame: string): string {
+  const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+  if (!dataLine) return "";
+  try {
+    const inner = JSON.parse(dataLine.slice("data: ".length));
+    return (inner?.meta?.name ?? "") as string;
+  } catch { return ""; }
+}
 const REPLAY_NAMES = new Set([
   "agent:info",
   "agent:query",
@@ -525,11 +534,8 @@ async function createSession(
   if (existing?.replay && existing.replay.length > 0) {
     let hasDangling = false;
     for (let i = existing.replay.length - 1; i >= 0; i--) {
-      let name = "";
-      try {
-        const inner = JSON.parse(existing.replay[i].replace(/^data:\s*/, "").trimEnd());
-        name = (inner?.meta?.name ?? "") as string;
-      } catch { continue; }
+      const name = parseFrameName(existing.replay[i]!);
+      if (!name) continue;
       if (name === "agent:processing-done" || name === "agent:cancelled" || name === "agent:error") break;
       if (name === "agent:processing-start") { hasDangling = true; break; }
     }
@@ -1301,12 +1307,7 @@ async function truncateReplayAfterCompact(session: Session): Promise<void> {
     let agentQueryCount = 0;
     let truncateAt = session.replay.length;
     for (let i = 0; i < session.replay.length; i++) {
-      const frame = session.replay[i]!;
-      let name = "";
-      try {
-        const inner = JSON.parse(frame.replace(/^data:\s*/, "").trimEnd());
-        name = (inner?.meta?.name ?? "") as string;
-      } catch {}
+      const name = parseFrameName(session.replay[i]!);
       if (name === "agent:query") {
         if (agentQueryCount >= remainingUserMsgs) {
           truncateAt = i;

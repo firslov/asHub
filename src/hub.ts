@@ -16,6 +16,8 @@ import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent } from "./bridges/types.js";
+import { LlmClient } from "agent-sh";
+import { resolveProvider, getSettings } from "agent-sh/settings";
 
 export interface HubOpts {
   port: number;
@@ -655,62 +657,44 @@ async function setSessionTitle(session: Session, title: string): Promise<void> {
 
 async function generateTitleAsync(session: Session): Promise<void> {
   const query = session.firstQuery?.trim();
-  // Skip if no query captured, or if user already set a custom title manually.
   if (!query || session.userTitle) return;
 
-  const settings = await readSettings();
-  const provider: string = (settings?.defaultProvider as string) || (settings?.provider as string) || "openai";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const providers: any = settings?.providers ?? {};
-  const providerCfg = providers[provider] as { apiKey?: string; baseURL?: string; model?: string; defaultModel?: string } | undefined;
-  const apiKey = (providerCfg?.apiKey as string) || (settings?.apiKey as string);
-  if (!apiKey) return;
+  const providerName = session.provider || getSettings().defaultProvider;
+  if (!providerName) {
+    console.warn(`[hub] auto-title: no provider configured for ${session.id}`);
+    return;
+  }
+  const resolved = resolveProvider(providerName);
+  if (!resolved?.apiKey) {
+    console.warn(`[hub] auto-title: provider "${providerName}" has no apiKey`);
+    return;
+  }
 
-  const model = (providerCfg?.defaultModel ?? providerCfg?.model ?? settings?.model ?? "gpt-4o-mini") as string;
-  const baseURL = (providerCfg?.baseURL ?? settings?.baseURL ?? "https://api.openai.com/v1") as string;
-  const url = baseURL.replace(/\/+$/, "") + "/chat/completions";
+  const model = session.model || resolved.defaultModel;
+  if (!model) {
+    console.warn(`[hub] auto-title: no model resolved for provider "${providerName}"`);
+    return;
+  }
 
-  const body = JSON.stringify({
+  const client = new LlmClient({
+    apiKey: resolved.apiKey,
+    baseURL: resolved.baseURL,
     model,
-    messages: [
-      { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 6 words, no quotes). Return ONLY the title text, nothing else." },
-      { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
-    ],
-    max_tokens: 80,
-    temperature: 0.3,
-    thinking: { type: "disabled" },
+    appName: "asHub",
   });
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-      },
-      body,
-      signal: controller.signal,
+    const raw = await client.complete({
+      messages: [
+        { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 10 words, no quotes). Return ONLY the title text, nothing else." },
+        { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
+      ],
+      max_tokens: 80,
     });
-    if (!resp.ok) return;
-    const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const title = data?.choices?.[0]?.message?.content?.trim().replace(/^"|"$/g, "") ?? "";
+    const title = raw?.trim().replace(/^"|"$/g, "") ?? "";
     if (title && !session.userTitle) await setSessionTitle(session, title);
-  } catch {
-    // Silently ignore — title generation is a best-effort feature
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function readSettings(): Promise<Record<string, unknown> | null> {
-  try {
-    const raw = await fs.promises.readFile(settingsPath(), "utf-8");
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return null;
+  } catch (err) {
+    console.warn(`[hub] auto-title failed for ${session.id} (provider=${providerName}, model=${model}):`, err instanceof Error ? err.message : err);
   }
 }
 
@@ -718,7 +702,7 @@ async function readSettings(): Promise<Record<string, unknown> | null> {
 
 function listSessions(res: http.ServerResponse, sessions: Map<string, Session>): void {
   const list = Array.from(sessions.values())
-    .sort((a, b) => (b.lastModified ?? b.startedAt) - (a.lastModified ?? a.startedAt))
+    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
     .map((s) => ({
       instanceId: s.id,
       title: s.title,

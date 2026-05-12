@@ -211,8 +211,11 @@ const renderSessions = async () => {
   try {
     const res = await fetch("/sessions");
     const list = await res.json();
-    const hash = JSON.stringify(list);
+    const hash = JSON.stringify(list.map((s) => [
+      s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread,
+    ]));
     if (hash === sessionsHash) return;  // 5s poll: skip rebuild when nothing changed
+    const isFirstRender = sessionsHash === "";
     sessionsHash = hash;
     if (!homeDir.value && list[0]?.cwd) {
       const m = list[0].cwd.match(/^(\/Users\/[^/]+|\/home\/[^/]+)/);
@@ -221,7 +224,7 @@ const renderSessions = async () => {
     sessionList.innerHTML = "";
     const buckets = new Map();
     for (const s of list) {
-      const k = bucketKey(s.lastModified ?? s.startedAt);
+      const k = bucketKey(s.startedAt);
       if (!buckets.has(k)) buckets.set(k, []);
       buckets.get(k).push(s);
     }
@@ -235,7 +238,11 @@ const renderSessions = async () => {
       let staggerIdx = 0;
       for (const s of items) {
         const li = renderSessionItem(s);
-        li.style.animationDelay = `${staggerIdx * 0.04}s`;
+        if (isFirstRender) {
+          li.style.animationDelay = `${staggerIdx * 0.04}s`;
+        } else {
+          li.style.animation = "none";
+        }
         staggerIdx++;
       }
     }

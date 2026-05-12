@@ -103,10 +103,9 @@ const handlers = {
     if (p?.name) agentInfo.name = p.name;
     if (p?.model) agentInfo.model = p.model;
     if (p?.provider) agentInfo.provider = p.provider;
-    const providerTag = agentInfo.provider ? `[${agentInfo.provider}]` : "";
     const modelTag = agentInfo.model ? `[${agentInfo.model}]` : "";
-    const bits = [agentInfo.name, providerTag, modelTag].filter(Boolean);
-    if (bits.length) instanceLabel.textContent = "agent-sh · " + bits.join(" ");
+    const bits = [agentInfo.name, modelTag].filter(Boolean);
+    if (bits.length) instanceLabel.textContent = bits.join(" ");
     if (typeof p?.contextWindow === "number" && p.contextWindow > 0) {
       state.contextWindow = p.contextWindow;
     }

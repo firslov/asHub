@@ -115,6 +115,8 @@ const translations = {
     "diff.toggle.wrap": "toggle wrap",
     "diff.copy.patch": "copy patch",
     "usage.cache": "cache hit / miss",
+    "usage.balance": "balance",
+    "usage.balance.loading": "loading…",
 
     // ── Thinking ───────────────────────────────────────────────────
     "thinking": "thinking…",
@@ -271,6 +273,8 @@ const translations = {
     "diff.toggle.wrap": "切换换行",
     "diff.copy.patch": "复制补丁",
     "usage.cache": "缓存命中 / 未命中",
+    "usage.balance": "余额",
+    "usage.balance.loading": "加载中…",
 
     // ── Thinking ───────────────────────────────────────────────────
     "thinking": "思考中…",

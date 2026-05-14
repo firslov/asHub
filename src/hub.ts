@@ -314,6 +314,7 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "PUT" && url === "/api/config") return updateConfig(req, res);
     if (req.method === "POST" && url === "/api/config/reload") return reloadConfig(res);
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
+    if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -395,6 +396,60 @@ export function startHub(opts: HubOpts): http.Server {
   });
 
   return server;
+}
+
+// ── Balance ──────────────────────────────────────────────────────────
+
+async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const params = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
+  const provider = params.get("provider") ?? "";
+  if (!provider) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "missing provider" }));
+    return;
+  }
+
+  // Only DeepSeek supports balance checking via their API
+  if (provider !== "deepseek") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ is_available: false }));
+    return;
+  }
+
+  try {
+    // Use resolveProvider to expand $ENV_VAR syntax in apiKey
+    const resolved = resolveProvider("deepseek");
+    const apiKey = resolved?.apiKey ?? process.env.DEEPSEEK_API_KEY ?? "";
+    if (!apiKey || apiKey === "YOUR_API_KEY") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ is_available: false, error: "no api key" }));
+      return;
+    }
+
+    const baseURL = resolved?.baseURL ?? "https://api.deepseek.com";
+    // Balance API is at the root, not under /v1 — use origin
+    let balanceURL: string;
+    try { balanceURL = `${new URL(baseURL).origin}/user/balance`; }
+    catch { balanceURL = `${baseURL.replace(/\/+$/, "")}/user/balance`; }
+
+    const r = await fetch(balanceURL, {
+      headers: { "Authorization": `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!r.ok) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ is_available: false, error: `HTTP ${r.status}` }));
+      return;
+    }
+
+    const data = await r.json();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(data));
+  } catch (err) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ is_available: false, error: err instanceof Error ? err.message : String(err) }));
+  }
 }
 
 // ── Version ──────────────────────────────────────────────────────────

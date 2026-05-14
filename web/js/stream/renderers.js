@@ -8,6 +8,8 @@ import { t } from "../i18n.js";
 export const hideUsage = (session) => {
   const strip = session?.usageStripEl;
   if (strip) strip.hidden = true;
+  // Reset balance state
+  if (session) session._balanceFetched = false;
 };
 
 export const renderUsage = (session) => {
@@ -34,6 +36,16 @@ export const renderUsage = (session) => {
         `<span class="cache-dot miss"></span>${fmtNum(cacheMiss)}` +
       `</span>`
     : "";
+
+  // Balance chip: shown for providers that support balance checking (e.g. DeepSeek).
+  // We render a placeholder that gets filled asynchronously.
+  const provider = session?.agentInfo?.provider ?? "";
+  const balanceHtml = (provider === "deepseek")
+    ? `<span class="usage-chip usage-balance" id="usage-balance-${session?.id ?? ""}" title="${t("usage.balance")}">` +
+        `<span class="balance-label">💰</span> ${t("usage.balance.loading")}` +
+      `</span>`
+    : "";
+
   usageEl.innerHTML =
     `<span class="usage-chip" title="${t("usage.input")}">↑ ${fmtNum(inTok)}</span>` +
     `<span class="usage-chip" title="${t("usage.output")}">↓ ${fmtNum(outTok)}</span>` +
@@ -44,10 +56,17 @@ export const renderUsage = (session) => {
         ? `<span class="usage-bar"><span style="width:${pct}%"></span></span>`
         : "") +
       `${ctxText}${st.contextWindow > 0 ? ` (${pct}%)` : ""}` +
-    `</span>`;
+    `</span>` +
+    balanceHtml;
   usageEl.classList.toggle("warm", pct >= 30 && pct < 70);
   usageEl.classList.toggle("hot", pct >= 70);
   if (usageStrip) usageStrip.hidden = false;
+
+  // Fetch DeepSeek balance asynchronously (debounced: once per session).
+  if (provider === "deepseek" && !session._balanceFetched) {
+    session._balanceFetched = true;
+    fetchBalance(session);
+  }
 };
 
 export const renderTurnSep = (session, ts) => {
@@ -259,3 +278,49 @@ export const renderToolBody = (lines) => {
   setExpanded(false);
   return wrap;
 };
+
+// ── Balance display (DeepSeek) ─────────────────────────────────────
+
+const BALANCE_CACHE_TTL = 120_000; // 2 min between fetches
+let _balanceCache = null;
+let _balanceCacheTs = 0;
+
+async function fetchBalance(session) {
+  const balanceElId = `usage-balance-${session?.id ?? ""}`;
+  const balanceEl = document.getElementById(balanceElId);
+  if (!balanceEl) return;
+
+  // Serve from cache if fresh
+  if (_balanceCache && Date.now() - _balanceCacheTs < BALANCE_CACHE_TTL) {
+    renderBalanceChip(balanceEl, _balanceCache);
+    return;
+  }
+
+  try {
+    const r = await fetch("/api/balance?provider=deepseek");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    _balanceCache = data;
+    _balanceCacheTs = Date.now();
+    renderBalanceChip(balanceEl, data);
+  } catch {
+    balanceEl.textContent = "💰 —";
+    balanceEl.title = "Balance unavailable";
+  }
+}
+
+function renderBalanceChip(el, data) {
+  if (!data?.is_available || !Array.isArray(data?.balance_infos) || !data.balance_infos.length) {
+    el.textContent = "💰 —";
+    el.title = "Balance unavailable";
+    return;
+  }
+  const info = data.balance_infos[0];
+  const currency = info.currency === "CNY" ? "¥" : (info.currency ?? "");
+  const total = info.total_balance ?? "—";
+  el.innerHTML = `<span class="balance-label">💰</span> ${currency}${total}`;
+  el.title = data.balance_infos.map((bi) => {
+    const c = bi.currency === "CNY" ? "¥" : (bi.currency ?? "");
+    return `Total: ${c}${bi.total_balance ?? "—"}  |  Top-up: ${c}${bi.topped_up_balance ?? "—"}  |  Grant: ${c}${bi.granted_balance ?? "—"}`;
+  }).join("\n");
+}

@@ -1960,6 +1960,29 @@ session-view[hidden] { display: none; }
   border: 1px solid var(--border);
 }
 
+/* ── Balance chip (DeepSeek) ─────────────────────────────────────── */
+.usage-balance {
+  transition: all 0.3s var(--ease-out-expo);
+  cursor: default;
+}
+
+.usage-balance:hover {
+  background: var(--bg-elevated);
+  border-color: var(--accent-border);
+}
+
+.balance-label {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.usage-strip .usage-balance {
+  font-weight: 500;
+  color: var(--accent);
+  border-color: var(--accent-soft);
+  background: var(--accent-glow);
+}
+
 /* ── Live input ─────────────────────────────────────────────────── */
 .live-input {
   position: relative;

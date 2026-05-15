@@ -15,6 +15,7 @@ import path from "node:path";
 import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
+import { activateAgent } from "agent-sh/agent";
 import { getSettings } from "agent-sh/settings";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
 
@@ -64,8 +65,8 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
     const settings = getSettings();
+    activateAgent(extCtx);
     const headlessDisabled = [
-      "tui-renderer",
       "file-autocomplete",
       "overlay-agent",
       ...(settings.disabledBuiltins ?? []),
@@ -93,7 +94,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       return [] as string[];
     });
 
-    // AgentLoop (from agent-backend builtin) defines its own
+    // AgentLoop (constructed by activateAgent) defines its own
     // history:read-recent in its constructor, and ember may advise it.
     // Stub both the read and the format renderer as the last step
     // before core:extensions-loaded, so wire() sees empty history.

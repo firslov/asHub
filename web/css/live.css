@@ -1230,6 +1230,42 @@ session-view[hidden] { display: none; }
   text-decoration-color: var(--cyan);
 }
 
+/* ── Reply copy button ─────────────────────────────────────────────── */
+.reply-copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 0.75rem;
+  margin-left: auto;
+  margin-right: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg2);
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0.3;
+  transition: opacity 0.2s ease, color 0.15s, border-color 0.15s, background 0.15s, transform 0.12s;
+}
+.agent-reply:hover .reply-copy-btn {
+  opacity: 1;
+}
+.reply-copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-glow);
+}
+.reply-copy-btn:active {
+  transform: scale(0.88);
+}
+.reply-copy-btn.copied {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(74, 138, 94, 0.1);
+  opacity: 1;
+}
+
 /* ── Message action buttons ────────────────────────────────────────── */
 .agent-box, .agent-reply { position: relative; }
 .agent-box.pending .msg-actions { display: none; }

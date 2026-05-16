@@ -3,6 +3,29 @@ import { append } from "./tool-group.js";
 import { maybeScroll } from "./scroll.js";
 import { t } from "../i18n.js";
 
+const COPY_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1"/><path d="M8 4V2.5A1.5 1.5 0 0 0 6.5 1h-3A1.5 1.5 0 0 0 2 2.5v3A1.5 1.5 0 0 0 3.5 7H4"/></svg>';
+const CHECK_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 6 5 9 10 2"/></svg>';
+
+export const addReplyCopyBtn = (el, text) => {
+  if (el.querySelector(".reply-copy-btn")) return;
+  const btn = document.createElement("button");
+  btn.className = "reply-copy-btn";
+  btn.title = t("copy");
+  btn.innerHTML = COPY_ICON_SVG;
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.classList.add("copied");
+      btn.innerHTML = CHECK_ICON_SVG;
+      setTimeout(() => {
+        btn.classList.remove("copied");
+        btn.innerHTML = COPY_ICON_SVG;
+      }, 1200);
+    } catch (e) { console.error("clipboard", e); }
+  });
+  el.appendChild(btn);
+};
+
 const flushReply = (session) => {
   const r = session?.reply;
   if (!r) return;
@@ -56,8 +79,9 @@ export const closeReply = (session) => {
   r.current.classList.remove("streaming");
   if (r.text === "") {
     r.current.remove();
-  } else if (!session.state.replaying) {
-    highlightWithin(r.current);
+  } else {
+    if (!session.state.replaying) highlightWithin(r.current);
+    addReplyCopyBtn(r.current, r.text);
   }
   r.current = null;
   r.text = "";

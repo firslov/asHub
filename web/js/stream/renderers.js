@@ -183,29 +183,36 @@ export const buildToolRow = (p) => {
   row.className = "tool-row";
   if (p?.toolCallId) row.dataset.callId = p.toolCallId;
 
+  const hasCustomIcon = typeof p?.icon === "string" && p.icon.length > 0;
   const icon = p?.icon ?? "·";
   const raw = (p?.rawInput && typeof p.rawInput === "object") ? p.rawInput : {};
   // agent-loop appends ": <description>" to bash titles; strip it.
   let title = p?.title ?? t("tool");
-  if (raw.command && title.includes(":")) title = title.split(":")[0];
+  if ((raw.command || raw.source) && title.includes(":")) title = title.split(":")[0];
+  if (hasCustomIcon) title = "";
+
+  const hasSource = typeof raw.source === "string" && raw.source.trim().length > 0;
+  const sourceLanguage = typeof p?.sourceLanguage === "string" ? p.sourceLanguage : "";
 
   let detail = p?.displayDetail;
+  if (hasSource) detail = "";
   if (!detail && Array.isArray(p?.locations) && p.locations[0]?.path) {
     detail = p.locations[0].path + (p.locations[0].line ? `:${p.locations[0].line}` : "");
   }
   if (!detail) {
     if (raw.command) detail = `$ ${raw.command}`;
+    else if (hasSource) detail = raw.source;
     else detail = raw.pattern ?? raw.query ?? raw.path ?? "";
   }
 
   const cmdFull = (raw.command && typeof raw.command === "string" && raw.command.length > CMD_COLLAPSE)
     ? raw.command : "";
   if (cmdFull) raw.command = cmdFull.slice(0, CMD_COLLAPSE).trimEnd() + "…";
-  const detailHtml = renderToolDetail(detail, raw);
+  const detailHtml = renderToolDetail(detail, raw, sourceLanguage);
   if (cmdFull) raw.command = cmdFull;
 
   row.innerHTML =
-    `<span class="tool-name">${escape(icon)} ${escape(title)}</span>` +
+    `<span class="tool-name">${escape(icon)}${title ? " " + escape(title) : ""}</span>` +
     (detailHtml ? ` ${detailHtml}` : "");
 
   if (cmdFull) {
@@ -223,10 +230,14 @@ export const buildToolRow = (p) => {
       });
     }
   }
+
   return row;
 };
 
-export const renderToolDetail = (detail, raw) => {
+export const renderToolDetail = (detail, raw, sourceLanguage = "") => {
+  if (raw?.source && typeof raw.source === "string") {
+    return `<code class="tool-detail tool-cmd">${escape(raw.source)}</code>`;
+  }
   if (!detail) return "";
   if (raw?.command && typeof raw.command === "string") {
     const cmd = raw.command;

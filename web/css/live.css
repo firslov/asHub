@@ -1349,7 +1349,14 @@ session-view[hidden] { display: none; }
 }
 
 .tool-detail { color: var(--text); }
-.tool-mark { color: var(--text-faint); margin-left: 0.4rem; font-size: 0.78rem; }
+.tool-mark {
+  color: var(--text-faint);
+  margin-left: auto;
+  padding-left: 0.6rem;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .tool-row.ok .tool-mark { color: var(--green-dim); }
 .tool-row.err .tool-mark { color: var(--red-dim); }
 

@@ -104,7 +104,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.activateBackend();
 
     if (this.opts.cwd) {
-      core.bus.emit("shell:cwd-change", { cwd: path.resolve(this.opts.cwd) });
+      const resolved = path.resolve(this.opts.cwd);
+      core.handlers.advise("cwd", () => resolved);
     }
 
     core.handlers.advise("system-prompt:build", (next: () => string) => {

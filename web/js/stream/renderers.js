@@ -208,6 +208,7 @@ export const buildToolRow = (p) => {
   const cmdFull = (raw.command && typeof raw.command === "string" && raw.command.length > CMD_COLLAPSE)
     ? raw.command : "";
   if (cmdFull) raw.command = cmdFull.slice(0, CMD_COLLAPSE).trimEnd() + "…";
+
   const detailHtml = renderToolDetail(detail, raw, sourceLanguage);
   if (cmdFull) raw.command = cmdFull;
 
@@ -236,7 +237,16 @@ export const buildToolRow = (p) => {
 
 export const renderToolDetail = (detail, raw, sourceLanguage = "") => {
   if (raw?.source && typeof raw.source === "string") {
-    return `<code class="tool-detail tool-cmd">${escape(raw.source)}</code>`;
+    const src = raw.source;
+    let html = escape(src);
+    let langClass = "";
+    if (sourceLanguage && window.hljs && window.hljs.getLanguage(sourceLanguage)) {
+      try {
+        html = window.hljs.highlight(src, { language: sourceLanguage }).value;
+        langClass = ` language-${sourceLanguage}`;
+      } catch {}
+    }
+    return `<code class="tool-detail tool-cmd hljs${langClass}">${html}</code>`;
   }
   if (!detail) return "";
   if (raw?.command && typeof raw.command === "string") {

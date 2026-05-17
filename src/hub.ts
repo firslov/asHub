@@ -862,15 +862,20 @@ async function setSessionTitle(session: Session, title: string): Promise<void> {
 }
 
 async function generateTitleAsync(session: Session): Promise<void> {
-  const query = session.firstQuery?.trim();
+  let query = session.firstQuery?.trim();
   if (!query || session.userTitle) return;
+  // Slash-commands don't make good titles — skip them.
+  if (query.startsWith("/")) query = undefined;
+  if (!query) return;
+
+  const fallback = query.slice(0, 80);
 
   const providerName = session.provider || getSettings().defaultProvider;
-  if (!providerName) return;
+  if (!providerName) { await setSessionTitle(session, fallback); return; }
   const resolved = resolveProvider(providerName);
-  if (!resolved?.apiKey) return;
+  if (!resolved?.apiKey) { await setSessionTitle(session, fallback); return; }
   const model = session.model || resolved.defaultModel;
-  if (!model) return;
+  if (!model) { await setSessionTitle(session, fallback); return; }
 
   const client = new LlmClient({
     apiKey: resolved.apiKey,
@@ -879,19 +884,26 @@ async function generateTitleAsync(session: Session): Promise<void> {
     appName: "asHub",
   });
 
-  const stream = await client.stream({
-    messages: [
-      { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 10 words, no quotes). Return ONLY the title text, nothing else." },
-      { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
-    ],
-    max_tokens: 4096,
-  });
-  let raw = "";
-  for await (const chunk of stream) {
-    raw += chunk?.choices?.[0]?.delta?.content ?? "";
+  try {
+    const stream = await client.stream({
+      messages: [
+        { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 10 words, no quotes). Return ONLY the title text, nothing else." },
+        { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
+      ],
+      max_tokens: 4096,
+    });
+    let raw = "";
+    for await (const chunk of stream) {
+      raw += chunk?.choices?.[0]?.delta?.content ?? "";
+    }
+    const title = raw.trim().replace(/^"|"$/g, "");
+    if (title && !session.userTitle) { await setSessionTitle(session, title); return; }
+  } catch {
+    // LLM call failed — fall through to fallback.
   }
-  const title = raw.trim().replace(/^"|"$/g, "");
-  if (title && !session.userTitle) await setSessionTitle(session, title);
+
+  // Fallback: use the first query text as title.
+  if (!session.userTitle) await setSessionTitle(session, fallback);
 }
 
 // ── HTTP handlers ───────────────────────────────────────────────────

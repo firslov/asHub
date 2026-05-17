@@ -210,20 +210,6 @@ async function deleteSessionFiles(id: string): Promise<void> {
   try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.jsonl.leaf`)); } catch {}
 }
 
-async function saveSessionMessages(session: Session): Promise<void> {
-  try {
-    await ensureSessionsDir();
-    const snap = await session.bridge.snapshot();
-    if (snap.messages.length === 0) return;
-    await fs.promises.writeFile(
-      path.join(SESSIONS_DIR, `${session.id}.messages.json`),
-      JSON.stringify(snap.messages),
-    );
-  } catch {
-    // Ignore write errors
-  }
-}
-
 interface PersistedSession {
   id: string;
   title?: string;
@@ -796,10 +782,6 @@ function routeEvent(session: Session, e: BusEvent): void {
       name: "agent:processing-done",
     }, {}));
     _flushBuf(session.id);
-    // Mirror submit()'s .then() handler for queued turns: persist messages
-    // so restarted sessions restore their state, and auto-generate a title
-    // after the first completed turn.
-    saveSessionMessages(session).catch(() => {});
     saveSessionMeta(session).catch(() => {});
     session.capture?.flush().catch((err) =>
       console.error(`[hub] capture.flush failed for ${session.id}:`, err)
@@ -1267,10 +1249,6 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       session.hasUnread = session.sseClients.size === 0;
       pushFrame(session, "agent:processing-done", sseFrame(meta("agent:processing-done"), {}));
       _flushBuf(session.id);
-      // Persist messages snapshot so restarted sessions restore their
-      // conversation state (not just SSE replay frames).
-      saveSessionMessages(session).catch(() => {});
-      // Persist lastModified so the session order survives restart.
       saveSessionMeta(session).catch(() => {});
       session.capture?.flush().catch((err) =>
         console.error(`[hub] capture.flush failed for ${session.id}:`, err)

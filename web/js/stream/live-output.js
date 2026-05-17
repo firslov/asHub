@@ -99,9 +99,24 @@ export const absorbAsToolBody = (session, callId) => {
     });
     actions.appendChild(toggle);
   }
-  if (actions.children.length > 0) {
-    blockEl.appendChild(actions);
-  }
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "tool-body-btn copy-btn";
+  copyBtn.textContent = t("copy");
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(all);
+      copyBtn.classList.add("copied");
+      copyBtn.textContent = t("copied");
+      setTimeout(() => {
+        copyBtn.classList.remove("copied");
+        copyBtn.textContent = t("copy");
+      }, 1200);
+    } catch (e) { console.error("clipboard", e); }
+  });
+  actions.appendChild(copyBtn);
+
+  blockEl.appendChild(actions);
   session.liveOutput.output = null;
   return true;
 };

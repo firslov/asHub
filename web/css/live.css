@@ -294,36 +294,6 @@
   position: relative;
 }
 
-.code-copy-btn {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg2);
-  color: var(--text-mid);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s ease, color 0.15s, border-color 0.15s, background 0.15s;
-  z-index: 2;
-}
-.agent-reply pre:hover .code-copy-btn {
-  opacity: 1;
-}
-.code-copy-btn:hover {
-  color: var(--accent);
-  border-color: var(--accent-border);
-  background: var(--accent-glow);
-}
-.code-copy-btn:active {
-  transform: scale(0.92);
-}
-
 /* ── App layout ─────────────────────────────────────────────────── */
 body { min-height: 100vh; padding: 0; font-size: 15px; }
 
@@ -1230,36 +1200,86 @@ session-view[hidden] { display: none; }
   text-decoration-color: var(--cyan);
 }
 
-/* ── Reply copy button ─────────────────────────────────────────────── */
-.reply-copy-btn {
-  display: flex;
+/* ── Shared copy button styles ───────────────────────────────────── */
+/* Unified look for: code-block copy, reply copy, tool-body copy.
+   All share the same size, radius, hover accent, and copied state.   */
+
+.code-copy-btn,
+.reply-copy-btn,
+.tool-body-btn.copy-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  margin-top: 0.75rem;
-  margin-left: auto;
-  margin-right: 0;
+  gap: 0.35rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg2);
   color: var(--text-dim);
   cursor: pointer;
-  opacity: 0.3;
-  transition: opacity 0.2s ease, color 0.15s, border-color 0.15s, background 0.15s, transform 0.12s;
+  font: inherit;
+  transition: opacity 0.15s ease, color 0.15s, border-color 0.15s, background 0.15s, transform 0.12s;
+  flex-shrink: 0;
 }
-.agent-reply:hover .reply-copy-btn {
+
+/* Icon-only copy buttons (code blocks, reply) */
+.code-copy-btn,
+.reply-copy-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
+
+/* Text copy buttons (tool body) */
+.tool-body-btn.copy-btn {
+  padding: 0.15rem 0.55rem;
+  font-size: 0.7rem;
+}
+
+/* Positioning */
+.code-copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  opacity: 0;
+  z-index: 2;
+}
+.reply-copy-btn {
+  margin-top: 0.75rem;
+  margin-left: auto;
+  opacity: 0;
+}
+.tool-body-btn.copy-btn {
+  opacity: 0;
+}
+
+/* Hover visibility */
+.agent-reply pre:hover .code-copy-btn,
+.agent-reply:hover .reply-copy-btn,
+.tool-body:hover .tool-body-btn.copy-btn,
+.tool-body.expanded .tool-body-btn.copy-btn,
+.tool-body-live:hover .tool-body-btn.copy-btn,
+.tool-body-live.expanded .tool-body-btn.copy-btn {
   opacity: 1;
 }
-.reply-copy-btn:hover {
+
+/* Interactive states */
+.code-copy-btn:hover,
+.reply-copy-btn:hover,
+.tool-body-btn.copy-btn:hover {
   color: var(--accent);
   border-color: var(--accent-border);
   background: var(--accent-glow);
 }
-.reply-copy-btn:active {
+.code-copy-btn:active,
+.reply-copy-btn:active,
+.tool-body-btn.copy-btn:active {
   transform: scale(0.88);
 }
-.reply-copy-btn.copied {
+
+/* Copied feedback */
+.code-copy-btn.copied,
+.reply-copy-btn.copied,
+.tool-body-btn.copy-btn.copied {
   color: var(--green);
   border-color: var(--green);
   background: rgba(74, 138, 94, 0.1);
@@ -1416,12 +1436,7 @@ session-view[hidden] { display: none; }
   display: flex;
   gap: 0.4rem;
   margin-top: 0.4rem;
-  opacity: 0;
-  transition: opacity 0.15s;
 }
-
-.tool-body:hover .tool-body-actions,
-.tool-body.expanded .tool-body-actions { opacity: 1; }
 
 .tool-body-btn {
   background: transparent;
@@ -1436,8 +1451,8 @@ session-view[hidden] { display: none; }
 }
 
 .tool-body-btn:hover {
-  color: var(--cyan);
-  border-color: var(--cyan-dim);
+  color: var(--accent);
+  border-color: var(--accent-border);
 }
 
 /* ── Diff blocks ─────────────────────────────────────────────────── */
@@ -3268,7 +3283,7 @@ session-view[hidden] { display: none; }
 .tool-body-live:hover .tool-body-actions,
 .tool-body-live.expanded .tool-body-actions { opacity: 1; }
 
-.tool-body-live .tool-body-btn {
+.tool-body-live .tool-body-btn:not(.copy-btn) {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-faint);
@@ -3281,7 +3296,7 @@ session-view[hidden] { display: none; }
   margin-right: 0.4rem;
 }
 
-.tool-body-live .tool-body-btn:hover { color: var(--cyan); border-color: var(--cyan-dim); }
+.tool-body-live .tool-body-btn:not(.copy-btn):hover { color: var(--accent); border-color: var(--accent-border); }
 
 /* ── Cancelled stamp ────────────────────────────────────────────── */
 .agent-reply.cancelled {

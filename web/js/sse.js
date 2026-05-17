@@ -15,7 +15,7 @@ import {
 } from "./stream/thinking.js";
 import {
   appendReplyChunk, fillFinalReply, closeReply, cancelReply, hasReply,
-  sawLiveSegment, startNewSegment,
+  sawLiveSegment, startNewSegment, addReplyCopyBtn,
 } from "./stream/reply.js";
 import {
   appendLiveOutputChunk, finalizeLiveOutput, resetCompletedTools,
@@ -200,6 +200,7 @@ export const handlers = {
     append(this, block);
     renderMathIn(block);
     if (!this.state.replaying) highlightWithin(block);
+    addReplyCopyBtn(block, stripAnsi(p.text ?? ""));
   },
 
   "agent:thinking-chunk"(p) {

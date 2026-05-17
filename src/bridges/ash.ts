@@ -13,6 +13,7 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
+import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
 import { getSettings } from "agent-sh/settings";
@@ -92,6 +93,11 @@ export class AshBridge extends EventEmitter implements Bridge {
       process.stderr.write(`[ash-bridge] ${err instanceof Error ? err.message : err}\n`);
       return [] as string[];
     });
+
+    // Activate the built-in ash agent backend and providers before
+    // emitting core:extensions-loaded. agentBackend listens for that
+    // event and only then registers via agent:register-backend.
+    activateAgent(extCtx);
 
     // AgentLoop (from agent-backend builtin) defines its own
     // history:read-recent in its constructor, and ember may advise it.

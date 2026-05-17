@@ -263,7 +263,18 @@ export const renderToolBody = (lines) => {
   const copyBtn = document.createElement("button");
   copyBtn.className = "tool-body-btn";
   copyBtn.textContent = t("copy");
-  copyBtn.addEventListener("click", () => copyToClipboard(all, copyBtn));
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(all);
+      const prev = copyBtn.textContent;
+      copyBtn.textContent = t("copied");
+      copyBtn.classList.add("copied");
+      setTimeout(() => {
+        copyBtn.textContent = prev;
+        copyBtn.classList.remove("copied");
+      }, 1200);
+    } catch (e) { console.error("clipboard", e); }
+  });
   let toggle = null;
   if (hasMore) {
     toggle = document.createElement("button");

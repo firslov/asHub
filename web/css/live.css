@@ -1349,7 +1349,14 @@ session-view[hidden] { display: none; }
 }
 
 .tool-detail { color: var(--text); }
-.tool-mark { color: var(--text-faint); margin-left: 0.4rem; font-size: 0.78rem; }
+.tool-mark {
+  color: var(--text-faint);
+  margin-left: auto;
+  padding-left: 0.6rem;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .tool-row.ok .tool-mark { color: var(--green-dim); }
 .tool-row.err .tool-mark { color: var(--red-dim); }
 
@@ -1781,6 +1788,28 @@ session-view[hidden] { display: none; }
   font-size: 0.62rem;
   color: var(--text-faint);
   vertical-align: middle;
+}
+
+.tool-detail.tool-cmd.language-scheme {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-row:has(.language-scheme) {
+  flex-wrap: wrap;
+}
+
+.tool-row:has(.language-scheme) > .tool-mark {
+  flex: 1 1 100%;
+  margin-left: 0;
+  padding-left: 1.95rem;
+  margin-top: 0.25rem;
+  text-align: left;
+  white-space: normal;
 }
 
 .tool-cmd-expanded::after {

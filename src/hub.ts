@@ -18,6 +18,10 @@ import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent } from "./bridges/types.js";
 import { LlmClient } from "agent-sh";
 import { resolveProvider, getSettings, getProviderNames } from "agent-sh/settings";
+import { SessionStore, type AgentMessage } from "./history/session-store.js";
+import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
+import { extractText, snippet, summarizeMessage } from "./history/summarize.js";
+import { createCompactionStrategy } from "./history/compaction-strategy.js";
 
 export interface HubOpts {
   port: number;
@@ -56,6 +60,9 @@ interface Session {
   /** Whether the session has new output since the user last viewed it. */
   hasUnread: boolean;
   lastAgentInfo: Record<string, unknown> | null;
+  store?: SessionStore;
+  capture?: Capture;
+  contextLock: Promise<void>;
 }
 
 const REPLAY_LIMIT = 5000;
@@ -117,10 +124,17 @@ async function ensureSessionsDir(): Promise<void> {
   await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
 }
 
+function sessionMetaPath(id: string): string {
+  return path.join(SESSIONS_DIR, `${id}.meta.json`);
+}
+
 async function saveSessionMeta(session: Session): Promise<void> {
   await ensureSessionsDir();
-  const meta = { id: session.id, title: session.title, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified };
-  await fs.promises.writeFile(path.join(SESSIONS_DIR, `${session.id}.meta.json`), JSON.stringify(meta));
+  const metaPath = sessionMetaPath(session.id);
+  let existing: Record<string, unknown> = {};
+  try { existing = JSON.parse(await fs.promises.readFile(metaPath, "utf-8")); } catch {}
+  const merged = { ...existing, id: session.id, title: session.title, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified };
+  await fs.promises.writeFile(metaPath, JSON.stringify(merged));
 }
 
 const _writeBufs = new Map<string, { frames: string[]; timer: ReturnType<typeof setTimeout> | null }>();
@@ -192,6 +206,8 @@ async function deleteSessionFiles(id: string): Promise<void> {
   try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.meta.json`)); } catch {}
   try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.replay.jsonl`)); } catch {}
   try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.messages.json`)); } catch {}
+  try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.jsonl`)); } catch {}
+  try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.jsonl.leaf`)); } catch {}
 }
 
 async function saveSessionMessages(session: Session): Promise<void> {
@@ -238,6 +254,37 @@ function providerHasModel(name: string | undefined, model: string | undefined): 
   const p = resolveProvider(name);
   if (!p) return false;
   return p.defaultModel === model || (p.models?.includes(model) ?? false);
+}
+
+async function migrateLegacySessions(): Promise<void> {
+  await ensureSessionsDir();
+  let files: string[];
+  try { files = await fs.promises.readdir(SESSIONS_DIR); } catch { return; }
+  for (const file of files) {
+    if (!file.endsWith(".meta.json")) continue;
+    const id = file.slice(0, -".meta.json".length);
+    const treePath = path.join(SESSIONS_DIR, `${id}.jsonl`);
+    if (fs.existsSync(treePath)) continue;
+    try {
+      const metaRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, file), "utf-8");
+      const meta = JSON.parse(metaRaw);
+      const cwd = meta.cwd ?? process.cwd();
+      let messages: AgentMessage[] = [];
+      try {
+        const msgRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, `${id}.messages.json`), "utf-8");
+        const parsed = JSON.parse(msgRaw);
+        if (Array.isArray(parsed)) messages = parsed;
+      } catch {}
+      const store = new SessionStore(treePath, {
+        create: { cwd, sessionId: id },
+        metaPath: sessionMetaPath(id),
+      });
+      if (messages.length > 0) await store.appendMessages(messages);
+      console.error(`[hub] migrated session ${id} → tree (${messages.length} messages)`);
+    } catch (err) {
+      console.error(`[hub] migration failed for ${id}:`, err);
+    }
+  }
 }
 
 async function loadPersistedSessions(): Promise<PersistedSession[]> {
@@ -369,6 +416,9 @@ export function startHub(opts: HubOpts): http.Server {
       if (req.method === "POST" && rest === "/context/rewind") return rewindContext(req, res, session);
       if (req.method === "POST" && rest === "/context/rewind-to-turn") return rewindToTurn(req, res, session);
       if (req.method === "POST" && rest === "/context/drop") return dropContext(req, res, session);
+      if (req.method === "GET" && rest === "/branch") return branchEndpoint(res, session);
+      if (req.method === "GET" && rest === "/tree") return treeEndpoint(res, session);
+      if (req.method === "POST" && rest === "/fork") return forkEndpoint(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
 
       const file = rest === "/" || rest === "/index.html" ? "/index.html" : rest;
@@ -539,7 +589,29 @@ async function createSession(
   existing?: { id: string; title?: string; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; lastModified?: number },
 ): Promise<Session> {
   const id = existing?.id ?? randomBytes(3).toString("hex");
-  const bridge = opts.makeBridge({ cwd, initialMessages: existing?.messages, model: existing?.model, provider: existing?.provider });
+
+  let store: SessionStore | undefined;
+  const treePath = path.join(SESSIONS_DIR, `${id}.jsonl`);
+  try {
+    if (existing && fs.existsSync(treePath)) {
+      store = new SessionStore(treePath, { metaPath: sessionMetaPath(id) });
+    } else if (!existing) {
+      store = new SessionStore(treePath, {
+        create: { cwd, sessionId: id },
+        metaPath: sessionMetaPath(id),
+      });
+    }
+  } catch (err) {
+    console.error(`[hub] failed to attach tree store for ${id}:`, err);
+  }
+
+  const initialMessages = existing && store ? store.buildMessages() : existing?.messages;
+  const compactionStrategy = createCompactionStrategy(
+    () => session?.store ?? null,
+    () => session?.capture ?? null,
+    (msg) => console.error(`[hub] ${id}: ${msg}`),
+  );
+  const bridge = opts.makeBridge({ cwd, initialMessages, model: existing?.model, provider: existing?.provider, compactionStrategy });
 
   const session: Session = {
     id,
@@ -563,7 +635,12 @@ async function createSession(
     isProcessing: false,
     hasUnread: false,
     lastAgentInfo: null,
+    store,
+    contextLock: Promise.resolve(),
   };
+  session.capture = createCapture(bridge, () => session.store ?? null, {
+    onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`),
+  });
 
   bridge.onEvent((e) => {
     try { routeEvent(session, e); }
@@ -581,6 +658,10 @@ async function createSession(
   });
 
   await bridge.ready();
+  if (existing && store && session.capture) {
+    const { entryIds } = store.buildBranchWithIds();
+    session.capture.resetTo(entryIds);
+  }
   sessions.set(id, session);
 
   // If the session was restored from disk and the replay ends with a
@@ -617,6 +698,7 @@ async function createSession(
 }
 
 async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): Promise<void> {
+  await migrateLegacySessions();
   const persisted = await loadPersistedSessions();
   if (persisted.length === 0) return;
   // Sort by lastModified descending so the most recently active sessions
@@ -719,6 +801,9 @@ function routeEvent(session: Session, e: BusEvent): void {
     // after the first completed turn.
     saveSessionMessages(session).catch(() => {});
     saveSessionMeta(session).catch(() => {});
+    session.capture?.flush().catch((err) =>
+      console.error(`[hub] capture.flush failed for ${session.id}:`, err)
+    );
     if (!session.firstTurnDone && session.firstQuery) {
       session.firstTurnDone = true;
       generateTitleAsync(session).catch((err) =>
@@ -1187,6 +1272,9 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       saveSessionMessages(session).catch(() => {});
       // Persist lastModified so the session order survives restart.
       saveSessionMeta(session).catch(() => {});
+      session.capture?.flush().catch((err) =>
+        console.error(`[hub] capture.flush failed for ${session.id}:`, err)
+      );
 
       // After the first turn completes, generate a title via the LLM.
       if (isFirstTurn && !session.firstTurnDone) {
@@ -1269,6 +1357,70 @@ async function getContext(res: http.ServerResponse, session: Session): Promise<v
   }
 }
 
+function getBranchEntries(session: Session): Array<{ id: string; type: string; parentId: string | null; timestamp: number; preview: string; role?: string; summary?: string }> | null {
+  if (!session.store) return null;
+  const branch = session.store.getBranch();
+  return branch.map((e) => {
+    if (e.type === "session") {
+      return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, preview: `[session ${e.id} cwd=${e.cwd}]` };
+    }
+    if (e.type === "compaction") {
+      return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, preview: `[compacted — firstKept ${e.firstKeptId.slice(0, 6)}]`, firstKeptId: e.firstKeptId };
+    }
+    const text = extractText(e.message.content);
+    return {
+      id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp,
+      role: e.message.role,
+      preview: snippet(text, 80),
+    };
+  });
+}
+
+async function branchEndpoint(res: http.ServerResponse, session: Session): Promise<void> {
+  const entries = getBranchEntries(session);
+  if (!entries) { res.statusCode = 409; res.end("session has no tree store"); return; }
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ leafId: session.store!.getActiveLeaf(), entries }));
+}
+
+async function treeEndpoint(res: http.ServerResponse, session: Session): Promise<void> {
+  if (!session.store) { res.statusCode = 409; res.end("session has no tree store"); return; }
+  const all = session.store.getAllEntries().map((e) => {
+    if (e.type === "session") return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp };
+    if (e.type === "compaction") return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, firstKeptId: e.firstKeptId };
+    return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, role: e.message.role, preview: snippet(extractText(e.message.content), 80) };
+  });
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ leafId: session.store.getActiveLeaf(), rootId: session.store.getRootId(), entries: all }));
+}
+
+async function forkEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  if (!session.store || !session.capture) { res.statusCode = 409; res.end("session has no tree store"); return; }
+  const body = await readBody(req);
+  let entryId: string | undefined;
+  let idPrefix: string | undefined;
+  try {
+    const parsed = JSON.parse(body) as { entryId?: string; idPrefix?: string };
+    entryId = parsed.entryId;
+    idPrefix = parsed.idPrefix;
+  } catch {
+    res.statusCode = 400; res.end("invalid body"); return;
+  }
+  const resolved = resolveEntryId(session, entryId, idPrefix);
+  if (!resolved) { res.statusCode = 404; res.end("entry not found or prefix ambiguous"); return; }
+  try {
+    await withContextLock(session, async () => {
+      session.store!.setActiveLeaf(resolved);
+      await applyBranchMessages(session);
+    });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, leafId: resolved }));
+  } catch (err) {
+    res.statusCode = 500;
+    res.end(`fork failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 async function dropContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   const body = await readBody(req);
   let indices: number[];
@@ -1284,11 +1436,22 @@ async function dropContext(req: http.IncomingMessage, res: http.ServerResponse, 
     return;
   }
   try {
-    const snap = await session.bridge.snapshot();
-    const drop = new Set(indices);
-    const kept = buildKeptWithPlaceholders(snap.messages, drop);
-    const stats = await session.bridge.compact({ kind: "replace", messages: kept });
-    await truncateReplayAfterCompact(session);
+    const stats = await withContextLock(session, async () => {
+      const snap = await session.bridge.snapshot();
+      const drop = new Set(indices);
+      const { kept, originalIndices } = buildKeptWithPlaceholders(snap.messages, drop);
+      const keptEntryIds = session.capture
+        ? originalIndices.map((i) => i === null ? null : session.capture!.getEntryIdAt(i))
+        : null;
+      const wire = keptEntryIds ? tagMessagesWithEntryIds(kept, keptEntryIds) : kept;
+      const result = await session.bridge.compact({ kind: "replace", messages: wire });
+      if (session.capture) {
+        const sanitized = await session.bridge.snapshot();
+        session.capture.resetTo(readEntryIdTags(sanitized.messages));
+      }
+      await truncateReplayAfterCompact(session);
+      return result;
+    });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, stats }));
   } catch (err) {
@@ -1303,61 +1466,26 @@ async function dropContext(req: http.IncomingMessage, res: http.ServerResponse, 
  * preserves chronology — the agent sees `[older] [placeholder] [newer]`
  * instead of a silent gap or a misleading front-prepended history block.
  */
-function buildKeptWithPlaceholders(messages: unknown[], drop: Set<number>): unknown[] {
+function buildKeptWithPlaceholders(messages: unknown[], drop: Set<number>): { kept: unknown[]; originalIndices: (number | null)[] } {
   const kept: unknown[] = [];
+  const originalIndices: (number | null)[] = [];
   let i = 0;
   while (i < messages.length) {
-    if (!drop.has(i)) { kept.push(messages[i]); i++; continue; }
+    if (!drop.has(i)) { kept.push(messages[i]); originalIndices.push(i); i++; continue; }
     const run: unknown[] = [];
     while (i < messages.length && drop.has(i)) { run.push(messages[i]); i++; }
     kept.push(makePlaceholder(run));
+    originalIndices.push(null);
   }
-  return kept;
+  return { kept, originalIndices };
 }
 
 function makePlaceholder(dropped: unknown[]): { role: "user"; content: string } {
-  // Deterministic placeholder: uses a fixed format regardless of the
-  // dropped messages' actual content. This preserves cache prefix stability
-  // — the same count of dropped messages always yields the exact same
-  // placeholder text, so subsequent model requests can hit KV cache.
+  const lines = dropped.map((m) => `- ${summarizeMessage(m)}`);
   return {
     role: "user",
-    content: `[${dropped.length} message(s) elided]`,
+    content: `[${dropped.length} message(s) elided]\n${lines.join("\n")}`,
   };
-}
-
-function summarizeMessage(m: unknown): string {
-  const msg = m as { role?: string; content?: unknown; tool_calls?: Array<{ function?: { name?: string } }> };
-  const role = msg?.role ?? "?";
-  if (role === "assistant" && Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0) {
-    const tools = msg.tool_calls.map((tc) => tc?.function?.name ?? "tool").join(", ");
-    const text = extractText(msg.content);
-    const prefix = text ? `${snippet(text, 60)} → ` : "";
-    return `assistant: ${prefix}called ${tools}`;
-  }
-  if (role === "tool") {
-    const text = typeof msg?.content === "string" ? msg.content : extractText(msg?.content);
-    return `tool result: ${snippet(text, 80)}`;
-  }
-  return `${role}: ${snippet(extractText(msg?.content), 100)}`;
-}
-
-function extractText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content.map((p) => {
-      if (typeof p === "string") return p;
-      const part = p as { text?: string; content?: string };
-      return part?.text ?? part?.content ?? "";
-    }).join(" ");
-  }
-  return "";
-}
-
-function snippet(text: string, max: number): string {
-  const cleaned = String(text ?? "").replace(/\s+/g, " ").trim();
-  if (cleaned.length <= max) return cleaned || "(empty)";
-  return cleaned.slice(0, max) + "…";
 }
 
 async function truncateReplayAfterCompact(session: Session): Promise<void> {
@@ -1367,6 +1495,138 @@ async function truncateReplayAfterCompact(session: Session): Promise<void> {
     const remainingUserMsgs = messages.filter((m) => m?.role === "user").length;
     truncateReplayToTurnCount(session, remainingUserMsgs);
   } catch {}
+}
+
+function withContextLock<T>(session: Session, fn: () => Promise<T>): Promise<T> {
+  const prev = session.contextLock;
+  let release!: () => void;
+  session.contextLock = new Promise<void>((r) => { release = r; });
+  return prev.then(fn).finally(release);
+}
+
+async function syncTreeAfterRewind(session: Session, newLength: number): Promise<void> {
+  if (!session.store || !session.capture) return;
+  if (newLength <= 0) {
+    session.store.setActiveLeaf(session.store.getRootId());
+    session.capture.resetTo([]);
+    return;
+  }
+  const leafId = session.capture.getEntryIdAt(newLength - 1);
+  if (!leafId) {
+    throw new Error(`rewind target index ${newLength - 1} resolves to a synthetic slot (no tree entry); rewind to a concrete message position instead`);
+  }
+  session.store.setActiveLeaf(leafId);
+  session.capture.truncateTo(newLength);
+}
+
+function synthesizeBranchFrames(session: Session, messages: unknown[]): string[] {
+  const frames: string[] = [];
+  let seq = 0;
+  const meta = (name: string) => ({
+    source: session.id,
+    ts: Date.now(),
+    id: `hub:${session.id}:branch:${seq++}`,
+    name,
+  });
+  frames.push(sseFrame(meta("hub:branch-switched"), {}));
+  frames.push(sseFrame(meta("session:title"), { title: session.title }));
+
+  type Msg = {
+    role?: string;
+    content?: unknown;
+    tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+    tool_call_id?: string;
+  };
+  const msgs = messages as Msg[];
+  let turnStarted = false;
+
+  const closeTurn = () => {
+    if (!turnStarted) return;
+    frames.push(sseFrame(meta("agent:response-done"), {}));
+    frames.push(sseFrame(meta("agent:processing-done"), {}));
+    turnStarted = false;
+  };
+
+  for (const m of msgs) {
+    if (m.role === "user") {
+      closeTurn();
+      frames.push(sseFrame(meta("agent:query"), { query: extractText(m.content) }));
+      frames.push(sseFrame(meta("agent:processing-start"), {}));
+      turnStarted = true;
+      continue;
+    }
+    if (m.role === "assistant") {
+      const text = extractText(m.content);
+      if (text) frames.push(sseFrame(meta("agent:response-segment"), { text }));
+      const tcs = m.tool_calls;
+      if (tcs && tcs.length > 0) {
+        const groups = [{
+          kind: "execute",
+          tools: tcs.map((tc) => ({ name: tc.function?.name ?? "tool" })),
+        }];
+        frames.push(sseFrame(meta("agent:tool-batch"), { groups }));
+        for (let i = 0; i < tcs.length; i++) {
+          const tc = tcs[i]!;
+          let rawInput: unknown = undefined;
+          try { rawInput = tc.function?.arguments ? JSON.parse(tc.function.arguments) : undefined; } catch {}
+          frames.push(sseFrame(meta("agent:tool-started"), {
+            title: tc.function?.name ?? "tool",
+            toolCallId: tc.id,
+            kind: "execute",
+            rawInput,
+            batchIndex: i,
+            batchTotal: tcs.length,
+          }));
+        }
+      }
+      continue;
+    }
+    if (m.role === "tool") {
+      const content = typeof m.content === "string" ? m.content : extractText(m.content);
+      frames.push(sseFrame(meta("agent:tool-completed"), {
+        toolCallId: m.tool_call_id,
+        exitCode: 0,
+        rawOutput: content,
+        kind: "execute",
+      }));
+      continue;
+    }
+  }
+  closeTurn();
+  return frames;
+}
+
+async function rebuildReplay(session: Session, messages: unknown[]): Promise<void> {
+  const frames = synthesizeBranchFrames(session, messages);
+  session.replay = frames;
+  session.segmentText = "";
+  session.segmentSeq = 0;
+  for (const r of session.sseClients) {
+    for (const f of frames) { try { r.write(f); } catch {} }
+  }
+  await persistReplayFile(session.id, frames);
+}
+
+async function applyBranchMessages(session: Session): Promise<void> {
+  if (!session.store || !session.capture) throw new Error("tree store not attached");
+  const { messages, entryIds } = session.store.buildBranchWithIds();
+  const wire = tagMessagesWithEntryIds(messages, entryIds);
+  await session.bridge.compact({ kind: "replace", messages: wire });
+  const sanitized = await session.bridge.snapshot();
+  session.capture.resetTo(readEntryIdTags(sanitized.messages));
+  await rebuildReplay(session, sanitized.messages);
+}
+
+function resolveEntryId(session: Session, entryId?: string, idPrefix?: string): string | null {
+  if (!session.store) return null;
+  if (entryId) {
+    return session.store.getEntry(entryId) ? entryId : null;
+  }
+  if (idPrefix) {
+    const matches = session.store.getAllEntries().filter((e) => e.id.startsWith(idPrefix));
+    if (matches.length === 1) return matches[0]!.id;
+  }
+  return null;
 }
 
 // Anchored on a known turn count rather than a post-compact snapshot.
@@ -1405,8 +1665,12 @@ async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse
     res.statusCode = 400; res.end("toIndex must be a non-negative integer"); return;
   }
   try {
-    const stats = await session.bridge.compact({ kind: "rewind", toIndex });
-    await truncateReplayAfterCompact(session);
+    const stats = await withContextLock(session, async () => {
+      const result = await session.bridge.compact({ kind: "rewind", toIndex });
+      await syncTreeAfterRewind(session, toIndex);
+      await truncateReplayAfterCompact(session);
+      return result;
+    });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, stats }));
   } catch (err) {
@@ -1433,24 +1697,28 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
     res.statusCode = 400; res.end("turn must be a non-negative integer"); return;
   }
   try {
-    const snap = await session.bridge.snapshot();
-    const msgs = snap.messages as Array<{ role?: string }>;
-    let seen = 0;
-    let toIndex = -1;
-    for (let i = 0; i < msgs.length; i++) {
-      if (msgs[i]?.role === "user") {
-        if (seen === turn) { toIndex = i; break; }
-        seen++;
+    const stats = await withContextLock(session, async () => {
+      const snap = await session.bridge.snapshot();
+      const msgs = snap.messages as Array<{ role?: string }>;
+      let seen = 0;
+      let toIndex = -1;
+      for (let i = 0; i < msgs.length; i++) {
+        if (msgs[i]?.role === "user") {
+          if (seen === turn) { toIndex = i; break; }
+          seen++;
+        }
       }
-    }
-    let stats: unknown = null;
-    // Snapshot may report fewer user msgs than the replay has agent:query frames
-    // (legacy sessions, prior compacts). Truncate the replay regardless so the
-    // UI matches the kernel state.
-    if (toIndex !== -1) {
-      stats = await session.bridge.compact({ kind: "rewind", toIndex });
-    }
-    truncateReplayToTurnCount(session, turn);
+      let result: unknown = null;
+      // Snapshot may report fewer user msgs than the replay has agent:query
+      // frames (legacy sessions, prior compacts). Truncate the replay
+      // regardless so the UI matches the kernel state.
+      if (toIndex !== -1) {
+        result = await session.bridge.compact({ kind: "rewind", toIndex });
+        await syncTreeAfterRewind(session, toIndex);
+      }
+      truncateReplayToTurnCount(session, turn);
+      return result;
+    });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, stats }));
   } catch (err) {

@@ -13,6 +13,7 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
+import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
 import { getSettings } from "agent-sh/settings";
@@ -63,6 +64,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.handlers.define("config:get-history-mode", () => "none");
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
+    // Activate the ash agent backend so backends can register themselves
+    // before core:extensions-loaded fires and activateBackend() runs.
+    // This matches the CLI init order in agent-sh/dist/cli/index.js.
+    activateAgent(extCtx);
     const settings = getSettings();
     const headlessDisabled = [
       "tui-renderer",

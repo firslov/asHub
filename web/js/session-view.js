@@ -81,6 +81,15 @@ class SessionView extends HTMLElement {
     resyncSession(this.id);
   }
 
+  resetForBranchSwitch() {
+    if (this.streamEl) this.streamEl.innerHTML = "";
+    this.state = { ...STATE_DEFAULTS };
+    this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };
+    this.thinking = { el: null, block: null };
+    this.toolGroup = { current: null };
+    this.liveOutput = { lastRow: null, output: null, completed: new Set() };
+  }
+
   disconnectedCallback() {
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
     this.controller?.abort();

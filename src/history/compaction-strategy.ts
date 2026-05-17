@@ -15,6 +15,7 @@ export function createCompactionStrategy(
   getStore: () => SessionStore | null,
   getCapture: () => Capture | null,
   onWarn?: (msg: string) => void,
+  onCompacted?: (liveView: AgentMessage[], entryIds: (string | null)[]) => void | Promise<void>,
 ): CompactionStrategyHook {
   return async (helpers, opts, next) => {
     const strategy = (opts as { strategy?: { kind?: string; target?: number; keepRecent?: number } })?.strategy;
@@ -54,6 +55,10 @@ export function createCompactionStrategy(
     const { messages: liveView, entryIds } = store.buildBranchWithIds();
     helpers.replaceMessages(liveView);
     capture.resetTo(entryIds);
+    if (onCompacted) {
+      try { await onCompacted(liveView, entryIds); }
+      catch (err) { onWarn?.(`compaction: onCompacted hook failed: ${(err as Error).message}`); }
+    }
 
     const tokensAfter = helpers.estimatePromptTokens();
     return { before: tokensBefore, after: tokensAfter, evictedCount };

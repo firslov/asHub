@@ -257,6 +257,22 @@ export const handlers = {
     updateSessionTitle(this.id, p?.title ?? "");
   },
 
+  "hub:branch-switched"() {
+    this.resetForBranchSwitch?.();
+  },
+
+  "hub:compaction-marker"(p) {
+    if (!this.streamEl) return;
+    const evicted = Number(p?.evictedCount ?? 0);
+    const pill = document.createElement("div");
+    pill.className = "compaction-marker";
+    pill.innerHTML =
+      `<span class="cm-line"></span>` +
+      `<span class="cm-pill">📦 ${evicted} message(s) compacted</span>` +
+      `<span class="cm-line"></span>`;
+    this.streamEl.appendChild(pill);
+  },
+
   "agent:tool-started"(p) {
     closeReply(this);
     hideThinking(this);

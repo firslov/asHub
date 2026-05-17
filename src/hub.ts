@@ -98,6 +98,7 @@ const REPLAY_NAMES = new Set([
   "ui:info",
   "ui:error",
   "session:title",
+  "hub:compaction-marker",
 ]);
 
 /** Agent events that indicate forward progress (reset idle timeout). */
@@ -596,6 +597,9 @@ async function createSession(
     () => session?.store ?? null,
     () => session?.capture ?? null,
     (msg) => console.error(`[hub] ${id}: ${msg}`),
+    async (liveView, entryIds) => {
+      if (session) await rebuildReplay(session, liveView, entryIds);
+    },
   );
   const bridge = opts.makeBridge({ cwd, initialMessages, model: existing?.model, provider: existing?.provider, compactionStrategy });
 
@@ -1497,7 +1501,11 @@ async function syncTreeAfterRewind(session: Session, newLength: number): Promise
   session.capture.truncateTo(newLength);
 }
 
-function synthesizeBranchFrames(session: Session, messages: unknown[]): string[] {
+function synthesizeBranchFrames(
+  session: Session,
+  messages: unknown[],
+  entryIds: (string | null)[] = [],
+): string[] {
   const frames: string[] = [];
   let seq = 0;
   const meta = (name: string) => ({
@@ -1525,7 +1533,14 @@ function synthesizeBranchFrames(session: Session, messages: unknown[]): string[]
     turnStarted = false;
   };
 
-  for (const m of msgs) {
+  for (let idx = 0; idx < msgs.length; idx++) {
+    const m = msgs[idx]!;
+    if (entryIds[idx] === null && m.role === "user" && typeof m.content === "string") {
+      closeTurn();
+      const evictedCount = parseEvictedCount(m.content);
+      frames.push(sseFrame(meta("hub:compaction-marker"), { evictedCount, summary: m.content }));
+      continue;
+    }
     if (m.role === "user") {
       closeTurn();
       frames.push(sseFrame(meta("agent:query"), { query: extractText(m.content) }));
@@ -1574,8 +1589,12 @@ function synthesizeBranchFrames(session: Session, messages: unknown[]): string[]
   return frames;
 }
 
-async function rebuildReplay(session: Session, messages: unknown[]): Promise<void> {
-  const frames = synthesizeBranchFrames(session, messages);
+async function rebuildReplay(
+  session: Session,
+  messages: unknown[],
+  entryIds: (string | null)[] = [],
+): Promise<void> {
+  const frames = synthesizeBranchFrames(session, messages, entryIds);
   session.replay = frames;
   session.segmentText = "";
   session.segmentSeq = 0;
@@ -1591,8 +1610,14 @@ async function applyBranchMessages(session: Session): Promise<void> {
   const wire = tagMessagesWithEntryIds(messages, entryIds);
   await session.bridge.compact({ kind: "replace", messages: wire });
   const sanitized = await session.bridge.snapshot();
-  session.capture.resetTo(readEntryIdTags(sanitized.messages));
-  await rebuildReplay(session, sanitized.messages);
+  const sanitizedIds = readEntryIdTags(sanitized.messages);
+  session.capture.resetTo(sanitizedIds);
+  await rebuildReplay(session, sanitized.messages, sanitizedIds);
+}
+
+function parseEvictedCount(summary: string): number {
+  const m = summary.match(/(\d+)\s+message\(s\)\s+elided/);
+  return m ? Number(m[1]) : 0;
 }
 
 function resolveEntryId(session: Session, entryId?: string, idPrefix?: string): string | null {

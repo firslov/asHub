@@ -1,6 +1,7 @@
 import { currentSessionId } from "./state.js";
 import { setCtxOpen } from "./context-panel.js";
 import { setConfigOpen } from "./config-panel.js";
+import { setTreeOpen } from "./tree-panel.js";
 import { t } from "./i18n.js";
 import { activeSession } from "./session-manager.js";
 import { effect } from "../vendor/signals-core.js";
@@ -219,6 +220,7 @@ const setFilesOpen = (on) => {
     // 互斥：关闭其他面板
     setCtxOpen(false);
     setConfigOpen(false);
+    setTreeOpen(false);
     const promptOverlay = document.getElementById("prompt-overlay");
     if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
       promptOverlay.setAttribute("hidden", "");

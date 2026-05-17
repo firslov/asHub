@@ -24,6 +24,7 @@ import {
 import { createUserBox } from "./actions.js";
 import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
+import { refreshTreeIfOpen } from "./tree-panel.js";
 import { compactReasoning } from "./stream/compact.js";
 import { activeSession, globalConnState } from "./session-manager.js";
 
@@ -222,6 +223,7 @@ export const handlers = {
     if (!this.state.replaying) setSessionStatus(this.id, "");
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
+    if (!this.state.replaying && this === activeSession.peek()) refreshTreeIfOpen();
   },
 
   "agent:cancelled"() {
@@ -259,6 +261,7 @@ export const handlers = {
 
   "hub:branch-switched"() {
     this.resetForBranchSwitch?.();
+    if (this === activeSession.peek()) refreshTreeIfOpen();
   },
 
   "hub:compaction-marker"(p) {

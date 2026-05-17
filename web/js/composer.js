@@ -215,6 +215,14 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 
+export const setComposerText = (text) => {
+  if (!input) return;
+  input.value = text ?? "";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+};
+
 export const cancelTurn = () => {
   const sid = currentSessionId();
   if (!sid) return;

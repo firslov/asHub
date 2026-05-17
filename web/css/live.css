@@ -1304,8 +1304,7 @@ session-view[hidden] { display: none; }
   z-index: 5;
   pointer-events: none;
 }
-.agent-box:hover .msg-actions,
-.agent-box.editing .msg-actions {
+.agent-box:hover .msg-actions {
   opacity: 1;
   pointer-events: auto;
 }
@@ -1326,34 +1325,6 @@ session-view[hidden] { display: none; }
   color: var(--text);
   border-color: var(--border-mid);
   background: var(--bg3);
-}
-.msg-action-btn.danger:hover {
-  color: var(--red);
-  border-color: var(--red);
-}
-
-.msg-edit-area {
-  width: 100%;
-  min-height: 2.4em;
-  padding: 0.4rem 0.6rem;
-  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.92em;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius-xs);
-  resize: vertical;
-  outline: none;
-  line-height: 1.6;
-}
-.msg-edit-area:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
-}
-
-.msg-edit-area.error {
-  border-color: var(--red);
-  box-shadow: 0 0 0 2px rgba(192,57,43,0.15);
 }
 
 .agent-reply .md-inline {
@@ -1773,7 +1744,7 @@ session-view[hidden] { display: none; }
   top: 0;
   bottom: 0;
   right: 48px;
-  width: 360px;
+  width: 300px;
   z-index: 14;
   border-left: 1px solid var(--border);
   background: var(--bg2);
@@ -1814,12 +1785,49 @@ session-view[hidden] { display: none; }
   align-items: center;
   gap: 0.4rem;
   padding: 0.25rem 0.85rem;
-  cursor: pointer;
+  cursor: default;
   color: var(--text-dim);
   white-space: nowrap;
 }
-.tree-row:hover { background: var(--bg3); color: var(--text); }
-.tree-prefix { color: var(--text-faint); white-space: pre; }
+.tree-row[data-switchable="1"] { cursor: pointer; }
+.tree-row[data-switchable="1"]:hover { background: var(--bg3); color: var(--text); }
+.tree-prefix {
+  display: flex;
+  align-self: stretch;
+  margin: -0.25rem 0;
+}
+.tp-col {
+  position: relative;
+  width: 1rem;
+  align-self: stretch;
+  flex: 0 0 auto;
+}
+.tp-col[data-line="vert"]::before,
+.tp-col[data-line="branch-mid"]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--text-faint);
+}
+.tp-col[data-line="branch-end"]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 50%;
+  border-left: 1px solid var(--text-faint);
+}
+.tp-col[data-line="branch-mid"]::after,
+.tp-col[data-line="branch-end"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  right: -0.4rem;
+  border-top: 1px solid var(--text-faint);
+}
 .tree-icon { width: 1em; text-align: center; opacity: 0.7; }
 .tree-id { color: var(--text-faint); font-size: 0.65rem; }
 .tree-preview { flex: 1; overflow: hidden; text-overflow: ellipsis; }

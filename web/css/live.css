@@ -206,13 +206,19 @@
 }
 
 /* ── Responsive ───────────────────────────────────────────────────── */
-@media (max-width: 900px) {
-  .app, .app.ctx-open, .app.files-open, .app.ctx-open.files-open {
-    grid-template-columns: 56px 1fr;
+/* Narrow window: shrink sidebar progressively, never hide the session list */
+/* 1100→700px: sidebar 260→145px. Below 700px: floor at 145px. */
+@media (max-width: 1100px) and (min-width: 701px) {
+  .app:not(.sidebar-collapsed) {
+    --sidebar-w: calc(145px + (100vw - 700px) * 0.29);
   }
-  .session-list, .sidebar-title { display: none; }
+}
+/* Extra-narrow: keep sidebar at minimum readable width, never collapse to icon-only */
+@media (max-width: 700px) {
+  .app, .app.ctx-open, .app.files-open, .app.ctx-open.files-open {
+    grid-template-columns: 145px 1fr;
+  }
   .sidebar-toggle { display: none; }
-  .sidebar-head { padding: 0.7rem 0.4rem; justify-content: center; height: auto; }
   .ctx-panel {
     width: min(300px, 92vw);
     z-index: 20;
@@ -1632,6 +1638,9 @@ session-view[hidden] { display: none; }
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  min-width: 0;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
   font-size: 0.72rem;
   color: var(--text-dim);
@@ -1648,6 +1657,7 @@ session-view[hidden] { display: none; }
   border-radius: var(--radius-pill);
   background: var(--bg3);
   font-size: 0.75rem;
+  flex-shrink: 0;
 }
 
 .usage-bar {
@@ -2130,6 +2140,9 @@ session-view[hidden] { display: none; }
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  min-width: 0;
   padding: 0.45rem 1.15rem;
   background: var(--bg2);
   border-top: 1px solid var(--border-light);

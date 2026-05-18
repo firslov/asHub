@@ -10,7 +10,7 @@ const SCROLL_SLOP = 40;
 class SessionView extends HTMLElement {
   connectedCallback() {
     this.id = this.getAttribute("session-id") || parseId();
-    this.agentInfo = { name: "", model: "", provider: "" };
+    this.agentInfo = { name: "", model: "", provider: "", thinkingLevel: "", thinkingSupported: false };
     this.files = { expandedDirs: new Map() };
     this.context = {
       selected: new Set(),

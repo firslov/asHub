@@ -195,8 +195,28 @@ export class AshBridge extends EventEmitter implements Bridge {
       }
     });
 
+    const readThinking = (): { level: string; supported: boolean } | null => {
+      try {
+        const emitPipe = bus.emitPipe.bind(bus) as unknown as (
+          n: string,
+          p: { level: string; levels: string[]; supported: boolean },
+        ) => { level: string; levels: string[]; supported: boolean };
+        const r = emitPipe("config:get-thinking", { level: "", levels: [], supported: false });
+        return { level: r?.level ?? "off", supported: !!r?.supported };
+      } catch { return null; }
+    };
+
     for (const name of FORWARDED) {
       onAny(name, (payload) => {
+        if (name === "agent:info") {
+          const think = readThinking();
+          const enriched = {
+            ...(payload as Record<string, unknown>),
+            ...(think ? { thinkingLevel: think.level, thinkingSupported: think.supported } : {}),
+          };
+          this.emit("event", { name, payload: enriched } satisfies BusEvent);
+          return;
+        }
         // Enrich agent:usage with cache fields that agent-sh core drops.
         if (name === "agent:usage") {
           // Always attach cache fields if we have accumulated any; this
@@ -220,6 +240,24 @@ export class AshBridge extends EventEmitter implements Bridge {
         this.emit("event", { name, payload } satisfies BusEvent);
       });
     }
+
+    onAny("config:changed", () => {
+      const think = readThinking();
+      if (!think) return;
+      this.emit("event", {
+        name: "agent:info",
+        payload: { thinkingLevel: think.level, thinkingSupported: think.supported },
+      } satisfies BusEvent);
+    });
+
+    onAny("config:set-thinking", (payload) => {
+      const level = (payload as { level?: string })?.level;
+      if (!level) return;
+      this.emit("event", {
+        name: "ui:info",
+        payload: { message: `Thinking level: ${level}` },
+      } satisfies BusEvent);
+    });
 
     // Track whether any agent backend registered. Without one, submit()
     // must reject so the UI doesn't spin forever (e.g. missing API key).

@@ -66,8 +66,10 @@ effect(() => {
 export const renderInstanceLabel = () => {
   if (!instanceLabel) return;
   const ai = activeSession.peek()?.agentInfo;
-  const modelTag = ai?.model ? `[${ai.model}]` : "";
-  instanceLabel.textContent = [ai?.name, modelTag].filter(Boolean).join(" ");
+  const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off";
+  const inner = [ai?.model, showThink ? ai.thinkingLevel : ""].filter(Boolean).join(" • ");
+  const tag = inner ? `[${inner}]` : "";
+  instanceLabel.textContent = [ai?.name, tag].filter(Boolean).join(" ");
 };
 
 // On active-session switch, chrome catches up to the new session's state.
@@ -88,6 +90,8 @@ export const handlers = {
     if (p?.name) this.agentInfo.name = p.name;
     if (p?.model) this.agentInfo.model = p.model;
     if (p?.provider) this.agentInfo.provider = p.provider;
+    if (typeof p?.thinkingLevel === "string") this.agentInfo.thinkingLevel = p.thinkingLevel;
+    if (typeof p?.thinkingSupported === "boolean") this.agentInfo.thinkingSupported = p.thinkingSupported;
     if (typeof p?.contextWindow === "number" && p.contextWindow > 0) {
       this.state.contextWindow = p.contextWindow;
     }

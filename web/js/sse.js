@@ -231,10 +231,6 @@ export const handlers = {
     hideThinking(this);
     finalizeThinking(this);
     finalizeLiveOutput(this);
-    this.streamEl?.querySelectorAll(".agent-box.pending").forEach((el) => {
-      delete el.dataset.queued;
-      el.remove();
-    });
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);

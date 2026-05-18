@@ -245,7 +245,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     onAny("agent:cancelled", () => {
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "cancelled" }); }
-      this.queryQueue.length = 0;
+      setTimeout(() => this.drainQueue(), 0);
     });
 
     // Permission gate — forward to UI as an event (so the diff preview

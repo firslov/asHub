@@ -24,6 +24,7 @@ import {
 import { createUserBox } from "./actions.js";
 import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
+import { refreshTreeIfOpen } from "./tree-panel.js";
 import { compactReasoning } from "./stream/compact.js";
 import { activeSession, globalConnState } from "./session-manager.js";
 
@@ -222,6 +223,7 @@ export const handlers = {
     if (!this.state.replaying) setSessionStatus(this.id, "");
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
+    if (!this.state.replaying && this === activeSession.peek()) refreshTreeIfOpen();
   },
 
   "agent:cancelled"() {
@@ -255,6 +257,23 @@ export const handlers = {
 
   "session:title"(p) {
     updateSessionTitle(this.id, p?.title ?? "");
+  },
+
+  "hub:branch-switched"() {
+    this.resetForBranchSwitch?.();
+    if (this === activeSession.peek()) refreshTreeIfOpen();
+  },
+
+  "hub:compaction-marker"(p) {
+    if (!this.streamEl) return;
+    const evicted = Number(p?.evictedCount ?? 0);
+    const pill = document.createElement("div");
+    pill.className = "compaction-marker";
+    pill.innerHTML =
+      `<span class="cm-line"></span>` +
+      `<span class="cm-pill">📦 ${evicted} message(s) compacted</span>` +
+      `<span class="cm-line"></span>`;
+    this.streamEl.appendChild(pill);
   },
 
   "agent:tool-started"(p) {

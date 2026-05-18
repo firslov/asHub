@@ -33,6 +33,7 @@ const flushReply = (session) => {
   if (!r.current) return;
   r.current.innerHTML = mdToHtml(r.text);
   renderMathIn(r.current);
+  highlightWithin(r.current);
   maybeScroll(session);
 };
 

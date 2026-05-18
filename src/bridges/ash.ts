@@ -120,6 +120,18 @@ export class AshBridge extends EventEmitter implements Bridge {
       return `${base}\n\n# Working Directory\n\nCurrent working directory: ${cwd}`;
     });
 
+    if (this.opts.compactionStrategy) {
+      const strategy = this.opts.compactionStrategy;
+      const helpers = {
+        getMessages: () => core.handlers.call("conversation:get-messages") as unknown[],
+        replaceMessages: (msgs: unknown[]) => { core.handlers.call("conversation:replace-messages", msgs); },
+        estimatePromptTokens: () => (core.handlers.call("conversation:estimate-prompt-tokens") as number) ?? 0,
+      };
+      core.handlers.advise("conversation:compact", async (next: (o: unknown) => unknown, opts: unknown) => {
+        return await strategy(helpers, opts, next);
+      });
+    }
+
     // Restored sessions: inject the persisted conversation into the agent's
     // live context so it can reference prior turns.  We do this at the very
     // end of init() — after extensions are loaded and the backend is

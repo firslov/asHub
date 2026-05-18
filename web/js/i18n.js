@@ -77,18 +77,10 @@ const translations = {
 
     // ── Actions / user box ─────────────────────────────────────────
     "you": "you",
-    "edit.message": "Edit message",
-    "regen.response": "Regenerate response",
-    "delete.turn": "Delete turn",
-    "save": "Save (Enter)",
-    "cancel": "Cancel (Esc)",
-    "delete.turn.confirm": "Delete this turn and everything after it?",
-    "delete.failed": "Delete failed: {msg}",
+    "rewind.here": "Rewind to here (puts message back in composer)",
     "rewind.failed": "rewind failed ({status})",
-    "regen.failed": "Regenerate failed: {msg}",
-    "regen.resubmit.failed": "Regenerate: message resubmit failed.\n{msg}",
-    "edit.failed": "Edit failed: {msg}",
-    "edit.resubmit.failed": "Edit: message resubmit failed.\n{msg}",
+    "rewind.action.failed": "Rewind failed: {msg}",
+    "cancel": "Cancel (Esc)",
 
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "reconnecting…",
@@ -235,18 +227,10 @@ const translations = {
 
     // ── Actions / user box ─────────────────────────────────────────
     "you": "你",
-    "edit.message": "编辑消息",
-    "regen.response": "重新生成",
-    "delete.turn": "删除轮次",
-    "save": "保存 (Enter)",
-    "cancel": "取消 (Esc)",
-    "delete.turn.confirm": "删除此轮次及之后的所有内容？",
-    "delete.failed": "删除失败：{msg}",
+    "rewind.here": "回退到此处（消息将放回输入框）",
     "rewind.failed": "回退失败 ({status})",
-    "regen.failed": "重新生成失败：{msg}",
-    "regen.resubmit.failed": "重新生成：消息重新提交失败。\n{msg}",
-    "edit.failed": "编辑失败：{msg}",
-    "edit.resubmit.failed": "编辑：消息重新提交失败。\n{msg}",
+    "rewind.action.failed": "回退失败：{msg}",
+    "cancel": "取消 (Esc)",
 
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "重连中…",

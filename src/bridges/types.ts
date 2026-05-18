@@ -23,7 +23,19 @@ export interface BridgeOpts {
   extra?: Record<string, unknown>;
   /** Messages to seed into the conversation on startup (session restore). */
   initialMessages?: unknown[];
+  /** Optional compaction strategy that intercepts conversation:compact. */
+  compactionStrategy?: CompactionStrategyHook;
 }
+
+export type CompactionStrategyHook = (
+  helpers: {
+    getMessages(): unknown[];
+    replaceMessages(msgs: unknown[]): void;
+    estimatePromptTokens(): number;
+  },
+  opts: unknown,
+  next: (opts: unknown) => unknown,
+) => Promise<unknown> | unknown;
 
 export type ContextStrategy =
   | { kind: "two-tier-pin"; target: number; keepRecent?: number; force?: boolean }

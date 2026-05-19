@@ -1003,7 +1003,8 @@ session-view[hidden] { display: none; }
   }
   /* single panel: 300px */
   .app.ctx-open .live-wrap .terminal,
-  .app.files-open .live-wrap .terminal {
+  .app.files-open .live-wrap .terminal,
+  .app.tree-open .live-wrap .terminal {
     padding-right: 300px;
   }
   /* both ctx+files open: 600px */

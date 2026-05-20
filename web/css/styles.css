@@ -149,28 +149,28 @@
 
 [data-theme="dark"] nav.scrolled {
   background: rgba(24, 24, 28, 0.88);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: 0 1px 0 var(--border-light);
 }
 
 [data-theme="dark"] .hero::before {
   background:
-    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(212, 168, 83, 0.06) 0%, transparent 50%),
-    radial-gradient(ellipse 60% 40% at 80% 60%, rgba(77, 184, 196, 0.05) 0%, transparent 40%);
+    radial-gradient(ellipse 80% 50% at 50% 0%, var(--accent-glow) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 80% 60%, var(--cyan-glow) 0%, transparent 40%);
 }
 
 [data-theme="dark"] .hero-glow {
-  background: radial-gradient(circle, rgba(212, 168, 83, 0.06) 0%, rgba(139, 123, 191, 0.03) 40%, transparent 65%);
+  background: radial-gradient(circle, var(--accent-glow) 0%, rgba(139, 123, 191, 0.03) 40%, transparent 65%);
 }
 
 [data-theme="dark"] ::selection {
-  background: rgba(212, 168, 83, 0.25);
+  background: var(--accent-soft);
   color: var(--text);
 }
 
 [data-theme="dark"] .stream-empty {
   background:
-    radial-gradient(ellipse 70% 40% at 50% 25%, rgba(212, 168, 83, 0.06) 0%, transparent 55%),
-    radial-gradient(ellipse 50% 30% at 30% 65%, rgba(77, 184, 196, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse 70% 40% at 50% 25%, var(--accent-glow) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 30% at 30% 65%, var(--cyan-glow) 0%, transparent 50%),
     radial-gradient(ellipse at 50% 95%, var(--bg) 0%, transparent 60%);
 }
 

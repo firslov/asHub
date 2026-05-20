@@ -393,6 +393,12 @@
   position: relative;
 }
 
+/* Dark theme: code blocks get a dedicated deeper background with a subtle cool tint */
+[data-theme="dark"] .agent-reply pre {
+  background: #1a1a20;
+  box-shadow: inset 0 1px 4px rgba(0,0,0,0.3);
+}
+
 /* Code block language badge — shown on hover at top-left */
 .agent-reply pre code[class*="language-"]::before {
   content: attr(data-language);
@@ -1822,6 +1828,10 @@ session-view[hidden] { display: none; }
   background: rgba(74, 138, 94, 0.12);
   border-left: 2px solid var(--green);
 }
+[data-theme="dark"] .diff-added {
+  background: rgba(90, 158, 111, 0.15);
+}
+
 .diff-added .diff-sign { color: var(--green); font-weight: 500; }
 .diff-added .diff-new { color: var(--green-dim); }
 
@@ -1829,6 +1839,10 @@ session-view[hidden] { display: none; }
   background: rgba(192, 57, 43, 0.10);
   border-left: 2px solid var(--red-dim);
 }
+[data-theme="dark"] .diff-removed {
+  background: rgba(199, 106, 100, 0.16);
+}
+
 .diff-removed .diff-sign { color: var(--red); font-weight: 500; }
 .diff-removed .diff-old { color: var(--red-dim); }
 

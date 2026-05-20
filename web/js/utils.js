@@ -18,6 +18,15 @@ export const highlightWithin = (root) => {
   root.querySelectorAll("pre code").forEach((el) => {
     if (el.dataset.highlighted) return;
     try { window.hljs.highlightElement(el); el.dataset.highlighted = "1"; } catch {}
+    // Set data-language for CSS badge
+    if (!el.dataset.language) {
+      for (const c of el.classList) {
+        if (c.startsWith("language-")) {
+          el.dataset.language = c.slice(9);
+          break;
+        }
+      }
+    }
     // Add copy button to code blocks
     const pre = el.parentElement;
     if (pre && pre.tagName === "PRE" && !pre.querySelector(".code-copy-btn")) {

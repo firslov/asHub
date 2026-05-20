@@ -1,5 +1,7 @@
 # asHub
 
+[English](#ashub) | [简体中文](README_CN.md)
+
 Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent-sh sessions and exposes them through a browser UI.
 
 ![asHub demo](docs/demo.gif)

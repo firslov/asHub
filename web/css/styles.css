@@ -67,6 +67,16 @@
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-panel: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* Duration tokens — single source of truth for all transitions */
+  --dur-fast:   0.15s;
+  --dur-normal: 0.25s;
+  --dur-slow:   0.4s;
+
+  /* Brand gradients */
+  --accent-gradient: linear-gradient(135deg, var(--accent), var(--accent-dim));
+  --brand-gradient:  linear-gradient(135deg, var(--accent) 0%, var(--cyan) 100%);
 }
 
 /* ── Dark theme ──────────────────────────────────────────────────── */
@@ -158,6 +168,7 @@
 *::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 3px;
+  transition: background var(--dur-normal) var(--ease-out-expo);
 }
 *::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
 *::-webkit-scrollbar-corner { background: transparent; }

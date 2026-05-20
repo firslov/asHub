@@ -376,6 +376,24 @@ session-view[hidden] { display: none; }
 .app.sidebar-collapsed .sidebar-toggle { margin: 0; }
 .app.sidebar-collapsed .new-session-form { display: none; }
 
+/* Collapsed sidebar: show dot indicators and tooltips */
+.app.sidebar-collapsed .sidebar-head::after {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 4px var(--accent-glow);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--dur-normal) var(--ease-out-expo);
+}
+/* Show dot when a session is active */
+.app.sidebar-collapsed.has-active .sidebar-head::after {
+  opacity: 1;
+  animation: session-pulse 1.2s ease-in-out infinite;
+}
+
 /* ── Toolbar ─────────────────────────────────────────────────────── */
 .toolbar {
   position: fixed;
@@ -458,7 +476,9 @@ session-view[hidden] { display: none; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg2);
+  background: color-mix(in srgb, var(--bg2) 90%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .sidebar::after {
@@ -496,7 +516,9 @@ session-view[hidden] { display: none; }
   gap: 0.4rem;
   padding: 0.7rem 0.85rem;
   border-bottom: 1px solid var(--border);
-  background: var(--bg3);
+  background: color-mix(in srgb, var(--bg3) 92%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   flex-shrink: 0;
   height: 52px;
   box-sizing: border-box;
@@ -632,14 +654,15 @@ session-view[hidden] { display: none; }
 }
 
 .session-list li.current {
-  background: linear-gradient(90deg, var(--accent-glow) 0%, transparent 100%);
+  background: linear-gradient(90deg, var(--accent-glow) 0%, color-mix(in srgb, var(--accent-glow) 20%, transparent) 30%, transparent 100%);
   border-left: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), inset 0 -1px 0 rgba(0, 0, 0, 0.04);
 }
 
 .session-list li.current a {
   color: var(--text);
-  padding-left: calc(1.25rem - 2px);
-  border-left: 2px solid var(--accent);
+  padding-left: calc(1.25rem - 3px);
+  border-left: 3px solid var(--accent);
 }
 
 .session-title {
@@ -686,15 +709,24 @@ session-view[hidden] { display: none; }
 }
 
 .session-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   padding: 0.75rem 1.25rem 0.3rem;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
   font-size: 0.62rem;
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--text-faint);
+  letter-spacing: 0.14em;
+  color: var(--text-mid);
   pointer-events: none;
   user-select: none;
+}
+.session-group-head::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-light);
 }
 .session-group-head:first-child { padding-top: 0.45rem; }
 .session-list li.session-group-head:hover { background: transparent; }
@@ -755,16 +787,21 @@ session-view[hidden] { display: none; }
 }
 
 /* ── Session status indicator (streaming / unread) ───────────────── */
+/* Per-session dot on the left edge: shows streaming (cyan pulse),
+   unread (amber), or idle (transparent). Adds visual information
+   density without noise. */
 .session-status {
   position: absolute;
-  top: 1rem;
-  left: 0.35rem;
-  width: 0.4rem;
-  height: 0.4rem;
+  top: 50%;
+  left: 0.4rem;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  opacity: 0;
+  background: var(--border-mid);
+  opacity: 0.45;
   pointer-events: none;
-  transition: opacity 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
+  transition: all var(--dur-slow) var(--ease-out-expo);
 }
 
 /* Streaming: pulsing cyan dot */
@@ -789,15 +826,17 @@ session-view[hidden] { display: none; }
 
 /* Current session + streaming: more prominent glow */
 .session-list li.current.session-streaming .session-status {
-  width: 0.45rem;
-  height: 0.45rem;
+  width: 7px;
+  height: 7px;
+  left: 0.35rem;
   box-shadow: 0 0 8px var(--cyan-soft);
 }
 
 /* Current session + unread: slightly larger */
 .session-list li.current.session-unread .session-status {
-  width: 0.45rem;
-  height: 0.45rem;
+  width: 7px;
+  height: 7px;
+  left: 0.35rem;
 }
 
 /* ── New session form ────────────────────────────────────────────── */
@@ -1055,7 +1094,7 @@ session-view[hidden] { display: none; }
 
 @keyframes terminal-top-line {
   0%, 100% { opacity: 0.04; }
-  50%      { opacity: 0.22; }
+  50%      { opacity: 0.28; }
 }
 
 /* ── Right-panel awareness ──────────────────────────────────────── */
@@ -1219,6 +1258,13 @@ session-view[hidden] { display: none; }
   margin-top: 1.5rem;
   background: linear-gradient(90deg, var(--accent-glow) 0%, transparent 70%);
   animation: agent-box-in 0.4s var(--ease-out-expo) both;
+  transition: transform var(--dur-normal) var(--ease-out-expo),
+              box-shadow var(--dur-normal) var(--ease-out-expo);
+}
+
+.live-wrap .agent-box:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-elevated);
 }
 
 @keyframes agent-box-in {
@@ -1238,6 +1284,14 @@ session-view[hidden] { display: none; }
   margin-left: 0;
   position: relative;
   border-image: linear-gradient(180deg, var(--accent) 0%, var(--accent-dim) 60%, transparent 100%) 1;
+  border-radius: var(--radius-sm);
+  transition: transform var(--dur-normal) var(--ease-out-expo),
+              box-shadow var(--dur-normal) var(--ease-out-expo);
+}
+
+.live-wrap .agent-reply:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-elevated);
 }
 
 .live-wrap .agent-reply.streaming {
@@ -1849,13 +1903,15 @@ session-view[hidden] { display: none; }
   width: 300px;
   z-index: 14;
   border-left: 1px solid var(--border);
-  background: var(--bg2);
+  background: color-mix(in srgb, var(--bg2) 88%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + 48px));
   transition: transform 0.45s var(--ease-panel);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-panel-md);
 }
 .tree-panel[hidden] { display: flex !important; pointer-events: none; }
 .app.tree-open .tree-panel { transform: translateX(0); pointer-events: auto; }
@@ -2440,13 +2496,15 @@ session-view[hidden] { display: none; }
   width: 300px;
   z-index: 15;
   border-left: 1px solid var(--border);
-  background: var(--bg2);
+  background: color-mix(in srgb, var(--bg2) 88%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + 48px));
   transition: transform 0.45s var(--ease-panel);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-panel-md);
 }
 
 .ctx-panel::before {
@@ -2711,13 +2769,15 @@ session-view[hidden] { display: none; }
   width: 300px;
   z-index: 14;
   border-left: 1px solid var(--border);
-  background: var(--bg2);
+  background: color-mix(in srgb, var(--bg2) 88%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + 48px));
   transition: transform 0.45s var(--ease-panel), right 0.45s var(--ease-panel);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-panel-md);
 }
 
 .files-panel::before {
@@ -2978,14 +3038,16 @@ session-view[hidden] { display: none; }
   right: 48px;
   width: 300px;
   z-index: 16;
-  background: var(--bg2);
+  background: color-mix(in srgb, var(--bg2) 88%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + 48px));
   transition: transform 0.45s var(--ease-panel);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-panel-md);
 }
 
 .config-overlay::before {
@@ -3590,14 +3652,16 @@ session-view[hidden] { display: none; }
   right: 48px;
   width: 300px;
   z-index: 17;
-  background: var(--bg2);
+  background: color-mix(in srgb, var(--bg2) 88%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + 48px));
   transition: transform 0.45s var(--ease-panel);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-panel-md);
 }
 
 .prompt-overlay::before {

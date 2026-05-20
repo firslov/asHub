@@ -11,6 +11,7 @@
   /* Sophisticated accent: warm amber/gold */
   --accent:       #b8860b;
   --accent-dim:   #9a6f08;
+  --accent-light: #c99a3a;
   --accent-glow:  rgba(184, 134, 11, 0.1);
   --accent-soft:  rgba(184, 134, 11, 0.16);
   --accent-border: rgba(184, 134, 11, 0.32);
@@ -18,6 +19,7 @@
   /* Cyan for secondary accents */
   --cyan:         #2d8a94;
   --cyan-dim:     #23767f;
+  --cyan-light:   #54b8c2;
   --cyan-glow:    rgba(45, 138, 148, 0.08);
   --cyan-soft:    rgba(45, 138, 148, 0.14);
 
@@ -28,6 +30,16 @@
   --red-dim:      #a93226;
   --amber:        #b8860b;
   --purple:       #6c5fa7;
+
+  /* Status color light variants for highlight states */
+  --green-light:  #6ab87e;
+  --red-light:    #e06c6c;
+
+  /* Shadow system — layered for depth */
+  --shadow-panel-sm:  0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-panel-md:  0 4px 18px rgba(0, 0, 0, 0.08);
+  --shadow-panel-lg:  0 12px 40px rgba(0, 0, 0, 0.10);
+  --shadow-elevated:  0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 8px rgba(0, 0, 0, 0.06);
 
   /* Text hierarchy */
   --text:         #1d1d22;
@@ -82,27 +94,31 @@
 /* ── Dark theme ──────────────────────────────────────────────────── */
 [data-theme="dark"] {
   --bg:           #18181c;
-  --bg2:          #1f1f24;
-  --bg3:          #26262c;
-  --bg4:          #2e2e36;
+  --bg2:          #212126;
+  --bg3:          #2a2a32;
+  --bg4:          #33333c;
   --bg-elevated:  #2a2a32;
 
-  --accent:       #d4a853;
-  --accent-dim:   #b8923f;
-  --accent-glow:  rgba(212, 168, 83, 0.15);
-  --accent-soft:  rgba(212, 168, 83, 0.22);
-  --accent-border: rgba(212, 168, 83, 0.35);
+  --accent:       #e0c060;
+  --accent-dim:   #c9a84e;
+  --accent-light: #f0d070;
+  --accent-glow:  rgba(224, 192, 96, 0.15);
+  --accent-soft:  rgba(224, 192, 96, 0.22);
+  --accent-border: rgba(224, 192, 96, 0.35);
 
-  --cyan:         #4db8c4;
-  --cyan-dim:     #3a9aa6;
-  --cyan-glow:    rgba(77, 184, 196, 0.12);
-  --cyan-soft:    rgba(77, 184, 196, 0.18);
+  --cyan:         #58c8d4;
+  --cyan-dim:     #45b0bc;
+  --cyan-light:   #70d8e0;
+  --cyan-glow:    rgba(88, 200, 212, 0.12);
+  --cyan-soft:    rgba(88, 200, 212, 0.18);
 
   --green:        #5a9e6f;
   --green-dim:    #4a8a5e;
+  --green-light:  #78c68e;
   --red:          #c76a64;
   --red-dim:      #b55a54;
-  --amber:        #d4a853;
+  --red-light:    #e87670;
+  --amber:        #e0c060;
   --purple:       #8b7bbf;
 
   --text:         #e8e8ec;
@@ -110,20 +126,25 @@
   --text-mid:     #6c6c78;
   --text-faint:   #4a4a56;
 
-  --border:       rgba(255, 255, 255, 0.08);
-  --border-light: rgba(255, 255, 255, 0.05);
-  --border-mid:   rgba(255, 255, 255, 0.12);
-  --border-accent: rgba(212, 168, 83, 0.25);
+  --border:       rgba(255, 255, 255, 0.10);
+  --border-light: rgba(255, 255, 255, 0.06);
+  --border-mid:   rgba(255, 255, 255, 0.14);
+  --border-accent: rgba(224, 192, 96, 0.30);
 
   --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.25);
   --shadow-md:   0 4px 14px rgba(0, 0, 0, 0.3);
   --shadow-lg:   0 8px 36px rgba(0, 0, 0, 0.35);
-  --shadow-glow: 0 0 40px rgba(212, 168, 83, 0.06);
+  --shadow-glow: 0 0 40px rgba(224, 192, 96, 0.06);
+
+  --shadow-panel-sm:  0 2px 8px rgba(0, 0, 0, 0.30);
+  --shadow-panel-md:  0 4px 18px rgba(0, 0, 0, 0.35);
+  --shadow-panel-lg:  0 12px 40px rgba(0, 0, 0, 0.40);
+  --shadow-elevated:  0 1px 2px rgba(0, 0, 0, 0.30), 0 4px 8px rgba(0, 0, 0, 0.25);
 
   --scrollbar-thumb: #484854;
 
   --logo-bg:      linear-gradient(135deg, #2a2a30 0%, #32323a 100%);
-  --logo-border:  rgba(212, 168, 83, 0.22);
+  --logo-border:  rgba(224, 192, 96, 0.22);
 }
 
 [data-theme="dark"] nav.scrolled {

@@ -46,6 +46,8 @@ const slashAc = attachAutocomplete({
   accept: (it) => {
     const trailing = it.name.includes(" ") ? "" : " ";
     input.value = it.name + trailing;
+    // Trigger input so autocomplete re-evaluates for sub-command completions
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   },
 });
 
@@ -60,11 +62,7 @@ const acceptAc = () => {
   return false;
 };
 
-form?.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  if (acceptAc()) return;
-
-  const query = input.value.trim();
+const doSubmit = async (query) => {
   if (!query) return;
   if (state.isSubmitting) return;
   state.lastQuery = query;
@@ -78,9 +76,6 @@ form?.addEventListener("submit", async (ev) => {
   let optimisticBox = null;
   let optimisticSep = null;
   if (!query.startsWith("/")) {
-    // Build turn separator (same as renderTurnSep in renderers.js),
-    // but appendAfterPending so it goes after any existing pending
-    // boxes — preserving queued-message submission order.
     optimisticSep = document.createElement("div");
     optimisticSep.className = "turn-sep";
     optimisticSep.innerHTML =
@@ -115,6 +110,13 @@ form?.addEventListener("submit", async (ev) => {
     input.disabled = false;
     input.focus();
   }
+};
+
+form?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (acceptAc()) return;
+  const query = input.value.trim();
+  await doSubmit(query);
 });
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
@@ -181,9 +183,12 @@ input?.addEventListener("keydown", (ev) => {
     }
   }
   if (ev.shiftKey) return;
-  if (ev.key === "Enter" && !hasAcSelection()) {
+  if (ev.key === "Enter") {
+    // Shift+Enter = newline. Enter always submits directly,
+    // bypassing autocomplete accept — Tab is for selecting items.
     ev.preventDefault();
-    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    const query = input.value.trim();
+    if (query) doSubmit(query);
   } else if (ev.key === "ArrowUp" && !input.value && queryHistory.hasItems) {
     ev.preventDefault();
     const recalled = queryHistory.recallUp(input.value);

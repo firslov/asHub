@@ -69,6 +69,26 @@ class SessionView extends HTMLElement {
     this.querySelector(".stream-empty-prompt")?.addEventListener("click", () => {
       document.getElementById("query")?.focus();
     }, { signal: ac });
+
+    // Quick-start suggestion cards: click to fill the input
+    this.querySelectorAll(".sugg-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        const text = card.dataset.suggest;
+        if (!text) return;
+        const queryEl = document.getElementById("query");
+        if (queryEl) {
+          // Open the new-session form if no session exists yet
+          const form = document.getElementById("new-session-form");
+          if (form && form.hidden) {
+            document.getElementById("new-session")?.click();
+          }
+          queryEl.value = text;
+          queryEl.focus();
+          // Trigger input to update autocomplete / resize
+          queryEl.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }, { signal: ac });
+    });
   }
 
   resync() {

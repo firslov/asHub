@@ -39,6 +39,7 @@ class SessionView extends HTMLElement {
     scanI18n(this);
     this.streamEl = this.querySelector(".session-stream");
     this.emptyStateEl = this.querySelector(".stream-empty");
+    this.loadingEl = this.querySelector(".stream-loading");
     this.pillEl = this.querySelector(".scroll-pill");
     this.usageStripEl = this.querySelector(".usage-strip");
     this.usageEl = this.querySelector(".terminal-usage");
@@ -135,6 +136,10 @@ class SessionView extends HTMLElement {
   }
 
   receiveFrame(frame) {
+    // Hide loading skeleton on first content frame to prevent layout shift.
+    if (this.state.replaying && this.loadingEl && !this.loadingEl.hidden) {
+      this.loadingEl.hidden = true;
+    }
     const fn = handlers[frame?.meta?.name];
     if (fn) {
       try { fn.call(this, frame.payload, frame.meta); }
@@ -149,6 +154,8 @@ class SessionView extends HTMLElement {
     // Hide empty state immediately to prevent flash on SPA session switch.
     // If replay yields no content, exitReplayMode will restore it.
     if (this.emptyStateEl) this.emptyStateEl.hidden = true;
+    // Show loading skeleton while replay frames stream in.
+    if (this.loadingEl) this.loadingEl.hidden = false;
     // Safety net for empty replays: exit after 500ms if no frames arrive.
     this.replayFlushTimer = setTimeout(() => this.exitReplayMode(), 500);
   }
@@ -162,6 +169,8 @@ class SessionView extends HTMLElement {
   exitReplayMode() {
     this.state.replaying = false;
     if (this.replayFlushTimer) { clearTimeout(this.replayFlushTimer); this.replayFlushTimer = null; }
+    // Hide loading skeleton now that content is rendered.
+    if (this.loadingEl) this.loadingEl.hidden = true;
     hidePageLoader();
     onReplayDone(this);
     // If replay produced no content, restore the empty state.

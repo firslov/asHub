@@ -32,11 +32,6 @@
         <span class="live-status" id="conn">connecting…</span>
         <span class="version-label" id="version-label" title="checking for updates…"></span>
         <span class="spinner" id="spinner" hidden></span>
-        <button class="bar-btn cancel-btn" id="cancel-turn" hidden data-i18n-title="interrupt" title="Interrupt response (Esc)">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-            <rect x="0" y="0" width="10" height="10" rx="1.5"></rect>
-          </svg>
-        </button>
       </span>
     </header>
     <aside class="sidebar">
@@ -85,6 +80,11 @@
         <div class="terminal">
           <session-view></session-view>
           <form class="live-input" id="form">
+            <button type="button" class="bar-btn cancel-btn input-cancel-btn" id="cancel-turn" hidden data-i18n-title="interrupt" title="Interrupt response (Esc)">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <rect x="1.5" y="1.5" width="9" height="9" rx="2"></rect>
+              </svg>
+            </button>
             <span class="c-arrow">⟩</span>
             <textarea id="query" autocomplete="off" data-i18n-placeholder="ask.agent" placeholder="ask the agent…" rows="1"></textarea>
             <ul class="autocomplete" id="autocomplete" hidden></ul>
@@ -142,6 +142,11 @@
           </div>
           <div class="stream-empty-hint">
             <span class="kbd-hint" data-i18n-html="shortcuts"><kbd>⌘K</kbd> focus · <kbd>↑</kbd> recall · <kbd>Esc</kbd> cancel · <kbd>⌘\</kbd> context</span>
+          </div>
+        </div>
+        <div class="stream-loading" hidden>
+          <div class="load-bar-track">
+            <div class="load-bar-fill"></div>
           </div>
         </div>
       </div>

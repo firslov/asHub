@@ -69,7 +69,6 @@ export class AshBridge extends EventEmitter implements Bridge {
     // This matches the CLI init order in agent-sh/dist/cli/index.js.
     activateAgent(extCtx);
     const settings = getSettings();
-    activateAgent(extCtx);
     const headlessDisabled = [
       "file-autocomplete",
       "overlay-agent",

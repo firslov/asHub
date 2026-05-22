@@ -1,6 +1,7 @@
 import { handlers, onReplayDone, hidePageLoader, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
 import { STATE_DEFAULTS } from "./state.js";
+import { t, scanI18n } from "./i18n.js";
 
 const parseId = () =>
   (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1] ?? "";
@@ -34,6 +35,8 @@ class SessionView extends HTMLElement {
 
     const tpl = document.getElementById("session-view-tpl");
     this.appendChild(tpl.content.cloneNode(true));
+    // Template content isn't scanned by initial scanI18n — rescan now
+    scanI18n(this);
     this.streamEl = this.querySelector(".session-stream");
     this.emptyStateEl = this.querySelector(".stream-empty");
     this.pillEl = this.querySelector(".scroll-pill");
@@ -71,24 +74,38 @@ class SessionView extends HTMLElement {
     }, { signal: ac });
 
     // Quick-start suggestion cards: click to fill the input
+    const populateSuggestions = () => {
+      this.querySelectorAll(".sugg-card").forEach((card) => {
+        const key = card.dataset.suggestKey;
+        if (!key) return;
+        const label = card.querySelector(".sugg-label");
+        if (label) label.textContent = t(key);
+      });
+    };
+    populateSuggestions();
+
     this.querySelectorAll(".sugg-card").forEach((card) => {
       card.addEventListener("click", () => {
-        const text = card.dataset.suggest;
+        const key = card.dataset.suggestKey;
+        if (!key) return;
+        const text = t(key);
         if (!text) return;
         const queryEl = document.getElementById("query");
         if (queryEl) {
-          // Open the new-session form if no session exists yet
           const form = document.getElementById("new-session-form");
           if (form && form.hidden) {
             document.getElementById("new-session")?.click();
           }
           queryEl.value = text;
           queryEl.focus();
-          // Trigger input to update autocomplete / resize
           queryEl.dispatchEvent(new Event("input", { bubbles: true }));
         }
       }, { signal: ac });
     });
+
+    // Re-populate on language change
+    const onLangChange = () => populateSuggestions();
+    document.addEventListener("langchange", onLangChange, { signal: ac });
   }
 
   resync() {

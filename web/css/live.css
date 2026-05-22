@@ -6,7 +6,7 @@
 .files-head, .files-entry,
 .config-head,
 .prompt-head, .prompt-item-name,
-.bar-btn, .terminal-bar, .live-status,
+.bar-btn, .title-bar, .live-status,
 .agent-reply pre, .agent-reply code, .agent-reply .md-code,
 .tool-row, .tool-body, .tool-name,
 .diff-block, .turn-sep, .thinking,
@@ -303,7 +303,7 @@
     box-shadow: -4px 0 24px rgba(0, 0, 0, 0.25);
   }
   .app.ctx-open.files-open .files-panel {
-    right: calc(48px + min(300px, 92vw));
+    right: calc(42px + min(300px, 92vw));
   }
   .config-overlay {
     width: min(300px, 90vw);
@@ -445,17 +445,19 @@ body.exiting .app {
   --sidebar-w: 260px;
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: auto 1fr;
   height: 100vh;
   overflow: hidden;
   transition: grid-template-columns 0.35s var(--ease-in-out);
-  padding-right: 48px; /* space for toolbar */
+  padding-right: 42px; /* space for toolbar */
 }
 .app.sidebar-collapsed { grid-template-columns: 56px 1fr; }
 .app.sidebar-resizing { transition: none; user-select: none; }
 
-/* Explicit grid-column assignment */
-.sidebar { grid-column: 1; }
-.main { grid-column: 2; }
+/* Explicit grid assignments */
+.title-bar { grid-column: 1 / -1; grid-row: 1; }
+.sidebar { grid-column: 1; grid-row: 2; }
+.main { grid-column: 2; grid-row: 2; }
 session-view { display: contents; }
 session-view[hidden] { display: none; }
 .app.sidebar-collapsed .session-list,
@@ -498,19 +500,21 @@ session-view[hidden] { display: none; }
 /* ── Toolbar ─────────────────────────────────────────────────────── */
 .toolbar {
   position: fixed;
-  top: 0;
+  top: 52px;
   left: auto;
   right: 0;
   bottom: 0;
-  width: 48px;
+  width: 42px;
   z-index: 25;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
-  padding: 0.65rem 0;
-  background: var(--bg3);
+  gap: 0.25rem;
+  padding: 0.5rem 0;
+  background: color-mix(in srgb, var(--bg3) 90%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border-left: 1px solid var(--border);
 }
 
@@ -530,8 +534,8 @@ session-view[hidden] { display: none; }
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -563,7 +567,7 @@ session-view[hidden] { display: none; }
 }
 
 .toolbar-sep {
-  width: 22px;
+  width: 18px;
   height: 1px;
   background: var(--border-mid);
   margin: 0.25rem 0;
@@ -1148,6 +1152,19 @@ session-view[hidden] { display: none; }
   color: var(--text-faint);
 }
 
+/* ── Balance display ──────────────────────────────────────────────── */
+.balance-display {
+  font-family: 'Geist Mono', 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 0.66rem;
+  font-weight: 420;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.balance-display[hidden] { display: none; }
+
 .version-label.checking {
   opacity: 1;
   color: var(--text-faint);
@@ -1212,11 +1229,8 @@ session-view[hidden] { display: none; }
 
 /* ── Right-panel awareness ──────────────────────────────────────── */
 /* When context / files / config / prompt panels slide in from the
-   right (300px each, fixed at right:48px), they cover the terminal
-   bar's version label and cancel button.  Padding on .terminal shifts
-   the whole terminal column left so those controls stay visible.
-   Only applies on wider screens; on mobile the panels are intentional
-   overlays and there isn't room to shift content sideways. */
+   right (300px), shift the terminal content left so content remains
+   visible. Title bar is not affected — panels slide under it. */
 @media (min-width: 901px) {
   .live-wrap .terminal {
     padding-right: 0;
@@ -1239,35 +1253,45 @@ session-view[hidden] { display: none; }
   }
 }
 
-.live-wrap .terminal-bar {
+.title-bar {
   display: flex;
   align-items: center;
   background: var(--bg2);
   flex-shrink: 0;
   gap: 0.6rem;
   padding: 0.7rem 1.2rem;
+  margin-right: -42px; /* negate .app padding-right so bar reaches toolbar edge */
   border-bottom: 1px solid var(--border);
   height: 52px;
   box-sizing: border-box;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.title-bar .bar-right {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .session-head {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 0.08rem;
+  align-items: center;
+  gap: 0.6rem;
 }
+
 .session-topic {
   font-family: 'Geist', 'Inter', -apple-system, sans-serif;
-  font-size: 0.88rem;
+  font-size: 0.85rem;
   font-weight: 500;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1.3;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.01em;
+  max-width: 50%;
 }
 .session-topic:empty::before {
   content: attr(data-empty);
@@ -1275,15 +1299,25 @@ session-view[hidden] { display: none; }
   font-weight: 400;
   font-style: italic;
 }
+
+/* Subtle pill badge for the cwd — matches the UI's understated design */
 .session-cwd-meta {
-  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
-  font-size: 0.68rem;
+  font-family: 'Geist Mono', 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 0.66rem;
+  font-weight: 420;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 1.2;
-  opacity: 0.7;
+  line-height: 1;
+  max-width: 36ch;
+  flex-shrink: 1;
+  padding: 0.18rem 0.55rem;
+  border-radius: var(--radius-pill);
+  background: var(--bg3);
+  border: 1px solid var(--border-light);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.04);
+  letter-spacing: 0.01em;
 }
 
 .bar-right {
@@ -1304,6 +1338,8 @@ session-view[hidden] { display: none; }
 
 .live-wrap .terminal-body > *:not(.stream-empty) {
   max-width: 48rem;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .live-wrap .agent-reply pre {
@@ -2067,9 +2103,9 @@ session-view[hidden] { display: none; }
 
 .tree-panel {
   position: fixed;
-  top: 0;
+  top: 52px;
   bottom: 0;
-  right: 48px;
+  right: 42px;
   width: 300px;
   z-index: 14;
   border-left: 1px solid var(--border);
@@ -2079,7 +2115,7 @@ session-view[hidden] { display: none; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 48px));
+  transform: translateX(calc(100% + 42px));
   transition: transform 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -2674,9 +2710,9 @@ session-view[hidden] { display: none; }
 /* ── Context panel ───────────────────────────────────────────────── */
 .ctx-panel {
   position: fixed;
-  top: 0;
+  top: 52px;
   bottom: 0;
-  right: 48px;
+  right: 42px;
   width: 300px;
   z-index: 15;
   border-left: 1px solid var(--border);
@@ -2686,7 +2722,7 @@ session-view[hidden] { display: none; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 48px));
+  transform: translateX(calc(100% + 42px));
   transition: transform 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -2974,9 +3010,9 @@ session-view[hidden] { display: none; }
 /* ── Files panel ─────────────────────────────────────────────────── */
 .files-panel {
   position: fixed;
-  top: 0;
+  top: 52px;
   bottom: 0;
-  right: 48px;
+  right: 42px;
   width: 300px;
   z-index: 14;
   border-left: 1px solid var(--border);
@@ -2986,7 +3022,7 @@ session-view[hidden] { display: none; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 48px));
+  transform: translateX(calc(100% + 42px));
   transition: transform 0.45s var(--ease-panel), right 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -3015,7 +3051,7 @@ session-view[hidden] { display: none; }
 
 /* When both panels open, shift files panel left of ctx panel */
 .app.ctx-open.files-open .files-panel {
-  right: calc(48px + 300px);
+  right: calc(42px + 300px);
 }
 
 .files-head {
@@ -3258,9 +3294,9 @@ session-view[hidden] { display: none; }
 /* ── Config panel (slide-out from toolbar) ───────────────────────── */
 .config-overlay {
   position: fixed;
-  top: 0;
+  top: 52px;
   bottom: 0;
-  right: 48px;
+  right: 42px;
   width: 300px;
   z-index: 16;
   background: color-mix(in srgb, var(--bg2) 88%, transparent);
@@ -3270,7 +3306,7 @@ session-view[hidden] { display: none; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 48px));
+  transform: translateX(calc(100% + 42px));
   transition: transform 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -3903,9 +3939,9 @@ session-view[hidden] { display: none; }
 /* ── Quick Prompts panel ────────────────────────────────────────────── */
 .prompt-overlay {
   position: fixed;
-  top: 0;
+  top: 52px;
   bottom: 0;
-  right: 48px;
+  right: 42px;
   width: 300px;
   z-index: 17;
   background: color-mix(in srgb, var(--bg2) 88%, transparent);
@@ -3915,7 +3951,7 @@ session-view[hidden] { display: none; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 48px));
+  transform: translateX(calc(100% + 42px));
   transition: transform 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }

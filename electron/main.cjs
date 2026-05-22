@@ -180,6 +180,13 @@ function createWindow() {
     minHeight: 600,
     title: "asHub",
     backgroundColor: isDark ? "#18181c" : "#fafaf7",
+    // hiddenInset: traffic-light buttons overlay content; titleBarOverlay
+    // lets us style the native toolbar background through CSS.
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    titleBarOverlay: process.platform === "darwin" ? {
+      color: isDark ? "#18181c" : "#fafaf7",
+      symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
+    } : undefined,
     show: false,
     webPreferences: {
       nodeIntegration: false,
@@ -199,6 +206,15 @@ function createWindow() {
   });
 
   mainWindow.loadURL(`http://127.0.0.1:${HUB_PORT}/`);
+
+  // Inject traffic-light safe area on macOS hiddenInset windows
+  if (process.platform === "darwin") {
+    mainWindow.webContents.on("did-finish-load", () => {
+      mainWindow.webContents.executeJavaScript(
+        `document.querySelector('.title-bar').style.paddingLeft = '80px'`
+      ).catch(() => {});
+    });
+  }
 
   if (isDev) {
     mainWindow.webContents.openDevTools();
@@ -307,6 +323,24 @@ function setupIPC() {
       // Invalid URL — ignore
     }
   });
+
+  // Sync native title bar with web UI theme changes
+  ipcMain.on("theme-changed", (_event, theme) => {
+    if (mainWindow) {
+      const isDark = theme === "dark";
+      mainWindow.setBackgroundColor(isDark ? "#18181c" : "#fafaf7");
+      if (process.platform === "darwin") {
+        try {
+          if (typeof mainWindow.setTitleBarOverlay === "function") {
+            mainWindow.setTitleBarOverlay({
+              color: isDark ? "#18181c" : "#fafaf7",
+              symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
+            });
+          }
+        } catch {}
+      }
+    }
+  });
 }
 
 async function startServer() {
@@ -396,6 +430,16 @@ if (!gotTheLock) {
       if (mainWindow) {
         const isDark = nativeTheme.shouldUseDarkColors;
         mainWindow.setBackgroundColor(isDark ? "#18181c" : "#fafaf7");
+        if (process.platform === "darwin") {
+          try {
+            if (typeof mainWindow.setTitleBarOverlay === "function") {
+              mainWindow.setTitleBarOverlay({
+                color: isDark ? "#18181c" : "#fafaf7",
+                symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
+              });
+            }
+          } catch {}
+        }
       }
     });
 

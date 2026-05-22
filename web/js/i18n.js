@@ -153,6 +153,11 @@ const translations = {
     // ── Version ────────────────────────────────────────────────────
     "version.available": "v{ver} available",
     "version.update.hint": "Update to v{ver} — click to download",
+
+    // ── Suggestion cards ───────────────────────────────────────────
+    "sugg.analyze": "Analyze this project — what files are most important and how are they organized?",
+    "sugg.explain": "Read the README and tell me the key features.",
+    "sugg.issues": "Find any bugs or potential issues in the codebase.",
   },
 
   zh: {
@@ -305,6 +310,11 @@ const translations = {
     // ── Version ────────────────────────────────────────────────────
     "version.available": "v{ver} 可用",
     "version.update.hint": "更新到 v{ver} — 点击下载",
+
+    // ── Suggestion cards ───────────────────────────────────────────
+    "sugg.analyze": "分析这个项目 —— 哪些文件最重要，它们是如何组织的？",
+    "sugg.explain": "阅读 README 并告诉我主要功能特性。",
+    "sugg.issues": "查找代码库中的 bug 或潜在问题。",
   },
 };
 

@@ -37,6 +37,7 @@ const cancelBtnEl = document.getElementById("cancel-turn");
 const pageLoader = document.getElementById("page-loader");
 const loaderBar = document.getElementById("page-loader-bar");
 const loaderBarFill = document.getElementById("page-loader-bar-fill");
+const balanceEl = document.getElementById("balance-display");
 
 if (loaderBar) loaderBar.classList.add("visible");
 if (loaderBarFill) {
@@ -51,6 +52,57 @@ export const hidePageLoader = () => {
     if (pageLoader) pageLoader.classList.add("hidden");
   }, 200);
 };
+
+// ── Balance display (DeepSeek) ────────────────────────────────────
+
+const BALANCE_CACHE_TTL = 120_000;
+let _balanceCache = null;
+let _balanceCacheTs = 0;
+
+const updateBalanceDisplay = async () => {
+  if (!balanceEl) return;
+  const provider = activeSession.peek()?.agentInfo?.provider ?? "";
+  if (provider !== "deepseek") {
+    balanceEl.hidden = true;
+    return;
+  }
+  balanceEl.hidden = false;
+
+  // Serve from cache if fresh
+  if (_balanceCache && Date.now() - _balanceCacheTs < BALANCE_CACHE_TTL) {
+    renderBalance(_balanceCache);
+    return;
+  }
+
+  try {
+    const r = await fetch("/api/balance?provider=deepseek");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    _balanceCache = data;
+    _balanceCacheTs = Date.now();
+    renderBalance(data);
+  } catch {
+    balanceEl.textContent = "💰 —";
+    balanceEl.title = "Balance unavailable";
+  }
+};
+
+function renderBalance(data) {
+  if (!balanceEl) return;
+  if (!data?.is_available || !Array.isArray(data?.balance_infos) || !data.balance_infos.length) {
+    balanceEl.textContent = "💰 —";
+    balanceEl.title = "Balance unavailable";
+    return;
+  }
+  const info = data.balance_infos[0];
+  const currency = info.currency === "CNY" ? "¥" : (info.currency ?? "");
+  const total = info.total_balance ?? "—";
+  balanceEl.textContent = `💰 ${currency}${total}`;
+  balanceEl.title = data.balance_infos.map((bi) => {
+    const c = bi.currency === "CNY" ? "¥" : (bi.currency ?? "");
+    return `Total: ${c}${bi.total_balance ?? "—"}  |  Top-up: ${c}${bi.topped_up_balance ?? "—"}  |  Grant: ${c}${bi.granted_balance ?? "—"}`;
+  }).join("\n");
+}
 
 effect(() => {
   const cs = globalConnState.value;
@@ -95,7 +147,10 @@ export const handlers = {
     if (typeof p?.contextWindow === "number" && p.contextWindow > 0) {
       this.state.contextWindow = p.contextWindow;
     }
-    if (this === activeSession.peek()) renderInstanceLabel();
+    if (this === activeSession.peek()) {
+      renderInstanceLabel();
+      updateBalanceDisplay();
+    }
   },
 
   "shell:cwd-change"(p) {
@@ -227,7 +282,10 @@ export const handlers = {
     if (!this.state.replaying) setSessionStatus(this.id, "");
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
-    if (!this.state.replaying && this === activeSession.peek()) refreshTreeIfOpen();
+    if (!this.state.replaying && this === activeSession.peek()) {
+      refreshTreeIfOpen();
+      updateBalanceDisplay();
+    }
   },
 
   "agent:cancelled"() {

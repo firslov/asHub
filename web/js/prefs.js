@@ -34,6 +34,10 @@ const setTheme = (theme) => {
   if (hljsLight) hljsLight.disabled = theme === "dark";
   if (themeIcon) themeIcon.innerHTML = theme === "dark" ? MOON_PATHS : SUN_PATHS;
   try { localStorage.setItem(LS_THEME, theme); } catch {}
+  // Sync native window chrome with theme
+  if (window.electronAPI?.onThemeChange) {
+    window.electronAPI.onThemeChange(theme);
+  }
 };
 
 const toggleTheme = () => {

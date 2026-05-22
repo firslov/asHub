@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.removeAllListeners("update-available");
     ipcRenderer.on("update-available", (_event, version) => callback(version));
   },
+  /** Send theme change to main process to update native title bar */
+  onThemeChange: (theme) => ipcRenderer.send("theme-changed", theme),
 });

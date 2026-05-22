@@ -185,6 +185,17 @@ effect(() => {
   panel?.classList.toggle("busy", busy);
 });
 
+// Refresh tree when active session changes (if panel is open).
+// Deferred via setTimeout so the effect registers after session-view
+// has been upgraded and registerSession has fired — avoiding an init-
+// time race with ES module evaluation order.
+setTimeout(() => {
+  effect(() => {
+    activeSession.value;
+    refreshTreeIfOpen();
+  });
+}, 0);
+
 export const refreshTreeIfOpen = () => {
   if (panel && !panel.hasAttribute("hidden")) refresh();
 };

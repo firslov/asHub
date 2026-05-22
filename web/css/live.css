@@ -2831,7 +2831,7 @@ session-view[hidden] { display: none; }
   padding: 0.65rem 0.85rem 0.65rem 1.2rem;
   margin: 0;
   font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  font-size: 0.86rem;
+  font-size: 0.78rem;
   font-weight: 400;
   position: relative;
   transition: all 0.15s var(--ease-out-expo);

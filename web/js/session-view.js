@@ -146,6 +146,9 @@ class SessionView extends HTMLElement {
   enterReplayMode() {
     this.state.replaying = true;
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
+    // Hide empty state immediately to prevent flash on SPA session switch.
+    // If replay yields no content, exitReplayMode will restore it.
+    if (this.emptyStateEl) this.emptyStateEl.hidden = true;
     // Safety net for empty replays: exit after 500ms if no frames arrive.
     this.replayFlushTimer = setTimeout(() => this.exitReplayMode(), 500);
   }
@@ -161,6 +164,10 @@ class SessionView extends HTMLElement {
     if (this.replayFlushTimer) { clearTimeout(this.replayFlushTimer); this.replayFlushTimer = null; }
     hidePageLoader();
     onReplayDone(this);
+    // If replay produced no content, restore the empty state.
+    if (this.emptyStateEl?.hidden && !this.streamEl?.querySelector('.turn-sep, .agent-box, .tool-row, .thinking-block')) {
+      this.emptyStateEl.hidden = false;
+    }
   }
 }
 

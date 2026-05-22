@@ -615,8 +615,9 @@ async function createSession(
     model: existing?.model,
     provider: existing?.provider,
     startedAt: existing?.startedAt ?? Date.now(),
-    // If the session already has messages, the first turn was already done.
-    firstTurnDone: !!(existing?.messages?.length),
+    // If the session already has messages (from tree store or legacy
+    // messages.json), the first turn was already done.
+    firstTurnDone: !!(initialMessages?.length),
     firstQuery: existing?.firstQuery,
     userTitle: existing?.userTitle,
     lastActivity: Date.now(),

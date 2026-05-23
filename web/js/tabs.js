@@ -125,10 +125,23 @@ const render = () => {
       ev.dataTransfer.setData("text/plain", id);
       btn.classList.add("dragging");
     });
-    btn.addEventListener("dragend", () => {
+    btn.addEventListener("dragend", (ev) => {
+      const torn = dragId;
       dragId = null;
       btn.classList.remove("dragging");
       clearDropMarks();
+      if (!torn || ev.dataTransfer.dropEffect !== "none") return;
+      const sx = ev.screenX, sy = ev.screenY;
+      const wx = window.screenX, wy = window.screenY;
+      const ww = window.outerWidth, wh = window.outerHeight;
+      const outside = sx < wx || sx > wx + ww || sy < wy || sy > wy + wh;
+      if (!outside) return;
+      if (openTabs.peek().length <= 1) return;  // tearing out the only tab would orphan the window
+      const api = window.electronAPI;
+      if (!api?.openSessionWindow) return;
+      api.openSessionWindow(torn, { x: sx, y: sy }).then((res) => {
+        if (res?.ok) closeTab(torn);
+      });
     });
     btn.addEventListener("dragover", (ev) => {
       if (!dragId || dragId === id) return;

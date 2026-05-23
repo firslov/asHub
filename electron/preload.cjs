@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   /** Send theme change to main process to update native title bar */
   onThemeChange: (theme) => ipcRenderer.send("theme-changed", theme),
+  openSessionWindow: (sessionId, pos) => ipcRenderer.invoke("open-session-window", sessionId, pos),
 });

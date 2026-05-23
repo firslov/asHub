@@ -171,6 +171,51 @@ function resolveWebRoot() {
   return path.join(process.resourcesPath, "web");
 }
 
+// Spawn an extra BrowserWindow loading a specific session URL. Used by the
+// tab tear-out gesture (drag a tab outside the window). Independent of the
+// `mainWindow` singleton so legacy theme/update handlers continue to target
+// the primary window only.
+function createTearOutWindow(loadPath, screenPos) {
+  const isDark = nativeTheme.shouldUseDarkColors;
+  const opts = {
+    width: 1200,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
+    title: "asHub",
+    backgroundColor: isDark ? "#18181c" : "#fafaf7",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    titleBarOverlay: process.platform === "darwin" ? {
+      color: isDark ? "#18181c" : "#fafaf7",
+      symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
+    } : undefined,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.cjs"),
+    },
+  };
+  if (screenPos && Number.isFinite(screenPos.x) && Number.isFinite(screenPos.y)) {
+    // Offset so the title-bar lands roughly under the cursor where the drop happened.
+    opts.x = Math.round(screenPos.x - 80);
+    opts.y = Math.round(screenPos.y - 20);
+  }
+  const win = new BrowserWindow(opts);
+  win.setMenuBarVisibility(false);
+  win.once("ready-to-show", () => win.show());
+  win.loadURL(`http://127.0.0.1:${HUB_PORT}${loadPath}`);
+  if (process.platform === "darwin") {
+    win.webContents.on("did-finish-load", () => {
+      win.webContents.executeJavaScript(
+        `document.querySelector('.title-bar').style.paddingLeft = '80px'`
+      ).catch(() => {});
+    });
+  }
+  if (isDev) win.webContents.openDevTools();
+  return win;
+}
+
 function createWindow() {
   const isDark = nativeTheme.shouldUseDarkColors;
   mainWindow = new BrowserWindow({
@@ -309,6 +354,14 @@ function setupIPC() {
     } catch (err) {
       return { error: err.message };
     }
+  });
+
+  ipcMain.handle("open-session-window", (_event, sessionId, screenPos) => {
+    if (typeof sessionId !== "string" || !/^[0-9a-f]{4,32}$/i.test(sessionId)) {
+      return { ok: false };
+    }
+    createTearOutWindow(`/${sessionId}/`, screenPos);
+    return { ok: true };
   });
 
   ipcMain.handle("open-external", async (_event, url) => {

@@ -405,6 +405,8 @@
 .agent-reply pre code.hljs {
   background: transparent;
   padding: 0;
+  border: none;
+  border-radius: 0;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
   font-size: 0.86rem;
   line-height: 1.6;

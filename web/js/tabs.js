@@ -14,6 +14,49 @@ const labelFor = (id) => {
 };
 
 let dragId = null;
+let editingId = null;
+
+const startRename = (btn, id) => {
+  const labelEl = btn.querySelector(".session-tab-label");
+  if (!labelEl || editingId) return;
+  editingId = id;
+  const current = labelEl.textContent ?? "";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "session-tab-rename";
+  input.value = current;
+  input.maxLength = 100;
+  labelEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const finish = async (commit) => {
+    if (editingId !== id) return;
+    editingId = null;
+    const val = input.value.trim();
+    const shouldSave = commit && val && val !== current;
+    if (shouldSave) {
+      const meta = sessionInfo.get(id);
+      if (meta) meta.title = val;
+    }
+    render();
+    if (shouldSave) {
+      try {
+        await fetch(`/${id}/title`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: val }),
+        });
+      } catch {}
+    }
+  };
+
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+    if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
+  });
+};
 
 const clearDropMarks = () => {
   for (const el of strip?.querySelectorAll(".session-tab") ?? []) {
@@ -38,6 +81,7 @@ const render = () => {
   const tabs = openTabs.value;
   const active = activeSessionId.value;
   sessionsTick.value;  // signal subscription — re-render on title/cwd updates
+  if (editingId) return;  // don't clobber an in-progress rename
 
   strip.hidden = tabs.length === 0 || app?.dataset.uiTabsEnabled !== "true";
   strip.innerHTML = "";
@@ -63,6 +107,10 @@ const render = () => {
     btn.appendChild(close);
 
     btn.addEventListener("click", () => openTab(id));
+    btn.addEventListener("dblclick", (ev) => {
+      ev.preventDefault();
+      startRename(btn, id);
+    });
     btn.addEventListener("mousedown", (ev) => {
       if (ev.button === 1) {
         ev.preventDefault();

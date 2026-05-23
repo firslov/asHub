@@ -4455,6 +4455,19 @@ session-view[hidden] { display: none; }
   min-width: 0;
 }
 
+.session-tab-rename {
+  appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  font: inherit;
+  color: var(--text);
+  text-align: center;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+}
+
 .session-tab-close {
   position: absolute;
   right: 0.4rem;

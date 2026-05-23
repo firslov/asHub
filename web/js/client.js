@@ -7,6 +7,7 @@ import "./links.js";
 import "./version.js";
 import "./sidebar.js";
 import "./tabs.js";
+import "./no-session.js";
 import "./context-panel.js";
 import "./files-panel.js";
 import "./tree-panel.js";

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, screen } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -164,6 +164,22 @@ let mainWindow = null;
 let shutdownHub = null;
 let _shuttingDown = false;
 
+// Most-recently-focused first, so cross-window drag hit-tests pick the topmost
+// window at a screen point instead of any overlapper.
+const windowZOrder = [];
+function trackWindow(win) {
+  windowZOrder.unshift(win);
+  win.on("focus", () => {
+    const i = windowZOrder.indexOf(win);
+    if (i >= 0) windowZOrder.splice(i, 1);
+    windowZOrder.unshift(win);
+  });
+  win.on("closed", () => {
+    const i = windowZOrder.indexOf(win);
+    if (i >= 0) windowZOrder.splice(i, 1);
+  });
+}
+
 function resolveWebRoot() {
   if (isDev) {
     return path.join(__dirname, "..", "web");
@@ -189,6 +205,7 @@ function createTearOutWindow(loadPath, screenPos) {
       color: isDark ? "#18181c" : "#fafaf7",
       symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
     } : undefined,
+    acceptFirstMouse: true,
     show: false,
     webPreferences: {
       nodeIntegration: false,
@@ -202,17 +219,18 @@ function createTearOutWindow(loadPath, screenPos) {
     opts.y = Math.round(screenPos.y - 20);
   }
   const win = new BrowserWindow(opts);
+  trackWindow(win);
   win.setMenuBarVisibility(false);
   win.once("ready-to-show", () => win.show());
   win.loadURL(`http://127.0.0.1:${HUB_PORT}${loadPath}`);
   if (process.platform === "darwin") {
     win.webContents.on("did-finish-load", () => {
+      if (win.isDestroyed()) return;
       win.webContents.executeJavaScript(
         `document.querySelector('.title-bar').style.paddingLeft = '80px'`
       ).catch(() => {});
     });
   }
-  if (isDev) win.webContents.openDevTools();
   return win;
 }
 
@@ -232,6 +250,7 @@ function createWindow() {
       color: isDark ? "#18181c" : "#fafaf7",
       symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
     } : undefined,
+    acceptFirstMouse: true,
     show: false,
     webPreferences: {
       nodeIntegration: false,
@@ -240,6 +259,7 @@ function createWindow() {
     },
   });
 
+  trackWindow(mainWindow);
   mainWindow.setMenuBarVisibility(false);
 
   mainWindow.once("ready-to-show", () => {
@@ -362,6 +382,71 @@ function setupIPC() {
     }
     createTearOutWindow(`/${sessionId}/`, screenPos);
     return { ok: true };
+  });
+
+  const isValidSessionId = (s) => typeof s === "string" && /^[0-9a-f]{4,32}$/i.test(s);
+  let dragHoverWin = null;
+  let dragPoll = null;
+  let dragSender = null;
+  let dragLabel = "";
+  let lastSentX = NaN, lastSentY = NaN;
+  const findWinAt = (sender, x, y) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    for (const w of windowZOrder) {
+      try {
+        if (!w || w.isDestroyed() || w.webContents === sender) continue;
+        if (!w.isVisible() || w.isMinimized()) continue;
+        const b = w.getBounds();
+        if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) return w;
+      } catch { /* destroyed mid-iteration */ }
+    }
+    return null;
+  };
+  const sendHover = (win, payload) => {
+    if (!win || win.isDestroyed()) return;
+    win.webContents.send("tab-drag-hover", payload);
+  };
+  const stopDragPoll = () => {
+    if (dragPoll) { clearInterval(dragPoll); dragPoll = null; }
+    if (dragHoverWin) { sendHover(dragHoverWin, { hovering: false }); dragHoverWin = null; }
+    dragSender = null;
+    lastSentX = lastSentY = NaN;
+  };
+  ipcMain.on("tab-drag-update", (event, payload, phase) => {
+    if (phase === "end") { stopDragPoll(); dragLabel = ""; return; }
+    if (phase === "start") {
+      stopDragPoll();
+      dragSender = event.sender;
+      dragLabel = typeof payload?.label === "string" ? payload.label : "";
+      dragPoll = setInterval(() => {
+        try {
+          const pt = screen.getCursorScreenPoint();
+          const target = findWinAt(dragSender, pt.x, pt.y);
+          if (target !== dragHoverWin) {
+            if (dragHoverWin) sendHover(dragHoverWin, { hovering: false });
+            dragHoverWin = target;
+            lastSentX = lastSentY = NaN;
+          }
+          if (target && (pt.x !== lastSentX || pt.y !== lastSentY)) {
+            sendHover(target, { hovering: true, screenPos: pt, label: dragLabel });
+            lastSentX = pt.x; lastSentY = pt.y;
+          }
+        } catch (err) {
+          console.error("[tab-drag poll]", err);
+          stopDragPoll();
+        }
+      }, 50);
+    }
+  });
+
+  ipcMain.handle("move-tab-to-window-at", (event, sessionId) => {
+    if (!isValidSessionId(sessionId)) return { ok: false, moved: false };
+    const pt = screen.getCursorScreenPoint();
+    const target = findWinAt(event.sender, pt.x, pt.y);
+    if (!target) return { ok: true, moved: false };
+    target.webContents.send("accept-tab", sessionId);
+    target.focus();
+    return { ok: true, moved: true };
   });
 
   ipcMain.handle("open-external", async (_event, url) => {

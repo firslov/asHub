@@ -81,6 +81,25 @@
       <div class="terminal-wrap live-wrap" data-ui-conversation-center="true" data-ui-reply-border-show="true" data-ui-reply-border-gradient="true" data-ui-reply-hover="true" data-ui-reply-code-border="true" data-ui-usage-align="right" data-ui-usage-sticky="false" data-ui-usage-git-branch="true" data-ui-usage-model-show="false" data-ui-usage-cache-show="true" data-ui-usage-total-show="true">
         <div class="terminal">
           <session-view></session-view>
+          <div class="no-session-empty terminal-body" id="no-session-empty" hidden>
+            <div class="stream-empty-brand">
+              <div class="stream-empty-logo">
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <rect x="1" y="1" width="46" height="46" rx="14" fill="var(--bg2)" stroke="var(--logo-border)" stroke-width="1.5"/>
+                  <rect x="4" y="4" width="40" height="40" rx="11" stroke="var(--accent-soft)" stroke-width="0.5" opacity="0.5"/>
+                  <path d="M14 16 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/>
+                  <path d="M14 16 L28 24 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  <rect x="30" y="19" width="3" height="10" rx="1.5" fill="var(--cyan)"/>
+                </svg>
+              </div>
+              <div class="stream-empty-line"></div>
+            </div>
+            <div class="stream-empty-title" data-i18n="no.session.title">no session yet</div>
+            <div class="stream-empty-sub" data-i18n="no.session.sub">create a session to start a conversation with the agent.</div>
+            <button type="button" class="stream-empty-prompt" id="no-session-cta">
+              <span data-i18n="no.session.cta">new session</span>
+            </button>
+          </div>
           <form class="live-input" id="form" data-ui-input-gradient="true">
             <button type="button" class="bar-btn cancel-btn input-cancel-btn" id="cancel-turn" data-ui-cancel-show="true" hidden data-i18n-title="interrupt" title="Interrupt response (Esc)">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">

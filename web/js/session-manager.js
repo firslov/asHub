@@ -125,14 +125,14 @@ export const resyncSession = (id) => {
 export const preloadSession = (id) => {
   if (!id) throw new Error("preloadSession: id required");
   if (sessions.has(id)) return sessions.get(id);
-  const existing = document.querySelector("session-view");
-  const parent = existing?.parentElement ?? document.body;
+  const terminal = document.querySelector(".terminal");
+  const form = terminal?.querySelector(".live-input");
+  const parent = terminal ?? document.body;
   const el = document.createElement("session-view");
   el.setAttribute("session-id", id);
   el.hidden = true;
-  // Insert after the first session-view so the trailing <form> stays at the
-  // bottom of the flex column.
-  parent.insertBefore(el, existing ? existing.nextSibling : null);
+  // Insert before the input form so the form stays at the bottom of the flex column.
+  parent.insertBefore(el, form ?? null);
   return el;
 };
 
@@ -161,6 +161,36 @@ effect(() => {
   if (id && !openTabs.peek().includes(id)) {
     openTabs.value = [...openTabs.peek(), id];
   }
+});
+
+const LS_OPEN_TABS = "ash.open-tabs";
+const isValidId = (s) => typeof s === "string" && /^[0-9a-f]{4,32}$/i.test(s);
+
+// whenDefined resolves once session-view.js calls customElements.define, and
+// the initial <session-view> upgrades + registers synchronously as part of
+// that call — so by the time .then runs, the URL session is already in
+// `sessions`. The persist effect installs after restore to avoid clobbering
+// the stored value with the empty pre-restore state.
+customElements.whenDefined("session-view").then(() => {
+  try {
+    const raw = sessionStorage.getItem(LS_OPEN_TABS);
+    if (raw) {
+      const ids = JSON.parse(raw);
+      if (Array.isArray(ids)) {
+        const restored = ids.filter(isValidId);
+        for (const id of restored) {
+          if (!sessions.has(id)) preloadSession(id);
+        }
+        const current = openTabs.peek();
+        const merged = [...restored];
+        for (const id of current) if (!merged.includes(id)) merged.push(id);
+        openTabs.value = merged;
+      }
+    }
+  } catch {}
+  effect(() => {
+    try { sessionStorage.setItem(LS_OPEN_TABS, JSON.stringify(openTabs.value)); } catch {}
+  });
 });
 
 window.__ash = { preload: preloadSession, switchTo, sessions, activeSessionId, openTabs, openTab, closeTab };

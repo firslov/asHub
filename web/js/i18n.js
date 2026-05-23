@@ -87,6 +87,9 @@ const translations = {
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "reconnecting…",
     "no.session": "no session — click + to create",
+    "no.session.title": "no session yet",
+    "no.session.sub": "create a session to start a conversation with the agent.",
+    "no.session.cta": "new session",
 
     // ── Renderers: errors, diffs, tools ────────────────────────────
     "error": "Error",
@@ -244,6 +247,9 @@ const translations = {
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "重连中…",
     "no.session": "无会话 — 点击 + 创建",
+    "no.session.title": "尚无会话",
+    "no.session.sub": "创建会话以开始与 agent 对话。",
+    "no.session.cta": "新会话",
 
     // ── Renderers: errors, diffs, tools ────────────────────────────
     "error": "错误",

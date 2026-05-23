@@ -44,6 +44,21 @@
 
 .stream-empty[hidden] { display: none; animation: none; opacity: 0; }
 
+.no-session-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+  text-align: center;
+  color: var(--text-dim);
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  gap: 0;
+  padding: 1.25rem 1.5rem;
+}
+.no-session-empty[hidden] { display: none; }
+
 /* ── Logo / brand mark ─────────────────────────────────────────── */
 .stream-empty-brand {
   display: flex;
@@ -4400,6 +4415,10 @@ session-view[hidden] { display: none; }
   overflow-x: auto;
   align-items: center;
   scrollbar-width: none;
+}
+.title-bar .session-tab,
+.title-bar .session-tab-close,
+.title-bar .session-tab-rename {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
@@ -4408,8 +4427,8 @@ session-view[hidden] { display: none; }
 
 .session-tab {
   appearance: none;
-  background: transparent;
-  border: none;
+  background: color-mix(in srgb, var(--bg2) 50%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   border-radius: 999px;
   padding: 0.28rem 0.95rem;
   font: inherit;
@@ -4425,16 +4444,86 @@ session-view[hidden] { display: none; }
   cursor: pointer;
   white-space: nowrap;
   position: relative;
+  margin: 0 2px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.session-tab:hover { color: var(--text); }
+.session-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg2) 80%, transparent);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
 .session-tab.active {
   background: var(--bg);
   color: var(--text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 .session-tab.dragging { opacity: 0.4; }
+
+.session-tab.session-tab-ghost {
+  background: transparent;
+  border: 1.5px dashed var(--accent);
+  color: var(--accent);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.tab-drag-preview {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 99999;
+  padding: 0.28rem 0.85rem;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app.tab-tearing-out .terminal-wrap {
+  position: relative;
+}
+.app.tab-tearing-out .terminal-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border: 1.5px dashed var(--accent);
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0.6;
+  z-index: 9000;
+  animation: tear-out-pulse 1.2s ease-in-out infinite;
+}
+.app.tab-tearing-out .terminal-wrap::before {
+  content: 'release to open in new window';
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.3rem 0.7rem;
+  background: var(--accent);
+  color: var(--bg);
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+  z-index: 9001;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+@keyframes tear-out-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.75; }
+}
 .session-tab.drop-before::after,
 .session-tab.drop-after::after {
   content: '';

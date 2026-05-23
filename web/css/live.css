@@ -405,8 +405,6 @@
 .agent-reply pre code.hljs {
   background: transparent;
   padding: 0;
-  border: none;
-  border-radius: 0;
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
   font-size: 0.86rem;
   line-height: 1.6;
@@ -1558,10 +1556,8 @@ session-view[hidden] { display: none; }
   padding-left: 0;
 }
 
-.live-wrap[data-ui-reply-code-border="false"] .agent-reply pre {
+.live-wrap[data-ui-reply-code-border="false"] .agent-reply code {
   border: none;
-  border-left: 2px solid var(--accent-border);
-  box-shadow: none;
 }
 
 .live-wrap .agent-reply.streaming {

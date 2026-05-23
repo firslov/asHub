@@ -4441,16 +4441,18 @@ session-view[hidden] { display: none; }
 }
 
 .session-tab-close {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
   opacity: 0;
   font-size: 0.95rem;
   line-height: 1;
   padding: 0 0.25rem;
-  margin-left: 0.15rem;
   border-radius: 50%;
   transition: opacity 0.12s ease;
 }
-.session-tab:hover .session-tab-close,
-.session-tab.active .session-tab-close { opacity: 0.5; }
+.session-tab:hover .session-tab-close { opacity: 0.5; }
 .session-tab-close:hover { opacity: 1 !important; background: var(--border-mid); }
 
 /* ── Reduced motion ────────────────────────────────────────────────── */

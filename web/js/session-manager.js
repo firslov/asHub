@@ -154,11 +154,12 @@ window.addEventListener("popstate", (ev) => {
 });
 
 // Auto-tab any session that becomes active so URL/popstate navigation
-// surfaces in the strip without callers having to remember.
+// surfaces in the strip. peek() openTabs so removing a tab doesn't re-fire
+// this and resurrect the closed entry.
 effect(() => {
   const id = activeSessionId.value;
-  if (id && !openTabs.value.includes(id)) {
-    openTabs.value = [...openTabs.value, id];
+  if (id && !openTabs.peek().includes(id)) {
+    openTabs.value = [...openTabs.peek(), id];
   }
 });
 

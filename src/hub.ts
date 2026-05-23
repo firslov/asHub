@@ -404,6 +404,7 @@ export function startHub(opts: HubOpts): http.Server {
       if (req.method === "POST" && rest === "/context/rewind-to-turn") return rewindToTurn(req, res, session);
       if (req.method === "POST" && rest === "/context/drop") return dropContext(req, res, session);
       if (req.method === "GET" && rest === "/branch") return branchEndpoint(res, session);
+      if (req.method === "GET" && rest === "/git-branch") return gitBranchEndpoint(res, session);
       if (req.method === "GET" && rest === "/tree") return treeEndpoint(res, session);
       if (req.method === "POST" && rest === "/fork") return forkEndpoint(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
@@ -1368,6 +1369,15 @@ function getBranchEntries(session: Session): Array<{ id: string; type: string; p
       role: e.message.role,
       preview: snippet(text, 80),
     };
+  });
+}
+
+function gitBranchEndpoint(res: http.ServerResponse, session: Session): void {
+  res.setHeader("Content-Type", "application/json");
+  execFile("git", ["-C", session.cwd, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 1000 }, (err, stdout) => {
+    if (err) { res.end(JSON.stringify({ branch: null })); return; }
+    const branch = stdout.toString().trim();
+    res.end(JSON.stringify({ branch: branch && branch !== "HEAD" ? branch : null }));
   });
 }
 

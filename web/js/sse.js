@@ -278,6 +278,7 @@ export const handlers = {
     finalizeThinking(this);
     finalizeLiveOutput(this);
     renderUsage(this);
+    if (this.usageStripEl) this.usageStripEl.hidden = false;
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
@@ -286,6 +287,7 @@ export const handlers = {
       refreshTreeIfOpen();
       updateBalanceDisplay();
     }
+    if (!this.state.replaying) refreshGitBranch(this);
   },
 
   "agent:cancelled"() {
@@ -311,7 +313,7 @@ export const handlers = {
     this.scheduleReplayFlush();
   },
 
-  "agent:usage"(p) { this.state.lastUsage = p; },
+  "agent:usage"(p) { this.state.lastUsage = p; renderUsage(this); },
 
   "session:title"(p) {
     updateSessionTitle(this.id, p?.title ?? "");
@@ -450,4 +452,22 @@ export const onReplayDone = (session) => {
   highlightWithin(session.streamEl);
   renderMathIn(session.streamEl);
   forceScrollBottom(session);
+  refreshGitBranch(session);
+};
+
+const refreshGitBranch = async (session) => {
+  if (!session?.branchEl || !session.id) return;
+  const wrap = session.branchEl.closest(".terminal-wrap");
+  if (wrap?.dataset.uiUsageGitBranch === "false") { session.branchEl.hidden = true; return; }
+  try {
+    const r = await fetch(`/${session.id}/git-branch`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { branch } = await r.json();
+    if (branch) {
+      session.branchEl.textContent = branch;
+      session.branchEl.hidden = false;
+    } else {
+      session.branchEl.hidden = true;
+    }
+  } catch { session.branchEl.hidden = true; }
 };

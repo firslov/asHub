@@ -7,14 +7,15 @@ import { t } from "../i18n.js";
 
 export const hideUsage = (session) => {
   const strip = session?.usageStripEl;
-  if (strip) strip.hidden = true;
+  if (!strip) return;
+  if (strip.closest(".terminal-wrap")?.dataset.uiUsageSticky === "true") return;
+  strip.hidden = true;
 };
 
 export const renderUsage = (session) => {
   const st = session?.state;
   if (!st?.lastUsage) return;
   const usageEl = session?.usageEl;
-  const usageStrip = session?.usageStripEl;
   if (!usageEl) return;
   const inTok = st.lastUsage.prompt_tokens ?? 0;
   const outTok = st.lastUsage.completion_tokens ?? 0;
@@ -48,7 +49,6 @@ export const renderUsage = (session) => {
     `</span>`;
   usageEl.classList.toggle("warm", pct >= 30 && pct < 70);
   usageEl.classList.toggle("hot", pct >= 70);
-  if (usageStrip) usageStrip.hidden = false;
 };
 
 export const renderTurnSep = (session, ts) => {

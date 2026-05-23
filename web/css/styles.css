@@ -487,6 +487,11 @@ nav.scrolled {
   text-transform: uppercase;
 }
 
+.terminal-title[data-ui-model-uppercase="false"] {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 .terminal-body {
   padding: 1.25rem 1.5rem;
 }

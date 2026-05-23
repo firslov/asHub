@@ -54,7 +54,6 @@ themeToggle?.addEventListener("click", toggleTheme);
 
 const setSidebarCollapsed = (on) => {
   app.classList.toggle("sidebar-collapsed", on);
-  if (sidebarToggle) sidebarToggle.textContent = on ? "›" : "‹";
   try { localStorage.setItem(LS_SIDEBAR, on ? "1" : "0"); } catch {}
 };
 
@@ -108,3 +107,70 @@ sidebarResize?.addEventListener("dblclick", () => {
 langToggle?.addEventListener("click", () => {
   setLang(lang.value === "zh" ? "en" : "zh");
 });
+
+// asHub UI prefs live in ~/.agent-sh/settings.json under `asHub.ui.*`.
+// Each pref attaches to the closest stable parent of what it affects, so the
+// HTML self-documents what each option controls. Defaults are baked into HTML
+// (data-ui-*) and CSS (var() fallbacks), so first paint matches the common
+// case and the fetch only diff-applies overrides.
+//
+// To add a key: append an entry below, then either gate CSS on
+// [data-ui-{attr}="value"] (kind: "attr") or read var(--ui-{name}) (kind: "var").
+// `target` is a CSS selector for where the attr/var lands; omit for documentElement.
+const UI_PREFS = {
+  "conversation.center":      { kind: "attr", attr: "data-ui-conversation-center",      target: ".terminal-wrap" },
+  "conversation.message-gap": { kind: "var",  prop: "--ui-conversation-message-gap",    target: ".terminal-wrap" },
+  "conversation.turn-gap":    { kind: "var",  prop: "--ui-conversation-turn-gap",       target: ".terminal-wrap" },
+  "reply.border.show":        { kind: "attr", attr: "data-ui-reply-border-show",        target: ".terminal-wrap" },
+  "reply.border.gradient":    { kind: "attr", attr: "data-ui-reply-border-gradient",    target: ".terminal-wrap" },
+  "reply.border.color":       { kind: "var",  prop: "--ui-reply-border-color",          target: ".terminal-wrap" },
+  "reply.hover":              { kind: "attr", attr: "data-ui-reply-hover",              target: ".terminal-wrap" },
+  "input.gradient":           { kind: "attr", attr: "data-ui-input-gradient",           target: ".live-input" },
+  "input.focus-ring":         { kind: "attr", attr: "data-ui-input-focus-ring",         target: "#query" },
+  "input.padding-y":          { kind: "var",  prop: "--ui-input-padding-y",             target: ".live-input" },
+  "usage.align":              { kind: "attr", attr: "data-ui-usage-align",              target: ".terminal-wrap" },
+  "usage.sticky":             { kind: "attr", attr: "data-ui-usage-sticky",             target: ".terminal-wrap" },
+  "usage.git-branch":         { kind: "attr", attr: "data-ui-usage-git-branch",         target: ".terminal-wrap" },
+  "cancel.show":              { kind: "attr", attr: "data-ui-cancel-show",              target: "#cancel-turn" },
+  "balance.show":             { kind: "attr", attr: "data-ui-balance-show",             target: "#balance-display" },
+  "sidebar.controls":         { kind: "attr", attr: "data-ui-sidebar-controls",         target: ".app" },
+  "title-bar.height":         { kind: "var",  prop: "--ui-title-bar-height" },
+  "title-bar.model-uppercase":{ kind: "attr", attr: "data-ui-model-uppercase",          target: "#instance" },
+  "cwd.max-width":            { kind: "var",  prop: "--ui-cwd-max-width",               target: "#session-cwd-meta" },
+};
+
+const relocateSidebarControls = () => {
+  if (app?.dataset.uiSidebarControls !== "titlebar") return;
+  const titleBar = document.querySelector(".title-bar");
+  const sessionHead = titleBar?.querySelector(".session-head");
+  const newBtn = document.getElementById("new-session");
+  const toggleBtn = document.getElementById("sidebar-toggle");
+  if (!titleBar || !sessionHead || !newBtn || !toggleBtn) return;
+  const group = document.createElement("span");
+  group.className = "title-bar-controls";
+  group.append(newBtn, toggleBtn);
+  titleBar.insertBefore(group, sessionHead);
+};
+
+const applyUiPrefs = (ui) => {
+  if (!ui || typeof ui !== "object") return;
+  for (const [key, spec] of Object.entries(UI_PREFS)) {
+    const v = ui[key];
+    if (v === undefined) continue;
+    const el = spec.target ? document.querySelector(spec.target) : document.documentElement;
+    if (!el) continue;
+    if (spec.kind === "attr") {
+      el.setAttribute(spec.attr, String(v));
+    } else if (spec.kind === "var") {
+      el.style.setProperty(spec.prop, String(v));
+    }
+  }
+};
+
+fetch("/api/config")
+  .then((r) => r.json())
+  .then((cfg) => {
+    applyUiPrefs(cfg?.asHub?.ui);
+    relocateSidebarControls();
+  })
+  .catch(() => {});

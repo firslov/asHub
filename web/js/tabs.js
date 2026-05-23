@@ -13,6 +13,26 @@ const labelFor = (id) => {
   return t("untitled");
 };
 
+let dragId = null;
+
+const clearDropMarks = () => {
+  for (const el of strip?.querySelectorAll(".session-tab") ?? []) {
+    el.classList.remove("drop-before", "drop-after");
+  }
+};
+
+const reorder = (sourceId, targetId, side) => {
+  if (!sourceId || sourceId === targetId) return;
+  const order = openTabs.peek().slice();
+  const from = order.indexOf(sourceId);
+  if (from < 0) return;
+  order.splice(from, 1);
+  const to = order.indexOf(targetId);
+  if (to < 0) return;
+  order.splice(side === "after" ? to + 1 : to, 0, sourceId);
+  openTabs.value = order;
+};
+
 const render = () => {
   if (!strip) return;
   const tabs = openTabs.value;
@@ -49,6 +69,38 @@ const render = () => {
         closeTab(id);
       }
     });
+
+    btn.draggable = true;
+    btn.addEventListener("dragstart", (ev) => {
+      dragId = id;
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", id);
+      btn.classList.add("dragging");
+    });
+    btn.addEventListener("dragend", () => {
+      dragId = null;
+      btn.classList.remove("dragging");
+      clearDropMarks();
+    });
+    btn.addEventListener("dragover", (ev) => {
+      if (!dragId || dragId === id) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "move";
+      const rect = btn.getBoundingClientRect();
+      const after = ev.clientX > rect.left + rect.width / 2;
+      btn.classList.toggle("drop-after", after);
+      btn.classList.toggle("drop-before", !after);
+    });
+    btn.addEventListener("dragleave", () => {
+      btn.classList.remove("drop-before", "drop-after");
+    });
+    btn.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      const after = btn.classList.contains("drop-after");
+      btn.classList.remove("drop-before", "drop-after");
+      reorder(dragId, id, after ? "after" : "before");
+    });
+
     strip.appendChild(btn);
   }
 };

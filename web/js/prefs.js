@@ -132,11 +132,16 @@ const UI_PREFS = {
   "usage.align":              { kind: "attr", attr: "data-ui-usage-align",              target: ".terminal-wrap" },
   "usage.sticky":             { kind: "attr", attr: "data-ui-usage-sticky",             target: ".terminal-wrap" },
   "usage.git-branch":         { kind: "attr", attr: "data-ui-usage-git-branch",         target: ".terminal-wrap" },
+  "usage.model.show":         { kind: "attr", attr: "data-ui-usage-model-show",         target: ".terminal-wrap" },
+  "usage.cache.show":         { kind: "attr", attr: "data-ui-usage-cache-show",         target: ".terminal-wrap" },
+  "usage.total.show":         { kind: "attr", attr: "data-ui-usage-total-show",         target: ".terminal-wrap" },
   "cancel.show":              { kind: "attr", attr: "data-ui-cancel-show",              target: "#cancel-turn" },
   "balance.show":             { kind: "attr", attr: "data-ui-balance-show",             target: "#balance-display" },
   "sidebar.controls":         { kind: "attr", attr: "data-ui-sidebar-controls",         target: ".app" },
   "title-bar.height":         { kind: "var",  prop: "--ui-title-bar-height" },
-  "title-bar.model-uppercase":{ kind: "attr", attr: "data-ui-model-uppercase",          target: "#instance" },
+  "title-bar.model.show":     { kind: "attr", attr: "data-ui-model-show",              target: "#instance" },
+  "title-bar.model.uppercase":{ kind: "attr", attr: "data-ui-model-uppercase",          target: "#instance" },
+  "title-bar.version.show":   { kind: "attr", attr: "data-ui-version-show",             target: "#version-label" },
   "cwd.max-width":            { kind: "var",  prop: "--ui-cwd-max-width",               target: "#session-cwd-meta" },
 };
 

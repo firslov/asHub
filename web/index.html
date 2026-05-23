@@ -26,11 +26,11 @@
         <span class="session-cwd-meta" id="session-cwd-meta"></span>
       </span>
       <span class="bar-right">
-        <span class="terminal-title" id="instance" data-ui-model-uppercase="true"></span>
+        <span class="terminal-title" id="instance" data-ui-model-show="true" data-ui-model-uppercase="true"></span>
         <span class="balance-display" id="balance-display" data-ui-balance-show="true" hidden></span>
         <span class="live-dot"></span>
         <span class="live-status" id="conn">connecting…</span>
-        <span class="version-label" id="version-label" title="checking for updates…"></span>
+        <span class="version-label" id="version-label" data-ui-version-show="true" title="checking for updates…"></span>
         <span class="spinner" id="spinner" hidden></span>
       </span>
     </header>
@@ -77,7 +77,7 @@
           </div>
         </div>
       </div>
-      <div class="terminal-wrap live-wrap" data-ui-conversation-center="true" data-ui-reply-border-show="true" data-ui-reply-border-gradient="true" data-ui-reply-hover="true" data-ui-reply-code-border="true" data-ui-usage-align="right" data-ui-usage-sticky="false" data-ui-usage-git-branch="true">
+      <div class="terminal-wrap live-wrap" data-ui-conversation-center="true" data-ui-reply-border-show="true" data-ui-reply-border-gradient="true" data-ui-reply-hover="true" data-ui-reply-code-border="true" data-ui-usage-align="right" data-ui-usage-sticky="false" data-ui-usage-git-branch="true" data-ui-usage-model-show="false" data-ui-usage-cache-show="true" data-ui-usage-total-show="true">
         <div class="terminal">
           <session-view></session-view>
           <form class="live-input" id="form" data-ui-input-gradient="true">
@@ -159,6 +159,7 @@
         <span data-i18n="new.output">new output</span>
       </button>
       <div class="usage-strip" hidden>
+        <span class="usage-model usage-chip" hidden></span>
         <span class="usage-branch usage-chip" hidden></span>
         <span class="terminal-usage"></span>
       </div>

@@ -44,6 +44,7 @@ class SessionView extends HTMLElement {
     this.usageStripEl = this.querySelector(".usage-strip");
     this.usageEl = this.querySelector(".terminal-usage");
     this.branchEl = this.querySelector(".usage-branch");
+    this.modelEl = this.querySelector(".usage-model");
 
     this.state = { ...STATE_DEFAULTS };
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };

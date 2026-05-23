@@ -39,7 +39,7 @@ export const renderUsage = (session) => {
   usageEl.innerHTML =
     `<span class="usage-chip" title="${t("usage.input")}">↑ ${fmtNum(inTok)}</span>` +
     `<span class="usage-chip" title="${t("usage.output")}">↓ ${fmtNum(outTok)}</span>` +
-    `<span class="usage-chip" title="${t("usage.total")}">Σ ${fmtNum(totalTok)}</span>` +
+    `<span class="usage-chip usage-total" title="${t("usage.total")}">Σ ${fmtNum(totalTok)}</span>` +
     cacheHtml +
     `<span class="usage-chip usage-ctx" title="${t("usage.context")}">` +
       (st.contextWindow > 0

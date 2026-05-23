@@ -1177,6 +1177,10 @@ session-view[hidden] { display: none; }
   opacity: 1;
 }
 
+.version-label[data-ui-version-show="false"] {
+  display: none;
+}
+
 .version-label.has-update {
   color: var(--accent);
   background: var(--accent-glow);
@@ -2618,9 +2622,19 @@ session-view[hidden] { display: none; }
   color: var(--accent);
 }
 
+.usage-model[hidden] { display: none; }
+.usage-model::before {
+  content: "✦";
+  margin-right: 0.3rem;
+  color: var(--accent);
+}
+
 .usage-strip[hidden] { display: none; }
 
 .terminal-wrap[data-ui-usage-align="left"] .usage-strip { justify-content: flex-start; }
+
+.terminal-wrap[data-ui-usage-cache-show="false"] .usage-cache { display: none; }
+.terminal-wrap[data-ui-usage-total-show="false"] .usage-total { display: none; }
 
 .usage-strip .terminal-usage {
   margin-left: 0;

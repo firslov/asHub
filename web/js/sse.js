@@ -147,6 +147,7 @@ export const handlers = {
     if (typeof p?.contextWindow === "number" && p.contextWindow > 0) {
       this.state.contextWindow = p.contextWindow;
     }
+    refreshModelChip(this);
     if (this === activeSession.peek()) {
       renderInstanceLabel();
       updateBalanceDisplay();
@@ -453,6 +454,18 @@ export const onReplayDone = (session) => {
   renderMathIn(session.streamEl);
   forceScrollBottom(session);
   refreshGitBranch(session);
+  refreshModelChip(session);
+};
+
+const refreshModelChip = (session) => {
+  if (!session?.modelEl) return;
+  const wrap = session.modelEl.closest(".terminal-wrap");
+  if (wrap?.dataset.uiUsageModelShow !== "true") { session.modelEl.hidden = true; return; }
+  const ai = session.agentInfo;
+  const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off";
+  const text = [ai?.model, showThink ? `[${ai.thinkingLevel}]` : ""].filter(Boolean).join(" ");
+  if (text) { session.modelEl.textContent = text; session.modelEl.hidden = false; }
+  else { session.modelEl.hidden = true; }
 };
 
 const refreshGitBranch = async (session) => {

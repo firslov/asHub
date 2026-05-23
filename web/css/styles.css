@@ -492,6 +492,10 @@ nav.scrolled {
   letter-spacing: normal;
 }
 
+.terminal-title[data-ui-model-show="false"] {
+  display: none;
+}
+
 .terminal-body {
   padding: 1.25rem 1.5rem;
 }

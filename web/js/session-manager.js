@@ -8,6 +8,32 @@ export const activeSession = computed(() => {
   return id ? sessions.get(id) ?? null : null;
 });
 
+// Client-side working set, like browser tabs vs the sidebar's bookmarks.
+export const openTabs = signal(/** @type {string[]} */ ([]));
+
+export const openTab = (id) => {
+  if (!id) return;
+  if (!openTabs.value.includes(id)) openTabs.value = [...openTabs.value, id];
+  switchTo(id);
+};
+
+export const closeTab = (id) => {
+  if (!id) return;
+  const list = openTabs.value;
+  const idx = list.indexOf(id);
+  if (idx < 0) return;
+  const next = list.filter((x) => x !== id);
+  openTabs.value = next;
+  if (activeSessionId.peek() === id) {
+    const neighbor = next[idx] ?? next[idx - 1] ?? next[0] ?? "";
+    if (neighbor) switchTo(neighbor);
+    else activeSessionId.value = "";
+  }
+  // .remove() triggers disconnectedCallback → unregister + unsubscribe.
+  // Backend session is untouched; sidebar entry remains.
+  sessions.get(id)?.remove();
+};
+
 export const registerSession = (view) => {
   sessions.set(view.id, view);
   if (!activeSessionId.value) activeSessionId.value = view.id;
@@ -127,4 +153,13 @@ window.addEventListener("popstate", (ev) => {
   if (id) switchTo(id, { push: false });
 });
 
-window.__ash = { preload: preloadSession, switchTo, sessions, activeSessionId };
+// Auto-tab any session that becomes active so URL/popstate navigation
+// surfaces in the strip without callers having to remember.
+effect(() => {
+  const id = activeSessionId.value;
+  if (id && !openTabs.value.includes(id)) {
+    openTabs.value = [...openTabs.value, id];
+  }
+});
+
+window.__ash = { preload: preloadSession, switchTo, sessions, activeSessionId, openTabs, openTab, closeTab };

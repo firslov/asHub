@@ -138,6 +138,7 @@ const UI_PREFS = {
   "cancel.show":              { kind: "attr", attr: "data-ui-cancel-show",              target: "#cancel-turn" },
   "balance.show":             { kind: "attr", attr: "data-ui-balance-show",             target: "#balance-display" },
   "sidebar.controls":         { kind: "attr", attr: "data-ui-sidebar-controls",         target: ".app" },
+  "tabs.enabled":             { kind: "attr", attr: "data-ui-tabs-enabled",             target: ".app" },
   "title-bar.height":         { kind: "var",  prop: "--ui-title-bar-height" },
   "title-bar.model.show":     { kind: "attr", attr: "data-ui-model-show",              target: "#instance" },
   "title-bar.model.uppercase":{ kind: "attr", attr: "data-ui-model-uppercase",          target: "#instance" },

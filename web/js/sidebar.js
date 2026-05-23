@@ -1,7 +1,7 @@
 import { escape } from "./utils.js";
 import { state, homeDir, headerTopic, headerCwd } from "./state.js";
-import { effect } from "../vendor/signals-core.js";
-import { activeSessionId, switchTo, spaEnabled, sessions } from "./session-manager.js";
+import { signal, effect } from "../vendor/signals-core.js";
+import { activeSessionId, switchTo, spaEnabled, sessions, openTabs, closeTab } from "./session-manager.js";
 import { attachAutocomplete } from "./autocomplete.js";
 import { t } from "./i18n.js";
 
@@ -41,6 +41,10 @@ if (sessionCwdMeta) {
 const LS_LAST_CWD = "ash.last-cwd";
 
 let sessionsHash = "";
+
+// Shared with tabs.js so the strip can label tabs off the same poll.
+export const sessionInfo = new Map();
+export const sessionsTick = signal(0);
 
 const shortenCwd = (cwd) => {
   if (!cwd) return "";
@@ -201,6 +205,7 @@ const renderSessionItem = (s) => {
     try {
       await fetch(`/${s.instanceId}/`, { method: "DELETE" });
     } catch {}
+    if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
     const closingActive = s.instanceId === activeSessionId.peek();
     if (closingActive && spaEnabled()) {
       // Pick another session to land on. Prefer one we've already preloaded,
@@ -245,6 +250,9 @@ const renderSessions = async () => {
     if (hash === sessionsHash) return;  // 5s poll: skip rebuild when nothing changed
     const isFirstRender = sessionsHash === "";
     sessionsHash = hash;
+    sessionInfo.clear();
+    for (const s of list) sessionInfo.set(s.instanceId, s);
+    sessionsTick.value = sessionsTick.peek() + 1;
     if (!homeDir.value && list[0]?.cwd) {
       const m = list[0].cwd.match(/^(\/Users\/[^/]+|\/home\/[^/]+)/);
       if (m) homeDir.value = m[1];

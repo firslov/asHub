@@ -19,12 +19,13 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 </head>
 <body>
-  <div class="app" data-ui-sidebar-controls="sidebar">
+  <div class="app" data-ui-sidebar-controls="sidebar" data-ui-tabs-enabled="false">
     <header class="title-bar">
       <span class="session-head">
         <span class="session-topic" id="session-topic"></span>
         <span class="session-cwd-meta" id="session-cwd-meta"></span>
       </span>
+      <div class="session-tabs" id="session-tabs" role="tablist" hidden></div>
       <span class="bar-right">
         <span class="terminal-title" id="instance" data-ui-model-show="true" data-ui-model-uppercase="true"></span>
         <span class="balance-display" id="balance-display" data-ui-balance-show="true" hidden></span>

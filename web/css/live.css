@@ -787,7 +787,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   width: 0.9rem;
   text-align: center;
 }
-.workspace-children li.kind-terminal .workspace-child-kind { color: var(--cyan, var(--accent)); }
 .workspace-child-title {
   flex: 1;
   min-width: 0;

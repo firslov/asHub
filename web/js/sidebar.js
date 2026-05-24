@@ -318,27 +318,22 @@ const renderSessions = async () => {
 
 const renderWorkspaces = () => {
   if (!workspaceList) return;
-  const all = [...sessionInfo.values()];
+  const agents = [...sessionInfo.values()].filter((s) => (s.kind ?? "agent") === "agent");
   const buckets = new Map();
-  for (const s of all) {
+  for (const s of agents) {
     const key = s.cwd || "(no cwd)";
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(s);
   }
   const groups = [...buckets.entries()].map(([cwd, items]) => {
-    items.sort((a, b) => {
-      const ak = (a.kind ?? "agent") === "terminal" ? 0 : 1;
-      const bk = (b.kind ?? "agent") === "terminal" ? 0 : 1;
-      if (ak !== bk) return ak - bk;
-      return (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0);
-    });
+    items.sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
     const lastModified = Math.max(...items.map((s) => s.lastModified ?? s.startedAt ?? 0));
     return { cwd, items, lastModified };
   });
   groups.sort((a, b) => b.lastModified - a.lastModified);
 
   const hash = JSON.stringify(groups.map((g) => [
-    g.cwd, g.items.map((s) => [s.instanceId, s.title, s.kind, s.isProcessing, s.hasUnread]),
+    g.cwd, g.items.map((s) => [s.instanceId, s.title, s.isProcessing, s.hasUnread]),
   ]));
   if (hash === workspacesHash) return;
   workspacesHash = hash;
@@ -367,36 +362,30 @@ const renderWorkspaces = () => {
 
     const count = document.createElement("span");
     count.className = "workspace-count";
-    const terms = g.items.filter((s) => (s.kind ?? "agent") === "terminal").length;
-    const ags = g.items.length - terms;
-    count.textContent = `${ags}a${terms ? ` · ${terms}t` : ""}`;
+    count.textContent = String(g.items.length);
     head.appendChild(count);
 
     const actions = document.createElement("span");
     actions.className = "workspace-actions";
-    const mkAction = (label, title, kind) => {
-      const b = document.createElement("button");
-      b.className = "workspace-action";
-      b.title = title;
-      b.textContent = label;
-      b.addEventListener("click", async (ev) => {
-        ev.stopPropagation();
-        const res = await fetch("/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cwd: g.cwd, kind }),
-        });
-        if (!res.ok) return;
-        const sess = await res.json();
-        if (sess.instanceId) {
-          setSessionKind(sess.instanceId, kind);
-          window.location.href = `/${sess.instanceId}/`;
-        }
+    const newBtn = document.createElement("button");
+    newBtn.className = "workspace-action";
+    newBtn.title = "New agent here";
+    newBtn.textContent = "+";
+    newBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const res = await fetch("/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: g.cwd, kind: "agent" }),
       });
-      return b;
-    };
-    actions.appendChild(mkAction("❯", "Open shell here", "terminal"));
-    actions.appendChild(mkAction("+", "New agent here", "agent"));
+      if (!res.ok) return;
+      const sess = await res.json();
+      if (sess.instanceId) {
+        setSessionKind(sess.instanceId, "agent");
+        window.location.href = `/${sess.instanceId}/`;
+      }
+    });
+    actions.appendChild(newBtn);
     head.appendChild(actions);
 
     head.addEventListener("click", () => {
@@ -411,10 +400,8 @@ const renderWorkspaces = () => {
     const children = document.createElement("ul");
     children.className = "workspace-children";
     for (const s of g.items) {
-      const kind = s.kind ?? "agent";
       const child = document.createElement("li");
       child.dataset.sessionId = s.instanceId;
-      child.className = `kind-${kind}`;
       if (s.instanceId === activeSessionId.peek()) child.classList.add("current");
       if (s.isProcessing) child.classList.add("session-streaming");
       else if (s.hasUnread) child.classList.add("session-unread");
@@ -431,7 +418,7 @@ const renderWorkspaces = () => {
       const hasTitle = s.title && s.title !== s.instanceId;
       const titleText = hasTitle ? s.title : t("untitled");
       a.innerHTML =
-        `<span class="workspace-child-kind">${kind === "terminal" ? "❯" : "◆"}</span>` +
+        `<span class="workspace-child-kind">◆</span>` +
         `<span class="workspace-child-title" title="${escape(titleText)}">${escape(titleText)}</span>`;
       child.appendChild(a);
       children.appendChild(child);

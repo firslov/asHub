@@ -174,26 +174,15 @@ effect(() => {
 const LS_OPEN_TABS = "ash.open-tabs";
 const isValidId = (s) => typeof s === "string" && /^[0-9a-f]{4,32}$/i.test(s);
 
-let initialSessionList = [];
 const fetchSessionKinds = fetch("/sessions")
   .then((r) => r.ok ? r.json() : [])
   .then((list) => {
     if (!Array.isArray(list)) return;
-    initialSessionList = list;
     for (const s of list) {
       if (s?.instanceId) sessionKinds.set(s.instanceId, s.kind ?? "agent");
     }
   })
   .catch(() => {});
-
-export const pickWorkspaceMembers = (cwd, list) => {
-  const peers = (list ?? []).filter((s) => s.cwd === cwd);
-  const terminal = peers.find((s) => (s.kind ?? "agent") === "terminal");
-  const agent = peers
-    .filter((s) => (s.kind ?? "agent") === "agent")
-    .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0))[0];
-  return { agentId: agent?.instanceId ?? "", terminalId: terminal?.instanceId ?? "" };
-};
 
 Promise.all([
   customElements.whenDefined("session-view"),

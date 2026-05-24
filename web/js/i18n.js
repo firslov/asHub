@@ -151,9 +151,9 @@ const translations = {
     "config.section.provider": "Provider",
     "config.section.appearance": "Appearance",
     "ui.style": "UI Style",
-    "ui.style.normal": "常规",
-    "ui.style.minimal": "极简",
-    "ui.style.hint": "常规为默认样式，极简为紧凑布局",
+    "ui.style.normal": "Normal",
+    "ui.style.minimal": "Minimal",
+    "ui.style.hint": "Normal is the default; Minimal is compact",
 
     // ── Compact / reasoning ────────────────────────────────────────
     "n.reasoning.rounds": "{n} reasoning rounds",

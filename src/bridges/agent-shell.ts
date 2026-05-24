@@ -1,16 +1,17 @@
 /**
- * Per-agent shell — spawns a node-pty alongside an AshBridge core, injects
- * OSC 7/9997/9999 hooks into the user's shell rc, and parses the PTY stream
- * to emit shell:cwd-change / shell:command-start / shell:command-done.
+ * Per-agent shell — spawns a node-pty alongside an AshBridge core, delegates
+ * rc generation to agent-sh's shell strategies (zsh/bash/fish + fallback),
+ * and parses the PTY stream to emit shell:cwd-change / shell:command-start /
+ * shell:command-done.
  *
  * The shell is owned by the agent: commands typed via the composer's `!`
- * prefix (and eventually the agent's bash tool) flow into this PTY.
+ * prefix flow into this PTY.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
-import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import * as pty from "node-pty";
+import { pickStrategy, FALLBACK_STRATEGY } from "agent-sh/shell/strategies";
 
 const OSC_PROMPT = (tag: string) => new RegExp(`\\x1b\\]9999;id=${tag};PROMPT\\x07`);
 const OSC_PREEXEC = (tag: string) => new RegExp(`\\x1b\\]9997;id=${tag};([^\\x07]*)\\x07`);
@@ -124,7 +125,7 @@ interface SpawnConfig {
   shellPath: string;
 }
 
-/** Spawn the user's shell with OSC 7/9997/9999 hooks injected. */
+/** Spawn the user's shell via agent-sh's strategy system (zsh/bash/fish + fallback). */
 export function spawnAgentShell(opts: {
   cwd: string;
   cols?: number;
@@ -132,67 +133,22 @@ export function spawnAgentShell(opts: {
 }): SpawnConfig {
   const tag = randomBytes(4).toString("hex");
   const shellPath = process.env.SHELL || (process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/bash");
-  const base = path.basename(shellPath);
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ashub-agent-shell-"));
 
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (typeof v === "string") env[k] = v;
   env.TERM = env.TERM && env.TERM !== "dumb" ? env.TERM : "xterm-256color";
 
-  let args: string[] = [];
+  const strategy = pickStrategy(shellPath) ?? FALLBACK_STRATEGY;
+  const spawnCfg = strategy.prepareSpawn({
+    tmpDirRoot: os.tmpdir(),
+    instanceTag: `id=${tag}`,
+    showIndicator: false,
+    userHome: env.HOME || os.homedir(),
+    env,
+  });
+  Object.assign(env, spawnCfg.envOverrides);
 
-  const promptHook = `printf "\\e]9999;id=${tag};PROMPT\\a"`;
-  const cwdHook   = `printf "\\e]7;file://%s%s\\a" "$(hostname)" "$PWD"`;
-  const preexec   = (cmd: string) => `printf "\\e]9997;id=${tag};%s\\a" "${cmd}"`;
-
-  if (base.includes("zsh")) {
-    const userZdotdir = env.ZDOTDIR || env.HOME || os.homedir();
-    const rc = [
-      `ZDOTDIR="${userZdotdir}"`,
-      `[ -f "${userZdotdir}/.zshrc" ] && source "${userZdotdir}/.zshrc"`,
-      ``,
-      `__ashub_precmd() {`,
-      `  ${cwdHook}`,
-      `  ${promptHook}`,
-      `}`,
-      `precmd_functions+=(__ashub_precmd)`,
-      ``,
-      `__ashub_preexec() {`,
-      `  ${preexec("$1")}`,
-      `}`,
-      `preexec_functions+=(__ashub_preexec)`,
-      ``,
-    ].join("\n");
-    fs.writeFileSync(path.join(tmpDir, ".zshrc"), rc);
-    args = ["--no-globalrcs"];
-    env.ZDOTDIR = tmpDir;
-  } else {
-    const home = env.HOME || os.homedir();
-    const rc = [
-      `[ -f "${home}/.bashrc" ] && source "${home}/.bashrc"`,
-      ``,
-      `__ashub_precmd() {`,
-      `  ${cwdHook}`,
-      `  ${promptHook}`,
-      `  __ashub_preexec_ran=0`,
-      `}`,
-      `PROMPT_COMMAND="\${PROMPT_COMMAND%;}"`,
-      `PROMPT_COMMAND="\${PROMPT_COMMAND:+$PROMPT_COMMAND;}__ashub_precmd"`,
-      ``,
-      `__ashub_preexec() {`,
-      `  [ "$__ashub_preexec_ran" = "1" ] && return`,
-      `  __ashub_preexec_ran=1`,
-      `  ${preexec("$BASH_COMMAND")}`,
-      `}`,
-      `trap '__ashub_preexec' DEBUG`,
-      ``,
-    ].join("\n");
-    const rcPath = path.join(tmpDir, ".bashrc");
-    fs.writeFileSync(rcPath, rc);
-    args = ["--rcfile", rcPath, "-i"];
-  }
-
-  const proc = pty.spawn(shellPath, args, {
+  const proc = pty.spawn(shellPath, spawnCfg.args, {
     name: env.TERM,
     cols: opts.cols ?? 100,
     rows: opts.rows ?? 30,
@@ -200,10 +156,12 @@ export function spawnAgentShell(opts: {
     env,
   });
 
-  return { pty: proc, tag, tmpDir, shellPath };
+  return { pty: proc, tag, tmpDir: spawnCfg.tmpDir ?? "", shellPath };
 }
 
 export function cleanupAgentShell(cfg: SpawnConfig): void {
   try { cfg.pty.kill(); } catch {}
-  try { fs.rmSync(cfg.tmpDir, { recursive: true, force: true }); } catch {}
+  if (cfg.tmpDir) {
+    try { fs.rmSync(cfg.tmpDir, { recursive: true, force: true }); } catch {}
+  }
 }

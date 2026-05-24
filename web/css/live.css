@@ -4761,7 +4761,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.4rem;
   flex: 1 1 0;
   min-width: 80px;
-  max-width: 280px;
   cursor: pointer;
   white-space: nowrap;
   position: relative;
@@ -4880,7 +4879,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-tab-close {
   position: absolute;
-  right: 0.4rem;
+  left: 0.4rem;
   top: 50%;
   transform: translateY(-50%);
   opacity: 0;

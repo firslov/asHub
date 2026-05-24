@@ -147,16 +147,35 @@ const UI_PREFS = {
 };
 
 const relocateSidebarControls = () => {
-  if (app?.dataset.uiSidebarControls !== "titlebar") return;
   const titleBar = document.querySelector(".title-bar");
   const sessionHead = titleBar?.querySelector(".session-head");
   const newBtn = document.getElementById("new-session");
   const toggleBtn = document.getElementById("sidebar-toggle");
   if (!titleBar || !sessionHead || !newBtn || !toggleBtn) return;
-  const group = document.createElement("span");
-  group.className = "title-bar-controls";
-  group.append(newBtn, toggleBtn);
-  titleBar.insertBefore(group, sessionHead);
+
+  if (app?.dataset.uiSidebarControls === "titlebar") {
+    // Move to title bar
+    const existing = titleBar.querySelector(".title-bar-controls");
+    if (existing) return; // already moved
+    const group = document.createElement("span");
+    group.className = "title-bar-controls";
+    group.append(newBtn, toggleBtn);
+    titleBar.insertBefore(group, sessionHead);
+  } else {
+    // Move back to sidebar
+    const group = titleBar.querySelector(".title-bar-controls");
+    if (!group) return; // not in title bar
+    const sidebarHead = document.querySelector(".sidebar-head");
+    if (!sidebarHead) return;
+    // Insert after sidebar title
+    const title = sidebarHead.querySelector(".sidebar-title");
+    if (title) {
+      title.after(newBtn, toggleBtn);
+    } else {
+      sidebarHead.append(newBtn, toggleBtn);
+    }
+    group.remove();
+  }
 };
 
 const applyUiPrefs = (ui) => {
@@ -186,13 +205,45 @@ const clearUiPrefs = () => {
   }
 };
 
+// ── Layered config: settings.json (priority 1) → localStorage (priority 2) ──
+
+const LS_UI = "ash.ui";
+
+const readUiPrefsFromStorage = () => {
+  try {
+    const raw = localStorage.getItem(LS_UI);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+};
+
+const writeUiPrefsToStorage = (ui) => {
+  try {
+    if (ui && typeof ui === "object" && Object.keys(ui).length > 0) {
+      localStorage.setItem(LS_UI, JSON.stringify(ui));
+    } else {
+      localStorage.removeItem(LS_UI);
+    }
+  } catch {}
+};
+
 fetch("/api/config")
   .then((r) => r.json())
   .then((cfg) => {
-    applyUiPrefs(cfg?.asHub?.ui);
+    const serverUi = cfg?.asHub?.ui;
+    const localUi = readUiPrefsFromStorage();
+    // Layer: server keys override local, local fills missing keys
+    const merged = serverUi
+      ? { ...localUi, ...serverUi }
+      : localUi;
+    if (merged) {
+      applyUiPrefs(merged);
+      writeUiPrefsToStorage(merged);
+    }
     relocateSidebarControls();
   })
-  .catch(() => {});
+  .catch(() => {
+    const localUi = readUiPrefsFromStorage();
+    if (localUi) applyUiPrefs(localUi);
+  });
 
-// Exported for config-panel live style switching
-export { applyUiPrefs, clearUiPrefs };
+export { applyUiPrefs, clearUiPrefs, writeUiPrefsToStorage, relocateSidebarControls };

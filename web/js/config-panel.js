@@ -2,7 +2,7 @@ import { setFilesOpen } from "./files-panel.js";
 import { setCtxOpen } from "./context-panel.js";
 import { setTreeOpen } from "./tree-panel.js";
 import { t } from "./i18n.js";
-import { applyUiPrefs, clearUiPrefs } from "./prefs.js";
+import { applyUiPrefs, clearUiPrefs, writeUiPrefsToStorage, relocateSidebarControls } from "./prefs.js";
 
 const configOverlay = document.getElementById("config-overlay");
 const configToggle = document.getElementById("config-toggle");
@@ -555,6 +555,7 @@ uiStyleMinimal?.addEventListener("click", () => setUiStyle("minimal"));
 
 // Inject/remove asHub.ui when saving — wraps doSave to intercept the config.
 // Only active in simple mode; advanced mode edits JSON directly.
+// Also mirrors to localStorage for offline fallback (layered config).
 const _originalDoSave = doSave;
 doSave = async (jsonStr) => {
   if (configMode === "simple") {
@@ -564,12 +565,16 @@ doSave = async (jsonStr) => {
         config.asHub = config.asHub || {};
         config.asHub.ui = { ...MINIMAL_UI };
         applyUiPrefs(MINIMAL_UI);
+        writeUiPrefsToStorage(MINIMAL_UI);
+        relocateSidebarControls();
       } else {
         if (config.asHub?.ui) {
           delete config.asHub.ui;
           if (Object.keys(config.asHub).length === 0) delete config.asHub;
         }
         clearUiPrefs();
+        writeUiPrefsToStorage(null);
+        relocateSidebarControls();
       }
       jsonStr = JSON.stringify(config, null, 2) + "\n";
     } catch {}

@@ -137,52 +137,12 @@ const UI_PREFS = {
   "usage.total.show":         { kind: "attr", attr: "data-ui-usage-total-show",         target: ".terminal-wrap" },
   "cancel.show":              { kind: "attr", attr: "data-ui-cancel-show",              target: "#cancel-turn" },
   "balance.show":             { kind: "attr", attr: "data-ui-balance-show",             target: "#balance-display" },
-  "sidebar.controls":         { kind: "attr", attr: "data-ui-sidebar-controls",         target: ".app" },
   "tabs.enabled":             { kind: "attr", attr: "data-ui-tabs-enabled",             target: ".app" },
   "title-bar.height":         { kind: "var",  prop: "--ui-title-bar-height" },
   "title-bar.model.show":     { kind: "attr", attr: "data-ui-model-show",              target: "#instance" },
   "title-bar.model.uppercase":{ kind: "attr", attr: "data-ui-model-uppercase",          target: "#instance" },
   "title-bar.version.show":   { kind: "attr", attr: "data-ui-version-show",             target: "#version-label" },
   "cwd.max-width":            { kind: "var",  prop: "--ui-cwd-max-width",               target: "#session-cwd-meta" },
-};
-
-const relocateSidebarControls = () => {
-  const titleBar = document.querySelector(".title-bar");
-  const sessionHead = titleBar?.querySelector(".session-head");
-  const newBtn = document.getElementById("new-session");
-  const newTerminalBtn = document.getElementById("new-terminal");
-  const viewSessionsBtn = document.getElementById("sidebar-view-sessions");
-  const viewWorkspacesBtn = document.getElementById("sidebar-view-workspaces");
-  const toggleBtn = document.getElementById("sidebar-toggle");
-  if (!titleBar || !sessionHead || !newBtn || !toggleBtn) return;
-
-  if (app?.dataset.uiSidebarControls === "titlebar") {
-    const existing = titleBar.querySelector(".title-bar-controls");
-    if (existing) return;
-    const group = document.createElement("span");
-    group.className = "title-bar-controls";
-    const children = [newBtn];
-    if (newTerminalBtn) children.push(newTerminalBtn);
-    if (viewSessionsBtn) children.push(viewSessionsBtn);
-    if (viewWorkspacesBtn) children.push(viewWorkspacesBtn);
-    children.push(toggleBtn);
-    group.append(...children);
-    titleBar.insertBefore(group, sessionHead);
-  } else {
-    const group = titleBar.querySelector(".title-bar-controls");
-    if (!group) return;
-    const sidebarHead = document.querySelector(".sidebar-head");
-    if (!sidebarHead) return;
-    const title = sidebarHead.querySelector(".sidebar-title");
-    const tail = [newBtn];
-    if (newTerminalBtn) tail.push(newTerminalBtn);
-    if (viewSessionsBtn) tail.push(viewSessionsBtn);
-    if (viewWorkspacesBtn) tail.push(viewWorkspacesBtn);
-    tail.push(toggleBtn);
-    if (title) title.after(...tail);
-    else sidebarHead.append(...tail);
-    group.remove();
-  }
 };
 
 const applyUiPrefs = (ui) => {
@@ -238,7 +198,6 @@ fetch("/api/config")
   .then((cfg) => {
     const serverUi = cfg?.asHub?.ui;
     const localUi = readUiPrefsFromStorage();
-    // Layer: server keys override local, local fills missing keys
     const merged = serverUi
       ? { ...localUi, ...serverUi }
       : localUi;
@@ -246,11 +205,10 @@ fetch("/api/config")
       applyUiPrefs(merged);
       writeUiPrefsToStorage(merged);
     }
-    relocateSidebarControls();
   })
   .catch(() => {
     const localUi = readUiPrefsFromStorage();
     if (localUi) applyUiPrefs(localUi);
   });
 
-export { applyUiPrefs, clearUiPrefs, writeUiPrefsToStorage, relocateSidebarControls };
+export { applyUiPrefs, clearUiPrefs, writeUiPrefsToStorage };

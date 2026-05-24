@@ -2,17 +2,15 @@ import { escape } from "./utils.js";
 import { state, homeDir, headerTopic, headerCwd } from "./state.js";
 import { signal, effect } from "../vendor/signals-core.js";
 import { activeSessionId, switchTo, spaEnabled, sessions, openTabs, closeTab, setSessionKind } from "./session-manager.js";
-import { attachAutocomplete } from "./autocomplete.js";
 import { t } from "./i18n.js";
 
 const sessionList = document.getElementById("sessions");
 const workspaceList = document.getElementById("workspaces");
+const terminalList = document.getElementById("terminals");
 const viewButtons = document.querySelectorAll(".sidebar-view-btn");
+const VIEWS = new Set(["sessions", "workspaces", "terminals"]);
 const sessionTopic = document.getElementById("session-topic");
 const sessionCwdMeta = document.getElementById("session-cwd-meta");
-const newForm = document.getElementById("new-session-form");
-const newCwd = document.getElementById("new-session-cwd");
-const newErr = document.getElementById("new-session-err");
 const newBtn = document.getElementById("new-session");
 const newTerminalBtn = document.getElementById("new-terminal");
 
@@ -47,6 +45,7 @@ const LS_WORKSPACE_COLLAPSED = "ash.workspace-collapsed";
 
 let sessionsHash = "";
 let workspacesHash = "";
+let terminalsHash = "";
 
 // Shared with tabs.js so the strip can label tabs off the same poll.
 export const sessionInfo = new Map();
@@ -55,7 +54,7 @@ export const sessionsTick = signal(0);
 const initialView = (() => {
   try {
     const v = localStorage.getItem(LS_SIDEBAR_VIEW);
-    return v === "workspaces" ? "workspaces" : "sessions";
+    return VIEWS.has(v) ? v : "sessions";
   } catch { return "sessions"; }
 })();
 export const sidebarView = signal(initialView);
@@ -429,10 +428,70 @@ const renderWorkspaces = () => {
   }
 };
 
+const renderTerminals = () => {
+  if (!terminalList) return;
+  const items = [...sessionInfo.values()]
+    .filter((s) => (s.kind ?? "agent") === "terminal")
+    .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
+
+  const hash = JSON.stringify(items.map((s) => [
+    s.instanceId, s.title, s.cwd, s.isProcessing,
+  ]));
+  if (hash === terminalsHash) return;
+  terminalsHash = hash;
+
+  terminalList.innerHTML = "";
+  if (items.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "terminal-empty";
+    empty.textContent = t("no.terminals");
+    terminalList.appendChild(empty);
+    return;
+  }
+  for (const s of items) {
+    const li = document.createElement("li");
+    li.dataset.sessionId = s.instanceId;
+    if (s.instanceId === activeSessionId.peek()) li.classList.add("current");
+
+    const a = document.createElement("a");
+    a.href = `/${s.instanceId}/`;
+    a.addEventListener("click", (ev) => {
+      if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+      if (spaEnabled()) { ev.preventDefault(); switchTo(s.instanceId); }
+    });
+    const hasTitle = s.title && s.title !== s.instanceId;
+    const titleText = hasTitle ? s.title : t("untitled");
+    const cwdText = s.cwd ? shortenCwd(s.cwd) : "";
+    a.innerHTML =
+      `<span class="terminal-kind">❯</span>` +
+      `<span class="terminal-meta">` +
+        `<span class="terminal-title" title="${escape(titleText)}">${escape(titleText)}</span>` +
+        (cwdText ? `<span class="terminal-cwd" title="${escape(s.cwd)}">${escape(cwdText)}</span>` : "") +
+      `</span>`;
+    li.appendChild(a);
+
+    const close = document.createElement("button");
+    close.className = "terminal-close";
+    close.title = t("close.session");
+    close.textContent = "×";
+    close.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!confirm(t("close.session.confirm", { title: escape(titleText) }))) return;
+      try { await fetch(`/${s.instanceId}/`, { method: "DELETE" }); } catch {}
+      if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
+      renderTerminals();
+    });
+    li.appendChild(close);
+
+    terminalList.appendChild(li);
+  }
+};
+
 for (const btn of viewButtons) {
   btn.addEventListener("click", () => {
     const v = btn.dataset.view;
-    if (v !== "sessions" && v !== "workspaces") return;
+    if (!VIEWS.has(v)) return;
     sidebarView.value = v;
     try { localStorage.setItem(LS_SIDEBAR_VIEW, v); } catch {}
   });
@@ -442,6 +501,7 @@ effect(() => {
   const view = sidebarView.value;
   if (sessionList) sessionList.hidden = view !== "sessions";
   if (workspaceList) workspaceList.hidden = view !== "workspaces";
+  if (terminalList) terminalList.hidden = view !== "terminals";
   for (const btn of viewButtons) {
     btn.classList.toggle("current", btn.dataset.view === view);
   }
@@ -449,17 +509,18 @@ effect(() => {
 
 effect(() => {
   sessionsTick.value;
-  if (sidebarView.value === "workspaces") {
-    workspacesHash = "";
-    renderWorkspaces();
-  }
+  const v = sidebarView.value;
+  if (v === "workspaces") { workspacesHash = ""; renderWorkspaces(); }
+  else if (v === "terminals") { terminalsHash = ""; renderTerminals(); }
 });
 
 effect(() => {
   const active = activeSessionId.value;
-  if (!workspaceList) return;
-  for (const li of workspaceList.querySelectorAll("li[data-session-id]")) {
-    li.classList.toggle("current", li.dataset.sessionId === active);
+  for (const root of [workspaceList, terminalList]) {
+    if (!root) continue;
+    for (const li of root.querySelectorAll("li[data-session-id]")) {
+      li.classList.toggle("current", li.dataset.sessionId === active);
+    }
   }
 });
 
@@ -510,26 +571,6 @@ export const updateSessionTitle = (sid, title) => {
   }
 };
 
-const cwdAc = attachAutocomplete({
-  inputEl: newCwd,
-  listEl: document.getElementById("cwd-autocomplete"),
-  shouldOpen: (b) => b.length > 0,
-  fetcher: async (buffer) => {
-    const r = await fetch(`/fs?prefix=${encodeURIComponent(buffer)}`);
-    if (!r.ok) return [];
-    const data = await r.json();
-    return data.items;
-  },
-  accept: (it) => { newCwd.value = it.name; },
-});
-
-const closeNewForm = () => {
-  if (!newForm) return;
-  newForm.hidden = true;
-  newErr.hidden = true;
-  newCwd.value = "";
-};
-
 newBtn?.addEventListener("click", async () => {
   newBtn.disabled = true;
   try {
@@ -553,14 +594,14 @@ newBtn?.addEventListener("click", async () => {
       });
       if (!res.ok) {
         const text = await res.text();
-        if (newErr) { newErr.textContent = text || `failed (${res.status})`; newErr.hidden = false; newForm.hidden = false; }
+        alert(text || `New session failed (${res.status})`);
         return;
       }
       const sess = await res.json();
       try { localStorage.setItem(LS_LAST_CWD, cwd); } catch {}
       if (sess.instanceId) window.location.href = `/${sess.instanceId}/`;
     } catch (e) {
-      if (newErr) { newErr.textContent = String(e?.message ?? e); newErr.hidden = false; newForm.hidden = false; }
+      alert(`New session failed: ${e?.message ?? e}`);
     }
   } catch {
   } finally {
@@ -590,38 +631,3 @@ newTerminalBtn?.addEventListener("click", async () => {
   }
 });
 
-newCwd?.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") {
-    ev.preventDefault();
-    ev.stopPropagation();
-    closeNewForm();
-  }
-});
-
-newForm?.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  if (cwdAc?.hasSelection()) {
-    cwdAc.acceptCurrent();
-    return;
-  }
-  const cwd = newCwd.value.trim();
-  try {
-    const res = await fetch("/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cwd ? { cwd } : {}),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      newErr.textContent = text || `failed (${res.status})`;
-      newErr.hidden = false;
-      return;
-    }
-    const data = await res.json();
-    if (cwd) try { localStorage.setItem(LS_LAST_CWD, cwd); } catch {}
-    if (data.instanceId) window.location.href = `/${data.instanceId}/`;
-  } catch (e) {
-    newErr.textContent = String(e?.message ?? e);
-    newErr.hidden = false;
-  }
-});

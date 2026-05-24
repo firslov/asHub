@@ -2,7 +2,7 @@ import { setFilesOpen } from "./files-panel.js";
 import { setCtxOpen } from "./context-panel.js";
 import { setTreeOpen } from "./tree-panel.js";
 import { t } from "./i18n.js";
-import { applyUiPrefs, clearUiPrefs, writeUiPrefsToStorage, relocateSidebarControls } from "./prefs.js";
+import { applyUiPrefs, clearUiPrefs, writeUiPrefsToStorage } from "./prefs.js";
 
 const configOverlay = document.getElementById("config-overlay");
 const configToggle = document.getElementById("config-toggle");
@@ -519,7 +519,6 @@ const MINIMAL_UI = {
   "usage.model.show": true,
   "cancel.show": false,
   "balance.show": false,
-  "sidebar.controls": "titlebar",
   "title-bar.height": "40px",
   "title-bar.model.show": false,
   "title-bar.model.uppercase": false,
@@ -566,7 +565,6 @@ doSave = async (jsonStr) => {
         config.asHub.ui = { ...MINIMAL_UI };
         applyUiPrefs(MINIMAL_UI);
         writeUiPrefsToStorage(MINIMAL_UI);
-        relocateSidebarControls();
       } else {
         if (config.asHub?.ui) {
           delete config.asHub.ui;
@@ -574,7 +572,6 @@ doSave = async (jsonStr) => {
         }
         clearUiPrefs();
         writeUiPrefsToStorage(null);
-        relocateSidebarControls();
       }
       jsonStr = JSON.stringify(config, null, 2) + "\n";
     } catch {}

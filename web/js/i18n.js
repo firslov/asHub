@@ -8,7 +8,6 @@ const translations = {
     "sessions": "Sessions",
     "new.session": "New session",
     "collapse.sidebar": "Collapse sidebar",
-    "working.dir": "Working directory path",
     "connecting": "connecting…",
     "checking.updates": "checking for updates…",
     "interrupt": "Interrupt response (Esc)",
@@ -90,6 +89,7 @@ const translations = {
     "no.session.title": "no session yet",
     "no.session.sub": "create a session to start a conversation with the agent.",
     "no.session.cta": "new session",
+    "no.terminals": "no terminals — click ▷ to create",
 
     // ── Renderers: errors, diffs, tools ────────────────────────────
     "error": "Error",
@@ -174,7 +174,6 @@ const translations = {
     "sessions": "会话列表",
     "new.session": "新建会话",
     "collapse.sidebar": "折叠侧边栏",
-    "working.dir": "工作目录路径",
     "connecting": "连接中…",
     "checking.updates": "检查更新中…",
     "interrupt": "中断响应 (Esc)",
@@ -256,6 +255,7 @@ const translations = {
     "no.session.title": "尚无会话",
     "no.session.sub": "创建会话以开始与 agent 对话。",
     "no.session.cta": "新会话",
+    "no.terminals": "无终端 — 点击 ▷ 创建",
 
     // ── Renderers: errors, diffs, tools ────────────────────────────
     "error": "错误",

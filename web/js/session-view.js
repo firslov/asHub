@@ -96,10 +96,7 @@ class SessionView extends HTMLElement {
         if (!text) return;
         const queryEl = document.getElementById("query");
         if (queryEl) {
-          const form = document.getElementById("new-session-form");
-          if (form && form.hidden) {
-            document.getElementById("new-session")?.click();
-          }
+          document.getElementById("new-session")?.click();
           queryEl.value = text;
           queryEl.focus();
           queryEl.dispatchEvent(new Event("input", { bubbles: true }));

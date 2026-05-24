@@ -20,9 +20,9 @@ import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
 import { getSettings } from "agent-sh/settings";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
-import { spawnAgentShell, cleanupAgentShell, AgentShellParser } from "./agent-shell.js";
+import { Shell } from "agent-sh/shell";
+import type { Terminal } from "agent-sh/shell/terminal";
 import { spillOutput } from "agent-sh/utils/shell-output-spill.js";
-import type * as pty from "node-pty";
 
 interface ShellExchange {
   id: number;
@@ -39,6 +39,20 @@ function formatShellExchange(ex: ShellExchange): string {
   if (ex.output) s += indentLines(ex.output, "  ") + "\n";
   if (ex.exitCode !== null) s += `  exit ${ex.exitCode}\n`;
   return s;
+}
+
+// Shell's compositor surface routes agent-status banners and exec-request
+// acks through `terminal.write` — in headless mode they have nowhere to go.
+// We only consume `shell:command-start`/`-done`/`-cwd-change` events from
+// the bus; the SHELL block UI is rendered from those, not from PTY bytes.
+function headlessTerminal(): Terminal {
+  return {
+    write() {},
+    onInput: () => () => {},
+    onResize: () => () => {},
+    cols: () => 100,
+    rows: () => 30,
+  };
 }
 
 function indentLines(text: string, prefix: string): string {
@@ -75,7 +89,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private closed = false;
   private seedMessages: unknown[] | null = null;
   private backendRegistered = false;
-  private shell: { pty: pty.IPty; tag: string; tmpDir: string; shellPath: string } | null = null;
+  private shell: Shell | null = null;
   private liveCwd: string = "";
   private shellExchanges: ShellExchange[] = [];
   private shellLastInjected = 0;
@@ -146,15 +160,17 @@ export class AshBridge extends EventEmitter implements Bridge {
     const startCwd = this.opts.cwd ? path.resolve(this.opts.cwd) : os.homedir();
     this.liveCwd = startCwd;
     try {
-      const cfg = spawnAgentShell({ cwd: startCwd });
-      this.shell = cfg;
-      const parser = new AgentShellParser(
-        { emit: (n, p) => core.bus.emit(n as any, p as any) },
-        startCwd,
-        cfg.tag,
-      );
-      cfg.pty.onData((data) => parser.processData(data));
-      cfg.pty.onExit(() => { this.shell = null; });
+      this.shell = new Shell({
+        bus: core.bus,
+        handlers: core.handlers,
+        cols: 100,
+        rows: 30,
+        shell: process.env.SHELL ?? "/bin/bash",
+        cwd: startCwd,
+        instanceId: extCtx.instanceId,
+        terminal: headlessTerminal(),
+      });
+      this.shell.onExit(() => { this.shell = null; });
     } catch (err) {
       process.stderr.write(`[ash-bridge] shell spawn failed: ${err instanceof Error ? err.message : err}\n`);
     }
@@ -541,12 +557,12 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   writePty(data: string): void {
     if (this.closed || !this.shell) return;
-    try { this.shell.pty.write(data); } catch {}
+    try { this.shell.writeToPty(data); } catch {}
   }
 
   resizePty(cols: number, rows: number): void {
     if (this.closed || !this.shell) return;
-    try { this.shell.pty.resize(cols, rows); } catch {}
+    try { this.shell.resize(cols, rows); } catch {}
   }
 
   close(): void {
@@ -554,7 +570,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.closed = true;
     try { this.core?.kill(); } catch {}
     if (this.shell) {
-      try { cleanupAgentShell(this.shell); } catch {}
+      try { this.shell.kill(); } catch {}
       this.shell = null;
     }
     for (const ex of this.shellExchanges) {

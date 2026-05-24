@@ -196,8 +196,6 @@ const render = () => {
         const res = await api.moveTabToWindowAt?.(torn);
         if (res?.moved) { closeTab(torn); stopPoll(); return; }
       }
-      // Stop poll before new-window creation so it cannot fire IPC against a
-      // half-initialized webContents.
       stopPoll();
       if (openTabs.peek().length <= 1 || !api.openSessionWindow) return;
       const r = await api.openSessionWindow(torn, { x: sx, y: sy });

@@ -151,35 +151,36 @@ const relocateSidebarControls = () => {
   const sessionHead = titleBar?.querySelector(".session-head");
   const newBtn = document.getElementById("new-session");
   const newTerminalBtn = document.getElementById("new-terminal");
+  const viewSessionsBtn = document.getElementById("sidebar-view-sessions");
+  const viewWorkspacesBtn = document.getElementById("sidebar-view-workspaces");
   const toggleBtn = document.getElementById("sidebar-toggle");
   if (!titleBar || !sessionHead || !newBtn || !toggleBtn) return;
 
   if (app?.dataset.uiSidebarControls === "titlebar") {
-    // Move to title bar
     const existing = titleBar.querySelector(".title-bar-controls");
-    if (existing) return; // already moved
+    if (existing) return;
     const group = document.createElement("span");
     group.className = "title-bar-controls";
     const children = [newBtn];
     if (newTerminalBtn) children.push(newTerminalBtn);
+    if (viewSessionsBtn) children.push(viewSessionsBtn);
+    if (viewWorkspacesBtn) children.push(viewWorkspacesBtn);
     children.push(toggleBtn);
     group.append(...children);
     titleBar.insertBefore(group, sessionHead);
   } else {
-    // Move back to sidebar
     const group = titleBar.querySelector(".title-bar-controls");
-    if (!group) return; // not in title bar
+    if (!group) return;
     const sidebarHead = document.querySelector(".sidebar-head");
     if (!sidebarHead) return;
-    // Insert after sidebar title
     const title = sidebarHead.querySelector(".sidebar-title");
-    if (title) {
-      if (newTerminalBtn) title.after(newBtn, newTerminalBtn, toggleBtn);
-      else title.after(newBtn, toggleBtn);
-    } else {
-      if (newTerminalBtn) sidebarHead.append(newBtn, newTerminalBtn, toggleBtn);
-      else sidebarHead.append(newBtn, toggleBtn);
-    }
+    const tail = [newBtn];
+    if (newTerminalBtn) tail.push(newTerminalBtn);
+    if (viewSessionsBtn) tail.push(viewSessionsBtn);
+    if (viewWorkspacesBtn) tail.push(viewWorkspacesBtn);
+    tail.push(toggleBtn);
+    if (title) title.after(...tail);
+    else sidebarHead.append(...tail);
     group.remove();
   }
 };

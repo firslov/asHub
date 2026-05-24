@@ -8,6 +8,82 @@ export const escape = (s) => String(s ?? "")
 
 export const stripAnsi = (s) => String(s ?? "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 
+// SGR (color/style) → <span class="ansi-…">. Non-SGR escapes (cursor moves,
+// OSC, charset selects) are dropped. Does not emulate a full terminal.
+const ANSI_SGR_RE = /\x1b\[([0-9;]*)m/g;
+const ANSI_OTHER_RE = /\x1b\[[0-9;?]*[A-HJKSTfinsulh]|\x1b\][^\x07]*\x07|\x1b[PX^_].*?\x1b\\|\x1b[()][AB012]/g;
+const SGR_FG = {
+  30: "black", 31: "red", 32: "green", 33: "yellow",
+  34: "blue", 35: "magenta", 36: "cyan", 37: "white",
+  90: "bright-black", 91: "bright-red", 92: "bright-green", 93: "bright-yellow",
+  94: "bright-blue", 95: "bright-magenta", 96: "bright-cyan", 97: "bright-white",
+};
+const SGR_BG = {
+  40: "black", 41: "red", 42: "green", 43: "yellow",
+  44: "blue", 45: "magenta", 46: "cyan", 47: "white",
+  100: "bright-black", 101: "bright-red", 102: "bright-green", 103: "bright-yellow",
+  104: "bright-blue", 105: "bright-magenta", 106: "bright-cyan", 107: "bright-white",
+};
+export const ansiToHtml = (raw) => {
+  const src = String(raw ?? "").replace(ANSI_OTHER_RE, "");
+  if (!src) return "";
+  let fg = null, bg = null, bold = false, dim = false, italic = false, underline = false, inverse = false;
+  const openSpan = () => {
+    const cls = [];
+    if (inverse) {
+      if (bg) cls.push(`ansi-fg-${bg}`); else cls.push("ansi-fg-inverse");
+      if (fg) cls.push(`ansi-bg-${fg}`); else cls.push("ansi-bg-inverse");
+    } else {
+      if (fg) cls.push(`ansi-fg-${fg}`);
+      if (bg) cls.push(`ansi-bg-${bg}`);
+    }
+    if (bold) cls.push("ansi-bold");
+    if (dim) cls.push("ansi-dim");
+    if (italic) cls.push("ansi-italic");
+    if (underline) cls.push("ansi-underline");
+    return cls.length ? `<span class="${cls.join(" ")}">` : "";
+  };
+  let out = "";
+  let spanOpen = "";
+  let last = 0;
+  const flush = (text) => {
+    if (!text) return;
+    if (spanOpen) { out += spanOpen + escape(text) + "</span>"; }
+    else out += escape(text);
+  };
+  src.replace(ANSI_SGR_RE, (m, params, idx) => {
+    flush(src.slice(last, idx));
+    last = idx + m.length;
+    const codes = (params || "0").split(";").map((s) => parseInt(s, 10) || 0);
+    for (let i = 0; i < codes.length; i++) {
+      const c = codes[i];
+      if (c === 0) { fg = bg = null; bold = dim = italic = underline = inverse = false; }
+      else if (c === 1) bold = true;
+      else if (c === 2) dim = true;
+      else if (c === 3) italic = true;
+      else if (c === 4) underline = true;
+      else if (c === 7) inverse = true;
+      else if (c === 22) { bold = false; dim = false; }
+      else if (c === 23) italic = false;
+      else if (c === 24) underline = false;
+      else if (c === 27) inverse = false;
+      else if (c === 39) fg = null;
+      else if (c === 49) bg = null;
+      else if (SGR_FG[c]) fg = SGR_FG[c];
+      else if (SGR_BG[c]) bg = SGR_BG[c];
+      else if (c === 38 || c === 48) {
+        // 256-color (skip 2) or truecolor (skip 4) — we don't render these.
+        if (codes[i + 1] === 5) i += 2;
+        else if (codes[i + 1] === 2) i += 4;
+      }
+    }
+    spanOpen = openSpan();
+    return m;
+  });
+  flush(src.slice(last));
+  return out;
+};
+
 export const mdToHtml = (raw) =>
   DOMPurify.sanitize(marked.parse(extractMath(String(raw ?? ""))));
 

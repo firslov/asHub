@@ -6,6 +6,8 @@ import { attachAutocomplete } from "./autocomplete.js";
 import { t } from "./i18n.js";
 
 const sessionList = document.getElementById("sessions");
+const workspaceList = document.getElementById("workspaces");
+const viewButtons = document.querySelectorAll(".sidebar-view-btn");
 const sessionTopic = document.getElementById("session-topic");
 const sessionCwdMeta = document.getElementById("session-cwd-meta");
 const newForm = document.getElementById("new-session-form");
@@ -40,12 +42,36 @@ if (sessionCwdMeta) {
 }
 
 const LS_LAST_CWD = "ash.last-cwd";
+const LS_SIDEBAR_VIEW = "ash.sidebar-view";
+const LS_WORKSPACE_COLLAPSED = "ash.workspace-collapsed";
 
 let sessionsHash = "";
+let workspacesHash = "";
 
 // Shared with tabs.js so the strip can label tabs off the same poll.
 export const sessionInfo = new Map();
 export const sessionsTick = signal(0);
+
+const initialView = (() => {
+  try {
+    const v = localStorage.getItem(LS_SIDEBAR_VIEW);
+    return v === "workspaces" ? "workspaces" : "sessions";
+  } catch { return "sessions"; }
+})();
+export const sidebarView = signal(initialView);
+
+const collapsedWorkspaces = (() => {
+  try {
+    const raw = localStorage.getItem(LS_WORKSPACE_COLLAPSED);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch { return new Set(); }
+})();
+
+const persistCollapsed = () => {
+  try { localStorage.setItem(LS_WORKSPACE_COLLAPSED, JSON.stringify([...collapsedWorkspaces])); } catch {}
+};
 
 const shortenCwd = (cwd) => {
   if (!cwd) return "";
@@ -289,6 +315,166 @@ const renderSessions = async () => {
     }
   } catch {}
 };
+
+const renderWorkspaces = () => {
+  if (!workspaceList) return;
+  const all = [...sessionInfo.values()];
+  const buckets = new Map();
+  for (const s of all) {
+    const key = s.cwd || "(no cwd)";
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(s);
+  }
+  const groups = [...buckets.entries()].map(([cwd, items]) => {
+    items.sort((a, b) => {
+      const ak = (a.kind ?? "agent") === "terminal" ? 0 : 1;
+      const bk = (b.kind ?? "agent") === "terminal" ? 0 : 1;
+      if (ak !== bk) return ak - bk;
+      return (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0);
+    });
+    const lastModified = Math.max(...items.map((s) => s.lastModified ?? s.startedAt ?? 0));
+    return { cwd, items, lastModified };
+  });
+  groups.sort((a, b) => b.lastModified - a.lastModified);
+
+  const hash = JSON.stringify(groups.map((g) => [
+    g.cwd, g.items.map((s) => [s.instanceId, s.title, s.kind, s.isProcessing, s.hasUnread]),
+  ]));
+  if (hash === workspacesHash) return;
+  workspacesHash = hash;
+
+  workspaceList.innerHTML = "";
+  for (const g of groups) {
+    const li = document.createElement("li");
+    li.className = "workspace-group";
+    li.dataset.cwd = g.cwd;
+    if (collapsedWorkspaces.has(g.cwd)) li.classList.add("collapsed");
+
+    const head = document.createElement("div");
+    head.className = "workspace-head";
+
+    const caret = document.createElement("span");
+    caret.className = "workspace-caret";
+    caret.textContent = "▾";
+    head.appendChild(caret);
+
+    const pathSpan = document.createElement("span");
+    pathSpan.className = "workspace-path";
+    const display = shortenCwd(g.cwd);
+    pathSpan.textContent = display;
+    pathSpan.title = g.cwd;
+    head.appendChild(pathSpan);
+
+    const count = document.createElement("span");
+    count.className = "workspace-count";
+    const terms = g.items.filter((s) => (s.kind ?? "agent") === "terminal").length;
+    const ags = g.items.length - terms;
+    count.textContent = `${ags}a${terms ? ` · ${terms}t` : ""}`;
+    head.appendChild(count);
+
+    const actions = document.createElement("span");
+    actions.className = "workspace-actions";
+    const mkAction = (label, title, kind) => {
+      const b = document.createElement("button");
+      b.className = "workspace-action";
+      b.title = title;
+      b.textContent = label;
+      b.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const res = await fetch("/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd: g.cwd, kind }),
+        });
+        if (!res.ok) return;
+        const sess = await res.json();
+        if (sess.instanceId) {
+          setSessionKind(sess.instanceId, kind);
+          window.location.href = `/${sess.instanceId}/`;
+        }
+      });
+      return b;
+    };
+    actions.appendChild(mkAction("❯", "Open shell here", "terminal"));
+    actions.appendChild(mkAction("+", "New agent here", "agent"));
+    head.appendChild(actions);
+
+    head.addEventListener("click", () => {
+      const isCollapsed = li.classList.toggle("collapsed");
+      if (isCollapsed) collapsedWorkspaces.add(g.cwd);
+      else collapsedWorkspaces.delete(g.cwd);
+      persistCollapsed();
+    });
+
+    li.appendChild(head);
+
+    const children = document.createElement("ul");
+    children.className = "workspace-children";
+    for (const s of g.items) {
+      const kind = s.kind ?? "agent";
+      const child = document.createElement("li");
+      child.dataset.sessionId = s.instanceId;
+      child.className = `kind-${kind}`;
+      if (s.instanceId === activeSessionId.peek()) child.classList.add("current");
+      if (s.isProcessing) child.classList.add("session-streaming");
+      else if (s.hasUnread) child.classList.add("session-unread");
+
+      const a = document.createElement("a");
+      a.href = `/${s.instanceId}/`;
+      a.addEventListener("click", (ev) => {
+        if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+        if (spaEnabled()) {
+          ev.preventDefault();
+          switchTo(s.instanceId);
+        }
+      });
+      const hasTitle = s.title && s.title !== s.instanceId;
+      const titleText = hasTitle ? s.title : t("untitled");
+      a.innerHTML =
+        `<span class="workspace-child-kind">${kind === "terminal" ? "❯" : "◆"}</span>` +
+        `<span class="workspace-child-title" title="${escape(titleText)}">${escape(titleText)}</span>`;
+      child.appendChild(a);
+      children.appendChild(child);
+    }
+    li.appendChild(children);
+
+    workspaceList.appendChild(li);
+  }
+};
+
+for (const btn of viewButtons) {
+  btn.addEventListener("click", () => {
+    const v = btn.dataset.view;
+    if (v !== "sessions" && v !== "workspaces") return;
+    sidebarView.value = v;
+    try { localStorage.setItem(LS_SIDEBAR_VIEW, v); } catch {}
+  });
+}
+
+effect(() => {
+  const view = sidebarView.value;
+  if (sessionList) sessionList.hidden = view !== "sessions";
+  if (workspaceList) workspaceList.hidden = view !== "workspaces";
+  for (const btn of viewButtons) {
+    btn.classList.toggle("current", btn.dataset.view === view);
+  }
+});
+
+effect(() => {
+  sessionsTick.value;
+  if (sidebarView.value === "workspaces") {
+    workspacesHash = "";
+    renderWorkspaces();
+  }
+});
+
+effect(() => {
+  const active = activeSessionId.value;
+  if (!workspaceList) return;
+  for (const li of workspaceList.querySelectorAll("li[data-session-id]")) {
+    li.classList.toggle("current", li.dataset.sessionId === active);
+  }
+});
 
 renderSessions();
 setInterval(renderSessions, 5000);

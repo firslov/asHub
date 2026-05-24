@@ -18,6 +18,44 @@ effect(() => {
   if (form) form.style.opacity = hasSession ? "" : "0.5";
 });
 
+let shellMode = false;
+const setShellMode = (on) => {
+  shellMode = !!on;
+  form?.classList.toggle("shell-mode", shellMode);
+};
+
+input?.addEventListener("keydown", (ev) => {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (shellMode && ev.key === "Backspace" && input.value === "" && input.selectionStart === 0) {
+    ev.preventDefault();
+    setShellMode(false);
+  }
+});
+
+// Also catches `!` from paste/IME, where keydown for the literal char never fires.
+input?.addEventListener("input", () => {
+  if (!shellMode && input.value.startsWith("!")) {
+    setShellMode(true);
+    input.value = input.value.slice(1);
+  }
+});
+
+const doShellSubmit = async (raw) => {
+  const sid = currentSessionId();
+  if (!sid) return;
+  input.value = "";
+  input.style.height = "";
+  try {
+    await fetch(`/${sid}/pty-input`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: raw + "\n" }),
+    });
+  } catch (e) {
+    console.error("pty-input failed", e);
+  }
+};
+
 const submitSlash = async (raw) => {
   const trimmed = raw.trim();
   const space = trimmed.indexOf(" ");
@@ -64,6 +102,10 @@ const acceptAc = () => {
 
 const doSubmit = async (query) => {
   if (!query) return;
+  if (shellMode || query.startsWith("!")) {
+    await doShellSubmit(query.startsWith("!") ? query.slice(1) : query);
+    return;
+  }
   if (state.isSubmitting) return;
   state.lastQuery = query;
   queryHistory.push(query);

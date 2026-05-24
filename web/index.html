@@ -51,6 +51,21 @@
             <line x1="12" y1="19" x2="20" y2="19"/>
           </svg>
         </button>
+        <button id="sidebar-view-sessions" class="sidebar-btn sidebar-view-btn" data-view="sessions" title="Sessions view">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="7" x2="20" y2="7"/>
+            <line x1="4" y1="12" x2="20" y2="12"/>
+            <line x1="4" y1="17" x2="20" y2="17"/>
+          </svg>
+        </button>
+        <button id="sidebar-view-workspaces" class="sidebar-btn sidebar-view-btn" data-view="workspaces" title="Workspaces view">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+          </svg>
+        </button>
         <button id="sidebar-toggle" class="sidebar-btn sidebar-toggle" data-i18n-title="collapse.sidebar" title="Collapse sidebar">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -67,6 +82,7 @@
         <div class="new-session-err" id="new-session-err" hidden></div>
       </form>
       <ul id="sessions" class="session-list"></ul>
+      <ul id="workspaces" class="workspace-list" hidden></ul>
       <div id="sidebar-resize" class="sidebar-resize" role="separator" aria-orientation="vertical"></div>
     </aside>
 

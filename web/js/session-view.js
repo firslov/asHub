@@ -51,6 +51,7 @@ class SessionView extends HTMLElement {
     this.thinking = { el: null, block: null };
     this.toolGroup = { current: null };
     this.liveOutput = { lastRow: null, output: null, completed: new Set() };
+    this.shellBlock = { current: null };
     this.scroll = { stickToBottom: true, lastSeen: 0 };
     this.infiniteScroll = {
       firstContentId: null,
@@ -128,6 +129,7 @@ class SessionView extends HTMLElement {
     this.thinking = { el: null, block: null };
     this.toolGroup = { current: null };
     this.liveOutput = { lastRow: null, output: null, completed: new Set() };
+    this.shellBlock = { current: null };
   }
 
   disconnectedCallback() {

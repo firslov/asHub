@@ -52,28 +52,15 @@ export const renderUsage = (session) => {
 };
 
 export const renderTurnSep = (session, ts) => {
-  const cwd = session?.state?.cwd ?? "";
   const sep = document.createElement("div");
   sep.className = "turn-sep";
   const date = ts ? new Date(ts) : new Date();
   sep.innerHTML =
     `<span class="turn-line"></span>` +
-    (cwd ? `<span class="turn-cwd">${escape(cwd)}</span>` : "") +
     `<span class="turn-time">${date.toLocaleTimeString()}</span>` +
     `<span class="turn-line"></span>`;
   append(session, sep);
   return sep;
-};
-
-export const renderPromptRow = (session) => {
-  const cwd = session?.state?.cwd ?? "";
-  if (!cwd) return;
-  const row = document.createElement("div");
-  row.className = "pl-row";
-  row.innerHTML =
-    `<span class="pl-left"><span class="pl-path">${escape(cwd)}</span></span>` +
-    `<span class="pl-right"><span class="pl-seg pl-time">${new Date().toLocaleTimeString()}</span></span>`;
-  append(session, row);
 };
 
 export const renderErrorCard = (message, detail) => {

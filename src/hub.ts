@@ -100,6 +100,9 @@ const REPLAY_NAMES = new Set([
   "ui:error",
   "session:title",
   "hub:compaction-marker",
+  "shell:command-start",
+  "shell:command-done",
+  "shell:cwd-change",
 ]);
 
 /** Agent events that indicate forward progress (reset idle timeout). */
@@ -1213,8 +1216,8 @@ function openSseMulti(
 }
 
 async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  if (session.kind !== "terminal" || !session.bridge.writePty) {
-    res.statusCode = 400; res.end("not a terminal session"); return;
+  if (!session.bridge.writePty) {
+    res.statusCode = 400; res.end("session has no PTY"); return;
   }
   const body = await readBody(req);
   let data = "";
@@ -1230,8 +1233,8 @@ async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, ses
 }
 
 async function ptyResize(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  if (session.kind !== "terminal" || !session.bridge.resizePty) {
-    res.statusCode = 400; res.end("not a terminal session"); return;
+  if (!session.bridge.resizePty) {
+    res.statusCode = 400; res.end("session has no PTY"); return;
   }
   const body = await readBody(req);
   let cols = 0, rows = 0;

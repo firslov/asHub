@@ -12,12 +12,37 @@
  */
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import * as os from "node:os";
 import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
 import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
 import { getSettings } from "agent-sh/settings";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
+import { spawnAgentShell, cleanupAgentShell, AgentShellParser } from "./agent-shell.js";
+import { spillOutput } from "agent-sh/utils/shell-output-spill.js";
+import type * as pty from "node-pty";
+
+interface ShellExchange {
+  id: number;
+  command: string;
+  output: string;
+  cwd: string;
+  exitCode: number | null;
+  outputLines: number;
+  spillPath?: string;
+}
+
+function formatShellExchange(ex: ShellExchange): string {
+  let s = `#${ex.id} [shell cwd:${ex.cwd}] $ ${ex.command}\n`;
+  if (ex.output) s += indentLines(ex.output, "  ") + "\n";
+  if (ex.exitCode !== null) s += `  exit ${ex.exitCode}\n`;
+  return s;
+}
+
+function indentLines(text: string, prefix: string): string {
+  return text.split("\n").map((line) => prefix + line).join("\n");
+}
 
 // Bus events to forward verbatim. Names line up with what the web client
 // already handles (see web/js/client.js handler map).
@@ -35,6 +60,9 @@ const FORWARDED = [
   // Slash-commands extension reports model/thinking/etc state and errors via these.
   "ui:info",
   "ui:error",
+  "shell:command-start",
+  "shell:command-done",
+  "shell:cwd-change",
 ];
 
 export class AshBridge extends EventEmitter implements Bridge {
@@ -46,6 +74,10 @@ export class AshBridge extends EventEmitter implements Bridge {
   private closed = false;
   private seedMessages: unknown[] | null = null;
   private backendRegistered = false;
+  private shell: { pty: pty.IPty; tag: string; tmpDir: string; shellPath: string } | null = null;
+  private liveCwd: string = "";
+  private shellExchanges: ShellExchange[] = [];
+  private shellLastInjected = 0;
 
   constructor(opts: BridgeOpts) {
     super();
@@ -107,16 +139,48 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.bus.emit("core:extensions-loaded", { names: [...builtinNames, ...userNames] });
     core.activateBackend();
 
-    if (this.opts.cwd) {
-      const resolved = path.resolve(this.opts.cwd);
-      core.handlers.advise("cwd", () => resolved);
+    // OSC 7 from precmd keeps `liveCwd` in sync with the user's `cd`s, so
+    // the agent's `cwd` handler sees the live shell cwd, not the start cwd.
+    const startCwd = this.opts.cwd ? path.resolve(this.opts.cwd) : os.homedir();
+    this.liveCwd = startCwd;
+    try {
+      const cfg = spawnAgentShell({ cwd: startCwd });
+      this.shell = cfg;
+      const parser = new AgentShellParser(
+        { emit: (n, p) => core.bus.emit(n as any, p as any) },
+        startCwd,
+        cfg.tag,
+      );
+      cfg.pty.onData((data) => parser.processData(data));
+      cfg.pty.onExit(() => { this.shell = null; });
+    } catch (err) {
+      process.stderr.write(`[ash-bridge] shell spawn failed: ${err instanceof Error ? err.message : err}\n`);
     }
+    const onAnyBus = core.bus.on.bind(core.bus) as unknown as (n: string, fn: (p: unknown) => void) => void;
+    onAnyBus("shell:cwd-change", (payload) => {
+      const next = (payload as { cwd?: string })?.cwd;
+      if (typeof next === "string" && next) this.liveCwd = next;
+    });
+    onAnyBus("shell:command-done", (payload) => {
+      this.recordShellExchange(payload as { command?: string; output?: string; cwd?: string; exitCode?: number | null });
+    });
+    core.handlers.advise("cwd", () => this.liveCwd);
 
     core.handlers.advise("system-prompt:build", (next: () => string) => {
       const base = next();
       const cwd = core.handlers.call("cwd");
       if (typeof cwd !== "string" || !cwd) return base;
       return `${base}\n\n# Working Directory\n\nCurrent working directory: ${cwd}`;
+    });
+
+    core.handlers.advise("query-context:build", (next: () => string) => {
+      const base = (next() ?? "").trim();
+      const cwdTag = this.liveCwd ? `<cwd>${this.liveCwd}</cwd>` : "";
+      const fresh = this.shellExchanges.filter((e) => e.id > this.shellLastInjected);
+      if (fresh.length > 0) this.shellLastInjected = fresh[fresh.length - 1].id;
+      const eventsText = fresh.map(formatShellExchange).filter(Boolean).join("\n");
+      const tail = eventsText ? `${cwdTag}\n<shell_events>\n${eventsText}\n</shell_events>` : cwdTag;
+      return base ? `${base}\n\n${tail}` : tail;
     });
 
     if (this.opts.compactionStrategy) {
@@ -430,10 +494,61 @@ export class AshBridge extends EventEmitter implements Bridge {
     return r.stats ?? null;
   }
 
+  private recordShellExchange(e: { command?: string; output?: string; cwd?: string; exitCode?: number | null }): void {
+    const command = e.command ?? "";
+    const rawOutput = e.output ?? "";
+    if (!command) return;
+    const cwd = e.cwd ?? this.liveCwd;
+    const exitCode = e.exitCode ?? null;
+    const id = this.shellExchanges.length + 1;
+    const settings = getSettings() as {
+      shellTruncateThreshold?: number;
+      shellHeadLines?: number;
+      shellTailLines?: number;
+    };
+    const threshold = settings.shellTruncateThreshold ?? 20;
+    const head = settings.shellHeadLines ?? 10;
+    const tail = settings.shellTailLines ?? 10;
+    const lines = rawOutput.split("\n");
+    let output = rawOutput;
+    let spillPath: string | undefined;
+    if (lines.length > threshold) {
+      try {
+        spillPath = spillOutput(id, rawOutput);
+        const omitted = lines.length - head - tail;
+        output = [
+          ...lines.slice(0, head),
+          `[... ${omitted} lines truncated — full output at ${spillPath}; use read_file to expand ...]`,
+          ...lines.slice(-tail),
+        ].join("\n");
+      } catch {}
+    }
+    this.shellExchanges.push({
+      id, command, output, cwd, exitCode,
+      outputLines: lines.length,
+      spillPath,
+    });
+    if (this.shellExchanges.length > 100) this.shellExchanges.shift();
+  }
+
+  writePty(data: string): void {
+    if (this.closed || !this.shell) return;
+    try { this.shell.pty.write(data); } catch {}
+  }
+
+  resizePty(cols: number, rows: number): void {
+    if (this.closed || !this.shell) return;
+    try { this.shell.pty.resize(cols, rows); } catch {}
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
     try { this.core?.kill(); } catch {}
+    if (this.shell) {
+      try { cleanupAgentShell(this.shell); } catch {}
+      this.shell = null;
+    }
     this.emit("closed");
   }
 

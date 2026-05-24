@@ -93,7 +93,6 @@ const reopen = () => {
     return;
   }
   globalConnState.value = "connecting";
-  // since= recovers frames emitted in the close/reattach gap.
   const params = new URLSearchParams({ subs: buildSubsParam() });
   if (lastSeenId > 0) params.set("since", String(lastSeenId));
   const next = new EventSource(`/events?${params}`);
@@ -112,7 +111,6 @@ const reopen = () => {
   };
 };
 
-// Coalesce rapid subscribe/unsubscribe calls into one reopen per tick.
 const scheduleReopen = () => {
   if (reopenScheduled) return;
   reopenScheduled = true;
@@ -150,10 +148,6 @@ export const preloadSession = (id, kind) => {
   return el;
 };
 
-/**
- * Switch the active session to `id`, lazily constructing a SessionView if
- * none exists. Pushes to history unless `push: false` (used by popstate).
- */
 export const switchTo = (id, { push = true } = {}) => {
   if (!id || activeSessionId.peek() === id) return;
   if (!sessions.has(id)) preloadSession(id);
@@ -180,14 +174,26 @@ effect(() => {
 const LS_OPEN_TABS = "ash.open-tabs";
 const isValidId = (s) => typeof s === "string" && /^[0-9a-f]{4,32}$/i.test(s);
 
+let initialSessionList = [];
 const fetchSessionKinds = fetch("/sessions")
   .then((r) => r.ok ? r.json() : [])
   .then((list) => {
-    if (Array.isArray(list)) for (const s of list) {
+    if (!Array.isArray(list)) return;
+    initialSessionList = list;
+    for (const s of list) {
       if (s?.instanceId) sessionKinds.set(s.instanceId, s.kind ?? "agent");
     }
   })
   .catch(() => {});
+
+export const pickWorkspaceMembers = (cwd, list) => {
+  const peers = (list ?? []).filter((s) => s.cwd === cwd);
+  const terminal = peers.find((s) => (s.kind ?? "agent") === "terminal");
+  const agent = peers
+    .filter((s) => (s.kind ?? "agent") === "agent")
+    .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0))[0];
+  return { agentId: agent?.instanceId ?? "", terminalId: terminal?.instanceId ?? "" };
+};
 
 Promise.all([
   customElements.whenDefined("session-view"),

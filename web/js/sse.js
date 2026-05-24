@@ -6,7 +6,7 @@ import { maybeScroll, forceScrollBottom } from "./stream/scroll.js";
 import { append, appendAfterPending, appendToGroup, bumpToolCount } from "./stream/tool-group.js";
 import {
   renderUsage, hideUsage, renderTurnSep, renderErrorCard,
-  renderDiffBlock, renderToolBody, buildToolRow, renderPromptRow,
+  renderDiffBlock, renderToolBody, buildToolRow,
 } from "./stream/renderers.js";
 import {
   showThinking, hideThinking, hasThinkingDots,
@@ -26,6 +26,7 @@ import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
 import { refreshTreeIfOpen } from "./tree-panel.js";
 import { compactReasoning } from "./stream/compact.js";
+import { startShellBlock, finishShellBlock } from "./stream/shell-block.js";
 import { activeSession, globalConnState } from "./session-manager.js";
 
 // Shared page chrome — reflects the active session, not whatever frame just arrived.
@@ -316,6 +317,9 @@ export const handlers = {
 
   "agent:usage"(p) { this.state.lastUsage = p; renderUsage(this); },
 
+  "shell:command-start"(p) { startShellBlock(this, p ?? {}); },
+  "shell:command-done"(p) { finishShellBlock(this, p ?? {}); },
+
   "session:title"(p) {
     updateSessionTitle(this.id, p?.title ?? "");
   },
@@ -408,32 +412,6 @@ export const handlers = {
   },
   "ui:error"(p) {
     append(this, renderErrorCard(p?.message || t("command.failed"), null));
-  },
-
-  "shell:command-start"(p) {
-    closeReply(this);
-    this.state.cwd = p?.cwd ?? this.state.cwd;
-    renderPromptRow(this);
-    const row = document.createElement("div");
-    row.className = "t-input";
-    row.innerHTML = `<span class="t-prompt">&gt;</span>${escape(p?.command ?? "")}`;
-    append(this, row);
-  },
-
-  "shell:command-done"(p) {
-    const text = stripAnsi(p?.output ?? "");
-    const isErr = p?.exitCode != null && p.exitCode !== 0;
-    if (isErr) {
-      append(this, renderErrorCard(t("shell.failed", { code: p.exitCode }), text));
-      return;
-    }
-    for (const line of text.split("\n")) {
-      if (!line) continue;
-      const row = document.createElement("div");
-      row.className = "t-out";
-      row.textContent = line;
-      append(this, row);
-    }
   },
 
   // Hub sentinel: fired synchronously after the replay loop so the client

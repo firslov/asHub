@@ -2,6 +2,7 @@ import { setFilesOpen } from "./files-panel.js";
 import { setCtxOpen } from "./context-panel.js";
 import { setTreeOpen } from "./tree-panel.js";
 import { t } from "./i18n.js";
+import { applyUiPrefs, clearUiPrefs } from "./prefs.js";
 
 const configOverlay = document.getElementById("config-overlay");
 const configToggle = document.getElementById("config-toggle");
@@ -303,6 +304,9 @@ const switchConfigMode = (mode) => {
   if (mode === "simple") {
     configBodySimple.removeAttribute("hidden");
     configBodyAdvanced.setAttribute("hidden", "");
+    // Show UI style toggle only in simple mode
+    const uiStyleField = document.querySelector(".config-ui-style");
+    if (uiStyleField) uiStyleField.removeAttribute("hidden");
     // Sync editor content so Advanced edits survive a Simple→Save round-trip.
     try {
       const edited = JSON.parse(configEditor.value);
@@ -321,6 +325,9 @@ const switchConfigMode = (mode) => {
   } else {
     configBodySimple.setAttribute("hidden", "");
     configBodyAdvanced.removeAttribute("hidden");
+    // Hide UI style toggle in advanced mode (edit JSON directly)
+    const uiStyleField = document.querySelector(".config-ui-style");
+    if (uiStyleField) uiStyleField.setAttribute("hidden", "");
     // Use current editor content as the base so edits made in Advanced
     // mode aren't lost when switching Simple → Advanced.
     try {
@@ -403,6 +410,9 @@ export const setConfigOpen = async (on) => {
     // advanced mode via the tabs if they need to edit providers not
     // listed in the simple dropdown or tweak advanced settings.
     switchConfigMode("simple");
+    // Detect and display current UI style
+    currentUiStyle = detectUiStyle();
+    setUiStyle(currentUiStyle);
   } else {
     configOverlay.setAttribute("hidden", "");
     configOverlay.classList.remove("open");
@@ -432,7 +442,7 @@ configEditor?.addEventListener("keydown", (ev) => {
   }
 });
 
-const doSave = async (jsonStr) => {
+let doSave = async (jsonStr) => {
   try {
     const r = await fetch("/api/config", {
       method: "PUT",
@@ -486,7 +496,86 @@ configReset?.addEventListener("click", () => {
     configEditor.value = serverConfig;
     parseConfigToSimple(JSON.parse(serverConfig || "{}"));
   }
+  currentUiStyle = detectUiStyle();
+  setUiStyle(currentUiStyle);
 });
+
+// ── UI Style quick-toggle (常规 / 极简) ──
+
+const MINIMAL_UI = {
+  "conversation.center": false,
+  "conversation.message-gap": "0.9rem",
+  "conversation.turn-gap": "1.2rem",
+  "reply.border.show": false,
+  "reply.hover": false,
+  "reply.code.border": false,
+  "input.gradient": false,
+  "input.focus-ring": false,
+  "input.padding-y": "0.35rem",
+  "usage.align": "left",
+  "usage.sticky": true,
+  "usage.cache.show": false,
+  "usage.total.show": false,
+  "usage.model.show": true,
+  "cancel.show": false,
+  "balance.show": false,
+  "sidebar.controls": "titlebar",
+  "title-bar.height": "40px",
+  "title-bar.model.show": false,
+  "title-bar.model.uppercase": false,
+  "title-bar.version.show": false,
+  "tabs.enabled": true,
+};
+
+const uiStyleNormal = document.getElementById("ui-style-normal");
+const uiStyleMinimal = document.getElementById("ui-style-minimal");
+
+const detectUiStyle = () => {
+  try {
+    const cfg = JSON.parse(originalConfig || serverConfig || "{}");
+    const ui = cfg?.asHub?.ui;
+    if (!ui || typeof ui !== "object") return "normal";
+    for (const [k, v] of Object.entries(MINIMAL_UI)) {
+      if (ui[k] !== v) return "normal";
+    }
+    return "minimal";
+  } catch { return "normal"; }
+};
+
+let currentUiStyle = "normal";
+
+const setUiStyle = (style) => {
+  currentUiStyle = style;
+  uiStyleNormal?.classList.toggle("active", style === "normal");
+  uiStyleMinimal?.classList.toggle("active", style === "minimal");
+};
+
+uiStyleNormal?.addEventListener("click", () => setUiStyle("normal"));
+uiStyleMinimal?.addEventListener("click", () => setUiStyle("minimal"));
+
+// Inject/remove asHub.ui when saving — wraps doSave to intercept the config.
+// Only active in simple mode; advanced mode edits JSON directly.
+const _originalDoSave = doSave;
+doSave = async (jsonStr) => {
+  if (configMode === "simple") {
+    try {
+      let config = JSON.parse(jsonStr);
+      if (currentUiStyle === "minimal") {
+        config.asHub = config.asHub || {};
+        config.asHub.ui = { ...MINIMAL_UI };
+        applyUiPrefs(MINIMAL_UI);
+      } else {
+        if (config.asHub?.ui) {
+          delete config.asHub.ui;
+          if (Object.keys(config.asHub).length === 0) delete config.asHub;
+        }
+        clearUiPrefs();
+      }
+      jsonStr = JSON.stringify(config, null, 2) + "\n";
+    } catch {}
+  }
+  return _originalDoSave(jsonStr);
+};
 
 configToggle?.addEventListener("click", () => setConfigOpen(configOverlay.hasAttribute("hidden")));
 configClose?.addEventListener("click", () => setConfigOpen(false));

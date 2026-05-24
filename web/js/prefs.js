@@ -174,6 +174,18 @@ const applyUiPrefs = (ui) => {
   }
 };
 
+const clearUiPrefs = () => {
+  for (const spec of Object.values(UI_PREFS)) {
+    const el = spec.target ? document.querySelector(spec.target) : document.documentElement;
+    if (!el) continue;
+    if (spec.kind === "attr") {
+      el.removeAttribute(spec.attr);
+    } else if (spec.kind === "var") {
+      el.style.removeProperty(spec.prop);
+    }
+  }
+};
+
 fetch("/api/config")
   .then((r) => r.json())
   .then((cfg) => {
@@ -181,3 +193,6 @@ fetch("/api/config")
     relocateSidebarControls();
   })
   .catch(() => {});
+
+// Exported for config-panel live style switching
+export { applyUiPrefs, clearUiPrefs };

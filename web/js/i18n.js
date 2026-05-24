@@ -148,6 +148,12 @@ const translations = {
 
     // ── Config panel ───────────────────────────────────────────────
     "config.save.failed": "save failed: {msg}",
+    "config.section.provider": "Provider",
+    "config.section.appearance": "Appearance",
+    "ui.style": "UI Style",
+    "ui.style.normal": "常规",
+    "ui.style.minimal": "极简",
+    "ui.style.hint": "常规为默认样式，极简为紧凑布局",
 
     // ── Compact / reasoning ────────────────────────────────────────
     "n.reasoning.rounds": "{n} reasoning rounds",
@@ -308,6 +314,12 @@ const translations = {
 
     // ── Config panel ───────────────────────────────────────────────
     "config.save.failed": "保存失败：{msg}",
+    "config.section.provider": "模型服务",
+    "config.section.appearance": "外观",
+    "ui.style": "UI 样式",
+    "ui.style.normal": "常规",
+    "ui.style.minimal": "极简",
+    "ui.style.hint": "常规为默认样式，极简为紧凑布局",
 
     // ── Compact / reasoning ────────────────────────────────────────
     "n.reasoning.rounds": "{n} 轮推理",

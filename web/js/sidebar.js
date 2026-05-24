@@ -43,6 +43,7 @@ const LS_LAST_CWD = "ash.last-cwd";
 const LS_SIDEBAR_VIEW = "ash.sidebar-view";
 const LS_WORKSPACE_COLLAPSED = "ash.workspace-collapsed";
 
+let fullSessionsHash = "";
 let sessionsHash = "";
 let workspacesHash = "";
 let terminalsHash = "";
@@ -270,6 +271,11 @@ const renderSessions = async () => {
   try {
     const res = await fetch("/sessions");
     const list = await res.json();
+    const fullHash = JSON.stringify(list.map((s) => [
+      s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread, s.kind ?? "agent",
+    ]));
+    if (fullHash === fullSessionsHash) return;
+    fullSessionsHash = fullHash;
     sessionInfo.clear();
     for (const s of list) {
       sessionInfo.set(s.instanceId, s);
@@ -280,7 +286,7 @@ const renderSessions = async () => {
     const hash = JSON.stringify(agents.map((s) => [
       s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread,
     ]));
-    if (hash === sessionsHash) return;  // 5s poll: skip rebuild when nothing changed
+    if (hash === sessionsHash) return;
     const isFirstRender = sessionsHash === "";
     sessionsHash = hash;
     if (!homeDir.value && agents[0]?.cwd) {
@@ -510,8 +516,8 @@ effect(() => {
 effect(() => {
   sessionsTick.value;
   const v = sidebarView.value;
-  if (v === "workspaces") { workspacesHash = ""; renderWorkspaces(); }
-  else if (v === "terminals") { terminalsHash = ""; renderTerminals(); }
+  if (v === "workspaces") renderWorkspaces();
+  else if (v === "terminals") renderTerminals();
 });
 
 effect(() => {

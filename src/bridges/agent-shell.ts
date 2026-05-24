@@ -24,7 +24,6 @@ interface ShellBus {
   emit(name: string, payload: Record<string, unknown>): void;
 }
 
-/** Parses PTY output to detect cwd + command boundaries. */
 export class AgentShellParser {
   private cwd: string;
   private tag: string;

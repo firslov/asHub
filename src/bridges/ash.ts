@@ -11,6 +11,7 @@
  * built-in tools' own safety checks handle anything dangerous.
  */
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
 import path from "node:path";
 import * as os from "node:os";
 import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
@@ -78,6 +79,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private liveCwd: string = "";
   private shellExchanges: ShellExchange[] = [];
   private shellLastInjected = 0;
+  private shellNextId = 1;
 
   constructor(opts: BridgeOpts) {
     super();
@@ -500,15 +502,16 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (!command) return;
     const cwd = e.cwd ?? this.liveCwd;
     const exitCode = e.exitCode ?? null;
-    const id = this.shellExchanges.length + 1;
-    const settings = getSettings() as {
+    const id = this.shellNextId++;
+    const {
+      shellTruncateThreshold: threshold = 20,
+      shellHeadLines: head = 10,
+      shellTailLines: tail = 10,
+    } = getSettings() as {
       shellTruncateThreshold?: number;
       shellHeadLines?: number;
       shellTailLines?: number;
     };
-    const threshold = settings.shellTruncateThreshold ?? 20;
-    const head = settings.shellHeadLines ?? 10;
-    const tail = settings.shellTailLines ?? 10;
     const lines = rawOutput.split("\n");
     let output = rawOutput;
     let spillPath: string | undefined;
@@ -528,7 +531,12 @@ export class AshBridge extends EventEmitter implements Bridge {
       outputLines: lines.length,
       spillPath,
     });
-    if (this.shellExchanges.length > 100) this.shellExchanges.shift();
+    while (this.shellExchanges.length > 100) {
+      const evicted = this.shellExchanges.shift();
+      if (evicted?.spillPath) {
+        try { fs.rmSync(evicted.spillPath, { force: true }); } catch {}
+      }
+    }
   }
 
   writePty(data: string): void {
@@ -549,6 +557,12 @@ export class AshBridge extends EventEmitter implements Bridge {
       try { cleanupAgentShell(this.shell); } catch {}
       this.shell = null;
     }
+    for (const ex of this.shellExchanges) {
+      if (ex.spillPath) {
+        try { fs.rmSync(ex.spillPath, { force: true }); } catch {}
+      }
+    }
+    this.shellExchanges.length = 0;
     this.emit("closed");
   }
 

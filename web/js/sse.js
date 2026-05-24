@@ -454,6 +454,7 @@ const refreshCwdChip = (session) => {
   if (wrap?.dataset.uiUsageCwdShow !== "true") { session.cwdEl.hidden = true; return; }
   const cwd = session.state?.cwd ?? "";
   if (!cwd) { session.cwdEl.hidden = true; return; }
+  if (session.cwdEl.title === cwd) return;
   const base = cwd.split("/").filter(Boolean).pop() ?? cwd;
   session.cwdEl.textContent = base;
   session.cwdEl.title = cwd;

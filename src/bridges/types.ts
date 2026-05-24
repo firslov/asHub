@@ -21,7 +21,6 @@ export interface BridgeOpts {
   kind?: SessionKind;
   /** Optional model override. Backends free to ignore. */
   model?: string;
-  /** Optional provider override. */
   provider?: string;
   /** Backend-specific extras (e.g. spawn command/args for AcpBridge). */
   extra?: Record<string, unknown>;
@@ -65,10 +64,10 @@ export interface Bridge {
   /** Best-effort cancel of the current turn. */
   cancel(): void;
 
-  /** Write raw bytes to the PTY (terminal kind only). */
+  /** Write raw bytes to the bridge's PTY (both terminal and agent bridges expose one). */
   writePty?(data: string): void;
 
-  /** Forward terminal size to the PTY (terminal kind only). */
+  /** Forward terminal size to the bridge's PTY. */
   resizePty?(cols: number, rows: number): void;
 
   /** Dispatch a slash command (e.g. "/model", "gpt-5"). Backends free to no-op. */

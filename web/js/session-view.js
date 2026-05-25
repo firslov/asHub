@@ -1,4 +1,4 @@
-import { handlers, onReplayDone, hidePageLoader, REPLAY_FLUSH_DELAY } from "./sse.js";
+import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
 import { STATE_DEFAULTS } from "./state.js";
 import { t, scanI18n } from "./i18n.js";
@@ -25,9 +25,20 @@ class SessionView extends HTMLElement {
     if (this.id) {
       this.enterReplayMode();
       subscribeSession(this.id);
+      this.seedStaticInfo();
     } else {
       hidePageLoader();
     }
+  }
+
+  async seedStaticInfo() {
+    try {
+      const r = await fetch("/sessions");
+      if (!r.ok) return;
+      const list = await r.json();
+      const info = Array.isArray(list) ? list.find((s) => s.instanceId === this.id) : null;
+      if (info) seedSessionInfo(this, info);
+    } catch {}
   }
 
   initStreamShell() {

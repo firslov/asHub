@@ -52,6 +52,16 @@ let terminalsHash = "";
 export const sessionInfo = new Map();
 export const sessionsTick = signal(0);
 
+effect(() => {
+  const id = activeSessionId.value;
+  sessionsTick.value;
+  const s = id ? sessionInfo.get(id) : null;
+  if (!s) return;
+  const hasTitle = s.title && s.title !== s.instanceId;
+  setSessionTopic(hasTitle ? s.title : "");
+  setSessionCwd(s.cwd);
+});
+
 const initialView = (() => {
   try {
     const v = localStorage.getItem(LS_SIDEBAR_VIEW);
@@ -178,11 +188,7 @@ const renderSessionItem = (s) => {
   li.dataset.sessionId = s.instanceId;
   const isCurrent = s.instanceId === activeSessionId.peek();
   const hasTitle = s.title && s.title !== s.instanceId;
-  if (isCurrent) {
-    li.className = "current";
-    setSessionTopic(hasTitle ? s.title : "");
-    setSessionCwd(s.cwd);
-  }
+  if (isCurrent) li.className = "current";
   if (s.isProcessing) li.classList.add("session-streaming");
   else if (s.hasUnread) li.classList.add("session-unread");
 

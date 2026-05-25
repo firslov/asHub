@@ -437,6 +437,17 @@ export const onReplayDone = (session) => {
   refreshCwdChip(session);
 };
 
+export const seedSessionInfo = (session, info) => {
+  if (!session || !info) return;
+  if (info.cwd && !session.state.cwd) session.state.cwd = info.cwd;
+  if (info.model && !session.agentInfo.model) session.agentInfo.model = info.model;
+  if (info.provider && !session.agentInfo.provider) session.agentInfo.provider = info.provider;
+  if (session.usageStripEl) session.usageStripEl.hidden = false;
+  refreshModelChip(session);
+  refreshCwdChip(session);
+  refreshGitBranch(session);
+};
+
 const refreshModelChip = (session) => {
   if (!session?.modelEl) return;
   const wrap = session.modelEl.closest(".terminal-wrap");

@@ -2089,9 +2089,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text-mid);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   font-size: 0.82rem;
-  padding: 0.35rem 0 0.55rem 1.6rem;
-  border-left: 1px solid var(--border);
+  padding: 0.35rem 0.9rem 0.55rem 1.6rem;
   margin-left: 0.65rem;
+  border-radius: var(--radius-sm);
   position: relative;
 }
 
@@ -2685,7 +2685,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .tool-cmd-collapsed {
   cursor: pointer;
   transition: all 0.12s;
-  max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4373,13 +4372,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text-mid);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   font-size: 0.78rem;
-  padding: 0.45rem 0 0.45rem 1.4rem;
-  border-left: 2px solid var(--cyan-dim);
+  padding: 0.45rem 0.9rem 0.45rem 1.4rem;
   margin: 0 0 0 0.65rem;
   white-space: pre-wrap;
   line-height: 1.55;
   background: var(--bg3);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-radius: var(--radius-sm);
   max-height: 24em;
   overflow: auto;
   position: relative;
@@ -4389,10 +4387,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .tool-body-live:not(.final) {
   background: var(--cyan-glow);
-}
-
-.tool-body-live.final {
-  border-left-color: var(--border);
 }
 
 .tool-body-live .tool-body-actions {

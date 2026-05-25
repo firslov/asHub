@@ -2095,10 +2095,17 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .tool-body-actions {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
   display: flex;
   gap: 0.4rem;
-  margin-top: 0.4rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
 }
+.tool-body:hover .tool-body-actions,
+.tool-body.expanded .tool-body-actions { opacity: 1; }
 
 .tool-body-btn {
   background: transparent;

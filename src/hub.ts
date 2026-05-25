@@ -20,7 +20,7 @@ import { LlmClient } from "agent-sh";
 import { resolveProvider, getSettings, getProviderNames } from "agent-sh/settings";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
-import { extractText, snippet, summarizeMessage } from "./history/summarize.js";
+import { extractText, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
 import { createCompactionStrategy } from "./history/compaction-strategy.js";
 
 export interface HubOpts {
@@ -1438,10 +1438,11 @@ function getBranchEntries(session: Session): Array<{ id: string; type: string; p
       return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, preview: `[compacted — firstKept ${e.firstKeptId.slice(0, 6)}]`, firstKeptId: e.firstKeptId };
     }
     const text = extractText(e.message.content);
+    const display = e.message.role === "user" ? stripContextWrappers(text) : text;
     return {
       id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp,
       role: e.message.role,
-      preview: snippet(text, 80),
+      preview: snippet(display, 80),
     };
   });
 }
@@ -1467,7 +1468,9 @@ async function treeEndpoint(res: http.ServerResponse, session: Session): Promise
   const all = session.store.getAllEntries().map((e) => {
     if (e.type === "session") return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp };
     if (e.type === "compaction") return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, firstKeptId: e.firstKeptId };
-    return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, role: e.message.role, preview: snippet(extractText(e.message.content), 80) };
+    const text = extractText(e.message.content);
+    const display = e.message.role === "user" ? stripContextWrappers(text) : text;
+    return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, role: e.message.role, preview: snippet(display, 80) };
   });
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ leafId: session.store.getActiveLeaf(), rootId: session.store.getRootId(), entries: all }));

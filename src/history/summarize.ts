@@ -1,3 +1,12 @@
+export function stripContextWrappers(text: string): string {
+  let out = String(text ?? "");
+  for (;;) {
+    const next = out.replace(/^\s*<(query_context|dynamic_context)>[\s\S]*?<\/\1>\s*/, "");
+    if (next === out) return out;
+    out = next;
+  }
+}
+
 export function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {

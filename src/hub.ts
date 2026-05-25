@@ -342,6 +342,7 @@ const MIME: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
 };
 
 export function startHub(opts: HubOpts): http.Server {

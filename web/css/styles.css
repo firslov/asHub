@@ -1,3 +1,11 @@
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  src: url('/vendor/fonts/SymbolsNerdFontMono-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {

@@ -26,7 +26,7 @@ class TerminalView extends HTMLElement {
     this.term = new Terminal({
       cursorBlink: true,
       convertEol: false,
-      fontFamily: 'JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace',
+      fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, "Symbols Nerd Font Mono", monospace',
       fontSize: 13,
       lineHeight: 1.2,
       scrollback: 10000,

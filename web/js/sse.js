@@ -26,7 +26,7 @@ import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
 import { refreshTreeIfOpen } from "./tree-panel.js";
 import { compactReasoning } from "./stream/compact.js";
-import { startShellBlock, finishShellBlock } from "./stream/shell-block.js";
+import { startShellBlock, finishShellBlock, queueShellBlock } from "./stream/shell-block.js";
 import { activeSession, globalConnState } from "./session-manager.js";
 
 // Shared page chrome — reflects the active session, not whatever frame just arrived.
@@ -318,6 +318,7 @@ export const handlers = {
 
   "shell:command-start"(p) { startShellBlock(this, p ?? {}); },
   "shell:command-done"(p) { finishShellBlock(this, p ?? {}); },
+  "shell:queued"(p) { queueShellBlock(this, p ?? {}); },
 
   "session:title"(p) {
     updateSessionTitle(this.id, p?.title ?? "");

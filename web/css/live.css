@@ -635,6 +635,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+.shell-block.queued { opacity: 0.65 !important; }
+.shell-block.queued .shell-block-head::after {
+  content: "QUEUED" !important;
+}
+.shell-block.queued .shell-block-output { display: none !important; }
 
 .live-input.shell-mode .c-arrow,
 .live-input.shell-mode:focus-within .c-arrow {

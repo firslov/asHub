@@ -12,9 +12,9 @@ const highlightBash = (s) => {
   return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 };
 
-const buildBlock = ({ command, running }) => {
+const buildBlock = ({ command, state }) => {
   const el = document.createElement("div");
-  el.className = "shell-block" + (running ? " running" : " done");
+  el.className = "shell-block " + (state ?? "done");
   el.innerHTML = `
     <div class="shell-block-head">
       <span class="shell-block-prompt">$</span>
@@ -26,11 +26,32 @@ const buildBlock = ({ command, running }) => {
   return el;
 };
 
+export const queueShellBlock = (session, payload) => {
+  if (!session?.streamEl) return null;
+  closeReply(session);
+  finalizeThinking(session);
+  const el = buildBlock({ command: payload?.command, state: "queued" });
+  el.dataset.queuedCommand = payload?.command ?? "";
+  append(session, el);
+  return el;
+};
+
 export const startShellBlock = (session, payload) => {
   if (!session?.streamEl) return null;
   closeReply(session);
   finalizeThinking(session);
-  const el = buildBlock({ command: payload?.command, running: true });
+  const pending = session.streamEl.querySelector(".shell-block.queued");
+  if (pending) {
+    pending.classList.remove("queued");
+    pending.classList.add("running");
+    delete pending.dataset.queuedCommand;
+    const cmdEl = pending.querySelector(".shell-block-cmd");
+    if (cmdEl) cmdEl.innerHTML = highlightBash(payload?.command ?? "");
+    session.shellBlock = session.shellBlock ?? { current: null };
+    session.shellBlock.current = pending;
+    return pending;
+  }
+  const el = buildBlock({ command: payload?.command, state: "running" });
   append(session, el);
   session.shellBlock = session.shellBlock ?? { current: null };
   session.shellBlock.current = el;
@@ -41,7 +62,7 @@ export const finishShellBlock = (session, payload) => {
   if (!session?.streamEl) return;
   let el = session.shellBlock?.current ?? null;
   if (!el) {
-    el = buildBlock({ command: payload?.command, running: false });
+    el = buildBlock({ command: payload?.command, state: "done" });
     append(session, el);
   }
   el.classList.remove("running");

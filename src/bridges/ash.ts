@@ -82,6 +82,7 @@ const FORWARDED = [
   "shell:command-start",
   "shell:command-done",
   "shell:cwd-change",
+  "shell:queued",
 ];
 
 export class AshBridge extends EventEmitter implements Bridge {
@@ -90,6 +91,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private opts: BridgeOpts;
   private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
   private queryQueue: string[] = [];
+  private shellQueue: string[] = [];
   private closed = false;
   private backendRegistered = false;
   private shell: Shell | null = null;
@@ -336,18 +338,18 @@ export class AshBridge extends EventEmitter implements Bridge {
     onAny("agent:processing-done", () => {
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "end_turn" }); }
-      setTimeout(() => this.drainQueue(), 0);
+      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
     onAny("agent:error", (payload) => {
       const message = (payload as { message?: string })?.message ?? "agent error";
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.reject(new Error(message)); }
-      setTimeout(() => this.drainQueue(), 0);
+      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
     onAny("agent:cancelled", () => {
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "cancelled" }); }
-      setTimeout(() => this.drainQueue(), 0);
+      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
 
     // Permission gate — forward to UI as an event (so the diff preview
@@ -523,7 +525,21 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   writePty(data: string): void {
     if (this.closed || !this.shell) return;
+    if (this.pendingTurn) {
+      this.shellQueue.push(data);
+      const command = data.replace(/\r?\n$/, "");
+      this.emit("event", { name: "shell:queued", payload: { command } } satisfies BusEvent);
+      return;
+    }
     try { this.shell.writeToPty(data); } catch {}
+  }
+
+  private drainShellQueue(): void {
+    if (!this.shell || this.closed) { this.shellQueue.length = 0; return; }
+    while (this.shellQueue.length > 0) {
+      const next = this.shellQueue.shift()!;
+      try { this.shell.writeToPty(next); } catch {}
+    }
   }
 
   resizePty(cols: number, rows: number): void {

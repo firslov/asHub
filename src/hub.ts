@@ -103,6 +103,7 @@ const REPLAY_NAMES = new Set([
   "shell:command-start",
   "shell:command-done",
   "shell:cwd-change",
+  "shell:queued",
 ]);
 
 /** Agent events that indicate forward progress (reset idle timeout). */

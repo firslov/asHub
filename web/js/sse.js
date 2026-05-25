@@ -147,6 +147,7 @@ export const handlers = {
     if (typeof p?.thinkingSupported === "boolean") this.agentInfo.thinkingSupported = p.thinkingSupported;
     if (typeof p?.contextWindow === "number" && p.contextWindow > 0) {
       this.state.contextWindow = p.contextWindow;
+      if (this.state.lastUsage) renderUsage(this);
     }
     refreshModelChip(this);
     if (this === activeSession.peek()) {

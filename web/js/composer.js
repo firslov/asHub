@@ -32,9 +32,13 @@ input?.addEventListener("keydown", (ev) => {
   }
 });
 
+// Shell mode via "!" prefix — only on platforms with a supported shell
+// (agent-sh Shell class supports zsh/bash/fish; not available on Windows).
+const shellSupported = !/win/i.test(navigator.platform || "");
+
 // Also catches `!` from paste/IME, where keydown for the literal char never fires.
 input?.addEventListener("input", () => {
-  if (!shellMode && input.value.startsWith("!")) {
+  if (shellSupported && !shellMode && input.value.startsWith("!")) {
     setShellMode(true);
     input.value = input.value.slice(1);
   }
@@ -102,7 +106,7 @@ const acceptAc = () => {
 
 const doSubmit = async (query) => {
   if (!query) return;
-  if (shellMode || query.startsWith("!")) {
+  if (shellMode || (shellSupported && query.startsWith("!"))) {
     await doShellSubmit(query.startsWith("!") ? query.slice(1) : query);
     return;
   }

@@ -55,6 +55,14 @@ function indentLines(text: string, prefix: string): string {
   return text.split("\n").map((line) => prefix + line).join("\n");
 }
 
+function defaultShell(): string {
+  if (process.platform === "win32") {
+    // Prefer PowerShell on modern Windows; fall back to cmd
+    return process.env.COMSPEC ?? "powershell.exe";
+  }
+  return process.env.SHELL ?? "/bin/bash";
+}
+
 // Bus events to forward verbatim. Names line up with what the web client
 // already handles (see web/js/client.js handler map).
 const FORWARDED = [
@@ -153,29 +161,35 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     const startCwd = this.opts.cwd ? path.resolve(this.opts.cwd) : os.homedir();
     this.liveCwd = startCwd;
-    try {
-      this.shell = new Shell({
-        bus: core.bus,
-        handlers: core.handlers,
-        cols: 100,
-        rows: 30,
-        shell: process.env.SHELL ?? "/bin/bash",
-        cwd: startCwd,
-        instanceId: extCtx.instanceId,
-        terminal: headlessTerminal(),
+
+    // agent-sh Shell only supports zsh/bash/fish — skip on Windows.
+    // Terminal sessions (kind: "terminal") use TerminalBridge with
+    // node-pty directly and work on all platforms.
+    if (process.platform !== "win32") {
+      try {
+        this.shell = new Shell({
+          bus: core.bus,
+          handlers: core.handlers,
+          cols: 100,
+          rows: 30,
+          shell: defaultShell(),
+          cwd: startCwd,
+          instanceId: extCtx.instanceId,
+          terminal: headlessTerminal(),
+        });
+        this.shell.onExit(() => { this.shell = null; });
+      } catch (err) {
+        process.stderr.write(`[ash-bridge] shell spawn failed: ${err instanceof Error ? err.message : err}\n`);
+      }
+      const onAnyBus = core.bus.on.bind(core.bus) as unknown as (n: string, fn: (p: unknown) => void) => void;
+      onAnyBus("shell:cwd-change", (payload) => {
+        const next = (payload as { cwd?: string })?.cwd;
+        if (typeof next === "string" && next) this.liveCwd = next;
       });
-      this.shell.onExit(() => { this.shell = null; });
-    } catch (err) {
-      process.stderr.write(`[ash-bridge] shell spawn failed: ${err instanceof Error ? err.message : err}\n`);
+      onAnyBus("shell:command-done", (payload) => {
+        this.recordShellExchange(payload as { command?: string; output?: string; cwd?: string; exitCode?: number | null });
+      });
     }
-    const onAnyBus = core.bus.on.bind(core.bus) as unknown as (n: string, fn: (p: unknown) => void) => void;
-    onAnyBus("shell:cwd-change", (payload) => {
-      const next = (payload as { cwd?: string })?.cwd;
-      if (typeof next === "string" && next) this.liveCwd = next;
-    });
-    onAnyBus("shell:command-done", (payload) => {
-      this.recordShellExchange(payload as { command?: string; output?: string; cwd?: string; exitCode?: number | null });
-    });
     core.handlers.advise("cwd", () => this.liveCwd);
 
     core.handlers.advise("system-prompt:build", (next: () => string) => {

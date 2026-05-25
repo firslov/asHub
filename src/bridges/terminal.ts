@@ -8,7 +8,7 @@ const DEFAULT_ROWS = 30;
 
 function defaultShell(): string {
   if (process.platform === "win32") {
-    return process.env.COMSPEC ?? "cmd.exe";
+    return process.env.COMSPEC ?? "powershell.exe";
   }
   return process.env.SHELL ?? "/bin/bash";
 }

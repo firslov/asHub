@@ -73,6 +73,9 @@ export interface Bridge {
   /** Dispatch a slash command (e.g. "/model", "gpt-5"). Backends free to no-op. */
   execCommand?(name: string, args: string): void;
 
+  /** Set thinking level silently (no echo, no toast). */
+  setThinking?(level: string): void;
+
   /** Resolve completions for a partial input. Returns suggestions or null if unsupported. */
   autocomplete?(buffer: string): Promise<Array<{ name: string; description: string }> | null>;
 

@@ -41,7 +41,13 @@ input?.addEventListener("keydown", (ev) => {
   const cur = session.agentInfo.thinkingLevel || "off";
   const idx = THINKING_LEVELS.indexOf(cur);
   const next = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
-  submitSlash(`/thinking ${next}`);
+  const sid = currentSessionId();
+  if (!sid) return;
+  fetch(`/${sid}/thinking`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ level: next }),
+  }).catch(() => {});
 });
 
 // Shell mode via "!" prefix — only on platforms with a supported shell

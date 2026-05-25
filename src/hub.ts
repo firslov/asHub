@@ -378,6 +378,7 @@ export function startHub(opts: HubOpts): http.Server {
       if (req.method === "POST" && rest === "/pty-resize") return ptyResize(req, res, session);
       if (req.method === "POST" && rest === "/submit") return submit(req, res, session);
       if (req.method === "POST" && rest === "/command") return execCommand(req, res, session);
+      if (req.method === "POST" && rest === "/thinking") return setThinking(req, res, session);
       if (req.method === "POST" && rest === "/title") return updateTitle(req, res, session);
       if (req.method === "POST" && rest === "/generate-title") return generateTitle(req, res, session);
       if (req.method === "GET" && rest.startsWith("/autocomplete")) {
@@ -1366,6 +1367,23 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       pushFrame(session, "agent:error", sseFrame(meta("agent:error"), { message: String(err) }));
     });
 
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function setThinking(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  session: Session,
+): Promise<void> {
+  const body = await readBody(req);
+  let level = "";
+  try { level = String((JSON.parse(body) as { level?: string }).level ?? "").trim(); } catch {}
+  if (!level) { res.statusCode = 400; res.end("missing level"); return; }
+  if (!session.bridge.setThinking) { res.statusCode = 501; res.end("bridge does not support setThinking"); return; }
+  try { session.bridge.setThinking(level); } catch (err) {
+    res.statusCode = 500; res.end(String(err)); return;
+  }
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }

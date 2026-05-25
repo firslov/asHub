@@ -323,15 +323,6 @@ export class AshBridge extends EventEmitter implements Bridge {
       } satisfies BusEvent);
     });
 
-    onAny("config:set-thinking", (payload) => {
-      const level = (payload as { level?: string })?.level;
-      if (!level) return;
-      this.emit("event", {
-        name: "ui:info",
-        payload: { message: `Thinking level: ${level}` },
-      } satisfies BusEvent);
-    });
-
     // Track whether any agent backend registered. Without one, submit()
     // must reject so the UI doesn't spin forever (e.g. missing API key).
     onAny("agent:register-backend", () => { this.backendRegistered = true; });
@@ -430,6 +421,10 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   execCommand(name: string, args: string): void {
     this.core?.bus.emit("command:execute", { name, args });
+  }
+
+  setThinking(level: string): void {
+    this.core?.bus.emit("config:set-thinking", { level });
   }
 
   async autocomplete(buffer: string): Promise<Array<{ name: string; description: string }> | null> {

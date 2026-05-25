@@ -187,7 +187,7 @@ class SessionView extends HTMLElement {
     hidePageLoader();
     onReplayDone(this);
     // If replay produced no content, restore the empty state.
-    if (this.emptyStateEl?.hidden && !this.streamEl?.querySelector('.turn-sep, .agent-box, .tool-row, .thinking-block')) {
+    if (this.emptyStateEl?.hidden && !this.streamEl?.querySelector('.turn-sep, .agent-box, .tool-row, .thinking-block, .shell-block')) {
       this.emptyStateEl.hidden = false;
     }
   }

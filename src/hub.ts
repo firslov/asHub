@@ -599,6 +599,12 @@ async function createSession(
           create: { cwd, sessionId: id },
           metaPath: sessionMetaPath(id),
         });
+      } else {
+        // Restored session whose tree file is missing — re-create it
+        store = new SessionStore(treePath, {
+          create: { cwd, sessionId: id },
+          metaPath: sessionMetaPath(id),
+        });
       }
     }
   } catch (err) {

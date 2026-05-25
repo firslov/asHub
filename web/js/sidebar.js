@@ -47,7 +47,6 @@ let sessionsHash = "";
 let workspacesHash = "";
 let terminalsHash = "";
 
-// Shared with tabs.js so the strip can label tabs off the same poll.
 export const sessionInfo = new Map();
 export const sessionsTick = signal(0);
 

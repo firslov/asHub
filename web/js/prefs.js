@@ -108,15 +108,10 @@ langToggle?.addEventListener("click", () => {
   setLang(lang.value === "zh" ? "en" : "zh");
 });
 
-// asHub UI prefs live in ~/.agent-sh/settings.json under `asHub.ui.*`.
-// Each pref attaches to the closest stable parent of what it affects, so the
-// HTML self-documents what each option controls. Defaults are baked into HTML
-// (data-ui-*) and CSS (var() fallbacks), so first paint matches the common
-// case and the fetch only diff-applies overrides.
-//
-// To add a key: append an entry below, then either gate CSS on
-// [data-ui-{attr}="value"] (kind: "attr") or read var(--ui-{name}) (kind: "var").
-// `target` is a CSS selector for where the attr/var lands; omit for documentElement.
+// UI prefs under `asHub.ui.*` in ~/.agent-sh/settings.json. Defaults live in HTML
+// (data-ui-*) / CSS (var() fallbacks); fetch only diff-applies overrides.
+// To add: `kind: "attr"` gates CSS on [data-ui-{attr}]; `kind: "var"` reads
+// var(--ui-{name}). `target` is the selector to attach to (default: documentElement).
 const UI_PREFS = {
   "conversation.center":      { kind: "attr", attr: "data-ui-conversation-center",      target: ".terminal-wrap" },
   "conversation.message-gap": { kind: "var",  prop: "--ui-conversation-message-gap",    target: ".terminal-wrap" },

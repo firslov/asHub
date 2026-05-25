@@ -304,7 +304,6 @@ const switchConfigMode = (mode) => {
   if (mode === "simple") {
     configBodySimple.removeAttribute("hidden");
     configBodyAdvanced.setAttribute("hidden", "");
-    // Show UI style toggle only in simple mode
     const uiStyleField = document.querySelector(".config-ui-style");
     if (uiStyleField) uiStyleField.removeAttribute("hidden");
     // Sync editor content so Advanced edits survive a Simple→Save round-trip.
@@ -325,7 +324,6 @@ const switchConfigMode = (mode) => {
   } else {
     configBodySimple.setAttribute("hidden", "");
     configBodyAdvanced.removeAttribute("hidden");
-    // Hide UI style toggle in advanced mode (edit JSON directly)
     const uiStyleField = document.querySelector(".config-ui-style");
     if (uiStyleField) uiStyleField.setAttribute("hidden", "");
     // Use current editor content as the base so edits made in Advanced
@@ -410,7 +408,6 @@ export const setConfigOpen = async (on) => {
     // advanced mode via the tabs if they need to edit providers not
     // listed in the simple dropdown or tweak advanced settings.
     switchConfigMode("simple");
-    // Detect and display current UI style
     currentUiStyle = detectUiStyle();
     setUiStyle(currentUiStyle);
   } else {

@@ -50,8 +50,6 @@ input?.addEventListener("keydown", (ev) => {
   }).catch(() => {});
 });
 
-// Shell mode via "!" prefix — only on platforms with a supported shell
-// (agent-sh Shell class supports zsh/bash/fish; not available on Windows).
 const shellSupported = !/win/i.test(navigator.platform || "");
 
 // Also catches `!` from paste/IME, where keydown for the literal char never fires.

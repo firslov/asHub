@@ -468,7 +468,7 @@
 body {
   min-height: 100vh;
   padding: 0;
-  font-size: 1rem; /* 16px — comfortable cross-platform */
+  font-size: 1rem;
   line-height: 1.65;
 }
 /* Global focus ring — polished keyboard navigation */

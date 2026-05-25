@@ -57,7 +57,6 @@ function indentLines(text: string, prefix: string): string {
 
 function defaultShell(): string {
   if (process.platform === "win32") {
-    // Prefer PowerShell on modern Windows; fall back to cmd
     return process.env.COMSPEC ?? "powershell.exe";
   }
   return process.env.SHELL ?? "/bin/bash";
@@ -164,8 +163,6 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.liveCwd = startCwd;
 
     // agent-sh Shell only supports zsh/bash/fish — skip on Windows.
-    // Terminal sessions (kind: "terminal") use TerminalBridge with
-    // node-pty directly and work on all platforms.
     if (process.platform !== "win32") {
       try {
         this.shell = new Shell({

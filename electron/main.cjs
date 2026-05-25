@@ -187,10 +187,7 @@ function resolveWebRoot() {
   return path.join(process.resourcesPath, "web");
 }
 
-// Spawn an extra BrowserWindow loading a specific session URL. Used by the
-// tab tear-out gesture (drag a tab outside the window). Independent of the
-// `mainWindow` singleton so legacy theme/update handlers continue to target
-// the primary window only.
+// Independent of `mainWindow` so theme/update handlers stay scoped to the primary window.
 function createTearOutWindow(loadPath, screenPos) {
   const isDark = nativeTheme.shouldUseDarkColors;
   const opts = {

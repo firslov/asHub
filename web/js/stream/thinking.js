@@ -65,7 +65,6 @@ const setThinkingCollapsed = (block, collapsed) => {
 
 export const appendThinkingChunk = (session, text) => {
   if (!text || !session) return;
-  hideThinking(session);
   if (!session.thinking.block) {
     const block = document.createElement("div");
     block.className = "thinking-block";

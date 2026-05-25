@@ -9,8 +9,8 @@ import {
   renderDiffBlock, renderToolBody, buildToolRow,
 } from "./stream/renderers.js";
 import {
-  showThinking, hideThinking, hasThinkingDots,
-  appendThinkingChunk, finalizeThinking, hasThinkingBlock,
+  showThinking, hideThinking,
+  appendThinkingChunk, finalizeThinking,
   sweepOrphanThinking,
 } from "./stream/thinking.js";
 import {
@@ -245,7 +245,6 @@ export const handlers = {
     const blocks = Array.isArray(p?.blocks) ? p.blocks : [];
     const delta = blocks.map(blockToText).join("");
     if (!delta) return;
-    hideThinking(this);
     finalizeThinking(this);
     appendReplyChunk(this, delta);
   },
@@ -254,7 +253,6 @@ export const handlers = {
   "agent:response-segment"(p) {
     if (hasReply(this) || sawLiveSegment(this)) return;
     if (!p?.text) return;
-    hideThinking(this);
     finalizeThinking(this);
     const block = document.createElement("div");
     block.className = "agent-reply";
@@ -344,7 +342,6 @@ export const handlers = {
 
   "agent:tool-started"(p) {
     closeReply(this);
-    hideThinking(this);
     finalizeThinking(this);
     finalizeLiveOutput(this);
     startNewSegment(this);
@@ -352,9 +349,6 @@ export const handlers = {
     appendToGroup(this, row);
     trackToolRow(this, row);
     bumpToolCount(this);
-    if (this.state.isProcessing && !hasReply(this) && !hasThinkingBlock(this)) {
-      showThinking(this);
-    }
   },
 
   "agent:tool-completed"(p) {

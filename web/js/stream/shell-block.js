@@ -1,6 +1,6 @@
 import { append } from "./tool-group.js";
 import { closeReply } from "./reply.js";
-import { hideThinking, finalizeThinking } from "./thinking.js";
+import { finalizeThinking } from "./thinking.js";
 import { ansiToHtml } from "../utils.js";
 import { maybeScroll } from "./scroll.js";
 
@@ -29,7 +29,6 @@ const buildBlock = ({ command, running }) => {
 export const startShellBlock = (session, payload) => {
   if (!session?.streamEl) return null;
   closeReply(session);
-  hideThinking(session);
   finalizeThinking(session);
   const el = buildBlock({ command: payload?.command, running: true });
   append(session, el);

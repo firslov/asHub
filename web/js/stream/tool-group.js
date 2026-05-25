@@ -20,9 +20,17 @@ const groupState = new WeakMap();
 export const insertStreamNode = (session, node) => {
   const stream = session?.streamEl;
   if (!stream) return;
+  if (node.classList?.contains("thinking")) {
+    stream.appendChild(node);
+    return;
+  }
+  const thinking = stream.querySelector(".thinking");
+  if (thinking) {
+    stream.insertBefore(node, thinking);
+    return;
+  }
   const firstPending = stream.querySelector(".agent-box.pending");
   if (firstPending) {
-    // Walk back past turn-sep(s) that belong to the same queued-message group.
     let insertBefore = firstPending;
     let prev = firstPending.previousElementSibling;
     while (prev && prev.classList.contains("turn-sep")) {

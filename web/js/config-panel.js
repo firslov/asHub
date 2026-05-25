@@ -513,6 +513,7 @@ const MINIMAL_UI = {
   "input.focus-ring": false,
   "input.padding-y": "0.35rem",
   "turn.time.show": false,
+  "turn.sep.show": false,
   "usage.align": "left",
   "usage.sticky": true,
   "usage.cwd.show": true,

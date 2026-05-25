@@ -2614,6 +2614,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-shrink: 0;
 }
 .terminal-wrap[data-ui-turn-time-show="false"] .turn-time { display: none; }
+.terminal-wrap[data-ui-turn-sep-show="false"] .turn-sep { display: none; }
 
 /* ── Thinking indicator ───────────────────────────────────────────── */
 .thinking {

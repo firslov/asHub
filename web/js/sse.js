@@ -448,7 +448,8 @@ const refreshModelChip = (session) => {
   if (wrap?.dataset.uiUsageModelShow !== "true") { session.modelEl.hidden = true; return; }
   const ai = session.agentInfo;
   const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off";
-  const text = [ai?.model, showThink ? `[${ai.thinkingLevel}]` : ""].filter(Boolean).join(" ");
+  const modelLabel = ai?.provider ? `${ai.model}@${ai.provider}` : ai?.model;
+  const text = [modelLabel, showThink ? `[${ai.thinkingLevel}]` : ""].filter(Boolean).join(" ");
   if (text) { session.modelEl.textContent = text; session.modelEl.hidden = false; }
   else { session.modelEl.hidden = true; }
 };

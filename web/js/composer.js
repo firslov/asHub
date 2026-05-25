@@ -32,6 +32,18 @@ input?.addEventListener("keydown", (ev) => {
   }
 });
 
+const THINKING_LEVELS = ["off", "low", "medium", "high", "xhigh"];
+input?.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Tab" || !ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const session = activeSession.peek();
+  if (!session?.agentInfo?.thinkingSupported) return;
+  ev.preventDefault();
+  const cur = session.agentInfo.thinkingLevel || "off";
+  const idx = THINKING_LEVELS.indexOf(cur);
+  const next = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
+  submitSlash(`/thinking ${next}`);
+});
+
 // Shell mode via "!" prefix — only on platforms with a supported shell
 // (agent-sh Shell class supports zsh/bash/fish; not available on Windows).
 const shellSupported = !/win/i.test(navigator.platform || "");

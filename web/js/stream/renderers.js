@@ -94,7 +94,7 @@ export const renderErrorCard = (message, detail) => {
 
 export const renderDiffBlock = (diff, filePath) => {
   const wrap = document.createElement("div");
-  wrap.className = "diff-block";
+  wrap.className = "diff-block wrapped";
   const lang = langForPath(filePath);
   const head = document.createElement("div");
   head.className = "diff-head";

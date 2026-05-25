@@ -20,7 +20,7 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
-    "agent-sh": "^0.14.3",
+    "agent-sh": "^0.14.4",
     "electron-updater": "^6.8.3",
     "tsx": "^4.7.0"
   },

@@ -129,6 +129,7 @@ const UI_PREFS = {
   "input.gradient":           { kind: "attr", attr: "data-ui-input-gradient",           target: ".live-input" },
   "input.focus-ring":         { kind: "attr", attr: "data-ui-input-focus-ring",         target: "#query" },
   "input.padding-y":          { kind: "var",  prop: "--ui-input-padding-y",             target: ".live-input" },
+  "turn.time.show":           { kind: "attr", attr: "data-ui-turn-time-show",           target: ".terminal-wrap" },
   "usage.align":              { kind: "attr", attr: "data-ui-usage-align",              target: ".terminal-wrap" },
   "usage.sticky":             { kind: "attr", attr: "data-ui-usage-sticky",             target: ".terminal-wrap" },
   "usage.git-branch":         { kind: "attr", attr: "data-ui-usage-git-branch",         target: ".terminal-wrap" },

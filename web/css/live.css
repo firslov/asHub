@@ -2613,6 +2613,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   white-space: nowrap;
   flex-shrink: 0;
 }
+.terminal-wrap[data-ui-turn-time-show="false"] .turn-time { display: none; }
 
 /* ── Thinking indicator ───────────────────────────────────────────── */
 .thinking {

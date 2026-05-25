@@ -7,6 +7,10 @@ const translations = {
     // ── HTML static strings ────────────────────────────────────────
     "sessions": "Sessions",
     "new.session": "New session",
+    "new.terminal": "New terminal",
+    "sidebar.view.sessions": "Sessions",
+    "sidebar.view.workspaces": "Workspaces",
+    "sidebar.view.terminals": "Terminals",
     "collapse.sidebar": "Collapse sidebar",
     "connecting": "connecting…",
     "checking.updates": "checking for updates…",
@@ -173,6 +177,10 @@ const translations = {
     // ── HTML static strings ────────────────────────────────────────
     "sessions": "会话列表",
     "new.session": "新建会话",
+    "new.terminal": "新建终端",
+    "sidebar.view.sessions": "会话",
+    "sidebar.view.workspaces": "工作区",
+    "sidebar.view.terminals": "终端",
     "collapse.sidebar": "折叠侧边栏",
     "connecting": "连接中…",
     "checking.updates": "检查更新中…",

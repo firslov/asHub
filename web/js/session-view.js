@@ -124,13 +124,13 @@ class SessionView extends HTMLElement {
     document.addEventListener("langchange", onLangChange, { signal: ac });
   }
 
-  resync() {
+  resync({ force = false } = {}) {
     if (!this.id) return;
     if (this.replayFlushTimer) { clearTimeout(this.replayFlushTimer); this.replayFlushTimer = null; }
     this.controller?.abort();
-    // SPA cache: if the session already has rendered content, just
-    // re-subscribe for live events without destroying the DOM.
-    if (this.streamEl && this.streamEl.children.length > 0) {
+    // SPA cache: preserve DOM across session switches.  Only rebuild when
+    // forced (rewind / branch-switch) or when there is no content yet.
+    if (!force && this.streamEl && this.streamEl.children.length > 0) {
       this.exitReplayMode();
       subscribeSession(this.id);
       return;

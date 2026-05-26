@@ -27,7 +27,7 @@ const rewindFromBox = async (box) => {
     return;
   }
   setComposerText(box._queryText ?? "");
-  activeSession.peek()?.resync();
+  activeSession.peek()?.resync({ force: true });
 };
 
 export const createUserBox = (queryText) => {

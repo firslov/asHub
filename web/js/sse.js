@@ -517,6 +517,15 @@ const toggleModelDropdown = async (session) => {
     });
   });
 
+  // Position dropdown above the model chip — append to body to escape overflow:hidden
+  if (dropdown.parentNode !== document.body) {
+    document.body.appendChild(dropdown);
+  }
+  const chipRect = session.modelEl.getBoundingClientRect();
+  dropdown.style.left = `${chipRect.left}px`;
+  dropdown.style.top = `${chipRect.top}px`;
+  dropdown.style.transform = "translateY(-100%) translateY(-6px)";
+
   dropdown.hidden = false;
 
   // Close on outside click

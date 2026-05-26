@@ -869,7 +869,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Toolbar ─────────────────────────────────────────────────────── */
 .toolbar {
   position: fixed;
-  top: var(--ui-title-bar-height, 52px);
+  top: var(--ui-title-bar-height, 40px);
   left: auto;
   right: 0;
   bottom: 0;
@@ -881,9 +881,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: center;
   gap: 0.25rem;
   padding: 0.5rem 0;
-  background: color-mix(in srgb, var(--bg3) 90%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: var(--bg2);
   border-left: 1px solid var(--border);
 }
 
@@ -993,7 +991,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   flex-shrink: 0;
-  height: var(--ui-title-bar-height, 52px);
+  height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
 }
 
@@ -1557,7 +1555,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.7rem 1.2rem;
   margin-right: -42px; /* negate .app padding-right so bar reaches toolbar edge */
   border-bottom: 1px solid var(--border);
-  height: var(--ui-title-bar-height, 52px);
+  height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
   -webkit-app-region: drag;
   app-region: drag;
@@ -2459,7 +2457,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .tree-panel {
   position: fixed;
-  top: var(--ui-title-bar-height, 52px);
+  top: var(--ui-title-bar-height, 40px);
   bottom: 0;
   right: 42px;
   width: 300px;
@@ -2492,7 +2490,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   text-transform: uppercase;
   background: var(--bg3);
   flex-shrink: 0;
-  height: var(--ui-title-bar-height, 52px);
+  height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
   position: relative;
 }
@@ -2865,9 +2863,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 0.45rem;
-  overflow: hidden;
   min-width: 0;
   padding: 0.45rem 1.15rem;
   background: var(--bg2);
@@ -2918,19 +2915,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .usage-balance:hover {
   background: var(--bg-elevated);
-  border-color: var(--accent-border);
+  border-color: var(--border-mid);
 }
 
 .balance-label {
   font-size: 0.7rem;
   line-height: 1;
-}
-
-.usage-strip .usage-balance {
-  font-weight: 500;
-  color: var(--accent);
-  border-color: var(--accent-soft);
-  background: var(--accent-glow);
 }
 
 /* ── Model picker dropdown ──────────────────────────────────────── */
@@ -2952,15 +2942,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .model-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 100;
+  position: fixed;
+  z-index: 1000;
   min-width: 220px;
   max-height: 260px;
   overflow-y: auto;
   list-style: none;
   padding: 4px;
+  padding-inline-start: 4px;
   margin: 0;
   background: var(--card);
   border: 1px solid var(--border);
@@ -3181,7 +3170,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Context panel ───────────────────────────────────────────────── */
 .ctx-panel {
   position: fixed;
-  top: var(--ui-title-bar-height, 52px);
+  top: var(--ui-title-bar-height, 40px);
   bottom: 0;
   right: 42px;
   width: 300px;
@@ -3235,7 +3224,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   white-space: nowrap;
   background: var(--bg3);
   flex-shrink: 0;
-  height: var(--ui-title-bar-height, 52px);
+  height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
   position: relative;
 }
@@ -3481,7 +3470,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Files panel ─────────────────────────────────────────────────── */
 .files-panel {
   position: fixed;
-  top: var(--ui-title-bar-height, 52px);
+  top: var(--ui-title-bar-height, 40px);
   bottom: 0;
   right: 42px;
   width: 300px;
@@ -3540,7 +3529,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   white-space: nowrap;
   background: var(--bg3);
   flex-shrink: 0;
-  height: var(--ui-title-bar-height, 52px);
+  height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
   position: relative;
 }
@@ -3765,7 +3754,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Config panel (slide-out from toolbar) ───────────────────────── */
 .config-overlay {
   position: fixed;
-  top: var(--ui-title-bar-height, 52px);
+  top: var(--ui-title-bar-height, 40px);
   bottom: 0;
   right: 42px;
   width: 300px;
@@ -3835,7 +3824,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   white-space: nowrap;
   background: var(--bg3);
   flex-shrink: 0;
-  height: var(--ui-title-bar-height, 52px);
+  height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
   position: relative;
 }
@@ -4437,7 +4426,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Quick Prompts panel ────────────────────────────────────────────── */
 .prompt-overlay {
   position: fixed;
-  top: var(--ui-title-bar-height, 52px);
+  top: var(--ui-title-bar-height, 40px);
   bottom: 0;
   right: 42px;
   width: 300px;
@@ -4498,7 +4487,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   text-transform: uppercase;
   white-space: nowrap;
   background: var(--bg3);
-  height: var(--ui-title-bar-height, 52px);
+  height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
   position: relative;
 }

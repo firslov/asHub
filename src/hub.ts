@@ -379,6 +379,8 @@ export function startHub(opts: HubOpts): http.Server {
       const rest = rawRest.split("?")[0]!;  // strip query string for route matching
       const session = sessions.get(id);
       if (!session) { res.statusCode = 404; res.end("no session"); return; }
+      // Lazy-init bridge for restored sessions that haven't been activated yet.
+      await session._ensureBridge?.();
 
       if (req.method === "POST" && rest === "/pty-input") return ptyInput(req, res, session);
       if (req.method === "POST" && rest === "/pty-resize") return ptyResize(req, res, session);
@@ -393,7 +395,6 @@ export function startHub(opts: HubOpts): http.Server {
         return autocomplete(res, session, params.get("buffer") ?? "");
       }
       if (req.method === "POST" && rest === "/cancel") {
-        await session._ensureBridge?.();
         const wasProcessing = session.bridge.isProcessing?.() ?? false;
         try { session.bridge.cancel(); } catch (err) { console.error("[hub] cancel:", err); }
         // If the bridge was not actually processing (e.g. restored session
@@ -1162,7 +1163,7 @@ async function listFiles(res: http.ServerResponse, session: Session, subdir?: st
 function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, id: string): void {
   const s = sessions.get(id);
   if (s) {
-    try { s.bridge.close(); } catch {}
+    try { s.bridge?.close(); } catch {}
     sessions.delete(id);
   }
   const buf = _writeBufs.get(id);
@@ -1272,7 +1273,6 @@ function openSseMulti(
 }
 
 async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  await session._ensureBridge?.();
   if (!session.bridge.writePty) {
     res.statusCode = 400; res.end("session has no PTY"); return;
   }
@@ -1290,7 +1290,6 @@ async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, ses
 }
 
 async function ptyResize(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  await session._ensureBridge?.();
   if (!session.bridge.resizePty) {
     res.statusCode = 400; res.end("session has no PTY"); return;
   }
@@ -1310,7 +1309,6 @@ async function ptyResize(req: http.IncomingMessage, res: http.ServerResponse, se
 }
 
 async function submit(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  await session._ensureBridge?.();
   const body = await readBody(req);
   let query = "";
   try { query = (JSON.parse(body) as { query?: string }).query ?? ""; } catch {}
@@ -1428,7 +1426,6 @@ async function setThinking(
   res: http.ServerResponse,
   session: Session,
 ): Promise<void> {
-  await session._ensureBridge?.();
   const body = await readBody(req);
   let level = "";
   try { level = String((JSON.parse(body) as { level?: string }).level ?? "").trim(); } catch {}
@@ -1446,7 +1443,6 @@ async function execCommand(
   res: http.ServerResponse,
   session: Session,
 ): Promise<void> {
-  await session._ensureBridge?.();
   const body = await readBody(req);
   let name = "", args = "";
   try {

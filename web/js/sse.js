@@ -346,7 +346,8 @@ export const handlers = {
       `<span class="cm-line"></span>` +
       `<span class="cm-pill">📦 ${evicted} message(s) compacted</span>` +
       `<span class="cm-line"></span>`;
-    this.streamEl.appendChild(pill);
+    const target = (this.state.replaying && this._replayFrag) || this.streamEl;
+    if (target) target.appendChild(pill);
   },
 
   "agent:tool-started"(p) {

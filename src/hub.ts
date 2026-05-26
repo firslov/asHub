@@ -765,8 +765,8 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
       }
     }
   }
-  console.error(`[hub] restoring ${persisted.length} session(s)…`);
-  for (const p of persisted) {
+  console.error(`[hub] restoring up to 5 of ${persisted.length} session(s)…`);
+  for (const p of persisted.slice(0, 5)) {
     if (p.kind === "terminal" || p.kind === "ash-terminal") {
       await deleteSessionFiles(p.id);
       continue;

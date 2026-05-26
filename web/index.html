@@ -6,12 +6,14 @@
   <title>asHub</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500;600&family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/css/styles.css" />
   <link rel="stylesheet" href="/css/live.css" />
   <link rel="stylesheet" id="hljs-dark" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css" disabled />
   <link rel="stylesheet" id="hljs-light" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
+  <script src="/vendor/xterm/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.11.1/highlight.min.js"></script>
@@ -19,44 +21,70 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 </head>
 <body>
-  <div class="app">
+  <div class="app" data-ui-tabs-enabled="false">
     <header class="title-bar">
+      <span class="title-bar-controls">
+        <button id="sidebar-toggle" class="sidebar-btn sidebar-toggle" data-i18n-title="collapse.sidebar" title="Collapse sidebar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <line x1="9" y1="3" x2="9" y2="21"/>
+            <path class="sidebar-toggle-chevron" d="m16 15-3-3 3-3"/>
+          </svg>
+        </button>
+        <button id="new-session" class="sidebar-btn" data-i18n-title="new.session" title="New session">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+        </button>
+        <button id="new-terminal" class="sidebar-btn" data-i18n-title="new.terminal" title="New terminal (⌘-click: ash terminal — type > to summon agent)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+        </button>
+      </span>
       <span class="session-head">
         <span class="session-topic" id="session-topic"></span>
         <span class="session-cwd-meta" id="session-cwd-meta"></span>
       </span>
+      <div class="session-tabs" id="session-tabs" role="tablist" hidden></div>
       <span class="bar-right">
-        <span class="terminal-title" id="instance"></span>
-        <span class="balance-display" id="balance-display" hidden></span>
+        <span class="terminal-title" id="instance" data-ui-model-show="true" data-ui-model-uppercase="true"></span>
+        <span class="balance-display" id="balance-display" data-ui-balance-show="true" hidden></span>
         <span class="live-dot"></span>
         <span class="live-status" id="conn">connecting…</span>
-        <span class="version-label" id="version-label" title="checking for updates…"></span>
+        <span class="version-label" id="version-label" data-ui-version-show="true" title="checking for updates…"></span>
         <span class="spinner" id="spinner" hidden></span>
       </span>
     </header>
     <aside class="sidebar">
       <div class="sidebar-head">
-        <span class="sidebar-title" data-i18n="sessions">Sessions</span>
-        <button id="new-session" class="sidebar-btn" data-i18n-title="new.session" title="New session">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <line x1="7" y1="2" x2="7" y2="12"></line>
-            <line x1="2" y1="7" x2="12" y2="7"></line>
+        <button id="sidebar-view-sessions" class="sidebar-btn sidebar-view-btn" data-view="sessions" data-i18n-title="sidebar.view.sessions" title="Sessions">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="7" x2="20" y2="7"/>
+            <line x1="4" y1="12" x2="20" y2="12"/>
+            <line x1="4" y1="17" x2="20" y2="17"/>
           </svg>
         </button>
-        <button id="sidebar-toggle" class="sidebar-btn sidebar-toggle" data-i18n-title="collapse.sidebar" title="Collapse sidebar">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="8 3 4 6 8 9"></polyline>
+        <button id="sidebar-view-workspaces" class="sidebar-btn sidebar-view-btn" data-view="workspaces" data-i18n-title="sidebar.view.workspaces" title="Workspaces">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+          </svg>
+        </button>
+        <button id="sidebar-view-terminals" class="sidebar-btn sidebar-view-btn" data-view="terminals" data-i18n-title="sidebar.view.terminals" title="Terminals">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2"/>
+            <polyline points="7,9 10,12 7,15"/>
+            <line x1="12" y1="16" x2="16" y2="16"/>
           </svg>
         </button>
       </div>
-      <form id="new-session-form" class="new-session-form" hidden>
-        <div class="new-session-input-wrap">
-          <input id="new-session-cwd" type="text" autocomplete="off" data-i18n-placeholder="working.dir" placeholder="Working directory path" spellcheck="false" />
-          <ul class="autocomplete autocomplete-cwd" id="cwd-autocomplete" hidden></ul>
-        </div>
-        <div class="new-session-err" id="new-session-err" hidden></div>
-      </form>
       <ul id="sessions" class="session-list"></ul>
+      <ul id="workspaces" class="workspace-list" hidden></ul>
+      <ul id="terminals" class="terminal-list" hidden></ul>
       <div id="sidebar-resize" class="sidebar-resize" role="separator" aria-orientation="vertical"></div>
     </aside>
 
@@ -76,17 +104,35 @@
           </div>
         </div>
       </div>
-      <div class="terminal-wrap live-wrap">
+      <div class="terminal-wrap live-wrap" data-ui-conversation-center="true" data-ui-reply-border-show="true" data-ui-reply-border-gradient="true" data-ui-reply-hover="true" data-ui-reply-code-border="true" data-ui-usage-align="right" data-ui-usage-sticky="false" data-ui-usage-git-branch="true" data-ui-usage-model-show="false" data-ui-usage-cache-show="true" data-ui-usage-total-show="true">
         <div class="terminal">
-          <session-view></session-view>
-          <form class="live-input" id="form">
-            <button type="button" class="bar-btn cancel-btn input-cancel-btn" id="cancel-turn" hidden data-i18n-title="interrupt" title="Interrupt response (Esc)">
+          <div class="no-session-empty terminal-body" id="no-session-empty" hidden>
+            <div class="stream-empty-brand">
+              <div class="stream-empty-logo">
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <rect x="1" y="1" width="46" height="46" rx="14" fill="var(--bg2)" stroke="var(--logo-border)" stroke-width="1.5"/>
+                  <rect x="4" y="4" width="40" height="40" rx="11" stroke="var(--accent-soft)" stroke-width="0.5" opacity="0.5"/>
+                  <path d="M14 16 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/>
+                  <path d="M14 16 L28 24 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  <rect x="30" y="19" width="3" height="10" rx="1.5" fill="var(--cyan)"/>
+                </svg>
+              </div>
+              <div class="stream-empty-line"></div>
+            </div>
+            <div class="stream-empty-title" data-i18n="no.session.title">no session yet</div>
+            <div class="stream-empty-sub" data-i18n="no.session.sub">create a session to start a conversation with the agent.</div>
+            <button type="button" class="stream-empty-prompt" id="no-session-cta">
+              <span data-i18n="no.session.cta">new session</span>
+            </button>
+          </div>
+          <form class="live-input" id="form" data-ui-input-gradient="true">
+            <button type="button" class="bar-btn cancel-btn input-cancel-btn" id="cancel-turn" data-ui-cancel-show="true" hidden data-i18n-title="interrupt" title="Interrupt response (Esc)">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
                 <rect x="1.5" y="1.5" width="9" height="9" rx="2"></rect>
               </svg>
             </button>
             <span class="c-arrow">⟩</span>
-            <textarea id="query" autocomplete="off" data-i18n-placeholder="ask.agent" placeholder="ask the agent…" rows="1"></textarea>
+            <textarea id="query" data-ui-input-focus-ring="true" autocomplete="off" data-i18n-placeholder="ask.agent" placeholder="ask the agent…" rows="1"></textarea>
             <ul class="autocomplete" id="autocomplete" hidden></ul>
           </form>
         </div>
@@ -158,6 +204,9 @@
         <span data-i18n="new.output">new output</span>
       </button>
       <div class="usage-strip" hidden>
+        <span class="usage-model usage-chip" hidden></span>
+        <span class="usage-cwd usage-chip" hidden></span>
+        <span class="usage-branch usage-chip" hidden></span>
         <span class="terminal-usage"></span>
       </div>
     </template>
@@ -258,19 +307,20 @@
           <path d="M4.5 11h3l3 -4"></path>
         </svg>
       </button>
+      <button class="toolbar-btn" id="prompt-toggle" data-i18n-title="quick.prompts" title="Quick prompts">
+        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 2h4l2 3h4a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>
+          <line x1="4" y1="6.5" x2="10" y2="6.5"/>
+          <line x1="4" y1="8.5" x2="8" y2="8.5"/>
+        </svg>
+      </button>
+      <div class="toolbar-sep"></div>
       <button class="toolbar-btn" id="config-toggle" data-i18n-title="settings" title="Settings">
         <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
           <line x1="1.5" y1="4" x2="12.5" y2="4"/>
           <circle cx="8" cy="4" r="1.6"/>
           <line x1="1.5" y1="9" x2="12.5" y2="9"/>
           <circle cx="5" cy="9" r="1.6"/>
-        </svg>
-      </button>
-      <button class="toolbar-btn" id="prompt-toggle" data-i18n-title="quick.prompts" title="Quick prompts">
-        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M2 2h4l2 3h4a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>
-          <line x1="4" y1="6.5" x2="10" y2="6.5"/>
-          <line x1="4" y1="8.5" x2="8" y2="8.5"/>
         </svg>
       </button>
       <button class="toolbar-btn" id="lang-toggle" data-i18n-title="toggle.lang" title="Switch language">
@@ -280,7 +330,6 @@
           <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
         </svg>
       </button>
-      <div class="toolbar-sep"></div>
       <button class="toolbar-btn" id="theme-toggle" data-i18n-title="toggle.theme" title="Toggle theme">
         <svg id="theme-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></svg>
       </button>
@@ -312,47 +361,69 @@
         </div>
         <!-- Simple config mode -->
         <div class="config-body" id="config-body-simple">
-          <div class="config-field">
-            <label class="config-label" for="config-provider" data-i18n="provider">Provider</label>
-            <div class="config-select-wrap">
-              <select id="config-provider" class="config-select">
-                <option value="deepseek">DeepSeek</option>
-                <option value="zhipu">Z.AI</option>
-                <option value="openrouter">OpenRouter</option>
-              </select>
-              <svg class="config-select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="1 1 5 5 9 1"></polyline>
-              </svg>
-            </div>
-            <span class="config-hint" id="config-provider-desc">DeepSeek V4 models with 1M context window</span>
-          </div>
-          <div class="config-field" id="config-model-field" hidden>
-            <label class="config-label" for="config-model" data-i18n="model">Model</label>
-            <div class="config-model-wrap">
-              <input id="config-model" class="config-input" type="text" list="config-model-list" placeholder="anthropic/claude-3.5-sonnet" autocomplete="off" spellcheck="false" />
-              <datalist id="config-model-list"></datalist>
-              <button class="bar-btn icon" id="config-model-refresh" type="button" data-i18n-title="refresh" title="Refresh model list">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-                  <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
-                  <polyline points="9.5 1 12 1 12 3.5"></polyline>
+          <div class="config-section">
+            <div class="config-section-title" data-i18n="config.section.provider">Provider</div>
+            <div class="config-field">
+              <label class="config-label" for="config-provider" data-i18n="provider">Provider</label>
+              <div class="config-select-wrap">
+                <select id="config-provider" class="config-select">
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="zhipu">Z.AI</option>
+                  <option value="openrouter">OpenRouter</option>
+                </select>
+                <svg class="config-select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="1 1 5 5 9 1"></polyline>
                 </svg>
-              </button>
+              </div>
+              <span class="config-hint" id="config-provider-desc">DeepSeek V4 models with 1M context window</span>
             </div>
-            <span class="config-hint" id="config-model-hint" data-i18n="model.hint">Type to search the OpenRouter catalog</span>
-          </div>
-          <div class="config-field">
-            <label class="config-label" for="config-apikey" data-i18n="api.key">API Key</label>
-            <div class="config-apikey-wrap">
-              <input id="config-apikey" class="config-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
-              <button class="config-apikey-toggle" id="config-apikey-toggle" type="button" data-i18n-title="show.hide.apikey" title="Show/hide API key">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/>
-                  <circle cx="8" cy="8" r="2"/>
-                </svg>
-              </button>
+            <div class="config-field" id="config-model-field" hidden>
+              <label class="config-label" for="config-model" data-i18n="model">Model</label>
+              <div class="config-model-wrap">
+                <input id="config-model" class="config-input" type="text" list="config-model-list" placeholder="anthropic/claude-3.5-sonnet" autocomplete="off" spellcheck="false" />
+                <datalist id="config-model-list"></datalist>
+                <button class="bar-btn icon" id="config-model-refresh" type="button" data-i18n-title="refresh" title="Refresh model list">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                    <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
+                    <polyline points="9.5 1 12 1 12 3.5"></polyline>
+                  </svg>
+                </button>
+              </div>
+              <span class="config-hint" id="config-model-hint" data-i18n="model.hint">Type to search the OpenRouter catalog</span>
             </div>
-            <span class="config-hint" data-i18n="apikey.hint">Your API key is stored locally in ~/.agent-sh/settings.json</span>
+            <div class="config-field">
+              <label class="config-label" for="config-apikey" data-i18n="api.key">API Key</label>
+              <div class="config-apikey-wrap">
+                <input id="config-apikey" class="config-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+                <button class="config-apikey-toggle" id="config-apikey-toggle" type="button" data-i18n-title="show.hide.apikey" title="Show/hide API key">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/>
+                    <circle cx="8" cy="8" r="2"/>
+                  </svg>
+                </button>
+              </div>
+              <span class="config-hint" data-i18n="apikey.hint">Your API key is stored locally in ~/.agent-sh/settings.json</span>
+            </div>
           </div>
+
+          <div class="config-section config-section-appearance">
+            <div class="config-section-title" data-i18n="config.section.appearance">Appearance</div>
+            <div class="config-field config-ui-style">
+              <label class="config-label" data-i18n="ui.style">UI Style</label>
+              <div class="config-ui-style-toggles">
+                <button class="ui-style-btn active" id="ui-style-normal" data-style="normal">
+                  <span class="ui-style-dot"></span>
+                  <span data-i18n="ui.style.normal">常规</span>
+                </button>
+                <button class="ui-style-btn" id="ui-style-minimal" data-style="minimal">
+                  <span class="ui-style-dot"></span>
+                  <span data-i18n="ui.style.minimal">极简</span>
+                </button>
+              </div>
+              <span class="config-hint" data-i18n="ui.style.hint">常规为默认样式，极简为紧凑布局</span>
+            </div>
+          </div>
+
           <div class="config-actions">
             <button class="bar-btn config-btn-save" id="config-save-simple" data-i18n="save.reload">save & reload</button>
           </div>

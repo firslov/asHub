@@ -7,14 +7,17 @@ const translations = {
     // ── HTML static strings ────────────────────────────────────────
     "sessions": "Sessions",
     "new.session": "New session",
+    "new.terminal": "New terminal",
+    "sidebar.view.sessions": "Sessions",
+    "sidebar.view.workspaces": "Workspaces",
+    "sidebar.view.terminals": "Terminals",
     "collapse.sidebar": "Collapse sidebar",
-    "working.dir": "Working directory path",
     "connecting": "connecting…",
     "checking.updates": "checking for updates…",
     "interrupt": "Interrupt response (Esc)",
-    "ready": "ready when you are.",
-    "ready.sub": "ask anything — the agent can explore files, run commands, <em>reason</em>, and edit code.",
-    "start.typing": "start typing below…",
+    "ready": "ready when you are",
+    "ready.sub": "explore files &middot; run commands &middot; reason &middot; edit code",
+    "start.typing": "start typing below",
     "shortcuts": "<kbd>⌘K</kbd> focus · <kbd>↑</kbd> recall · <kbd>Esc</kbd> cancel · <kbd>⌘\\</kbd> context",
     "new.output": "new output",
     "ask.agent": "ask the agent…",
@@ -87,6 +90,10 @@ const translations = {
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "reconnecting…",
     "no.session": "no session — click + to create",
+    "no.session.title": "no session",
+    "no.session.sub": "create a session to get started",
+    "no.session.cta": "new session",
+    "no.terminals": "no terminals — click ▷ to create",
 
     // ── Renderers: errors, diffs, tools ────────────────────────────
     "error": "Error",
@@ -145,6 +152,12 @@ const translations = {
 
     // ── Config panel ───────────────────────────────────────────────
     "config.save.failed": "save failed: {msg}",
+    "config.section.provider": "Provider",
+    "config.section.appearance": "Appearance",
+    "ui.style": "UI Style",
+    "ui.style.normal": "Normal",
+    "ui.style.minimal": "Minimal",
+    "ui.style.hint": "Normal is the default; Minimal is compact",
 
     // ── Compact / reasoning ────────────────────────────────────────
     "n.reasoning.rounds": "{n} reasoning rounds",
@@ -164,14 +177,17 @@ const translations = {
     // ── HTML static strings ────────────────────────────────────────
     "sessions": "会话列表",
     "new.session": "新建会话",
+    "new.terminal": "新建终端",
+    "sidebar.view.sessions": "会话",
+    "sidebar.view.workspaces": "工作区",
+    "sidebar.view.terminals": "终端",
     "collapse.sidebar": "折叠侧边栏",
-    "working.dir": "工作目录路径",
     "connecting": "连接中…",
     "checking.updates": "检查更新中…",
     "interrupt": "中断响应 (Esc)",
-    "ready": "准备好了。",
-    "ready.sub": "随便问 — agent 可以浏览文件、运行命令、<em>推理</em>和编辑代码。",
-    "start.typing": "在下方开始输入…",
+    "ready": "开始对话",
+    "ready.sub": "浏览文件 &middot; 运行命令 &middot; 推理 &middot; 编辑代码",
+    "start.typing": "在下方输入",
     "shortcuts": "<kbd>⌘K</kbd> 聚焦 · <kbd>↑</kbd> 回溯 · <kbd>Esc</kbd> 取消 · <kbd>⌘\\</kbd> 上下文",
     "new.output": "新输出",
     "ask.agent": "向 agent 提问…",
@@ -244,6 +260,10 @@ const translations = {
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "重连中…",
     "no.session": "无会话 — 点击 + 创建",
+    "no.session.title": "无会话",
+    "no.session.sub": "创建会话以开始使用",
+    "no.session.cta": "新会话",
+    "no.terminals": "无终端 — 点击 ▷ 创建",
 
     // ── Renderers: errors, diffs, tools ────────────────────────────
     "error": "错误",
@@ -302,6 +322,12 @@ const translations = {
 
     // ── Config panel ───────────────────────────────────────────────
     "config.save.failed": "保存失败：{msg}",
+    "config.section.provider": "模型服务",
+    "config.section.appearance": "外观",
+    "ui.style": "UI 样式",
+    "ui.style.normal": "常规",
+    "ui.style.minimal": "极简",
+    "ui.style.hint": "常规为默认样式，极简为紧凑布局",
 
     // ── Compact / reasoning ────────────────────────────────────────
     "n.reasoning.rounds": "{n} 轮推理",

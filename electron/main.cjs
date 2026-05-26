@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -164,11 +164,70 @@ let mainWindow = null;
 let shutdownHub = null;
 let _shuttingDown = false;
 
+// MRU order so cross-window drag hit-tests pick the topmost window.
+const windowZOrder = [];
+function trackWindow(win) {
+  windowZOrder.unshift(win);
+  win.on("focus", () => {
+    const i = windowZOrder.indexOf(win);
+    if (i >= 0) windowZOrder.splice(i, 1);
+    windowZOrder.unshift(win);
+  });
+  win.on("closed", () => {
+    const i = windowZOrder.indexOf(win);
+    if (i >= 0) windowZOrder.splice(i, 1);
+  });
+}
+
 function resolveWebRoot() {
   if (isDev) {
     return path.join(__dirname, "..", "web");
   }
   return path.join(process.resourcesPath, "web");
+}
+
+// Independent of `mainWindow` so theme/update handlers stay scoped to the primary window.
+function createTearOutWindow(loadPath, screenPos) {
+  const isDark = nativeTheme.shouldUseDarkColors;
+  const opts = {
+    width: 1200,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
+    title: "asHub",
+    backgroundColor: isDark ? "#18181c" : "#fafaf7",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    titleBarOverlay: process.platform === "darwin" ? {
+      color: isDark ? "#18181c" : "#fafaf7",
+      symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
+    } : undefined,
+    acceptFirstMouse: true,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.cjs"),
+    },
+  };
+  if (screenPos && Number.isFinite(screenPos.x) && Number.isFinite(screenPos.y)) {
+    // Offset so the title-bar lands roughly under the cursor where the drop happened.
+    opts.x = Math.round(screenPos.x - 80);
+    opts.y = Math.round(screenPos.y - 20);
+  }
+  const win = new BrowserWindow(opts);
+  trackWindow(win);
+  win.setMenuBarVisibility(false);
+  win.once("ready-to-show", () => win.show());
+  win.loadURL(`http://127.0.0.1:${HUB_PORT}${loadPath}`);
+  if (process.platform === "darwin") {
+    win.webContents.on("did-finish-load", () => {
+      if (win.isDestroyed()) return;
+      win.webContents.executeJavaScript(
+        `document.querySelector('.title-bar').style.paddingLeft = '80px'`
+      ).catch(() => {});
+    });
+  }
+  return win;
 }
 
 function createWindow() {
@@ -187,6 +246,7 @@ function createWindow() {
       color: isDark ? "#18181c" : "#fafaf7",
       symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
     } : undefined,
+    acceptFirstMouse: true,
     show: false,
     webPreferences: {
       nodeIntegration: false,
@@ -195,6 +255,7 @@ function createWindow() {
     },
   });
 
+  trackWindow(mainWindow);
   mainWindow.setMenuBarVisibility(false);
 
   mainWindow.once("ready-to-show", () => {
@@ -311,6 +372,79 @@ function setupIPC() {
     }
   });
 
+  ipcMain.handle("open-session-window", (_event, sessionId, screenPos) => {
+    if (typeof sessionId !== "string" || !/^[0-9a-f]{4,32}$/i.test(sessionId)) {
+      return { ok: false };
+    }
+    createTearOutWindow(`/${sessionId}/`, screenPos);
+    return { ok: true };
+  });
+
+  const isValidSessionId = (s) => typeof s === "string" && /^[0-9a-f]{4,32}$/i.test(s);
+  let dragHoverWin = null;
+  let dragPoll = null;
+  let dragSender = null;
+  let dragLabel = "";
+  let lastSentX = NaN, lastSentY = NaN;
+  const findWinAt = (sender, x, y) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    for (const w of windowZOrder) {
+      try {
+        if (!w || w.isDestroyed() || w.webContents === sender) continue;
+        if (!w.isVisible() || w.isMinimized()) continue;
+        const b = w.getBounds();
+        if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) return w;
+      } catch { /* destroyed mid-iteration */ }
+    }
+    return null;
+  };
+  const sendHover = (win, payload) => {
+    if (!win || win.isDestroyed()) return;
+    win.webContents.send("tab-drag-hover", payload);
+  };
+  const stopDragPoll = () => {
+    if (dragPoll) { clearInterval(dragPoll); dragPoll = null; }
+    if (dragHoverWin) { sendHover(dragHoverWin, { hovering: false }); dragHoverWin = null; }
+    dragSender = null;
+    lastSentX = lastSentY = NaN;
+  };
+  ipcMain.on("tab-drag-update", (event, payload, phase) => {
+    if (phase === "end") { stopDragPoll(); dragLabel = ""; return; }
+    if (phase === "start") {
+      stopDragPoll();
+      dragSender = event.sender;
+      dragLabel = typeof payload?.label === "string" ? payload.label : "";
+      dragPoll = setInterval(() => {
+        try {
+          const pt = screen.getCursorScreenPoint();
+          const target = findWinAt(dragSender, pt.x, pt.y);
+          if (target !== dragHoverWin) {
+            if (dragHoverWin) sendHover(dragHoverWin, { hovering: false });
+            dragHoverWin = target;
+            lastSentX = lastSentY = NaN;
+          }
+          if (target && (pt.x !== lastSentX || pt.y !== lastSentY)) {
+            sendHover(target, { hovering: true, screenPos: pt, label: dragLabel });
+            lastSentX = pt.x; lastSentY = pt.y;
+          }
+        } catch (err) {
+          console.error("[tab-drag poll]", err);
+          stopDragPoll();
+        }
+      }, 50);
+    }
+  });
+
+  ipcMain.handle("move-tab-to-window-at", (event, sessionId) => {
+    if (!isValidSessionId(sessionId)) return { ok: false, moved: false };
+    const pt = screen.getCursorScreenPoint();
+    const target = findWinAt(event.sender, pt.x, pt.y);
+    if (!target) return { ok: true, moved: false };
+    target.webContents.send("accept-tab", sessionId);
+    target.focus();
+    return { ok: true, moved: true };
+  });
+
   ipcMain.handle("open-external", async (_event, url) => {
     // Block dangerous protocols, allow everything else (http, https, mailto, etc.)
     const BLOCKED = new Set(["javascript:", "file:", "data:", "vbscript:"]);
@@ -347,12 +481,13 @@ async function startServer() {
   const webRoot = resolveWebRoot();
   const distRoot = path.join(__dirname, "..", "dist");
 
-  let startHub, AshBridge;
+  let startHub, AshBridge, TerminalBridge;
   try {
     const hubMod = await import(pathToFileURL(path.join(distRoot, "hub.js")).href);
     startHub = hubMod.startHub;
     shutdownHub = hubMod.shutdownHub;
     ({ AshBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "ash.js")).href));
+    ({ TerminalBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "terminal.js")).href));
   } catch (err) {
     console.error("[electron] failed to import dist modules:", err);
     dialog.showErrorBox(
@@ -369,7 +504,7 @@ async function startServer() {
       port: HUB_PORT,
       host: "127.0.0.1",
       webRoot,
-      makeBridge: (opts) => new AshBridge(opts),
+      makeBridge: (opts) => opts.kind === "terminal" ? new TerminalBridge(opts) : new AshBridge(opts),
     });
   } catch (err) {
     console.error("[electron] failed to start hub:", err);
@@ -422,6 +557,22 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(() => {
+    // Custom menu omits Cmd+W so the renderer can intercept it for tab close.
+    const isMac = process.platform === "darwin";
+    const template = [
+      ...(isMac ? [{ role: "appMenu" }] : []),
+      { role: "editMenu" },
+      { role: "viewMenu" },
+      {
+        label: "Window",
+        submenu: [
+          { role: "minimize" },
+          { role: "zoom" },
+          ...(isMac ? [{ type: "separator" }, { role: "front" }] : []),
+        ],
+      },
+    ];
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
     setupIPC();
     startServer();
 

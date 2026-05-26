@@ -11,13 +11,48 @@
  * built-in tools' own safety checks handle anything dangerous.
  */
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
 import path from "node:path";
+import * as os from "node:os";
 import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
 import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
 import { getSettings } from "agent-sh/settings";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
+import { Shell } from "agent-sh/shell";
+import { registerShellHandlers } from "agent-sh/shell/host";
+import { type Terminal, BridgedTerminal, headlessTerminal, surfaceFromTerminal } from "agent-sh/shell/terminal";
+import { palette as p } from "agent-sh/utils/palette.js";
+import { spillOutput } from "agent-sh/utils/shell-output-spill.js";
+
+interface ShellExchange {
+  id: number;
+  command: string;
+  output: string;
+  cwd: string;
+  exitCode: number | null;
+  outputLines: number;
+  spillPath?: string;
+}
+
+function formatShellExchange(ex: ShellExchange): string {
+  let s = `#${ex.id} [shell cwd:${ex.cwd}] $ ${ex.command}\n`;
+  if (ex.output) s += indentLines(ex.output, "  ") + "\n";
+  if (ex.exitCode !== null) s += `  exit ${ex.exitCode}\n`;
+  return s;
+}
+
+function indentLines(text: string, prefix: string): string {
+  return text.split("\n").map((line) => prefix + line).join("\n");
+}
+
+function defaultShell(): string {
+  if (process.platform === "win32") {
+    return process.env.COMSPEC ?? "powershell.exe";
+  }
+  return process.env.SHELL ?? "/bin/bash";
+}
 
 // Bus events to forward verbatim. Names line up with what the web client
 // already handles (see web/js/client.js handler map).
@@ -35,6 +70,10 @@ const FORWARDED = [
   // Slash-commands extension reports model/thinking/etc state and errors via these.
   "ui:info",
   "ui:error",
+  "shell:command-start",
+  "shell:command-done",
+  "shell:cwd-change",
+  "shell:queued",
 ];
 
 export class AshBridge extends EventEmitter implements Bridge {
@@ -43,9 +82,16 @@ export class AshBridge extends EventEmitter implements Bridge {
   private opts: BridgeOpts;
   private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
   private queryQueue: string[] = [];
+  private shellQueue: string[] = [];
   private closed = false;
-  private seedMessages: unknown[] | null = null;
   private backendRegistered = false;
+  private shell: Shell | null = null;
+  private bridgedTerminal: BridgedTerminal | null = null;
+  private agentInfoSnapshot: { name?: string; model?: string } | null = null;
+  private liveCwd: string = "";
+  private shellExchanges: ShellExchange[] = [];
+  private shellLastInjected = 0;
+  private shellNextId = 1;
 
   constructor(opts: BridgeOpts) {
     super();
@@ -67,6 +113,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     // Activate the ash agent backend so backends can register themselves
     // before core:extensions-loaded fires and activateBackend() runs.
     // This matches the CLI init order in agent-sh/dist/cli/index.js.
+    const exposeTerminal = this.opts.kind === "ash-terminal";
+    // registerShellHandlers must precede activateAgent + loadBuiltinExtensions
+    // so ctx.shell.compositor + tui-renderer are wired before the input mode prompt fires.
+    if (exposeTerminal) registerShellHandlers(extCtx);
     activateAgent(extCtx);
     const settings = getSettings();
     const headlessDisabled = [
@@ -105,18 +155,92 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.handlers.define("conversation:format-prior-history", () => null);
 
     core.bus.emit("core:extensions-loaded", { names: [...builtinNames, ...userNames] });
-    core.activateBackend();
+    await core.activateBackend();
 
-    if (this.opts.cwd) {
-      const resolved = path.resolve(this.opts.cwd);
-      core.handlers.advise("cwd", () => resolved);
+    const startCwd = this.opts.cwd ? path.resolve(this.opts.cwd) : os.homedir();
+    this.liveCwd = startCwd;
+
+    // agent-sh Shell only supports zsh/bash/fish — skip on Windows.
+    if (process.platform !== "win32") {
+      let terminal: Terminal;
+      if (exposeTerminal) {
+        this.bridgedTerminal = new BridgedTerminal((data) => {
+          this.emit("event", { name: "shell:pty-data", payload: { raw: data } } satisfies BusEvent);
+        });
+        terminal = this.bridgedTerminal;
+        const surface = surfaceFromTerminal(terminal);
+        const compositor = extCtx.shell?.compositor;
+        if (compositor) {
+          compositor.setDefault("agent", surface);
+          compositor.setDefault("query", surface);
+          compositor.setDefault("status", surface);
+        }
+        core.bus.on("agent:info", (info) => {
+          const i = info as { name?: string; model?: string } | null;
+          if (i) this.agentInfoSnapshot = { name: i.name, model: i.model };
+          core.bus.emit("config:changed", {});
+        });
+      } else {
+        terminal = headlessTerminal();
+      }
+      try {
+        this.shell = new Shell({
+          bus: core.bus,
+          handlers: core.handlers,
+          cols: 100,
+          rows: 30,
+          shell: defaultShell(),
+          cwd: startCwd,
+          instanceId: extCtx.instanceId,
+          terminal,
+          onShowAgentInfo: exposeTerminal ? () => {
+            const info = this.agentInfoSnapshot;
+            if (!info?.name) return { info: "" };
+            return { info: `${p.dim}${info.name}${info.model ? ` (${info.model})` : ""}${p.reset}` };
+          } : undefined,
+        });
+        this.shell.onExit(() => { this.shell = null; });
+      } catch (err) {
+        process.stderr.write(`[ash-bridge] shell spawn failed: ${err instanceof Error ? err.message : err}\n`);
+      }
+      if (exposeTerminal) {
+        core.bus.emit("input-mode:register", {
+          id: "agent",
+          trigger: ">",
+          label: "agent",
+          promptIcon: "❯",
+          indicator: "●",
+          onSubmit(query, b) { b.emit("agent:submit", { query }); },
+          returnToSelf: true,
+        });
+      }
+      const onAnyBus = core.bus.on.bind(core.bus) as unknown as (n: string, fn: (p: unknown) => void) => void;
+      onAnyBus("shell:cwd-change", (payload) => {
+        const next = (payload as { cwd?: string })?.cwd;
+        if (typeof next === "string" && next) this.liveCwd = next;
+      });
+      onAnyBus("shell:command-done", (payload) => {
+        this.recordShellExchange(payload as { command?: string; output?: string; cwd?: string; exitCode?: number | null });
+      });
     }
+    core.handlers.advise("cwd", () => this.liveCwd);
 
     core.handlers.advise("system-prompt:build", (next: () => string) => {
       const base = next();
       const cwd = core.handlers.call("cwd");
       if (typeof cwd !== "string" || !cwd) return base;
       return `${base}\n\n# Working Directory\n\nCurrent working directory: ${cwd}`;
+    });
+
+    core.handlers.advise("query-context:build", (next: () => string) => {
+      const base = (next() ?? "").trim();
+      const fresh = this.shellExchanges.filter((e) => e.id > this.shellLastInjected);
+      if (fresh.length === 0) return base;
+      this.shellLastInjected = fresh[fresh.length - 1].id;
+      const eventsText = fresh.map(formatShellExchange).filter(Boolean).join("\n");
+      if (!eventsText) return base;
+      const tail = `<shell_events>\n${eventsText}\n</shell_events>`;
+      return base ? `${base}\n\n${tail}` : tail;
     });
 
     if (this.opts.compactionStrategy) {
@@ -131,25 +255,9 @@ export class AshBridge extends EventEmitter implements Bridge {
       });
     }
 
-    // Restored sessions: inject the persisted conversation into the agent's
-    // live context so it can reference prior turns.  We do this at the very
-    // end of init() — after extensions are loaded and the backend is
-    // activated — to avoid microtask races with other conversation
-    // mutations.  Only clear seedMessages when the compact actually
-    // succeeded (stats returned); if no pipe handler processed it we keep
-    // the seed fallback so snapshot() still shows history in the UI.
-    this.seedMessages = this.opts.initialMessages?.length ? [...this.opts.initialMessages] : null;
-    if (this.seedMessages) {
+    if (this.opts.initialMessages?.length) {
       try {
-        const emitPipeAsync = core.bus.emitPipeAsync.bind(core.bus) as unknown as (
-          name: string,
-          payload: { strategy: ContextStrategy; stats?: { before: number; after: number; evictedCount: number } },
-        ) => Promise<{ stats?: { before: number; after: number; evictedCount: number } }>;
-        const r = await emitPipeAsync("context:compact", { strategy: { kind: "replace", messages: this.seedMessages } });
-        // Stats are only present when a pipe handler actually processed
-        // the compact.  If absent the agent's conversation was NOT mutated,
-        // so keep seedMessages for the snapshot() UI fallback.
-        if (r?.stats) this.seedMessages = null;
+        core.handlers.call("conversation:replace-messages", this.opts.initialMessages);
       } catch (err) {
         process.stderr.write(`[ash-bridge] failed to inject restored messages: ${err instanceof Error ? err.message : err}\n`);
       }
@@ -249,15 +357,6 @@ export class AshBridge extends EventEmitter implements Bridge {
       } satisfies BusEvent);
     });
 
-    onAny("config:set-thinking", (payload) => {
-      const level = (payload as { level?: string })?.level;
-      if (!level) return;
-      this.emit("event", {
-        name: "ui:info",
-        payload: { message: `Thinking level: ${level}` },
-      } satisfies BusEvent);
-    });
-
     // Track whether any agent backend registered. Without one, submit()
     // must reject so the UI doesn't spin forever (e.g. missing API key).
     onAny("agent:register-backend", () => { this.backendRegistered = true; });
@@ -271,18 +370,18 @@ export class AshBridge extends EventEmitter implements Bridge {
     onAny("agent:processing-done", () => {
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "end_turn" }); }
-      setTimeout(() => this.drainQueue(), 0);
+      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
     onAny("agent:error", (payload) => {
       const message = (payload as { message?: string })?.message ?? "agent error";
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.reject(new Error(message)); }
-      setTimeout(() => this.drainQueue(), 0);
+      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
     onAny("agent:cancelled", () => {
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "cancelled" }); }
-      setTimeout(() => this.drainQueue(), 0);
+      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
 
     // Permission gate — forward to UI as an event (so the diff preview
@@ -358,6 +457,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.core?.bus.emit("command:execute", { name, args });
   }
 
+  setThinking(level: string): void {
+    this.core?.bus.emit("config:set-thinking", { level });
+  }
+
   async autocomplete(buffer: string): Promise<Array<{ name: string; description: string }> | null> {
     if (!this.core) return null;
     // Arg-completion handlers in slash-commands.ts gate on `payload.command`
@@ -392,18 +495,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     // Filter system notes from the live conversation — they are
     // internal metadata that shouldn't appear in the context panel
     // or be persisted across save/restore cycles.
-    const cur = (snap.messages as Array<{ isSystemNote?: boolean }>)
+    snap.messages = (snap.messages as Array<{ isSystemNote?: boolean }>)
       .filter((m) => !m.isSystemNote);
-
-    // When restoring a session, seedMessages holds the persisted
-    // conversation.  Prepend it so both the context panel and
-    // saveSessionMessages see the full history.  (seed messages were
-    // saved from a prior snapshot, so they are already system-note-free.)
-    if (this.seedMessages) {
-      snap.messages = [...this.seedMessages, ...cur];
-    } else {
-      snap.messages = cur;
-    }
 
     return snap;
   }
@@ -416,24 +509,95 @@ export class AshBridge extends EventEmitter implements Bridge {
       payload: { strategy: ContextStrategy; stats?: { before: number; after: number; evictedCount: number } },
     ) => Promise<{ stats?: { before: number; after: number; evictedCount: number } }>;
     const r = await emitPipeAsync("context:compact", { strategy });
-
-    // After a successful replace/rewind, the live conversation already
-    // contains the full (mutated) history.  Clear seedMessages so that
-    // subsequent snapshot() calls do NOT prepend the stale persisted
-    // messages again — that would duplicate history and break KV-cache
-    // prefix matching because the message sequence would differ from what
-    // the model actually saw.
-    if (this.seedMessages && (strategy.kind === "replace" || strategy.kind === "rewind")) {
-      this.seedMessages = null;
-    }
-
     return r.stats ?? null;
+  }
+
+  private recordShellExchange(e: { command?: string; output?: string; cwd?: string; exitCode?: number | null }): void {
+    const command = e.command ?? "";
+    const rawOutput = e.output ?? "";
+    if (!command) return;
+    const cwd = e.cwd ?? this.liveCwd;
+    const exitCode = e.exitCode ?? null;
+    const id = this.shellNextId++;
+    const {
+      shellTruncateThreshold: threshold = 20,
+      shellHeadLines: head = 10,
+      shellTailLines: tail = 10,
+    } = getSettings() as {
+      shellTruncateThreshold?: number;
+      shellHeadLines?: number;
+      shellTailLines?: number;
+    };
+    const lines = rawOutput.split("\n");
+    let output = rawOutput;
+    let spillPath: string | undefined;
+    if (lines.length > threshold) {
+      try {
+        spillPath = spillOutput(id, rawOutput);
+        const omitted = lines.length - head - tail;
+        output = [
+          ...lines.slice(0, head),
+          `[... ${omitted} lines truncated — full output at ${spillPath}; use read_file to expand ...]`,
+          ...lines.slice(-tail),
+        ].join("\n");
+      } catch {}
+    }
+    this.shellExchanges.push({
+      id, command, output, cwd, exitCode,
+      outputLines: lines.length,
+      spillPath,
+    });
+    while (this.shellExchanges.length > 100) {
+      const evicted = this.shellExchanges.shift();
+      if (evicted?.spillPath) {
+        try { fs.rmSync(evicted.spillPath, { force: true }); } catch {}
+      }
+    }
+  }
+
+  writePty(data: string): void {
+    if (this.closed || !this.shell) return;
+    if (this.bridgedTerminal) {
+      this.bridgedTerminal.pushInput(data);
+      return;
+    }
+    if (this.pendingTurn) {
+      this.shellQueue.push(data);
+      const command = data.replace(/\r?\n$/, "");
+      this.emit("event", { name: "shell:queued", payload: { command } } satisfies BusEvent);
+      return;
+    }
+    try { this.shell.writeToPty(data); } catch {}
+  }
+
+  private drainShellQueue(): void {
+    if (!this.shell || this.closed) { this.shellQueue.length = 0; return; }
+    while (this.shellQueue.length > 0) {
+      const next = this.shellQueue.shift()!;
+      try { this.shell.writeToPty(next); } catch {}
+    }
+  }
+
+  resizePty(cols: number, rows: number): void {
+    if (this.closed || !this.shell) return;
+    if (this.bridgedTerminal) this.bridgedTerminal.pushResize(cols, rows);
+    try { this.shell.resize(cols, rows); } catch {}
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
     try { this.core?.kill(); } catch {}
+    if (this.shell) {
+      try { this.shell.kill(); } catch {}
+      this.shell = null;
+    }
+    for (const ex of this.shellExchanges) {
+      if (ex.spillPath) {
+        try { fs.rmSync(ex.spillPath, { force: true }); } catch {}
+      }
+    }
+    this.shellExchanges.length = 0;
     this.emit("closed");
   }
 

@@ -51,26 +51,38 @@ const computeGroups = (msgs) => {
 const tokensOf = (m) => Math.ceil(JSON.stringify(m ?? null).length / 4);
 const fmtTok = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
+const stripContextWrappers = (s) => {
+  let out = String(s ?? "");
+  for (;;) {
+    const next = out.replace(/^\s*<(query_context|dynamic_context)>[\s\S]*?<\/\1>\s*/, "");
+    if (next === out) return out;
+    out = next;
+  }
+};
+
 const messageText = (m) => {
-  if (typeof m?.content === "string") return m.content;
-  if (Array.isArray(m?.content)) {
-    return m.content
-      .map((p) => (typeof p === "string" ? p : p?.text ?? p?.content ?? JSON.stringify(p)))
-      .join("\n");
-  }
-  if (m?.role === "assistant" && Array.isArray(m?.tool_calls)) {
-    return m.tool_calls.map((tc) => {
-      const fn = tc?.function ?? {};
-      let args = fn.arguments ?? "";
-      try {
-        const parsed = typeof args === "string" ? JSON.parse(args) : args;
-        args = JSON.stringify(parsed, null, 2);
-      } catch {}
-      return `→ ${fn.name ?? t("tool")}(\n${args}\n)`;
-    }).join("\n\n");
-  }
-  if (m?.role === "tool") return String(m.content ?? "");
-  return JSON.stringify(m ?? {});
+  const raw = (() => {
+    if (typeof m?.content === "string") return m.content;
+    if (Array.isArray(m?.content)) {
+      return m.content
+        .map((p) => (typeof p === "string" ? p : p?.text ?? p?.content ?? JSON.stringify(p)))
+        .join("\n");
+    }
+    if (m?.role === "assistant" && Array.isArray(m?.tool_calls)) {
+      return m.tool_calls.map((tc) => {
+        const fn = tc?.function ?? {};
+        let args = fn.arguments ?? "";
+        try {
+          const parsed = typeof args === "string" ? JSON.parse(args) : args;
+          args = JSON.stringify(parsed, null, 2);
+        } catch {}
+        return `→ ${fn.name ?? t("tool")}(\n${args}\n)`;
+      }).join("\n\n");
+    }
+    if (m?.role === "tool") return String(m.content ?? "");
+    return JSON.stringify(m ?? {});
+  })();
+  return m?.role === "user" ? stripContextWrappers(raw) : raw;
 };
 
 const ctx = () => activeSession.peek()?.context;

@@ -54,7 +54,6 @@ themeToggle?.addEventListener("click", toggleTheme);
 
 const setSidebarCollapsed = (on) => {
   app.classList.toggle("sidebar-collapsed", on);
-  if (sidebarToggle) sidebarToggle.textContent = on ? "›" : "‹";
   try { localStorage.setItem(LS_SIDEBAR, on ? "1" : "0"); } catch {}
 };
 
@@ -108,3 +107,104 @@ sidebarResize?.addEventListener("dblclick", () => {
 langToggle?.addEventListener("click", () => {
   setLang(lang.value === "zh" ? "en" : "zh");
 });
+
+// UI prefs under `asHub.ui.*`. Defaults baked into HTML (data-ui-*) and CSS (var()),
+// so the fetch only diff-applies overrides.
+const UI_PREFS = {
+  "conversation.center":      { kind: "attr", attr: "data-ui-conversation-center",      target: ".terminal-wrap" },
+  "conversation.message-gap": { kind: "var",  prop: "--ui-conversation-message-gap",    target: ".terminal-wrap" },
+  "conversation.turn-gap":    { kind: "var",  prop: "--ui-conversation-turn-gap",       target: ".terminal-wrap" },
+  "reply.border.show":        { kind: "attr", attr: "data-ui-reply-border-show",        target: ".terminal-wrap" },
+  "reply.border.gradient":    { kind: "attr", attr: "data-ui-reply-border-gradient",    target: ".terminal-wrap" },
+  "reply.border.color":       { kind: "var",  prop: "--ui-reply-border-color",          target: ".terminal-wrap" },
+  "reply.hover":              { kind: "attr", attr: "data-ui-reply-hover",              target: ".terminal-wrap" },
+  "reply.code.border":        { kind: "attr", attr: "data-ui-reply-code-border",        target: ".terminal-wrap" },
+  "input.gradient":           { kind: "attr", attr: "data-ui-input-gradient",           target: ".live-input" },
+  "input.focus-ring":         { kind: "attr", attr: "data-ui-input-focus-ring",         target: "#query" },
+  "input.padding-y":          { kind: "var",  prop: "--ui-input-padding-y",             target: ".live-input" },
+  "turn.time.show":           { kind: "attr", attr: "data-ui-turn-time-show",           target: ".terminal-wrap" },
+  "turn.sep.show":            { kind: "attr", attr: "data-ui-turn-sep-show",            target: ".terminal-wrap" },
+  "usage.align":              { kind: "attr", attr: "data-ui-usage-align",              target: ".terminal-wrap" },
+  "usage.sticky":             { kind: "attr", attr: "data-ui-usage-sticky",             target: ".terminal-wrap" },
+  "usage.git-branch":         { kind: "attr", attr: "data-ui-usage-git-branch",         target: ".terminal-wrap" },
+  "usage.cwd.show":           { kind: "attr", attr: "data-ui-usage-cwd-show",           target: ".terminal-wrap" },
+  "usage.model.show":         { kind: "attr", attr: "data-ui-usage-model-show",         target: ".terminal-wrap" },
+  "usage.cache.show":         { kind: "attr", attr: "data-ui-usage-cache-show",         target: ".terminal-wrap" },
+  "usage.total.show":         { kind: "attr", attr: "data-ui-usage-total-show",         target: ".terminal-wrap" },
+  "cancel.show":              { kind: "attr", attr: "data-ui-cancel-show",              target: "#cancel-turn" },
+  "balance.show":             { kind: "attr", attr: "data-ui-balance-show",             target: "#balance-display" },
+  "tabs.enabled":             { kind: "attr", attr: "data-ui-tabs-enabled",             target: ".app" },
+  "title-bar.height":         { kind: "var",  prop: "--ui-title-bar-height" },
+  "title-bar.model.show":     { kind: "attr", attr: "data-ui-model-show",              target: "#instance" },
+  "title-bar.model.uppercase":{ kind: "attr", attr: "data-ui-model-uppercase",          target: "#instance" },
+  "title-bar.version.show":   { kind: "attr", attr: "data-ui-version-show",             target: "#version-label" },
+  "cwd.max-width":            { kind: "var",  prop: "--ui-cwd-max-width",               target: "#session-cwd-meta" },
+};
+
+const applyUiPrefs = (ui) => {
+  if (!ui || typeof ui !== "object") return;
+  for (const [key, spec] of Object.entries(UI_PREFS)) {
+    const v = ui[key];
+    if (v === undefined) continue;
+    const el = spec.target ? document.querySelector(spec.target) : document.documentElement;
+    if (!el) continue;
+    if (spec.kind === "attr") {
+      el.setAttribute(spec.attr, String(v));
+    } else if (spec.kind === "var") {
+      el.style.setProperty(spec.prop, String(v));
+    }
+  }
+};
+
+const clearUiPrefs = () => {
+  for (const spec of Object.values(UI_PREFS)) {
+    const el = spec.target ? document.querySelector(spec.target) : document.documentElement;
+    if (!el) continue;
+    if (spec.kind === "attr") {
+      el.removeAttribute(spec.attr);
+    } else if (spec.kind === "var") {
+      el.style.removeProperty(spec.prop);
+    }
+  }
+};
+
+// ── Layered config: settings.json (priority 1) → localStorage (priority 2) ──
+
+const LS_UI = "ash.ui";
+
+const readUiPrefsFromStorage = () => {
+  try {
+    const raw = localStorage.getItem(LS_UI);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+};
+
+const writeUiPrefsToStorage = (ui) => {
+  try {
+    if (ui && typeof ui === "object" && Object.keys(ui).length > 0) {
+      localStorage.setItem(LS_UI, JSON.stringify(ui));
+    } else {
+      localStorage.removeItem(LS_UI);
+    }
+  } catch {}
+};
+
+fetch("/api/config")
+  .then((r) => r.json())
+  .then((cfg) => {
+    const serverUi = cfg?.asHub?.ui;
+    const localUi = readUiPrefsFromStorage();
+    const merged = serverUi
+      ? { ...localUi, ...serverUi }
+      : localUi;
+    if (merged) {
+      applyUiPrefs(merged);
+      writeUiPrefsToStorage(merged);
+    }
+  })
+  .catch(() => {
+    const localUi = readUiPrefsFromStorage();
+    if (localUi) applyUiPrefs(localUi);
+  });
+
+export { applyUiPrefs, clearUiPrefs, writeUiPrefsToStorage };

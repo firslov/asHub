@@ -1,17 +1,18 @@
 import { escape } from "./utils.js";
 import { state, homeDir, headerTopic, headerCwd } from "./state.js";
-import { effect } from "../vendor/signals-core.js";
-import { activeSessionId, switchTo, spaEnabled, sessions } from "./session-manager.js";
-import { attachAutocomplete } from "./autocomplete.js";
+import { signal, effect } from "../vendor/signals-core.js";
+import { activeSessionId, switchTo, spaEnabled, sessions, openTabs, closeTab, setSessionKind } from "./session-manager.js";
 import { t } from "./i18n.js";
 
 const sessionList = document.getElementById("sessions");
+const workspaceList = document.getElementById("workspaces");
+const terminalList = document.getElementById("terminals");
+const viewButtons = document.querySelectorAll(".sidebar-view-btn");
+const VIEWS = new Set(["sessions", "workspaces", "terminals"]);
 const sessionTopic = document.getElementById("session-topic");
 const sessionCwdMeta = document.getElementById("session-cwd-meta");
-const newForm = document.getElementById("new-session-form");
-const newCwd = document.getElementById("new-session-cwd");
-const newErr = document.getElementById("new-session-err");
 const newBtn = document.getElementById("new-session");
+const newTerminalBtn = document.getElementById("new-terminal");
 
 export const setSessionTopic = (title) => { headerTopic.value = title ?? ""; };
 export const setSessionCwd = (cwd) => { headerCwd.value = cwd ?? ""; };
@@ -38,9 +39,47 @@ if (sessionCwdMeta) {
   });
 }
 
-const LS_LAST_CWD = "ash.last-cwd";
+const LS_SIDEBAR_VIEW = "ash.sidebar-view";
+const LS_WORKSPACE_COLLAPSED = "ash.workspace-collapsed";
 
+let fullSessionsHash = "";
 let sessionsHash = "";
+let workspacesHash = "";
+let terminalsHash = "";
+
+export const sessionInfo = new Map();
+export const sessionsTick = signal(0);
+
+effect(() => {
+  const id = activeSessionId.value;
+  sessionsTick.value;
+  const s = id ? sessionInfo.get(id) : null;
+  if (!s) return;
+  const hasTitle = s.title && s.title !== s.instanceId;
+  setSessionTopic(hasTitle ? s.title : "");
+  setSessionCwd(s.cwd);
+});
+
+const initialView = (() => {
+  try {
+    const v = localStorage.getItem(LS_SIDEBAR_VIEW);
+    return VIEWS.has(v) ? v : "sessions";
+  } catch { return "sessions"; }
+})();
+export const sidebarView = signal(initialView);
+
+const collapsedWorkspaces = (() => {
+  try {
+    const raw = localStorage.getItem(LS_WORKSPACE_COLLAPSED);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch { return new Set(); }
+})();
+
+const persistCollapsed = () => {
+  try { localStorage.setItem(LS_WORKSPACE_COLLAPSED, JSON.stringify([...collapsedWorkspaces])); } catch {}
+};
 
 const shortenCwd = (cwd) => {
   if (!cwd) return "";
@@ -147,11 +186,7 @@ const renderSessionItem = (s) => {
   li.dataset.sessionId = s.instanceId;
   const isCurrent = s.instanceId === activeSessionId.peek();
   const hasTitle = s.title && s.title !== s.instanceId;
-  if (isCurrent) {
-    li.className = "current";
-    setSessionTopic(hasTitle ? s.title : "");
-    setSessionCwd(s.cwd);
-  }
+  if (isCurrent) li.className = "current";
   if (s.isProcessing) li.classList.add("session-streaming");
   else if (s.hasUnread) li.classList.add("session-unread");
 
@@ -201,6 +236,7 @@ const renderSessionItem = (s) => {
     try {
       await fetch(`/${s.instanceId}/`, { method: "DELETE" });
     } catch {}
+    if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
     const closingActive = s.instanceId === activeSessionId.peek();
     if (closingActive && spaEnabled()) {
       // Pick another session to land on. Prefer one we've already preloaded,
@@ -239,19 +275,31 @@ const renderSessions = async () => {
   try {
     const res = await fetch("/sessions");
     const list = await res.json();
-    const hash = JSON.stringify(list.map((s) => [
+    const fullHash = JSON.stringify(list.map((s) => [
+      s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread, s.kind ?? "agent",
+    ]));
+    if (fullHash === fullSessionsHash) return;
+    fullSessionsHash = fullHash;
+    sessionInfo.clear();
+    for (const s of list) {
+      sessionInfo.set(s.instanceId, s);
+      setSessionKind(s.instanceId, s.kind ?? "agent");
+    }
+    sessionsTick.value = sessionsTick.peek() + 1;
+    const agents = list.filter((s) => (s.kind ?? "agent") === "agent");
+    const hash = JSON.stringify(agents.map((s) => [
       s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread,
     ]));
-    if (hash === sessionsHash) return;  // 5s poll: skip rebuild when nothing changed
+    if (hash === sessionsHash) return;
     const isFirstRender = sessionsHash === "";
     sessionsHash = hash;
-    if (!homeDir.value && list[0]?.cwd) {
-      const m = list[0].cwd.match(/^(\/Users\/[^/]+|\/home\/[^/]+)/);
+    if (!homeDir.value && agents[0]?.cwd) {
+      const m = agents[0].cwd.match(/^(\/Users\/[^/]+|\/home\/[^/]+)/);
       if (m) homeDir.value = m[1];
     }
     sessionList.innerHTML = "";
     const buckets = new Map();
-    for (const s of list) {
+    for (const s of agents) {
       const k = bucketKey(s.startedAt);
       if (!buckets.has(k)) buckets.set(k, []);
       buckets.get(k).push(s);
@@ -276,6 +324,215 @@ const renderSessions = async () => {
     }
   } catch {}
 };
+
+const renderWorkspaces = () => {
+  if (!workspaceList) return;
+  const agents = [...sessionInfo.values()].filter((s) => (s.kind ?? "agent") === "agent");
+  const buckets = new Map();
+  for (const s of agents) {
+    const key = s.cwd || "(no cwd)";
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(s);
+  }
+  const groups = [...buckets.entries()].map(([cwd, items]) => {
+    items.sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
+    const lastModified = Math.max(...items.map((s) => s.lastModified ?? s.startedAt ?? 0));
+    return { cwd, items, lastModified };
+  });
+  groups.sort((a, b) => b.lastModified - a.lastModified);
+
+  const hash = JSON.stringify(groups.map((g) => [
+    g.cwd, g.items.map((s) => [s.instanceId, s.title, s.isProcessing, s.hasUnread]),
+  ]));
+  if (hash === workspacesHash) return;
+  workspacesHash = hash;
+
+  workspaceList.innerHTML = "";
+  for (const g of groups) {
+    const li = document.createElement("li");
+    li.className = "workspace-group";
+    li.dataset.cwd = g.cwd;
+    if (collapsedWorkspaces.has(g.cwd)) li.classList.add("collapsed");
+
+    const head = document.createElement("div");
+    head.className = "workspace-head";
+
+    const caret = document.createElement("span");
+    caret.className = "workspace-caret";
+    caret.textContent = "▾";
+    head.appendChild(caret);
+
+    const pathSpan = document.createElement("span");
+    pathSpan.className = "workspace-path";
+    const display = shortenCwd(g.cwd);
+    pathSpan.textContent = display;
+    pathSpan.title = g.cwd;
+    head.appendChild(pathSpan);
+
+    const count = document.createElement("span");
+    count.className = "workspace-count";
+    count.textContent = String(g.items.length);
+    head.appendChild(count);
+
+    const actions = document.createElement("span");
+    actions.className = "workspace-actions";
+    const newBtn = document.createElement("button");
+    newBtn.className = "workspace-action";
+    newBtn.title = "New agent here";
+    newBtn.textContent = "+";
+    newBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const res = await fetch("/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: g.cwd, kind: "agent" }),
+      });
+      if (!res.ok) return;
+      const sess = await res.json();
+      if (sess.instanceId) {
+        setSessionKind(sess.instanceId, "agent");
+        window.location.href = `/${sess.instanceId}/`;
+      }
+    });
+    actions.appendChild(newBtn);
+    head.appendChild(actions);
+
+    head.addEventListener("click", () => {
+      const isCollapsed = li.classList.toggle("collapsed");
+      if (isCollapsed) collapsedWorkspaces.add(g.cwd);
+      else collapsedWorkspaces.delete(g.cwd);
+      persistCollapsed();
+    });
+
+    li.appendChild(head);
+
+    const children = document.createElement("ul");
+    children.className = "workspace-children";
+    for (const s of g.items) {
+      const child = document.createElement("li");
+      child.dataset.sessionId = s.instanceId;
+      if (s.instanceId === activeSessionId.peek()) child.classList.add("current");
+      if (s.isProcessing) child.classList.add("session-streaming");
+      else if (s.hasUnread) child.classList.add("session-unread");
+
+      const a = document.createElement("a");
+      a.href = `/${s.instanceId}/`;
+      a.addEventListener("click", (ev) => {
+        if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+        if (spaEnabled()) {
+          ev.preventDefault();
+          switchTo(s.instanceId);
+        }
+      });
+      const hasTitle = s.title && s.title !== s.instanceId;
+      const titleText = hasTitle ? s.title : t("untitled");
+      a.innerHTML =
+        `<span class="workspace-child-kind">◆</span>` +
+        `<span class="workspace-child-title" title="${escape(titleText)}">${escape(titleText)}</span>`;
+      child.appendChild(a);
+      children.appendChild(child);
+    }
+    li.appendChild(children);
+
+    workspaceList.appendChild(li);
+  }
+};
+
+const renderTerminals = () => {
+  if (!terminalList) return;
+  const items = [...sessionInfo.values()]
+    .filter((s) => (s.kind ?? "agent") === "terminal")
+    .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
+
+  const hash = JSON.stringify(items.map((s) => [
+    s.instanceId, s.title, s.cwd, s.isProcessing,
+  ]));
+  if (hash === terminalsHash) return;
+  terminalsHash = hash;
+
+  terminalList.innerHTML = "";
+  if (items.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "terminal-empty";
+    empty.textContent = t("no.terminals");
+    terminalList.appendChild(empty);
+    return;
+  }
+  for (const s of items) {
+    const li = document.createElement("li");
+    li.dataset.sessionId = s.instanceId;
+    if (s.instanceId === activeSessionId.peek()) li.classList.add("current");
+
+    const a = document.createElement("a");
+    a.href = `/${s.instanceId}/`;
+    a.addEventListener("click", (ev) => {
+      if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+      if (spaEnabled()) { ev.preventDefault(); switchTo(s.instanceId); }
+    });
+    const hasTitle = s.title && s.title !== s.instanceId;
+    const titleText = hasTitle ? s.title : t("untitled");
+    const cwdText = s.cwd ? shortenCwd(s.cwd) : "";
+    a.innerHTML =
+      `<span class="terminal-kind">❯</span>` +
+      `<span class="terminal-meta">` +
+        `<span class="terminal-title" title="${escape(titleText)}">${escape(titleText)}</span>` +
+        (cwdText ? `<span class="terminal-cwd" title="${escape(s.cwd)}">${escape(cwdText)}</span>` : "") +
+      `</span>`;
+    li.appendChild(a);
+
+    const close = document.createElement("button");
+    close.className = "terminal-close";
+    close.title = t("close.session");
+    close.textContent = "×";
+    close.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!confirm(t("close.session.confirm", { title: escape(titleText) }))) return;
+      try { await fetch(`/${s.instanceId}/`, { method: "DELETE" }); } catch {}
+      if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
+      renderTerminals();
+    });
+    li.appendChild(close);
+
+    terminalList.appendChild(li);
+  }
+};
+
+for (const btn of viewButtons) {
+  btn.addEventListener("click", () => {
+    const v = btn.dataset.view;
+    if (!VIEWS.has(v)) return;
+    sidebarView.value = v;
+    try { localStorage.setItem(LS_SIDEBAR_VIEW, v); } catch {}
+  });
+}
+
+effect(() => {
+  const view = sidebarView.value;
+  if (sessionList) sessionList.hidden = view !== "sessions";
+  if (workspaceList) workspaceList.hidden = view !== "workspaces";
+  if (terminalList) terminalList.hidden = view !== "terminals";
+  for (const btn of viewButtons) {
+    btn.classList.toggle("current", btn.dataset.view === view);
+  }
+});
+
+effect(() => {
+  sessionsTick.value;
+  const v = sidebarView.value;
+  if (v === "workspaces") renderWorkspaces();
+  else if (v === "terminals") renderTerminals();
+});
+
+effect(() => {
+  const active = activeSessionId.value;
+  for (const root of [workspaceList, terminalList]) {
+    if (!root) continue;
+    for (const li of root.querySelectorAll("li[data-session-id]")) {
+      li.classList.toggle("current", li.dataset.sessionId === active);
+    }
+  }
+});
 
 renderSessions();
 setInterval(renderSessions, 5000);
@@ -324,26 +581,6 @@ export const updateSessionTitle = (sid, title) => {
   }
 };
 
-const cwdAc = attachAutocomplete({
-  inputEl: newCwd,
-  listEl: document.getElementById("cwd-autocomplete"),
-  shouldOpen: (b) => b.length > 0,
-  fetcher: async (buffer) => {
-    const r = await fetch(`/fs?prefix=${encodeURIComponent(buffer)}`);
-    if (!r.ok) return [];
-    const data = await r.json();
-    return data.items;
-  },
-  accept: (it) => { newCwd.value = it.name; },
-});
-
-const closeNewForm = () => {
-  if (!newForm) return;
-  newForm.hidden = true;
-  newErr.hidden = true;
-  newCwd.value = "";
-};
-
 newBtn?.addEventListener("click", async () => {
   newBtn.disabled = true;
   try {
@@ -367,14 +604,13 @@ newBtn?.addEventListener("click", async () => {
       });
       if (!res.ok) {
         const text = await res.text();
-        if (newErr) { newErr.textContent = text || `failed (${res.status})`; newErr.hidden = false; newForm.hidden = false; }
+        alert(text || `New session failed (${res.status})`);
         return;
       }
       const sess = await res.json();
-      try { localStorage.setItem(LS_LAST_CWD, cwd); } catch {}
       if (sess.instanceId) window.location.href = `/${sess.instanceId}/`;
     } catch (e) {
-      if (newErr) { newErr.textContent = String(e?.message ?? e); newErr.hidden = false; newForm.hidden = false; }
+      alert(`New session failed: ${e?.message ?? e}`);
     }
   } catch {
   } finally {
@@ -382,38 +618,25 @@ newBtn?.addEventListener("click", async () => {
   }
 });
 
-newCwd?.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") {
-    ev.preventDefault();
-    ev.stopPropagation();
-    closeNewForm();
-  }
-});
-
-newForm?.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  if (cwdAc?.hasSelection()) {
-    cwdAc.acceptCurrent();
-    return;
-  }
-  const cwd = newCwd.value.trim();
+newTerminalBtn?.addEventListener("click", async (ev) => {
+  newTerminalBtn.disabled = true;
   try {
+    const kind = (ev.metaKey || ev.ctrlKey) ? "ash-terminal" : "terminal";
+    const cwd = sessionInfo.get(activeSessionId.peek())?.cwd ?? null;
+    const body = cwd ? { cwd, kind } : { kind };
     const res = await fetch("/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cwd ? { cwd } : {}),
+      body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      const text = await res.text();
-      newErr.textContent = text || `failed (${res.status})`;
-      newErr.hidden = false;
-      return;
+    if (!res.ok) return;
+    const sess = await res.json();
+    if (sess.instanceId) {
+      setSessionKind(sess.instanceId, kind);
+      window.location.href = `/${sess.instanceId}/`;
     }
-    const data = await res.json();
-    if (cwd) try { localStorage.setItem(LS_LAST_CWD, cwd); } catch {}
-    if (data.instanceId) window.location.href = `/${data.instanceId}/`;
-  } catch (e) {
-    newErr.textContent = String(e?.message ?? e);
-    newErr.hidden = false;
+  } finally {
+    newTerminalBtn.disabled = false;
   }
 });
+

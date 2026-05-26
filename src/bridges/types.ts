@@ -13,11 +13,14 @@ export interface BusEvent {
   payload: unknown;
 }
 
+export type SessionKind = "agent" | "terminal" | "ash-terminal";
+
 export interface BridgeOpts {
   cwd?: string;
+  /** What kind of session to spawn. Defaults to "agent". */
+  kind?: SessionKind;
   /** Optional model override. Backends free to ignore. */
   model?: string;
-  /** Optional provider override. */
   provider?: string;
   /** Backend-specific extras (e.g. spawn command/args for AcpBridge). */
   extra?: Record<string, unknown>;
@@ -49,6 +52,9 @@ export interface ContextSnapshot {
 }
 
 export interface Bridge {
+  /** What kind of session this bridge implements. Defaults to "agent". */
+  readonly kind?: SessionKind;
+
   /** Resolves once the underlying agent is initialized and ready for prompts. */
   ready(): Promise<void>;
 
@@ -58,8 +64,17 @@ export interface Bridge {
   /** Best-effort cancel of the current turn. */
   cancel(): void;
 
+  /** Write raw bytes to the bridge's PTY (both terminal and agent bridges expose one). */
+  writePty?(data: string): void;
+
+  /** Forward terminal size to the bridge's PTY. */
+  resizePty?(cols: number, rows: number): void;
+
   /** Dispatch a slash command (e.g. "/model", "gpt-5"). Backends free to no-op. */
   execCommand?(name: string, args: string): void;
+
+  /** Set thinking level silently (no echo, no toast). */
+  setThinking?(level: string): void;
 
   /** Resolve completions for a partial input. Returns suggestions or null if unsupported. */
   autocomplete?(buffer: string): Promise<Array<{ name: string; description: string }> | null>;

@@ -20,7 +20,7 @@ const LS_FILES = "ash.files-open";
 // Set initial text (JS manages this dynamically, so no data-i18n in HTML)
 if (filesEmpty) filesEmpty.textContent = t("files.loading");
 
-const expandedDirs = () => activeSession.peek()?.files.expandedDirs ?? new Map();
+const expandedDirs = () => activeSession.peek()?.files?.expandedDirs ?? new Map();
 
 const showFilesEmpty = (msg, sub) => {
   if (!filesEmpty) return;

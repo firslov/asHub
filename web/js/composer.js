@@ -18,6 +18,64 @@ effect(() => {
   if (form) form.style.opacity = hasSession ? "" : "0.5";
 });
 
+let shellMode = false;
+const setShellMode = (on) => {
+  shellMode = !!on;
+  form?.classList.toggle("shell-mode", shellMode);
+};
+
+input?.addEventListener("keydown", (ev) => {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (shellMode && ev.key === "Backspace" && input.value === "" && input.selectionStart === 0) {
+    ev.preventDefault();
+    setShellMode(false);
+  }
+});
+
+const THINKING_LEVELS = ["off", "low", "medium", "high", "xhigh"];
+input?.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Tab" || !ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const session = activeSession.peek();
+  if (!session?.agentInfo?.thinkingSupported) return;
+  ev.preventDefault();
+  const cur = session.agentInfo.thinkingLevel || "off";
+  const idx = THINKING_LEVELS.indexOf(cur);
+  const next = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
+  const sid = currentSessionId();
+  if (!sid) return;
+  fetch(`/${sid}/thinking`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ level: next }),
+  }).catch(() => {});
+});
+
+const shellSupported = !/win/i.test(navigator.platform || "");
+
+// Also catches `!` from paste/IME, where keydown for the literal char never fires.
+input?.addEventListener("input", () => {
+  if (shellSupported && !shellMode && input.value.startsWith("!")) {
+    setShellMode(true);
+    input.value = input.value.slice(1);
+  }
+});
+
+const doShellSubmit = async (raw) => {
+  const sid = currentSessionId();
+  if (!sid) return;
+  input.value = "";
+  input.style.height = "";
+  try {
+    await fetch(`/${sid}/pty-input`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: raw + "\n" }),
+    });
+  } catch (e) {
+    console.error("pty-input failed", e);
+  }
+};
+
 const submitSlash = async (raw) => {
   const trimmed = raw.trim();
   const space = trimmed.indexOf(" ");
@@ -64,6 +122,10 @@ const acceptAc = () => {
 
 const doSubmit = async (query) => {
   if (!query) return;
+  if (shellMode || (shellSupported && query.startsWith("!"))) {
+    await doShellSubmit(query.startsWith("!") ? query.slice(1) : query);
+    return;
+  }
   if (state.isSubmitting) return;
   state.lastQuery = query;
   queryHistory.push(query);

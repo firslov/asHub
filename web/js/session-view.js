@@ -1,4 +1,4 @@
-import { handlers, onReplayDone, hidePageLoader, REPLAY_FLUSH_DELAY } from "./sse.js";
+import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
 import { STATE_DEFAULTS } from "./state.js";
 import { t, scanI18n } from "./i18n.js";
@@ -25,9 +25,20 @@ class SessionView extends HTMLElement {
     if (this.id) {
       this.enterReplayMode();
       subscribeSession(this.id);
+      this.seedStaticInfo();
     } else {
       hidePageLoader();
     }
+  }
+
+  async seedStaticInfo() {
+    try {
+      const r = await fetch("/sessions");
+      if (!r.ok) return;
+      const list = await r.json();
+      const info = Array.isArray(list) ? list.find((s) => s.instanceId === this.id) : null;
+      if (info) seedSessionInfo(this, info);
+    } catch {}
   }
 
   initStreamShell() {
@@ -43,12 +54,16 @@ class SessionView extends HTMLElement {
     this.pillEl = this.querySelector(".scroll-pill");
     this.usageStripEl = this.querySelector(".usage-strip");
     this.usageEl = this.querySelector(".terminal-usage");
+    this.branchEl = this.querySelector(".usage-branch");
+    this.modelEl = this.querySelector(".usage-model");
+    this.cwdEl = this.querySelector(".usage-cwd");
 
     this.state = { ...STATE_DEFAULTS };
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };
     this.thinking = { el: null, block: null };
     this.toolGroup = { current: null };
     this.liveOutput = { lastRow: null, output: null, completed: new Set() };
+    this.shellBlock = { current: null };
     this.scroll = { stickToBottom: true, lastSeen: 0 };
     this.infiniteScroll = {
       firstContentId: null,
@@ -93,10 +108,7 @@ class SessionView extends HTMLElement {
         if (!text) return;
         const queryEl = document.getElementById("query");
         if (queryEl) {
-          const form = document.getElementById("new-session-form");
-          if (form && form.hidden) {
-            document.getElementById("new-session")?.click();
-          }
+          document.getElementById("new-session")?.click();
           queryEl.value = text;
           queryEl.focus();
           queryEl.dispatchEvent(new Event("input", { bubbles: true }));
@@ -126,6 +138,7 @@ class SessionView extends HTMLElement {
     this.thinking = { el: null, block: null };
     this.toolGroup = { current: null };
     this.liveOutput = { lastRow: null, output: null, completed: new Set() };
+    this.shellBlock = { current: null };
   }
 
   disconnectedCallback() {
@@ -174,7 +187,7 @@ class SessionView extends HTMLElement {
     hidePageLoader();
     onReplayDone(this);
     // If replay produced no content, restore the empty state.
-    if (this.emptyStateEl?.hidden && !this.streamEl?.querySelector('.turn-sep, .agent-box, .tool-row, .thinking-block')) {
+    if (this.emptyStateEl?.hidden && !this.streamEl?.querySelector('.turn-sep, .agent-box, .tool-row, .thinking-block, .shell-block')) {
       this.emptyStateEl.hidden = false;
     }
   }

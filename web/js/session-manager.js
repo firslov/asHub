@@ -1,12 +1,47 @@
 import { signal, computed, effect } from "../vendor/signals-core.js";
 
 export const sessions = new Map();
+export const sessionKinds = new Map();
 export const activeSessionId = signal("");
+
+export const setSessionKind = (id, kind) => {
+  if (!id || !kind) return;
+  sessionKinds.set(id, kind);
+};
 
 export const activeSession = computed(() => {
   const id = activeSessionId.value;
   return id ? sessions.get(id) ?? null : null;
 });
+
+export const openTabs = signal(/** @type {string[]} */ ([]));
+
+export const openTab = (id) => {
+  if (!id) return;
+  if (!openTabs.value.includes(id)) openTabs.value = [...openTabs.value, id];
+  switchTo(id);
+};
+
+export const closeTab = (id) => {
+  if (!id) return;
+  const list = openTabs.value;
+  const idx = list.indexOf(id);
+  if (idx < 0) return;
+  const next = list.filter((x) => x !== id);
+  openTabs.value = next;
+  if (activeSessionId.peek() === id) {
+    const neighbor = next[idx] ?? next[idx - 1] ?? next[0] ?? "";
+    if (neighbor) switchTo(neighbor);
+    else activeSessionId.value = "";
+  }
+  // Agent sessions keep their backend (sidebar bookmark); terminals die with the tab.
+  sessions.get(id)?.remove();
+  const kind = sessionKinds.get(id);
+  if (kind === "terminal" || kind === "ash-terminal") {
+    sessionKinds.delete(id);
+    fetch(`/${id}/`, { method: "DELETE" }).catch(() => {});
+  }
+};
 
 export const registerSession = (view) => {
   sessions.set(view.id, view);
@@ -27,6 +62,8 @@ export const spaEnabled = () => {
 effect(() => {
   const active = activeSessionId.value;
   for (const [id, el] of sessions) el.hidden = id !== active;
+  const kind = active ? sessionKinds.get(active) : null;
+  document.querySelector(".app")?.classList.toggle("terminal-active", kind === "terminal" || kind === "ash-terminal");
 });
 
 export const globalConnState = signal(
@@ -54,7 +91,6 @@ const reopen = () => {
     return;
   }
   globalConnState.value = "connecting";
-  // since= recovers frames emitted in the close/reattach gap.
   const params = new URLSearchParams({ subs: buildSubsParam() });
   if (lastSeenId > 0) params.set("since", String(lastSeenId));
   const next = new EventSource(`/events?${params}`);
@@ -73,7 +109,6 @@ const reopen = () => {
   };
 };
 
-// Coalesce rapid subscribe/unsubscribe calls into one reopen per tick.
 const scheduleReopen = () => {
   if (reopenScheduled) return;
   reopenScheduled = true;
@@ -96,24 +131,21 @@ export const resyncSession = (id) => {
   scheduleReopen();
 };
 
-export const preloadSession = (id) => {
+export const preloadSession = (id, kind) => {
   if (!id) throw new Error("preloadSession: id required");
   if (sessions.has(id)) return sessions.get(id);
-  const existing = document.querySelector("session-view");
-  const parent = existing?.parentElement ?? document.body;
-  const el = document.createElement("session-view");
+  const resolvedKind = kind ?? sessionKinds.get(id) ?? "agent";
+  const terminal = document.querySelector(".terminal");
+  const form = terminal?.querySelector(".live-input");
+  const parent = terminal ?? document.body;
+  const tag = (resolvedKind === "terminal" || resolvedKind === "ash-terminal") ? "terminal-view" : "session-view";
+  const el = document.createElement(tag);
   el.setAttribute("session-id", id);
   el.hidden = true;
-  // Insert after the first session-view so the trailing <form> stays at the
-  // bottom of the flex column.
-  parent.insertBefore(el, existing ? existing.nextSibling : null);
+  parent.insertBefore(el, form ?? null);
   return el;
 };
 
-/**
- * Switch the active session to `id`, lazily constructing a SessionView if
- * none exists. Pushes to history unless `push: false` (used by popstate).
- */
 export const switchTo = (id, { push = true } = {}) => {
   if (!id || activeSessionId.peek() === id) return;
   if (!sessions.has(id)) preloadSession(id);
@@ -127,4 +159,56 @@ window.addEventListener("popstate", (ev) => {
   if (id) switchTo(id, { push: false });
 });
 
-window.__ash = { preload: preloadSession, switchTo, sessions, activeSessionId };
+// Auto-tab the active session. peek() so removing a tab doesn't resurrect it.
+effect(() => {
+  const id = activeSessionId.value;
+  if (id && !openTabs.peek().includes(id)) {
+    openTabs.value = [...openTabs.peek(), id];
+  }
+});
+
+const LS_OPEN_TABS = "ash.open-tabs";
+const isValidId = (s) => typeof s === "string" && /^[0-9a-f]{4,32}$/i.test(s);
+
+const fetchSessionKinds = fetch("/sessions")
+  .then((r) => r.ok ? r.json() : [])
+  .then((list) => {
+    if (!Array.isArray(list)) return;
+    for (const s of list) {
+      if (s?.instanceId) sessionKinds.set(s.instanceId, s.kind ?? "agent");
+    }
+  })
+  .catch(() => {});
+
+Promise.all([
+  customElements.whenDefined("session-view"),
+  customElements.whenDefined("terminal-view"),
+  fetchSessionKinds,
+]).then(() => {
+  const urlId = (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1];
+  if (urlId && !sessions.has(urlId)) {
+    preloadSession(urlId);
+    activeSessionId.value = urlId;
+  }
+  try {
+    const raw = sessionStorage.getItem(LS_OPEN_TABS);
+    if (raw) {
+      const ids = JSON.parse(raw);
+      if (Array.isArray(ids)) {
+        const restored = ids.filter(isValidId);
+        for (const id of restored) {
+          if (!sessions.has(id)) preloadSession(id);
+        }
+        const current = openTabs.peek();
+        const merged = [...restored];
+        for (const id of current) if (!merged.includes(id)) merged.push(id);
+        openTabs.value = merged;
+      }
+    }
+  } catch {}
+  effect(() => {
+    try { sessionStorage.setItem(LS_OPEN_TABS, JSON.stringify(openTabs.value)); } catch {}
+  });
+});
+
+window.__ash = { preload: preloadSession, switchTo, sessions, activeSessionId, openTabs, openTab, closeTab };

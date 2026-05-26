@@ -15,12 +15,12 @@ import * as os from "node:os";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { Bridge, BridgeFactory, BusEvent } from "./bridges/types.js";
+import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
 import { LlmClient } from "agent-sh";
 import { resolveProvider, getSettings, getProviderNames } from "agent-sh/settings";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
-import { extractText, snippet, summarizeMessage } from "./history/summarize.js";
+import { extractText, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
 import { createCompactionStrategy } from "./history/compaction-strategy.js";
 
 export interface HubOpts {
@@ -34,6 +34,7 @@ export interface HubOpts {
 interface Session {
   id: string;
   title: string;
+  kind: SessionKind;
   cwd: string;
   bridge: Bridge;
   replay: string[];
@@ -99,6 +100,10 @@ const REPLAY_NAMES = new Set([
   "ui:error",
   "session:title",
   "hub:compaction-marker",
+  "shell:command-start",
+  "shell:command-done",
+  "shell:cwd-change",
+  "shell:queued",
 ]);
 
 /** Agent events that indicate forward progress (reset idle timeout). */
@@ -134,7 +139,7 @@ async function saveSessionMeta(session: Session): Promise<void> {
   const metaPath = sessionMetaPath(session.id);
   let existing: Record<string, unknown> = {};
   try { existing = JSON.parse(await fs.promises.readFile(metaPath, "utf-8")); } catch {}
-  const merged = { ...existing, id: session.id, title: session.title, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified };
+  const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified };
   await fs.promises.writeFile(metaPath, JSON.stringify(merged));
 }
 
@@ -214,6 +219,7 @@ async function deleteSessionFiles(id: string): Promise<void> {
 interface PersistedSession {
   id: string;
   title?: string;
+  kind?: SessionKind;
   cwd: string;
   model?: string;
   provider?: string;
@@ -297,7 +303,7 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
           const parsed = JSON.parse(msgRaw);
           if (Array.isArray(parsed)) messages = parsed;
         } catch {}
-        results.push({ id: meta.id || id, title: meta.title, cwd: meta.cwd, model: meta.model, provider: meta.provider, startedAt: meta.startedAt, replay, messages, firstQuery: meta.firstQuery, userTitle: meta.userTitle, lastModified: meta.lastModified });
+        results.push({ id: meta.id || id, title: meta.title, kind: meta.kind, cwd: meta.cwd, model: meta.model, provider: meta.provider, startedAt: meta.startedAt, replay, messages, firstQuery: meta.firstQuery, userTitle: meta.userTitle, lastModified: meta.lastModified });
       } catch {}
     }
 
@@ -336,6 +342,7 @@ const MIME: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
 };
 
 export function startHub(opts: HubOpts): http.Server {
@@ -369,8 +376,11 @@ export function startHub(opts: HubOpts): http.Server {
       const session = sessions.get(id);
       if (!session) { res.statusCode = 404; res.end("no session"); return; }
 
+      if (req.method === "POST" && rest === "/pty-input") return ptyInput(req, res, session);
+      if (req.method === "POST" && rest === "/pty-resize") return ptyResize(req, res, session);
       if (req.method === "POST" && rest === "/submit") return submit(req, res, session);
       if (req.method === "POST" && rest === "/command") return execCommand(req, res, session);
+      if (req.method === "POST" && rest === "/thinking") return setThinking(req, res, session);
       if (req.method === "POST" && rest === "/title") return updateTitle(req, res, session);
       if (req.method === "POST" && rest === "/generate-title") return generateTitle(req, res, session);
       if (req.method === "GET" && rest.startsWith("/autocomplete")) {
@@ -404,6 +414,7 @@ export function startHub(opts: HubOpts): http.Server {
       if (req.method === "POST" && rest === "/context/rewind-to-turn") return rewindToTurn(req, res, session);
       if (req.method === "POST" && rest === "/context/drop") return dropContext(req, res, session);
       if (req.method === "GET" && rest === "/branch") return branchEndpoint(res, session);
+      if (req.method === "GET" && rest === "/git-branch") return gitBranchEndpoint(res, session);
       if (req.method === "GET" && rest === "/tree") return treeEndpoint(res, session);
       if (req.method === "POST" && rest === "/fork") return forkEndpoint(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
@@ -573,39 +584,55 @@ async function createSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
   cwd: string,
-  existing?: { id: string; title?: string; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; lastModified?: number },
+  existing?: { id: string; title?: string; kind?: SessionKind; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; lastModified?: number },
+  spawnKind: SessionKind = "agent",
 ): Promise<Session> {
   const id = existing?.id ?? randomBytes(3).toString("hex");
+  const kind: SessionKind = existing?.kind ?? spawnKind;
+  const isAgent = kind === "agent";
+  const isTerminalKind = kind === "terminal" || kind === "ash-terminal";
 
   let store: SessionStore | undefined;
   const treePath = path.join(SESSIONS_DIR, `${id}.jsonl`);
   try {
-    if (existing && fs.existsSync(treePath)) {
-      store = new SessionStore(treePath, { metaPath: sessionMetaPath(id) });
-    } else if (!existing) {
-      store = new SessionStore(treePath, {
-        create: { cwd, sessionId: id },
-        metaPath: sessionMetaPath(id),
-      });
+    if (isAgent) {
+      if (existing && fs.existsSync(treePath)) {
+        store = new SessionStore(treePath, { metaPath: sessionMetaPath(id) });
+      } else if (!existing) {
+        store = new SessionStore(treePath, {
+          create: { cwd, sessionId: id },
+          metaPath: sessionMetaPath(id),
+        });
+      } else {
+        // Restored session whose tree file is missing — re-create it
+        store = new SessionStore(treePath, {
+          create: { cwd, sessionId: id },
+          metaPath: sessionMetaPath(id),
+        });
+      }
     }
   } catch (err) {
     console.error(`[hub] failed to attach tree store for ${id}:`, err);
   }
 
   const initialMessages = existing && store ? store.buildMessages() : existing?.messages;
-  const compactionStrategy = createCompactionStrategy(
-    () => session?.store ?? null,
-    () => session?.capture ?? null,
-    (msg) => console.error(`[hub] ${id}: ${msg}`),
-    async (liveView, entryIds) => {
-      if (session) await rebuildReplay(session, liveView, entryIds);
-    },
-  );
-  const bridge = opts.makeBridge({ cwd, initialMessages, model: existing?.model, provider: existing?.provider, compactionStrategy });
+  const compactionStrategy = isAgent
+    ? createCompactionStrategy(
+        () => session?.store ?? null,
+        () => session?.capture ?? null,
+        (msg) => console.error(`[hub] ${id}: ${msg}`),
+        async (liveView, entryIds) => {
+          if (session) await rebuildReplay(session, liveView, entryIds);
+        },
+      )
+    : undefined;
+  const bridge = opts.makeBridge({ cwd, kind, initialMessages, model: existing?.model, provider: existing?.provider, compactionStrategy });
 
+  const defaultTitle = isTerminalKind ? `▷ ${path.basename(cwd) || cwd}` : "";
   const session: Session = {
     id,
-    title: existing?.title ?? "",
+    title: existing?.title ?? defaultTitle,
+    kind,
     cwd,
     bridge,
     replay: existing?.replay ?? [],
@@ -629,9 +656,11 @@ async function createSession(
     store,
     contextLock: Promise.resolve(),
   };
-  session.capture = createCapture(bridge, () => session.store ?? null, {
-    onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`),
-  });
+  if (isAgent) {
+    session.capture = createCapture(bridge, () => session.store ?? null, {
+      onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`),
+    });
+  }
 
   bridge.onEvent((e) => {
     try { routeEvent(session, e); }
@@ -708,8 +737,12 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
   }
   console.error(`[hub] restoring ${persisted.length} session(s)…`);
   for (const p of persisted) {
+    if (p.kind === "terminal" || p.kind === "ash-terminal") {
+      await deleteSessionFiles(p.id);
+      continue;
+    }
     try {
-      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle, model: p.model, provider: p.provider, lastModified: p.lastModified });
+      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, kind: p.kind, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle, model: p.model, provider: p.provider, lastModified: p.lastModified });
       console.error(`[hub] restored session ${p.id} (cwd: ${p.cwd})`);
     } catch (err) {
       console.error(`[hub] failed to restore session ${p.id}:`, err);
@@ -730,6 +763,15 @@ function routeEvent(session: Session, e: BusEvent): void {
     id: `hub:${session.id}:${session.segmentSeq}`,
     name: e.name,
   };
+
+  if (session.kind === "terminal" || session.kind === "ash-terminal") {
+    if (e.name === "shell:pty-data" || e.name === "shell:exit") {
+      pushFrame(session, e.name, sseFrame(meta, e.payload), { transient: true });
+    } else if (e.name === "ui:error" || e.name === "ui:info") {
+      pushFrame(session, e.name, sseFrame(meta, e.payload), { transient: true });
+    }
+    return;
+  }
 
   // ── Activity heartbeat ──────────────────────────────────────────
   // These events indicate the agent is making progress; bump the idle
@@ -838,8 +880,11 @@ function sseFrame(meta: object, payload: unknown): string {
   return `id: ${++frameSeq}\ndata: ${JSON.stringify({ meta, payload })}\n\n`;
 }
 
-function pushFrame(session: Session, name: string, frame: string): void {
-  if (REPLAY_NAMES.has(name)) {
+function pushFrame(session: Session, name: string, frame: string, opts?: { transient?: boolean }): void {
+  if (opts?.transient) {
+    session.replay.push(frame);
+    if (session.replay.length > REPLAY_LIMIT) session.replay.shift();
+  } else if (REPLAY_NAMES.has(name)) {
     session.replay.push(frame);
     if (session.replay.length > REPLAY_LIMIT) session.replay.shift();
     persistReplayFrame(session.id, frame);
@@ -915,6 +960,7 @@ function listSessions(res: http.ServerResponse, sessions: Map<string, Session>):
     .map((s) => ({
       instanceId: s.id,
       title: s.title,
+      kind: s.kind,
       model: s.model,
       provider: s.provider,
       cwd: s.cwd,
@@ -934,11 +980,14 @@ async function spawnSession(
   opts: HubOpts,
 ): Promise<void> {
   const body = await readBody(req);
-  let cwd = process.cwd();
+  let kind: SessionKind = "agent";
+  let cwd: string | null = null;
   try {
-    const parsed = JSON.parse(body) as { cwd?: string };
+    const parsed = JSON.parse(body) as { cwd?: string; kind?: SessionKind };
     if (parsed.cwd) cwd = path.resolve(expandHome(parsed.cwd.trim()));
+    if (parsed.kind === "terminal" || parsed.kind === "agent" || parsed.kind === "ash-terminal") kind = parsed.kind;
   } catch {}
+  if (!cwd) cwd = (kind === "terminal" || kind === "ash-terminal") ? os.homedir() : process.cwd();
   try {
     const stat = await fs.promises.stat(cwd);
     if (!stat.isDirectory()) {
@@ -952,9 +1001,9 @@ async function spawnSession(
     return;
   }
   try {
-    const s = await createSession(sessions, opts, cwd);
+    const s = await createSession(sessions, opts, cwd, undefined, kind);
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ instanceId: s.id, cwd: s.cwd }));
+    res.end(JSON.stringify({ instanceId: s.id, cwd: s.cwd, kind: s.kind }));
   } catch (err) {
     console.error("[hub] spawn failed:", err);
     res.statusCode = 500;
@@ -1176,6 +1225,42 @@ function openSseMulti(
   });
 }
 
+async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  if (!session.bridge.writePty) {
+    res.statusCode = 400; res.end("session has no PTY"); return;
+  }
+  const body = await readBody(req);
+  let data = "";
+  try { data = (JSON.parse(body) as { data?: string }).data ?? ""; } catch {}
+  if (typeof data !== "string") { res.statusCode = 400; res.end("invalid data"); return; }
+  try { session.bridge.writePty(data); } catch (err) {
+    res.statusCode = 500; res.end(`pty write failed: ${err instanceof Error ? err.message : err}`); return;
+  }
+  session.lastActivity = Date.now();
+  session.lastModified = Date.now();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function ptyResize(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  if (!session.bridge.resizePty) {
+    res.statusCode = 400; res.end("session has no PTY"); return;
+  }
+  const body = await readBody(req);
+  let cols = 0, rows = 0;
+  try {
+    const parsed = JSON.parse(body) as { cols?: number; rows?: number };
+    cols = Number(parsed.cols) | 0;
+    rows = Number(parsed.rows) | 0;
+  } catch {}
+  if (cols <= 0 || rows <= 0) { res.statusCode = 400; res.end("invalid size"); return; }
+  try { session.bridge.resizePty(cols, rows); } catch (err) {
+    res.statusCode = 500; res.end(`pty resize failed: ${err instanceof Error ? err.message : err}`); return;
+  }
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
 async function submit(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   const body = await readBody(req);
   let query = "";
@@ -1289,6 +1374,23 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   res.end(JSON.stringify({ ok: true }));
 }
 
+async function setThinking(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  session: Session,
+): Promise<void> {
+  const body = await readBody(req);
+  let level = "";
+  try { level = String((JSON.parse(body) as { level?: string }).level ?? "").trim(); } catch {}
+  if (!level) { res.statusCode = 400; res.end("missing level"); return; }
+  if (!session.bridge.setThinking) { res.statusCode = 501; res.end("bridge does not support setThinking"); return; }
+  try { session.bridge.setThinking(level); } catch (err) {
+    res.statusCode = 500; res.end(String(err)); return;
+  }
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
 async function execCommand(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -1363,11 +1465,21 @@ function getBranchEntries(session: Session): Array<{ id: string; type: string; p
       return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, preview: `[compacted — firstKept ${e.firstKeptId.slice(0, 6)}]`, firstKeptId: e.firstKeptId };
     }
     const text = extractText(e.message.content);
+    const display = e.message.role === "user" ? stripContextWrappers(text) : text;
     return {
       id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp,
       role: e.message.role,
-      preview: snippet(text, 80),
+      preview: snippet(display, 80),
     };
+  });
+}
+
+function gitBranchEndpoint(res: http.ServerResponse, session: Session): void {
+  res.setHeader("Content-Type", "application/json");
+  execFile("git", ["-C", session.cwd, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 1000 }, (err, stdout) => {
+    if (err) { res.end(JSON.stringify({ branch: null })); return; }
+    const branch = stdout.toString().trim();
+    res.end(JSON.stringify({ branch: branch && branch !== "HEAD" ? branch : null }));
   });
 }
 
@@ -1383,7 +1495,9 @@ async function treeEndpoint(res: http.ServerResponse, session: Session): Promise
   const all = session.store.getAllEntries().map((e) => {
     if (e.type === "session") return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp };
     if (e.type === "compaction") return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, firstKeptId: e.firstKeptId };
-    return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, role: e.message.role, preview: snippet(extractText(e.message.content), 80) };
+    const text = extractText(e.message.content);
+    const display = e.message.role === "user" ? stripContextWrappers(text) : text;
+    return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, role: e.message.role, preview: snippet(display, 80) };
   });
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ leafId: session.store.getActiveLeaf(), rootId: session.store.getRootId(), entries: all }));

@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { startHub, shutdownHub, type HubOpts } from "./hub.js";
 import { AshBridge } from "./bridges/ash.js";
 import { AcpBridge } from "./bridges/acp.js";
+import { TerminalBridge } from "./bridges/terminal.js";
 import type { BridgeFactory } from "./bridges/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -85,13 +86,19 @@ Endpoints:
 
 function makeFactory(args: Args): BridgeFactory {
   if (args.backend === "ash") {
-    return (opts) => new AshBridge({ ...opts, model: opts.model ?? args.model, provider: opts.provider ?? args.provider });
+    return (opts) => {
+      if (opts.kind === "terminal") return new TerminalBridge(opts);
+      return new AshBridge({ ...opts, model: opts.model ?? args.model, provider: opts.provider ?? args.provider });
+    };
   }
   const [command, ...spawnArgs] = args.cmd.split(/\s+/);
-  return (opts) => new AcpBridge({
-    ...opts,
-    extra: { command: command!, args: spawnArgs },
-  });
+  return (opts) => {
+    if (opts.kind === "terminal") return new TerminalBridge(opts);
+    return new AcpBridge({
+      ...opts,
+      extra: { command: command!, args: spawnArgs },
+    });
+  };
 }
 
 const args = parseArgs();

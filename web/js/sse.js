@@ -6,11 +6,11 @@ import { maybeScroll, forceScrollBottom } from "./stream/scroll.js";
 import { append, appendAfterPending, appendToGroup, bumpToolCount } from "./stream/tool-group.js";
 import {
   renderUsage, hideUsage, renderTurnSep, renderErrorCard,
-  renderDiffBlock, renderToolBody, buildToolRow, renderPromptRow,
+  renderDiffBlock, renderToolBody, buildToolRow,
 } from "./stream/renderers.js";
 import {
-  showThinking, hideThinking, hasThinkingDots,
-  appendThinkingChunk, finalizeThinking, hasThinkingBlock,
+  showThinking, hideThinking,
+  appendThinkingChunk, finalizeThinking,
   sweepOrphanThinking,
 } from "./stream/thinking.js";
 import {
@@ -26,6 +26,7 @@ import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
 import { refreshTreeIfOpen } from "./tree-panel.js";
 import { compactReasoning } from "./stream/compact.js";
+import { startShellBlock, finishShellBlock, queueShellBlock } from "./stream/shell-block.js";
 import { activeSession, globalConnState } from "./session-manager.js";
 
 // Shared page chrome — reflects the active session, not whatever frame just arrived.
@@ -128,7 +129,7 @@ export const renderInstanceLabel = () => {
 effect(() => {
   const s = activeSession.value;
   renderInstanceLabel();
-  const busy = !!s?.state.isProcessing;
+  const busy = !!s?.state?.isProcessing;
   if (spinnerEl) spinnerEl.hidden = !busy;
   if (cancelBtnEl) cancelBtnEl.hidden = !busy;
 });
@@ -146,7 +147,9 @@ export const handlers = {
     if (typeof p?.thinkingSupported === "boolean") this.agentInfo.thinkingSupported = p.thinkingSupported;
     if (typeof p?.contextWindow === "number" && p.contextWindow > 0) {
       this.state.contextWindow = p.contextWindow;
+      if (this.state.lastUsage) renderUsage(this);
     }
+    refreshModelChip(this);
     if (this === activeSession.peek()) {
       renderInstanceLabel();
       updateBalanceDisplay();
@@ -155,6 +158,7 @@ export const handlers = {
 
   "shell:cwd-change"(p) {
     this.state.cwd = p?.cwd ?? "";
+    refreshCwdChip(this);
     if (this === activeSession.peek()) refreshFilesIfOpen();
   },
 
@@ -242,7 +246,6 @@ export const handlers = {
     const blocks = Array.isArray(p?.blocks) ? p.blocks : [];
     const delta = blocks.map(blockToText).join("");
     if (!delta) return;
-    hideThinking(this);
     finalizeThinking(this);
     appendReplyChunk(this, delta);
   },
@@ -251,7 +254,6 @@ export const handlers = {
   "agent:response-segment"(p) {
     if (hasReply(this) || sawLiveSegment(this)) return;
     if (!p?.text) return;
-    hideThinking(this);
     finalizeThinking(this);
     const block = document.createElement("div");
     block.className = "agent-reply";
@@ -278,6 +280,7 @@ export const handlers = {
     finalizeThinking(this);
     finalizeLiveOutput(this);
     renderUsage(this);
+    if (this.usageStripEl) this.usageStripEl.hidden = false;
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
@@ -286,6 +289,7 @@ export const handlers = {
       refreshTreeIfOpen();
       updateBalanceDisplay();
     }
+    if (!this.state.replaying) refreshGitBranch(this);
   },
 
   "agent:cancelled"() {
@@ -311,7 +315,11 @@ export const handlers = {
     this.scheduleReplayFlush();
   },
 
-  "agent:usage"(p) { this.state.lastUsage = p; },
+  "agent:usage"(p) { this.state.lastUsage = p; renderUsage(this); },
+
+  "shell:command-start"(p) { startShellBlock(this, p ?? {}); },
+  "shell:command-done"(p) { finishShellBlock(this, p ?? {}); },
+  "shell:queued"(p) { queueShellBlock(this, p ?? {}); },
 
   "session:title"(p) {
     updateSessionTitle(this.id, p?.title ?? "");
@@ -336,7 +344,6 @@ export const handlers = {
 
   "agent:tool-started"(p) {
     closeReply(this);
-    hideThinking(this);
     finalizeThinking(this);
     finalizeLiveOutput(this);
     startNewSegment(this);
@@ -344,9 +351,6 @@ export const handlers = {
     appendToGroup(this, row);
     trackToolRow(this, row);
     bumpToolCount(this);
-    if (this.state.isProcessing && !hasReply(this) && !hasThinkingBlock(this)) {
-      showThinking(this);
-    }
   },
 
   "agent:tool-completed"(p) {
@@ -407,32 +411,6 @@ export const handlers = {
     append(this, renderErrorCard(p?.message || t("command.failed"), null));
   },
 
-  "shell:command-start"(p) {
-    closeReply(this);
-    this.state.cwd = p?.cwd ?? this.state.cwd;
-    renderPromptRow(this);
-    const row = document.createElement("div");
-    row.className = "t-input";
-    row.innerHTML = `<span class="t-prompt">&gt;</span>${escape(p?.command ?? "")}`;
-    append(this, row);
-  },
-
-  "shell:command-done"(p) {
-    const text = stripAnsi(p?.output ?? "");
-    const isErr = p?.exitCode != null && p.exitCode !== 0;
-    if (isErr) {
-      append(this, renderErrorCard(t("shell.failed", { code: p.exitCode }), text));
-      return;
-    }
-    for (const line of text.split("\n")) {
-      if (!line) continue;
-      const row = document.createElement("div");
-      row.className = "t-out";
-      row.textContent = line;
-      append(this, row);
-    }
-  },
-
   // Hub sentinel: fired synchronously after the replay loop so the client
   // can exit batching mode deterministically, even when live events from
   // an active turn arrive immediately after replay.
@@ -450,4 +428,60 @@ export const onReplayDone = (session) => {
   highlightWithin(session.streamEl);
   renderMathIn(session.streamEl);
   forceScrollBottom(session);
+  refreshGitBranch(session);
+  refreshModelChip(session);
+  refreshCwdChip(session);
+};
+
+export const seedSessionInfo = (session, info) => {
+  if (!session || !info) return;
+  if (info.cwd && !session.state.cwd) session.state.cwd = info.cwd;
+  if (info.model && !session.agentInfo.model) session.agentInfo.model = info.model;
+  if (info.provider && !session.agentInfo.provider) session.agentInfo.provider = info.provider;
+  if (session.usageStripEl) session.usageStripEl.hidden = false;
+  refreshModelChip(session);
+  refreshCwdChip(session);
+  refreshGitBranch(session);
+};
+
+const refreshModelChip = (session) => {
+  if (!session?.modelEl) return;
+  const wrap = session.modelEl.closest(".terminal-wrap");
+  if (wrap?.dataset.uiUsageModelShow !== "true") { session.modelEl.hidden = true; return; }
+  const ai = session.agentInfo;
+  const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off";
+  const modelLabel = ai?.provider ? `${ai.model}@${ai.provider}` : ai?.model;
+  const text = [modelLabel, showThink ? `[${ai.thinkingLevel}]` : ""].filter(Boolean).join(" ");
+  if (text) { session.modelEl.textContent = text; session.modelEl.hidden = false; }
+  else { session.modelEl.hidden = true; }
+};
+
+const refreshCwdChip = (session) => {
+  if (!session?.cwdEl) return;
+  const wrap = session.cwdEl.closest(".terminal-wrap");
+  if (wrap?.dataset.uiUsageCwdShow !== "true") { session.cwdEl.hidden = true; return; }
+  const cwd = session.state?.cwd ?? "";
+  if (!cwd) { session.cwdEl.hidden = true; return; }
+  if (session.cwdEl.title === cwd) return;
+  const base = cwd.split("/").filter(Boolean).pop() ?? cwd;
+  session.cwdEl.textContent = base;
+  session.cwdEl.title = cwd;
+  session.cwdEl.hidden = false;
+};
+
+const refreshGitBranch = async (session) => {
+  if (!session?.branchEl || !session.id) return;
+  const wrap = session.branchEl.closest(".terminal-wrap");
+  if (wrap?.dataset.uiUsageGitBranch === "false") { session.branchEl.hidden = true; return; }
+  try {
+    const r = await fetch(`/${session.id}/git-branch`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { branch } = await r.json();
+    if (branch) {
+      session.branchEl.textContent = branch;
+      session.branchEl.hidden = false;
+    } else {
+      session.branchEl.hidden = true;
+    }
+  } catch { session.branchEl.hidden = true; }
 };

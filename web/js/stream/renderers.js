@@ -7,14 +7,15 @@ import { t } from "../i18n.js";
 
 export const hideUsage = (session) => {
   const strip = session?.usageStripEl;
-  if (strip) strip.hidden = true;
+  if (!strip) return;
+  if (strip.closest(".terminal-wrap")?.dataset.uiUsageSticky === "true") return;
+  strip.hidden = true;
 };
 
 export const renderUsage = (session) => {
   const st = session?.state;
   if (!st?.lastUsage) return;
   const usageEl = session?.usageEl;
-  const usageStrip = session?.usageStripEl;
   if (!usageEl) return;
   const inTok = st.lastUsage.prompt_tokens ?? 0;
   const outTok = st.lastUsage.completion_tokens ?? 0;
@@ -38,7 +39,7 @@ export const renderUsage = (session) => {
   usageEl.innerHTML =
     `<span class="usage-chip" title="${t("usage.input")}">↑ ${fmtNum(inTok)}</span>` +
     `<span class="usage-chip" title="${t("usage.output")}">↓ ${fmtNum(outTok)}</span>` +
-    `<span class="usage-chip" title="${t("usage.total")}">Σ ${fmtNum(totalTok)}</span>` +
+    `<span class="usage-chip usage-total" title="${t("usage.total")}">Σ ${fmtNum(totalTok)}</span>` +
     cacheHtml +
     `<span class="usage-chip usage-ctx" title="${t("usage.context")}">` +
       (st.contextWindow > 0
@@ -48,32 +49,18 @@ export const renderUsage = (session) => {
     `</span>`;
   usageEl.classList.toggle("warm", pct >= 30 && pct < 70);
   usageEl.classList.toggle("hot", pct >= 70);
-  if (usageStrip) usageStrip.hidden = false;
 };
 
 export const renderTurnSep = (session, ts) => {
-  const cwd = session?.state.cwd ?? "";
   const sep = document.createElement("div");
   sep.className = "turn-sep";
   const date = ts ? new Date(ts) : new Date();
   sep.innerHTML =
     `<span class="turn-line"></span>` +
-    (cwd ? `<span class="turn-cwd">${escape(cwd)}</span>` : "") +
     `<span class="turn-time">${date.toLocaleTimeString()}</span>` +
     `<span class="turn-line"></span>`;
   append(session, sep);
   return sep;
-};
-
-export const renderPromptRow = (session) => {
-  const cwd = session?.state.cwd ?? "";
-  if (!cwd) return;
-  const row = document.createElement("div");
-  row.className = "pl-row";
-  row.innerHTML =
-    `<span class="pl-left"><span class="pl-path">${escape(cwd)}</span></span>` +
-    `<span class="pl-right"><span class="pl-seg pl-time">${new Date().toLocaleTimeString()}</span></span>`;
-  append(session, row);
 };
 
 export const renderErrorCard = (message, detail) => {
@@ -107,7 +94,7 @@ export const renderErrorCard = (message, detail) => {
 
 export const renderDiffBlock = (diff, filePath) => {
   const wrap = document.createElement("div");
-  wrap.className = "diff-block";
+  wrap.className = "diff-block wrapped";
   const lang = langForPath(filePath);
   const head = document.createElement("div");
   head.className = "diff-head";
@@ -160,13 +147,28 @@ export const renderDiffBlock = (diff, filePath) => {
 
 const CMD_COLLAPSE = 100;
 
+const TOOL_ICON_PATHS = {
+  read: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  execute: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+  write: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+};
+
+const renderToolIcon = (kind) => {
+  const paths = kind && TOOL_ICON_PATHS[kind];
+  if (!paths) return "";
+  return `<svg class="tool-icon tool-icon--${escape(kind)}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+};
+
 export const buildToolRow = (p) => {
   const row = document.createElement("div");
   row.className = "tool-row";
   if (p?.toolCallId) row.dataset.callId = p.toolCallId;
 
-  const hasCustomIcon = typeof p?.icon === "string" && p.icon.length > 0;
-  const icon = p?.icon ?? "·";
+  const iconSvg = renderToolIcon(p?.kind);
+  const fallbackIcon = typeof p?.icon === "string" && p.icon.length > 0 ? p.icon : "";
+  const hasCustomIcon = iconSvg.length > 0 || fallbackIcon.length > 0;
+  const iconHtml = iconSvg || escape(fallbackIcon || "·");
   const raw = (p?.rawInput && typeof p.rawInput === "object") ? p.rawInput : {};
   // agent-loop appends ": <description>" to bash titles; strip it.
   let title = p?.title ?? t("tool");
@@ -195,7 +197,7 @@ export const buildToolRow = (p) => {
   if (cmdFull) raw.command = cmdFull;
 
   row.innerHTML =
-    `<span class="tool-name">${escape(icon)}${title ? " " + escape(title) : ""}</span>` +
+    `<span class="tool-name">${iconHtml}${title ? " " + escape(title) : ""}</span>` +
     (detailHtml ? ` ${detailHtml}` : "");
 
   if (cmdFull) {

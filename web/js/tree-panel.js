@@ -181,7 +181,7 @@ closeBtn?.addEventListener("click", () => setTreeOpen(false));
 refreshBtn?.addEventListener("click", () => refresh());
 
 effect(() => {
-  const busy = !!activeSession.value?.state.isProcessing;
+  const busy = !!activeSession.value?.state?.isProcessing;
   panel?.classList.toggle("busy", busy);
 });
 

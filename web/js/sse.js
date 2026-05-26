@@ -27,7 +27,7 @@ import { refreshFilesIfOpen } from "./files-panel.js";
 import { refreshTreeIfOpen } from "./tree-panel.js";
 import { compactReasoning } from "./stream/compact.js";
 import { startShellBlock, finishShellBlock, queueShellBlock } from "./stream/shell-block.js";
-import { activeSession, globalConnState } from "./session-manager.js";
+import { activeSession, globalConnState, sessions } from "./session-manager.js";
 
 // Shared page chrome — reflects the active session, not whatever frame just arrived.
 const conn = document.getElementById("conn");
@@ -38,7 +38,6 @@ const cancelBtnEl = document.getElementById("cancel-turn");
 const pageLoader = document.getElementById("page-loader");
 const loaderBar = document.getElementById("page-loader-bar");
 const loaderBarFill = document.getElementById("page-loader-bar-fill");
-const balanceEl = document.getElementById("balance-display");
 
 if (loaderBar) loaderBar.classList.add("visible");
 if (loaderBarFill) {
@@ -54,20 +53,18 @@ export const hidePageLoader = () => {
   }, 200);
 };
 
-// ── Balance display (DeepSeek) ────────────────────────────────────
+// ── Balance display (DeepSeek) — rendered in each session's usage strip ──
 
 const BALANCE_CACHE_TTL = 120_000;
 let _balanceCache = null;
 let _balanceCacheTs = 0;
 
 const updateBalanceDisplay = async () => {
-  if (!balanceEl) return;
   const provider = activeSession.peek()?.agentInfo?.provider ?? "";
   if (provider !== "deepseek") {
-    balanceEl.hidden = true;
+    for (const [_, s] of sessions) s.balanceEl && (s.balanceEl.hidden = true);
     return;
   }
-  balanceEl.hidden = false;
 
   // Serve from cache if fresh
   if (_balanceCache && Date.now() - _balanceCacheTs < BALANCE_CACHE_TTL) {
@@ -83,26 +80,36 @@ const updateBalanceDisplay = async () => {
     _balanceCacheTs = Date.now();
     renderBalance(data);
   } catch {
-    balanceEl.textContent = "💰 —";
-    balanceEl.title = "Balance unavailable";
+    const label = "💰 —";
+    for (const [_, s] of sessions) {
+      if (s.balanceEl) { s.balanceEl.textContent = label; s.balanceEl.title = "Balance unavailable"; s.balanceEl.hidden = false; }
+    }
   }
 };
 
 function renderBalance(data) {
-  if (!balanceEl) return;
   if (!data?.is_available || !Array.isArray(data?.balance_infos) || !data.balance_infos.length) {
-    balanceEl.textContent = "💰 —";
-    balanceEl.title = "Balance unavailable";
+    const label = "💰 —";
+    for (const [_, s] of sessions) {
+      if (s.balanceEl) { s.balanceEl.textContent = label; s.balanceEl.title = "Balance unavailable"; s.balanceEl.hidden = false; }
+    }
     return;
   }
   const info = data.balance_infos[0];
   const currency = info.currency === "CNY" ? "¥" : (info.currency ?? "");
   const total = info.total_balance ?? "—";
-  balanceEl.textContent = `💰 ${currency}${total}`;
-  balanceEl.title = data.balance_infos.map((bi) => {
+  const label = `💰 ${currency}${total}`;
+  const tooltip = data.balance_infos.map((bi) => {
     const c = bi.currency === "CNY" ? "¥" : (bi.currency ?? "");
     return `Total: ${c}${bi.total_balance ?? "—"}  |  Top-up: ${c}${bi.topped_up_balance ?? "—"}  |  Grant: ${c}${bi.granted_balance ?? "—"}`;
   }).join("\n");
+  for (const [_, s] of sessions) {
+    if (s.balanceEl) {
+      s.balanceEl.textContent = label;
+      s.balanceEl.title = tooltip;
+      s.balanceEl.hidden = false;
+    }
+  }
 }
 
 effect(() => {

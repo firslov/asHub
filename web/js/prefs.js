@@ -132,13 +132,41 @@ const UI_PREFS = {
   "usage.cache.show":         { kind: "attr", attr: "data-ui-usage-cache-show",         target: ".terminal-wrap" },
   "usage.total.show":         { kind: "attr", attr: "data-ui-usage-total-show",         target: ".terminal-wrap" },
   "cancel.show":              { kind: "attr", attr: "data-ui-cancel-show",              target: "#cancel-turn" },
-  "balance.show":             { kind: "attr", attr: "data-ui-balance-show",             target: "#balance-display" },
   "tabs.enabled":             { kind: "attr", attr: "data-ui-tabs-enabled",             target: ".app" },
   "title-bar.height":         { kind: "var",  prop: "--ui-title-bar-height" },
   "title-bar.model.show":     { kind: "attr", attr: "data-ui-model-show",              target: "#instance" },
   "title-bar.model.uppercase":{ kind: "attr", attr: "data-ui-model-uppercase",          target: "#instance" },
   "title-bar.version.show":   { kind: "attr", attr: "data-ui-version-show",             target: "#version-label" },
   "cwd.max-width":            { kind: "var",  prop: "--ui-cwd-max-width",               target: "#session-cwd-meta" },
+};
+
+// ── Baseline defaults (applied immediately, before any config loads) ──
+// These replace the old CSS-level "normal" defaults so the minimal UI is
+// the only built-in mode. Server / localStorage config can override.
+const DEFAULT_UI = {
+  "conversation.center": false,
+  "conversation.message-gap": "0.9rem",
+  "conversation.turn-gap": "1.2rem",
+  "reply.border.show": false,
+  "reply.hover": false,
+  "reply.code.border": false,
+  "input.gradient": false,
+  "input.focus-ring": false,
+  "input.padding-y": "0.35rem",
+  "turn.time.show": false,
+  "turn.sep.show": false,
+  "usage.align": "left",
+  "usage.sticky": true,
+  "usage.cwd.show": true,
+  "usage.cache.show": false,
+  "usage.total.show": false,
+  "usage.model.show": true,
+  "cancel.show": false,
+  "title-bar.height": "40px",
+  "title-bar.model.show": false,
+  "title-bar.model.uppercase": false,
+  "title-bar.version.show": false,
+  "tabs.enabled": true,
 };
 
 const applyUiPrefs = (ui) => {
@@ -168,7 +196,10 @@ const clearUiPrefs = () => {
   }
 };
 
-// ── Layered config: settings.json (priority 1) → localStorage (priority 2) ──
+// Apply baseline defaults immediately before any config loads.
+applyUiPrefs(DEFAULT_UI);
+
+// ── Layered config: DEFAULT_UI base → settings.json overrides → localStorage fallback ──
 
 const LS_UI = "ash.ui";
 
@@ -193,18 +224,15 @@ fetch("/api/config")
   .then((r) => r.json())
   .then((cfg) => {
     const serverUi = cfg?.asHub?.ui;
-    const localUi = readUiPrefsFromStorage();
-    const merged = serverUi
-      ? { ...localUi, ...serverUi }
-      : localUi;
-    if (merged) {
-      applyUiPrefs(merged);
-      writeUiPrefsToStorage(merged);
-    }
+    // Baseline defaults → server settings override. localStorage is just
+    // a cache of the last applied state for offline fallback.
+    const merged = { ...DEFAULT_UI, ...serverUi };
+    applyUiPrefs(merged);
+    writeUiPrefsToStorage(merged);
   })
   .catch(() => {
     const localUi = readUiPrefsFromStorage();
-    if (localUi) applyUiPrefs(localUi);
+    applyUiPrefs({ ...DEFAULT_UI, ...localUi });
   });
 
 export { applyUiPrefs, clearUiPrefs, writeUiPrefsToStorage };

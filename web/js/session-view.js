@@ -128,6 +128,13 @@ class SessionView extends HTMLElement {
     if (!this.id) return;
     if (this.replayFlushTimer) { clearTimeout(this.replayFlushTimer); this.replayFlushTimer = null; }
     this.controller?.abort();
+    // SPA cache: if the session already has rendered content, just
+    // re-subscribe for live events without destroying the DOM.
+    if (this.streamEl && this.streamEl.children.length > 0) {
+      this.exitReplayMode();
+      subscribeSession(this.id);
+      return;
+    }
     this.innerHTML = "";
     this.initStreamShell();
     this.enterReplayMode();

@@ -66,7 +66,7 @@ interface Session {
   contextLock: Promise<void>;
 }
 
-const REPLAY_LIMIT = 5000;
+const REPLAY_LIMIT = 1000;
 
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;

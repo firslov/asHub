@@ -56,6 +56,7 @@ class SessionView extends HTMLElement {
     this.usageEl = this.querySelector(".terminal-usage");
     this.branchEl = this.querySelector(".usage-branch");
     this.modelEl = this.querySelector(".usage-model");
+    this.balanceEl = this.querySelector(".usage-balance");
     this.cwdEl = this.querySelector(".usage-cwd");
 
     this.state = { ...STATE_DEFAULTS };

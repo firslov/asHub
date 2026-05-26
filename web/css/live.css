@@ -1460,20 +1460,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text-faint);
 }
 
-/* ── Balance display ──────────────────────────────────────────────── */
-.balance-display {
-  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.66rem;
-  font-weight: 420;
-  color: var(--text-dim);
-  letter-spacing: 0.03em;
-  white-space: nowrap;
-  user-select: none;
-}
-
-.balance-display[hidden] { display: none; }
-#balance-display[data-ui-balance-show="false"] { display: none !important; }
-
 .version-label.checking {
   opacity: 1;
   color: var(--text-faint);
@@ -3988,58 +3974,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .config-field[hidden] {
   display: none;
-}
-
-/* ── UI style quick-toggle ───────────────────────────────────────── */
-.config-ui-style-toggles {
-  display: flex;
-  gap: 0;
-  background: var(--bg3);
-  border-radius: var(--radius-pill);
-  padding: 3px;
-  width: fit-content;
-  border: 1px solid var(--border);
-}
-
-.ui-style-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 18px;
-  border: none;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--text-faint);
-  font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  font-size: 0.78rem;
-  font-weight: 450;
-  cursor: pointer;
-  transition: all 0.2s var(--ease-out-expo);
-  white-space: nowrap;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.ui-style-btn:hover { color: var(--text); }
-
-.ui-style-btn.active {
-  background: var(--card);
-  color: var(--text);
-  font-weight: 500;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-}
-
-.ui-style-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-faint);
-  flex-shrink: 0;
-  transition: background 0.2s;
-}
-
-.ui-style-btn.active .ui-style-dot {
-  background: var(--accent);
-  box-shadow: 0 0 6px var(--accent-glow);
 }
 
 .config-label {

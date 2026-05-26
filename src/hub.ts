@@ -37,6 +37,9 @@ interface Session {
   kind: SessionKind;
   cwd: string;
   bridge: Bridge;
+  /** Lazy-init factory — only set for restored sessions; bridge is created
+   *  on first SSE subscription.  Once created, this is cleared. */
+  _ensureBridge?: () => Promise<void>;
   replay: string[];
   segmentText: string;
   segmentSeq: number;
@@ -390,6 +393,7 @@ export function startHub(opts: HubOpts): http.Server {
         return autocomplete(res, session, params.get("buffer") ?? "");
       }
       if (req.method === "POST" && rest === "/cancel") {
+        await session._ensureBridge?.();
         const wasProcessing = session.bridge.isProcessing?.() ?? false;
         try { session.bridge.cancel(); } catch (err) { console.error("[hub] cancel:", err); }
         // If the bridge was not actually processing (e.g. restored session
@@ -656,7 +660,11 @@ async function createSession(
         },
       )
     : undefined;
-  const bridge = opts.makeBridge({ cwd, kind, initialMessages, model: existing?.model, provider: existing?.provider, compactionStrategy });
+  // New sessions create the bridge immediately; restored sessions defer.
+  const isRestored = !!existing;
+  const bridge: Bridge = isRestored
+    ? null as unknown as Bridge
+    : opts.makeBridge({ cwd, kind, initialMessages, model: existing!.model, provider: existing!.provider, compactionStrategy });
 
   const defaultTitle = isTerminalKind ? `▷ ${path.basename(cwd) || cwd}` : "";
   const session: Session = {
@@ -672,8 +680,6 @@ async function createSession(
     model: existing?.model,
     provider: existing?.provider,
     startedAt: existing?.startedAt ?? Date.now(),
-    // If the session already has messages (from tree store or legacy
-    // messages.json), the first turn was already done.
     firstTurnDone: !!(initialMessages?.length),
     firstQuery: existing?.firstQuery,
     userTitle: existing?.userTitle,
@@ -686,32 +692,40 @@ async function createSession(
     store,
     contextLock: Promise.resolve(),
   };
-  if (isAgent) {
-    session.capture = createCapture(bridge, () => session.store ?? null, {
-      onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`),
-    });
+
+  // For restored sessions, store a factory to lazily create + wire the
+  // bridge.  The factory is called from openSseMulti / spawnSession flow.
+  if (isRestored && isAgent) {
+    const storeRef = store;
+    session._ensureBridge = async () => {
+      if (session.bridge) return;
+      const b = opts.makeBridge({ cwd, kind: session.kind, initialMessages: undefined, model: session.model, provider: session.provider, compactionStrategy });
+      session.bridge = b;
+      b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
+      b.onClose(() => {
+        try { sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+      });
+      b.onError((err) => {
+        try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
+      });
+      if (storeRef) {
+        session.capture = createCapture(b, () => session.store ?? null, { onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`) });
+        const { entryIds } = storeRef.buildBranchWithIds();
+        session.capture.resetTo(entryIds);
+      }
+      await b.ready();
+      session._ensureBridge = undefined;
+    };
   }
 
-  bridge.onEvent((e) => {
-    try { routeEvent(session, e); }
-    catch (err) { console.error("[hub] routeEvent error:", err); }
-  });
-  bridge.onClose(() => {
-    try {
-      sessions.delete(id);
-      for (const r of session.sseClients) { try { r.end(); } catch {} }
-    } catch (err) { console.error("[hub] bridge onClose error:", err); }
-  });
-  bridge.onError((err) => {
-    try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); }
-    catch (e) { console.error("[hub] bridge onError error:", e); }
-  });
-
-  await bridge.ready();
-  if (existing && store && session.capture) {
-    const { entryIds } = store.buildBranchWithIds();
-    session.capture.resetTo(entryIds);
+  if (bridge) {
+    await bridge.ready();
+    if (existing && store && session.capture) {
+      const { entryIds } = store.buildBranchWithIds();
+      session.capture.resetTo(entryIds);
+    }
   }
+
   sessions.set(id, session);
 
   // If the session was restored from disk and the replay ends with a
@@ -765,8 +779,8 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
       }
     }
   }
-  console.error(`[hub] restoring up to 5 of ${persisted.length} session(s)…`);
-  for (const p of persisted.slice(0, 5)) {
+  console.error(`[hub] restoring ${persisted.length} session(s)…`);
+  for (const p of persisted) {
     if (p.kind === "terminal" || p.kind === "ash-terminal") {
       await deleteSessionFiles(p.id);
       continue;
@@ -1228,6 +1242,8 @@ function openSseMulti(
   for (const { id, tail } of subs) {
     const session = sessions.get(id);
     if (!session) continue;
+    // Lazily create bridge if this is a restored session.
+    void session._ensureBridge?.();
     if (tail > 0) {
       session.hasUnread = false;
       for (const line of session.replay.slice(-tail)) {
@@ -1256,6 +1272,7 @@ function openSseMulti(
 }
 
 async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  await session._ensureBridge?.();
   if (!session.bridge.writePty) {
     res.statusCode = 400; res.end("session has no PTY"); return;
   }
@@ -1273,6 +1290,7 @@ async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, ses
 }
 
 async function ptyResize(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  await session._ensureBridge?.();
   if (!session.bridge.resizePty) {
     res.statusCode = 400; res.end("session has no PTY"); return;
   }
@@ -1292,6 +1310,7 @@ async function ptyResize(req: http.IncomingMessage, res: http.ServerResponse, se
 }
 
 async function submit(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  await session._ensureBridge?.();
   const body = await readBody(req);
   let query = "";
   try { query = (JSON.parse(body) as { query?: string }).query ?? ""; } catch {}
@@ -1409,6 +1428,7 @@ async function setThinking(
   res: http.ServerResponse,
   session: Session,
 ): Promise<void> {
+  await session._ensureBridge?.();
   const body = await readBody(req);
   let level = "";
   try { level = String((JSON.parse(body) as { level?: string }).level ?? "").trim(); } catch {}
@@ -1426,6 +1446,7 @@ async function execCommand(
   res: http.ServerResponse,
   session: Session,
 ): Promise<void> {
+  await session._ensureBridge?.();
   const body = await readBody(req);
   let name = "", args = "";
   try {

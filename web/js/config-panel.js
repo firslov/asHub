@@ -102,8 +102,12 @@ const buildConfig = () => {
     baseURL: prev.baseURL ?? providerDef.baseURL,
     apiKey: apiKey || prev.apiKey || "YOUR_API_KEY",
     defaultModel: prev.defaultModel ?? providerDef.defaultModel,
-    models: prev.models ?? providerDef.models,
   };
+  // Only carry forward explicitly configured models — the app now
+  // auto-discovers model lists from provider APIs and built-in catalog.
+  if (prev.models && Array.isArray(prev.models) && prev.models.length > 0) {
+    providerCfg.models = prev.models;
+  }
 
   if (providerDef.dynamicModels) {
     const typed = configModelInput?.value.trim();

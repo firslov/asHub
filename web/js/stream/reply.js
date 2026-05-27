@@ -26,12 +26,35 @@ export const addReplyCopyBtn = (el, text) => {
   el.appendChild(btn);
 };
 
+// Threshold (characters) above which we switch from full re-render
+// to incremental DOM append.  Full re-render is fast for short text;
+// incremental avoids blocking the main thread when r.text grows large
+// (e.g. long code generation, background-tab catch-up).
+const INCREMENTAL_THRESHOLD = 2000;
+
 const flushReply = (session) => {
   const r = session?.reply;
   if (!r) return;
   r.pendingChunkRender = false;
   if (!r.current) return;
-  r.current.innerHTML = mdToHtml(r.text);
+
+  const fullLen = r.text.length;
+  if (fullLen < INCREMENTAL_THRESHOLD) {
+    // Short — full re-render is cheap and guarantees correctness.
+    r.current.innerHTML = mdToHtml(r.text);
+    r._renderedLen = fullLen;
+  } else {
+    // Long — only render the new tail to avoid O(n²) mdToHtml cost.
+    const prevLen = r._renderedLen ?? 0;
+    const delta = r.text.slice(prevLen);
+    if (!delta) return;
+    const tmp = document.createElement("div");
+    tmp.innerHTML = mdToHtml(delta);
+    while (tmp.firstChild) {
+      r.current.appendChild(tmp.firstChild);
+    }
+    r._renderedLen = fullLen;
+  }
   renderMathIn(r.current);
   highlightWithin(r.current);
   maybeScroll(session);
@@ -55,6 +78,7 @@ export const appendReplyChunk = (session, delta) => {
     r.current = document.createElement("div");
     r.current.className = "agent-reply streaming";
     r.current.dataset.turn = String(session.state.currentTurn);
+    r._renderedLen = 0;
     append(session, r.current);
   }
   r.text += stripAnsi(delta);
@@ -67,9 +91,11 @@ export const fillFinalReply = (session, text) => {
   if (!r?.current || !text) return;
   const full = stripAnsi(text);
   if (full === r.text) return;
-  // Final payload wins over accumulated chunks — heals gaps from SSE reopens.
+  // Final payload wins over accumulated chunks — heals gaps from SSE reopens
+  // and any incremental-render artefacts (e.g. cross-chunk markdown breaks).
   r.text = full;
   r.current.innerHTML = mdToHtml(r.text);
+  r._renderedLen = full.length;
   renderMathIn(r.current);
 };
 
@@ -86,6 +112,7 @@ export const closeReply = (session) => {
   }
   r.current = null;
   r.text = "";
+  r._renderedLen = 0;
 };
 
 export const cancelReply = (session) => {

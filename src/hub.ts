@@ -359,7 +359,7 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "POST" && url === "/api/config/reload") return reloadConfig(res);
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
-    if (req.method === "GET" && url.startsWith("/api/models/")) return getModels(req, res);
+    if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -509,13 +509,149 @@ async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): 
 
 // ── Models ──────────────────────────────────────────────────────────
 
-function getModels(req: http.IncomingMessage, res: http.ServerResponse): void {
-  const provider = req.url!.split("/api/models/")[1]?.split("?")[0];
+// Built-in model catalog for providers that don't require manual model
+// configuration in settings.json. User-configured models are always
+// merged in (deduplicated by id). Keep these lists reasonably current.
+const KNOWN_MODELS: Record<string, string[]> = {
+  deepseek: [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "deepseek-reasoner",
+    "deepseek-chat",
+  ],
+  openrouter: [
+    "deepseek/deepseek-v4-flash",
+    "anthropic/claude-sonnet-4-20250514",
+    "anthropic/claude-3.5-sonnet",
+    "openai/gpt-4o",
+    "openai/gpt-4.1",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "meta-llama/llama-4-maverick",
+    "qwen/qwen3-235b-a22b",
+    "qwen/qwen3.7-max",
+  ],
+  zhipu: [
+    "glm-5.1",
+    "glm-5-turbo",
+    "glm-4.7",
+    "glm-4.5",
+    "glm-4-flash",
+    "glm-4-plus",
+    "glm-4-air",
+    "glm-4-airx",
+  ],
+  openai: [
+    "gpt-4.1",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "o3",
+    "o4-mini",
+  ],
+  anthropic: [
+    "claude-sonnet-4-20250514",
+    "claude-3.5-sonnet",
+    "claude-opus-4-20250514",
+    "claude-3.5-haiku",
+  ],
+  google: [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+  ],
+};
+
+// ── Live model fetching from provider APIs ─────────────────────────
+
+interface ModelsCacheEntry {
+  models: string[];
+  fetchedAt: number;
+}
+const _modelsCache = new Map<string, ModelsCacheEntry>();
+const MODELS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function fetchProviderModels(name: string): Promise<string[]> {
+  // Check cache
+  const cached = _modelsCache.get(name);
+  if (cached && Date.now() - cached.fetchedAt < MODELS_CACHE_TTL) {
+    return cached.models;
+  }
+
+  try {
+    const resolved = resolveProvider(name);
+    if (!resolved) return [];
+
+    const apiKey = resolved.apiKey;
+    let url: string | null = null;
+
+    // OpenRouter has a public model list endpoint (no auth needed)
+    if (name === "openrouter") {
+      url = "https://openrouter.ai/api/v1/models";
+    }
+    // DeepSeek / OpenAI-compatible: /v1/models with API key
+    else if (apiKey) {
+      const base = (resolved.baseURL ?? "").replace(/\/+$/, "");
+      if (base) url = `${base}/v1/models`;
+    }
+
+    if (!url) return [];
+
+    const headers: Record<string, string> = {};
+    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+    const r = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    if (!r.ok) return [];
+
+    const json = await r.json() as { data?: Array<{ id: string }> };
+    const ids = (json.data ?? []).map((m) => m.id).filter(Boolean);
+    // Cache the result
+    _modelsCache.set(name, { models: ids, fetchedAt: Date.now() });
+    return ids;
+  } catch {
+    // Network errors, timeouts — silently fall back to cache/known models
+    return cached?.models ?? [];
+  }
+}
+
+async function getModels(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const raw = req.url!.split("/api/models")[1] ?? "";
+  const provider = raw.startsWith("/") ? raw.slice(1).split("?")[0] : "";
+
+  // ── GET /api/models — all configured providers ──────────────────
   if (!provider) {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "missing provider" }));
+    try {
+      const names = getProviderNames();
+      const providers = await Promise.all(names.map(async (name) => {
+        const resolved = resolveProvider(name);
+        if (!resolved) return null;
+        // Merge: configured → live-fetched → built-in known catalog
+        const configured = resolved.models ?? [];
+        const live = await fetchProviderModels(name);
+        const known = KNOWN_MODELS[name.toLowerCase()] ?? [];
+        const merged = [...new Set([...configured, ...live, ...known])];
+        if (merged.length === 0 && resolved.defaultModel) {
+          merged.push(resolved.defaultModel);
+        }
+        return {
+          name,
+          defaultModel: resolved.defaultModel,
+          models: merged.map((id) => ({ id })),
+        };
+      }));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ providers: providers.filter(Boolean) }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+    }
     return;
   }
+
+  // ── GET /api/models/:provider — single provider (legacy) ─────────
   try {
     const resolved = resolveProvider(provider);
     if (!resolved) {
@@ -1568,13 +1704,14 @@ async function setModelEndpoint(req: http.IncomingMessage, res: http.ServerRespo
   req.on("data", (chunk) => { body += chunk; });
   req.on("end", () => {
     try {
-      const { model } = JSON.parse(body);
+      const { model, provider } = JSON.parse(body);
       if (!model || typeof model !== "string") {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "invalid model" }));
         return;
       }
       session.model = model;
+      if (provider && typeof provider === "string") session.provider = provider;
       // Persist to meta file
       void (async () => {
         try {
@@ -1582,11 +1719,12 @@ async function setModelEndpoint(req: http.IncomingMessage, res: http.ServerRespo
           let meta: Record<string, unknown> = {};
           try { meta = JSON.parse(await fs.promises.readFile(metaPath, "utf-8")); } catch {}
           meta.model = model;
+          if (provider) meta.provider = provider;
           await fs.promises.writeFile(metaPath, JSON.stringify(meta, null, 2) + "\n");
         } catch { /* best-effort */ }
       })();
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, model }));
+      res.end(JSON.stringify({ ok: true, model, provider: session.provider }));
     } catch {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "invalid JSON" }));

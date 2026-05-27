@@ -475,48 +475,101 @@ const refreshModelChip = (session) => {
 
 // ── Model picker dropdown ───────────────────────────────────────────
 
-let _modelsCache = null;
+let _allModelsCache = null;  // { providers: [{ name, defaultModel, models: [{id}] }] }
 
 const toggleModelDropdown = async (session) => {
   const dropdown = session.modelDropdownEl;
   if (!dropdown) return;
 
   // Close if already open
-  if (!dropdown.hidden) { dropdown.hidden = true; return; }
+  if (!dropdown.hidden) {
+    dropdown.hidden = true;
+    // Clean up the stale document click handler
+    if (dropdown._closeHandler) {
+      document.removeEventListener("click", dropdown._closeHandler);
+      dropdown._closeHandler = null;
+    }
+    return;
+  }
 
   // Close any other open dropdowns
-  document.querySelectorAll(".model-dropdown").forEach((d) => { d.hidden = true; });
+  document.querySelectorAll(".model-dropdown").forEach((d) => {
+    d.hidden = true;
+    if (d._closeHandler) {
+      document.removeEventListener("click", d._closeHandler);
+      d._closeHandler = null;
+    }
+  });
 
-  const provider = session.agentInfo?.provider;
-  if (!provider) return;
-
-  // Fetch models if not cached
-  if (!_modelsCache || _modelsCache.provider !== provider) {
+  // Fetch all models if not cached
+  if (!_allModelsCache) {
     try {
-      const r = await fetch(`/api/models/${provider}`);
-      _modelsCache = await r.json();
-      _modelsCache.provider = provider;
+      const r = await fetch("/api/models");
+      _allModelsCache = await r.json();
     } catch {
       return;
     }
   }
 
-  const models = _modelsCache.models || [];
-  const currentModel = session.agentInfo?.model;
-  dropdown.innerHTML = models.map((m) => {
-    const id = typeof m === "string" ? m : m.id;
-    const label = typeof m === "string" ? m : (m.name || m.id);
-    const sel = id === currentModel ? " selected" : "";
-    return `<li class="model-option${sel}" data-model="${escapeAttr(id)}">${escapeAttr(label)}</li>`;
-  }).join("");
+  const providers = _allModelsCache.providers || [];
+  if (!providers.length) return;
 
+  const currentModel = session.agentInfo?.model;
+  const currentProvider = session.agentInfo?.provider;
+
+  // Build dropdown HTML with search and provider groups
+  dropdown.innerHTML =
+    `<div class="model-dropdown-search">` +
+      `<input type="text" class="model-search-input" placeholder="${t("search.models") || "Search models…"}" autocomplete="off">` +
+    `</div>` +
+    `<div class="model-dropdown-list">` +
+      providers.map((p) => {
+        const models = p.models || [];
+        if (!models.length) return "";
+        const isCurrent = p.name === currentProvider;
+        return `<div class="model-group" data-provider="${escapeAttr(p.name)}">` +
+          `<div class="model-group-head">${escapeAttr(p.name)}${isCurrent ? ` <span class="model-group-badge">current</span>` : ""}</div>` +
+          models.map((m) => {
+            const id = m.id;
+            const sel = (id === currentModel && isCurrent) ? " selected" : "";
+            return `<div class="model-option${sel}" data-model="${escapeAttr(id)}" data-provider="${escapeAttr(p.name)}">${escapeAttr(id)}</div>`;
+          }).join("") +
+        `</div>`;
+      }).join("") +
+    `</div>`;
+
+  // Click handlers
   dropdown.querySelectorAll(".model-option").forEach((opt) => {
     opt.addEventListener("click", () => {
       const modelId = opt.dataset.model;
-      if (modelId) selectModel(session, modelId);
+      const provider = opt.dataset.provider;
+      if (modelId) selectModel(session, modelId, provider);
       dropdown.hidden = true;
+      if (dropdown._closeHandler) {
+        document.removeEventListener("click", dropdown._closeHandler);
+        dropdown._closeHandler = null;
+      }
     });
   });
+
+  // Search filter
+  const searchInput = dropdown.querySelector(".model-search-input");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      const q = searchInput.value.toLowerCase().trim();
+      dropdown.querySelectorAll(".model-group").forEach((group) => {
+        let visible = false;
+        group.querySelectorAll(".model-option").forEach((opt) => {
+          const match = !q || opt.dataset.model.toLowerCase().includes(q);
+          opt.hidden = !match;
+          if (match) visible = true;
+        });
+        group.hidden = !visible;
+      });
+    });
+    // Focus the search input after a tick
+    setTimeout(() => searchInput.focus(), 50);
+  }
 
   // Position dropdown above the model chip — append to body to escape overflow:hidden
   if (dropdown.parentNode !== document.body) {
@@ -529,24 +582,30 @@ const toggleModelDropdown = async (session) => {
 
   dropdown.hidden = false;
 
-  // Close on outside click
+  // Remove stale handler before adding new one
+  if (dropdown._closeHandler) {
+    document.removeEventListener("click", dropdown._closeHandler);
+  }
   const close = (e) => {
     if (!dropdown.contains(e.target) && e.target !== session.modelEl) {
       dropdown.hidden = true;
       document.removeEventListener("click", close);
+      dropdown._closeHandler = null;
     }
   };
+  dropdown._closeHandler = close;
   setTimeout(() => document.addEventListener("click", close), 0);
 };
 
-const selectModel = (session, modelId) => {
+const selectModel = (session, modelId, provider) => {
   session.agentInfo.model = modelId;
+  if (provider) session.agentInfo.provider = provider;
   refreshModelChip(session);
-  // Notify backend about model change for this session
+  // Notify backend about model/provider change for this session
   fetch(`/api/sessions/${session.id}/model`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: modelId }),
+    body: JSON.stringify({ model: modelId, provider: provider || undefined }),
   }).catch(() => {});
 };
 

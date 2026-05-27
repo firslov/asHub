@@ -2393,29 +2393,39 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.3rem;
 }
 
-.usage-cache .cache-dot {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  margin-right: 0.15rem;
+/* ── Cache ring ──────────────────────────────────────────────────── */
+.usage-cache .cache-ring {
+  flex-shrink: 0;
+  transform: rotate(-90deg);
 }
 
-.usage-cache .cache-dot.hit {
-  background: var(--green);
-  box-shadow: 0 0 3px rgba(90, 158, 111, 0.3);
+.usage-cache .cache-ring-track {
+  fill: none;
+  stroke: var(--bg4);
+  stroke-width: 3;
 }
 
-.usage-cache .cache-dot.miss {
-  background: var(--amber);
-  box-shadow: 0 0 4px rgba(212, 168, 83, 0.3);
+.usage-cache .cache-ring-fill {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.5s var(--ease-out-expo);
 }
 
-.usage-cache .cache-sep {
-  color: var(--text-faint);
-  margin: 0 0.15rem;
-  font-size: 0.65rem;
+.usage-cache .cache-ring-fill.high { stroke: var(--green); }
+.usage-cache .cache-ring-fill.mid  { stroke: var(--amber); }
+.usage-cache .cache-ring-fill.low  { stroke: var(--red); }
+
+.usage-cache .cache-pct {
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  transition: color 0.3s;
 }
+
+.usage-cache .cache-pct.high { color: var(--green); }
+.usage-cache .cache-pct.mid  { color: var(--amber); }
+.usage-cache .cache-pct.low  { color: var(--red); }
 
 /* ── Turn separator ──────────────────────────────────────────────── */
 .turn-sep {

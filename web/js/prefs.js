@@ -158,7 +158,7 @@ const DEFAULT_UI = {
   "usage.align": "left",
   "usage.sticky": true,
   "usage.cwd.show": true,
-  "usage.cache.show": false,
+  "usage.cache.show": true,
   "usage.total.show": false,
   "usage.model.show": true,
   "cancel.show": false,

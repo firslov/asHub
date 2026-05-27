@@ -28,11 +28,22 @@ export const renderUsage = (session) => {
     ctxText = `${(inTok / 1000).toFixed(1)}k / ${(st.contextWindow / 1000).toFixed(0)}k`;
   }
   const totalTok = st.lastUsage.total_tokens ?? (inTok + outTok);
+  const cacheTotal = cacheHit + cacheMiss;
+  const cacheRatio = cacheTotal > 0 ? cacheHit / cacheTotal : 0;
+  const cacheRatioPct = Math.round(cacheRatio * 100);
+  const cacheRatioClass = cacheRatioPct >= 80 ? "high" : cacheRatioPct >= 40 ? "mid" : "low";
+  const cacheTooltip = `${t("usage.cache")}: ${fmtNum(cacheHit)} / ${fmtNum(cacheMiss)} (${cacheRatioPct}%)`;
+  // SVG ring: r=9, circumference ≈ 56.5487
+  const ringCircum = 56.5487;
+  const ringOffset = ringCircum * (1 - cacheRatio);
   const cacheHtml = (cacheHit > 0 || cacheMiss > 0)
-    ? `<span class="usage-chip usage-cache" title="${t("usage.cache")}">` +
-        `<span class="cache-dot hit"></span>${fmtNum(cacheHit)}` +
-        `<span class="cache-sep">/</span>` +
-        `<span class="cache-dot miss"></span>${fmtNum(cacheMiss)}` +
+    ? `<span class="usage-chip usage-cache" title="${cacheTooltip}">` +
+        `<svg class="cache-ring" viewBox="0 0 24 24" width="16" height="16">` +
+          `<circle class="cache-ring-track" cx="12" cy="12" r="9"/>` +
+          `<circle class="cache-ring-fill ${cacheRatioClass}" cx="12" cy="12" r="9"` +
+            ` stroke-dasharray="${ringCircum}" stroke-dashoffset="${ringOffset.toFixed(2)}"/>` +
+        `</svg>` +
+        `<span class="cache-pct ${cacheRatioClass}">${cacheRatioPct}%</span>` +
       `</span>`
     : "";
 

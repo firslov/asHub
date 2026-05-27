@@ -665,7 +665,7 @@ async function createSession(
   const isRestored = !!existing;
   const bridge: Bridge = isRestored
     ? null as unknown as Bridge
-    : opts.makeBridge({ cwd, kind, initialMessages, model: existing!.model, provider: existing!.provider, compactionStrategy });
+    : opts.makeBridge({ cwd, kind, initialMessages, compactionStrategy });
 
   const defaultTitle = isTerminalKind ? `▷ ${path.basename(cwd) || cwd}` : "";
   const session: Session = {
@@ -700,7 +700,7 @@ async function createSession(
     const storeRef = store;
     session._ensureBridge = async () => {
       if (session.bridge) return;
-      const b = opts.makeBridge({ cwd, kind: session.kind, initialMessages: undefined, model: session.model, provider: session.provider, compactionStrategy });
+      const b = opts.makeBridge({ cwd, kind: session.kind, initialMessages, model: session.model, provider: session.provider, compactionStrategy });
       session.bridge = b;
       b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       b.onClose(() => {
@@ -720,6 +720,19 @@ async function createSession(
   }
 
   if (bridge) {
+    // Wire event handlers for new sessions (restored sessions defer to _ensureBridge).
+    if (!isRestored && isAgent) {
+      bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
+      bridge.onClose(() => {
+        try { sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+      });
+      bridge.onError((err) => {
+        try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
+      });
+      if (store) {
+        session.capture = createCapture(bridge, () => session.store ?? null, { onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`) });
+      }
+    }
     await bridge.ready();
     if (existing && store && session.capture) {
       const { entryIds } = store.buildBranchWithIds();

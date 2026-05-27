@@ -346,7 +346,8 @@ export const handlers = {
       `<span class="cm-line"></span>` +
       `<span class="cm-pill">📦 ${evicted} message(s) compacted</span>` +
       `<span class="cm-line"></span>`;
-    this.streamEl.appendChild(pill);
+    const target = (this.state.replaying && this._replayFrag) || this.streamEl;
+    if (target) target.appendChild(pill);
   },
 
   "agent:tool-started"(p) {
@@ -461,7 +462,95 @@ const refreshModelChip = (session) => {
   const text = [modelLabel, showThink ? `[${ai.thinkingLevel}]` : ""].filter(Boolean).join(" ");
   if (text) { session.modelEl.textContent = text; session.modelEl.hidden = false; }
   else { session.modelEl.hidden = true; }
+
+  // Attach model-picker click handler (once per session)
+  if (session.modelPickerEl && !session._modelPickerAttached) {
+    session._modelPickerAttached = true;
+    session.modelEl.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      toggleModelDropdown(session);
+    });
+  }
 };
+
+// ── Model picker dropdown ───────────────────────────────────────────
+
+let _modelsCache = null;
+
+const toggleModelDropdown = async (session) => {
+  const dropdown = session.modelDropdownEl;
+  if (!dropdown) return;
+
+  // Close if already open
+  if (!dropdown.hidden) { dropdown.hidden = true; return; }
+
+  // Close any other open dropdowns
+  document.querySelectorAll(".model-dropdown").forEach((d) => { d.hidden = true; });
+
+  const provider = session.agentInfo?.provider;
+  if (!provider) return;
+
+  // Fetch models if not cached
+  if (!_modelsCache || _modelsCache.provider !== provider) {
+    try {
+      const r = await fetch(`/api/models/${provider}`);
+      _modelsCache = await r.json();
+      _modelsCache.provider = provider;
+    } catch {
+      return;
+    }
+  }
+
+  const models = _modelsCache.models || [];
+  const currentModel = session.agentInfo?.model;
+  dropdown.innerHTML = models.map((m) => {
+    const id = typeof m === "string" ? m : m.id;
+    const label = typeof m === "string" ? m : (m.name || m.id);
+    const sel = id === currentModel ? " selected" : "";
+    return `<li class="model-option${sel}" data-model="${escapeAttr(id)}">${escapeAttr(label)}</li>`;
+  }).join("");
+
+  dropdown.querySelectorAll(".model-option").forEach((opt) => {
+    opt.addEventListener("click", () => {
+      const modelId = opt.dataset.model;
+      if (modelId) selectModel(session, modelId);
+      dropdown.hidden = true;
+    });
+  });
+
+  // Position dropdown above the model chip — append to body to escape overflow:hidden
+  if (dropdown.parentNode !== document.body) {
+    document.body.appendChild(dropdown);
+  }
+  const chipRect = session.modelEl.getBoundingClientRect();
+  dropdown.style.left = `${chipRect.left}px`;
+  dropdown.style.top = `${chipRect.top}px`;
+  dropdown.style.transform = "translateY(-100%) translateY(-6px)";
+
+  dropdown.hidden = false;
+
+  // Close on outside click
+  const close = (e) => {
+    if (!dropdown.contains(e.target) && e.target !== session.modelEl) {
+      dropdown.hidden = true;
+      document.removeEventListener("click", close);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", close), 0);
+};
+
+const selectModel = (session, modelId) => {
+  session.agentInfo.model = modelId;
+  refreshModelChip(session);
+  // Notify backend about model change for this session
+  fetch(`/api/sessions/${session.id}/model`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: modelId }),
+  }).catch(() => {});
+};
+
+const escapeAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 const refreshCwdChip = (session) => {
   if (!session?.cwdEl) return;

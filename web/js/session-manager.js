@@ -75,7 +75,7 @@ let es = null;
 let reopenScheduled = false;
 let lastSeenId = 0;
 
-const TAIL = { fresh: "all", ready: "0", resync: "all" };
+const TAIL = { fresh: "all", ready: "0", resync: "100" };
 const buildSubsParam = () => {
   const parts = [];
   for (const [id, status] of subState) parts.push(`${id}:${TAIL[status]}`);

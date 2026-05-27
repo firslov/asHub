@@ -37,6 +37,9 @@ interface Session {
   kind: SessionKind;
   cwd: string;
   bridge: Bridge;
+  /** Lazy-init factory — only set for restored sessions; bridge is created
+   *  on first SSE subscription.  Once created, this is cleared. */
+  _ensureBridge?: () => Promise<void>;
   replay: string[];
   segmentText: string;
   segmentSeq: number;
@@ -66,7 +69,7 @@ interface Session {
   contextLock: Promise<void>;
 }
 
-const REPLAY_LIMIT = 5000;
+const REPLAY_LIMIT = 1000;
 
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;
@@ -356,6 +359,7 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "POST" && url === "/api/config/reload") return reloadConfig(res);
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
+    if (req.method === "GET" && url.startsWith("/api/models/")) return getModels(req, res);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -375,6 +379,8 @@ export function startHub(opts: HubOpts): http.Server {
       const rest = rawRest.split("?")[0]!;  // strip query string for route matching
       const session = sessions.get(id);
       if (!session) { res.statusCode = 404; res.end("no session"); return; }
+      // Lazy-init bridge for restored sessions that haven't been activated yet.
+      await session._ensureBridge?.();
 
       if (req.method === "POST" && rest === "/pty-input") return ptyInput(req, res, session);
       if (req.method === "POST" && rest === "/pty-resize") return ptyResize(req, res, session);
@@ -417,6 +423,7 @@ export function startHub(opts: HubOpts): http.Server {
       if (req.method === "GET" && rest === "/git-branch") return gitBranchEndpoint(res, session);
       if (req.method === "GET" && rest === "/tree") return treeEndpoint(res, session);
       if (req.method === "POST" && rest === "/fork") return forkEndpoint(req, res, session);
+      if (req.method === "PUT" && rest === "/model") return setModelEndpoint(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
 
       const file = rest === "/" || rest === "/index.html" ? "/index.html" : rest;
@@ -497,6 +504,34 @@ async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): 
   } catch (err) {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ is_available: false, error: err instanceof Error ? err.message : String(err) }));
+  }
+}
+
+// ── Models ──────────────────────────────────────────────────────────
+
+function getModels(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const provider = req.url!.split("/api/models/")[1]?.split("?")[0];
+  if (!provider) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "missing provider" }));
+    return;
+  }
+  try {
+    const resolved = resolveProvider(provider);
+    if (!resolved) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: `unknown provider: ${provider}` }));
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      provider,
+      defaultModel: resolved.defaultModel,
+      models: resolved.models ?? [],
+    }));
+  } catch (err) {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }
 }
 
@@ -626,7 +661,11 @@ async function createSession(
         },
       )
     : undefined;
-  const bridge = opts.makeBridge({ cwd, kind, initialMessages, model: existing?.model, provider: existing?.provider, compactionStrategy });
+  // New sessions create the bridge immediately; restored sessions defer.
+  const isRestored = !!existing;
+  const bridge: Bridge = isRestored
+    ? null as unknown as Bridge
+    : opts.makeBridge({ cwd, kind, initialMessages, model: existing!.model, provider: existing!.provider, compactionStrategy });
 
   const defaultTitle = isTerminalKind ? `▷ ${path.basename(cwd) || cwd}` : "";
   const session: Session = {
@@ -642,8 +681,6 @@ async function createSession(
     model: existing?.model,
     provider: existing?.provider,
     startedAt: existing?.startedAt ?? Date.now(),
-    // If the session already has messages (from tree store or legacy
-    // messages.json), the first turn was already done.
     firstTurnDone: !!(initialMessages?.length),
     firstQuery: existing?.firstQuery,
     userTitle: existing?.userTitle,
@@ -656,32 +693,40 @@ async function createSession(
     store,
     contextLock: Promise.resolve(),
   };
-  if (isAgent) {
-    session.capture = createCapture(bridge, () => session.store ?? null, {
-      onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`),
-    });
+
+  // For restored sessions, store a factory to lazily create + wire the
+  // bridge.  The factory is called from openSseMulti / spawnSession flow.
+  if (isRestored && isAgent) {
+    const storeRef = store;
+    session._ensureBridge = async () => {
+      if (session.bridge) return;
+      const b = opts.makeBridge({ cwd, kind: session.kind, initialMessages: undefined, model: session.model, provider: session.provider, compactionStrategy });
+      session.bridge = b;
+      b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
+      b.onClose(() => {
+        try { sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+      });
+      b.onError((err) => {
+        try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
+      });
+      if (storeRef) {
+        session.capture = createCapture(b, () => session.store ?? null, { onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`) });
+        const { entryIds } = storeRef.buildBranchWithIds();
+        session.capture.resetTo(entryIds);
+      }
+      await b.ready();
+      session._ensureBridge = undefined;
+    };
   }
 
-  bridge.onEvent((e) => {
-    try { routeEvent(session, e); }
-    catch (err) { console.error("[hub] routeEvent error:", err); }
-  });
-  bridge.onClose(() => {
-    try {
-      sessions.delete(id);
-      for (const r of session.sseClients) { try { r.end(); } catch {} }
-    } catch (err) { console.error("[hub] bridge onClose error:", err); }
-  });
-  bridge.onError((err) => {
-    try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); }
-    catch (e) { console.error("[hub] bridge onError error:", e); }
-  });
-
-  await bridge.ready();
-  if (existing && store && session.capture) {
-    const { entryIds } = store.buildBranchWithIds();
-    session.capture.resetTo(entryIds);
+  if (bridge) {
+    await bridge.ready();
+    if (existing && store && session.capture) {
+      const { entryIds } = store.buildBranchWithIds();
+      session.capture.resetTo(entryIds);
+    }
   }
+
   sessions.set(id, session);
 
   // If the session was restored from disk and the replay ends with a
@@ -1118,7 +1163,7 @@ async function listFiles(res: http.ServerResponse, session: Session, subdir?: st
 function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, id: string): void {
   const s = sessions.get(id);
   if (s) {
-    try { s.bridge.close(); } catch {}
+    try { s.bridge?.close(); } catch {}
     sessions.delete(id);
   }
   const buf = _writeBufs.get(id);
@@ -1198,6 +1243,8 @@ function openSseMulti(
   for (const { id, tail } of subs) {
     const session = sessions.get(id);
     if (!session) continue;
+    // Lazily create bridge if this is a restored session.
+    void session._ensureBridge?.();
     if (tail > 0) {
       session.hasUnread = false;
       for (const line of session.replay.slice(-tail)) {
@@ -1501,6 +1548,37 @@ async function treeEndpoint(res: http.ServerResponse, session: Session): Promise
   });
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ leafId: session.store.getActiveLeaf(), rootId: session.store.getRootId(), entries: all }));
+}
+
+async function setModelEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  let body = "";
+  req.on("data", (chunk) => { body += chunk; });
+  req.on("end", () => {
+    try {
+      const { model } = JSON.parse(body);
+      if (!model || typeof model !== "string") {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid model" }));
+        return;
+      }
+      session.model = model;
+      // Persist to meta file
+      void (async () => {
+        try {
+          const metaPath = path.join(SESSIONS_DIR, `${session.id}.meta.json`);
+          let meta: Record<string, unknown> = {};
+          try { meta = JSON.parse(await fs.promises.readFile(metaPath, "utf-8")); } catch {}
+          meta.model = model;
+          await fs.promises.writeFile(metaPath, JSON.stringify(meta, null, 2) + "\n");
+        } catch { /* best-effort */ }
+      })();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, model }));
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid JSON" }));
+    }
+  });
 }
 
 async function forkEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {

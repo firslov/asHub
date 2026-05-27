@@ -57,6 +57,8 @@ class SessionView extends HTMLElement {
     this.branchEl = this.querySelector(".usage-branch");
     this.modelEl = this.querySelector(".usage-model");
     this.balanceEl = this.querySelector(".usage-balance");
+    this.modelPickerEl = this.querySelector(".model-picker");
+    this.modelDropdownEl = this.querySelector(".model-dropdown");
     this.cwdEl = this.querySelector(".usage-cwd");
 
     this.state = { ...STATE_DEFAULTS };
@@ -122,10 +124,17 @@ class SessionView extends HTMLElement {
     document.addEventListener("langchange", onLangChange, { signal: ac });
   }
 
-  resync() {
+  resync({ force = false } = {}) {
     if (!this.id) return;
     if (this.replayFlushTimer) { clearTimeout(this.replayFlushTimer); this.replayFlushTimer = null; }
     this.controller?.abort();
+    // SPA cache: preserve DOM across session switches.  Only rebuild when
+    // forced (rewind / branch-switch) or when there is no content yet.
+    if (!force && this.streamEl && this.streamEl.children.length > 0) {
+      this.exitReplayMode();
+      subscribeSession(this.id);
+      return;
+    }
     this.innerHTML = "";
     this.initStreamShell();
     this.enterReplayMode();
@@ -134,6 +143,7 @@ class SessionView extends HTMLElement {
 
   resetForBranchSwitch() {
     if (this.streamEl) this.streamEl.innerHTML = "";
+    this._replayFrag = null;
     this.state = { ...STATE_DEFAULTS };
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };
     this.thinking = { el: null, block: null };
@@ -170,6 +180,8 @@ class SessionView extends HTMLElement {
     if (this.emptyStateEl) this.emptyStateEl.hidden = true;
     // Show loading skeleton while replay frames stream in.
     if (this.loadingEl) this.loadingEl.hidden = false;
+    // Batch DOM updates into a fragment during replay to avoid 1000+ reflows.
+    this._replayFrag = document.createDocumentFragment();
     // Safety net for empty replays: exit after 500ms if no frames arrive.
     this.replayFlushTimer = setTimeout(() => this.exitReplayMode(), 500);
   }
@@ -183,6 +195,11 @@ class SessionView extends HTMLElement {
   exitReplayMode() {
     this.state.replaying = false;
     if (this.replayFlushTimer) { clearTimeout(this.replayFlushTimer); this.replayFlushTimer = null; }
+    // Flush batched replay fragment to the real DOM in a single operation.
+    if (this._replayFrag && this._replayFrag.childNodes.length > 0 && this.streamEl) {
+      this.streamEl.appendChild(this._replayFrag);
+    }
+    this._replayFrag = null;
     // Hide loading skeleton now that content is rendered.
     if (this.loadingEl) this.loadingEl.hidden = true;
     hidePageLoader();

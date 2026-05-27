@@ -18,18 +18,22 @@ const groupState = new WeakMap();
  * keeping the timestamp and user message together.
  */
 export const insertStreamNode = (session, node) => {
-  const stream = session?.streamEl;
-  if (!stream) return;
+  // During replay, batch all nodes into a DocumentFragment for
+  // single-pass DOM insertion — eliminates 1000+ reflows.
+  const target = (session?.state.replaying && session._replayFrag)
+    ? session._replayFrag
+    : session?.streamEl;
+  if (!target) return;
   if (node.classList?.contains("thinking")) {
-    stream.appendChild(node);
+    target.appendChild(node);
     return;
   }
-  const thinking = stream.querySelector(".thinking");
+  const thinking = target.querySelector(".thinking");
   if (thinking) {
-    stream.insertBefore(node, thinking);
+    target.insertBefore(node, thinking);
     return;
   }
-  const firstPending = stream.querySelector(".agent-box.pending");
+  const firstPending = target.querySelector(".agent-box.pending");
   if (firstPending) {
     let insertBefore = firstPending;
     let prev = firstPending.previousElementSibling;
@@ -37,9 +41,9 @@ export const insertStreamNode = (session, node) => {
       insertBefore = prev;
       prev = prev.previousElementSibling;
     }
-    stream.insertBefore(node, insertBefore);
+    target.insertBefore(node, insertBefore);
   } else {
-    stream.appendChild(node);
+    target.appendChild(node);
   }
 };
 

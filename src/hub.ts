@@ -694,9 +694,12 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse)
 }
 
 function reloadConfig(res: http.ServerResponse): void {
-  import("agent-sh/settings")
-    .then((m) => { m.reloadSettings(); invalidateModelProviders(); })
-    .catch(() => {});
+  Promise.all([
+    import("agent-sh/settings").then((m) => m.reloadSettings()),
+    // keys.json has its own module-level cache; the bootstrap path pushes
+    // a fresh keys file and needs subsequent AshBridge.init calls to see it.
+    import("agent-sh/auth").then((m) => m.reloadKeysFile?.()).catch(() => {}),
+  ]).then(() => invalidateModelProviders()).catch(() => {});
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }

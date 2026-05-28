@@ -660,6 +660,65 @@ function pickHostAndCwd(hosts) {
       title.textContent = `Spawn on ${host.label}`;
       Object.assign(title.style, { marginBottom: "10px", fontWeight: "600" });
       panel.appendChild(title);
+
+      // Readiness banner — populated async after panel renders.
+      const banner = document.createElement("div");
+      Object.assign(banner.style, {
+        fontSize: "12px", padding: "8px 10px", borderRadius: "4px",
+        marginBottom: "10px", display: "none",
+      });
+      panel.appendChild(banner);
+      const showBanner = (text, kind) => {
+        banner.style.display = "block";
+        banner.style.background = kind === "warn" ? "rgba(255,180,0,0.15)" : "rgba(0,200,120,0.12)";
+        banner.style.border = `1px solid ${kind === "warn" ? "rgba(255,180,0,0.4)" : "rgba(0,200,120,0.35)"}`;
+        banner.textContent = "";
+        const span = document.createElement("span");
+        span.textContent = text;
+        banner.appendChild(span);
+        return banner;
+      };
+      const checkAndRenderReadiness = async () => {
+        try {
+          const r = await fetch(`/api/hosts/${encodeURIComponent(host.id)}/status`);
+          if (!r.ok) return;
+          const j = await r.json();
+          const ready = j.readiness;
+          if (!ready) return;
+          if (ready.keys && ready.providers) {
+            showBanner("Remote config ready.", "ok");
+            return;
+          }
+          const missing = [];
+          if (!ready.keys) missing.push("keys.json");
+          if (!ready.providers) missing.push("providers");
+          showBanner(`Missing on remote: ${missing.join(", ")}.`, "warn");
+          const push = document.createElement("button");
+          push.textContent = "Push from local";
+          Object.assign(push.style, {
+            marginLeft: "8px", padding: "3px 8px", borderRadius: "3px",
+            border: "1px solid var(--border, #444)", background: "transparent", color: "inherit",
+            cursor: "pointer", fontSize: "11px",
+          });
+          push.addEventListener("click", async () => {
+            push.disabled = true; push.textContent = "Pushing…";
+            try {
+              const pr = await fetch(`/api/hosts/${encodeURIComponent(host.id)}/bootstrap`, { method: "POST" });
+              if (!pr.ok) { showBanner(`Push failed: ${await pr.text()}`, "warn"); return; }
+              const pj = await pr.json();
+              const r2 = pj.readiness;
+              if (r2?.keys && r2?.providers) showBanner("Pushed. Remote config ready.", "ok");
+              else showBanner(`Pushed; still missing: ${[!r2?.keys && "keys.json", !r2?.providers && "providers"].filter(Boolean).join(", ")}`, "warn");
+            } catch (e) {
+              showBanner(`Push failed: ${e?.message ?? e}`, "warn");
+            } finally {
+              push.disabled = false;
+            }
+          });
+          banner.appendChild(push);
+        } catch { /* probe failure is non-fatal */ }
+      };
+
       const label = document.createElement("div");
       label.textContent = "Remote working directory:";
       Object.assign(label.style, { fontSize: "12px", opacity: "0.7", marginBottom: "6px" });
@@ -706,6 +765,7 @@ function pickHostAndCwd(hosts) {
       row.appendChild(spawn);
       panel.appendChild(row);
       setTimeout(() => { input.focus(); input.select(); }, 0);
+      void checkAndRenderReadiness();
     };
 
     overlay.addEventListener("click", (e) => { if (e.target === overlay) { overlay.remove(); resolve(null); } });

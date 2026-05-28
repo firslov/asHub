@@ -386,6 +386,25 @@ export function startHub(opts: HubOpts): http.Server {
       res.end(JSON.stringify({ hosts }));
       return;
     }
+    {
+      const m = url.match(/^\/api\/hosts\/([^/]+)\/(status|bootstrap)$/);
+      if (m && (req.method === "GET" || req.method === "POST")) {
+        const id = m[1]!;
+        const op = m[2]!;
+        if (!opts.hosts) { res.statusCode = 404; res.end("no host registry"); return; }
+        try {
+          const r = op === "bootstrap" && req.method === "POST"
+            ? await opts.hosts.bootstrap(id)
+            : await opts.hosts.status(id);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ readiness: r }));
+        } catch (err) {
+          res.statusCode = 500;
+          res.end(`${op} failed: ${err instanceof Error ? err.message : err}`);
+        }
+        return;
+      }
+    }
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
     if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res, sessions);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);

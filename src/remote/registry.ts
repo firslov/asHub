@@ -10,7 +10,7 @@ import { connectRemote } from "./ssh.js";
 import { RemoteBridge } from "../bridges/remote.js";
 import { TerminalBridge } from "../bridges/terminal.js";
 import type { BridgeFactory } from "../bridges/types.js";
-import type { RemoteHost, ConnectedRemote } from "./types.js";
+import type { RemoteHost, ConnectedRemote, RemoteReadiness } from "./types.js";
 
 interface HostsFile { hosts?: RemoteHost[] }
 
@@ -40,22 +40,33 @@ export function loadHostsFromDisk(): RemoteHost[] {
 export interface HostRegistry {
   list(): HostInfo[];
   factory(hostId: string): BridgeFactory | null;
+  /** Connects (if needed) and returns current readiness.  Null for "local"
+   *  or hosts using directBaseUrl (no SSH layer to probe). */
+  status(hostId: string): Promise<RemoteReadiness | null>;
+  /** Connects (if needed) and pushes local config to fill in missing
+   *  keys/providers.  Returns updated readiness. */
+  bootstrap(hostId: string): Promise<RemoteReadiness | null>;
   shutdown(): Promise<void>;
 }
 
 export function createHostRegistry(localFactory: BridgeFactory, hosts: RemoteHost[]): HostRegistry {
   const tunnels = new Map<string, Promise<ConnectedRemote>>();
   const factories = new Map<string, BridgeFactory>();
+  const hostById = new Map<string, RemoteHost>();
   factories.set(LOCAL_HOST_ID, localFactory);
+  const ensure = (h: RemoteHost): Promise<ConnectedRemote> => {
+    let p = tunnels.get(h.id);
+    if (!p) { p = connectRemote(h); tunnels.set(h.id, p); }
+    return p;
+  };
   for (const h of hosts) {
     if (h.id === LOCAL_HOST_ID) continue;
+    hostById.set(h.id, h);
     factories.set(h.id, (opts) => {
       if (opts.kind === "terminal") return new TerminalBridge(opts);
       const getBaseUrl = async (): Promise<string> => {
         if (h.directBaseUrl) return h.directBaseUrl.replace(/\/$/, "");
-        let p = tunnels.get(h.id);
-        if (!p) { p = connectRemote(h); tunnels.set(h.id, p); }
-        const c = await p;
+        const c = await ensure(h);
         return `http://127.0.0.1:${c.localPort}`;
       };
       return new RemoteBridge({ ...opts, baseUrl: getBaseUrl });
@@ -72,6 +83,18 @@ export function createHostRegistry(localFactory: BridgeFactory, hosts: RemoteHos
     },
     factory(id: string): BridgeFactory | null {
       return factories.get(id) ?? null;
+    },
+    async status(id: string): Promise<RemoteReadiness | null> {
+      const h = hostById.get(id);
+      if (!h || h.directBaseUrl) return null;
+      const c = await ensure(h);
+      return c.readiness;
+    },
+    async bootstrap(id: string): Promise<RemoteReadiness | null> {
+      const h = hostById.get(id);
+      if (!h || h.directBaseUrl) return null;
+      const c = await ensure(h);
+      return await c.bootstrapConfig();
     },
     async shutdown(): Promise<void> {
       const ps = [...tunnels.values()];

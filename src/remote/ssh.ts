@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as net from "node:net";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import type { RemoteHost, ConnectedRemote } from "./types.js";
+import type { RemoteHost, ConnectedRemote, RemoteReadiness } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require_ = createRequire(import.meta.url);
@@ -207,6 +207,68 @@ async function addForward(host: RemoteHost, ctrl: string, localPort: number, rem
   }
 }
 
+async function probeReadiness(host: RemoteHost, ctrl: string): Promise<RemoteReadiness> {
+  const keys = await runOverCtrl(host, ctrl, "test -s $HOME/.agent-sh/keys.json && echo ok || echo missing");
+  const providers = await runOverCtrl(host, ctrl, `node -e 'try { const s = require(process.env.HOME + "/.agent-sh/settings.json"); process.stdout.write(s.providers && Object.keys(s.providers).length > 0 ? "ok" : "missing"); } catch { process.stdout.write("missing"); }'`);
+  return {
+    keys: keys.stdout.trim() === "ok",
+    providers: providers.stdout.trim() === "ok",
+  };
+}
+
+async function pushFileOverCtrl(host: RemoteHost, ctrl: string, srcPath: string, remotePath: string, mode: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const cmd = `mkdir -p $(dirname ${remotePath}) && cat > ${remotePath} && chmod ${mode} ${remotePath}`;
+    const args = [...sshBaseArgs(host), "-T", "-S", ctrl, sshTarget(host), cmd];
+    const ssh = spawn("ssh", args, { stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = "";
+    ssh.stderr.on("data", (d) => { stderr += d.toString(); });
+    ssh.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`push ${remotePath} failed (code ${code}): ${stderr.trim()}`));
+    });
+    const file = fs.createReadStream(srcPath);
+    file.on("error", reject);
+    file.pipe(ssh.stdin);
+  });
+}
+
+function extractMinimalSettings(defaultProviderOverride?: string): string | null {
+  const localPath = path.join(os.homedir(), ".agent-sh", "settings.json");
+  try {
+    const raw = fs.readFileSync(localPath, "utf-8");
+    const parsed = JSON.parse(raw) as { providers?: unknown; defaultProvider?: unknown };
+    const out: Record<string, unknown> = {};
+    if (parsed.providers) out.providers = parsed.providers;
+    const defaultProvider = defaultProviderOverride ?? (typeof parsed.defaultProvider === "string" ? parsed.defaultProvider : undefined);
+    if (defaultProvider) out.defaultProvider = defaultProvider;
+    if (Object.keys(out).length === 0) return null;
+    return JSON.stringify(out, null, 2) + "\n";
+  } catch { return null; }
+}
+
+async function bootstrapConfig(host: RemoteHost, ctrl: string, readiness: RemoteReadiness): Promise<RemoteReadiness> {
+  if (!readiness.keys) {
+    const localKeys = path.join(os.homedir(), ".agent-sh", "keys.json");
+    if (fs.existsSync(localKeys)) {
+      await pushFileOverCtrl(host, ctrl, localKeys, "$HOME/.agent-sh/keys.json", "600");
+    }
+  }
+  if (!readiness.providers) {
+    const minimal = extractMinimalSettings(host.defaultProvider);
+    if (minimal) {
+      const tmp = path.join(os.tmpdir(), `ashub-settings-${Date.now()}.json`);
+      fs.writeFileSync(tmp, minimal);
+      try {
+        await pushFileOverCtrl(host, ctrl, tmp, "$HOME/.agent-sh/settings.json", "644");
+      } finally {
+        try { fs.rmSync(tmp); } catch {}
+      }
+    }
+  }
+  return await probeReadiness(host, ctrl);
+}
+
 export async function connectRemote(host: RemoteHost): Promise<ConnectedRemote> {
   const version = host.serverVersion ?? LOCAL_VERSION;
   const ctrl = controlSocketPath(host.id);
@@ -220,14 +282,21 @@ export async function connectRemote(host: RemoteHost): Promise<ConnectedRemote> 
     const localPort = await pickFreePort();
     await addForward(host, ctrl, localPort, server.remotePort);
     const launched = server;
-    return {
+    let readiness = await probeReadiness(host, ctrl);
+    const result: ConnectedRemote = {
       host,
       localPort,
+      get readiness() { return readiness; },
+      async bootstrapConfig(): Promise<RemoteReadiness> {
+        readiness = await bootstrapConfig(host, ctrl, readiness);
+        return readiness;
+      },
       close: async (): Promise<void> => {
         try { launched.child.kill("SIGTERM"); } catch {}
         closeControlMaster(host, ctrl);
       },
     };
+    return result;
   } catch (err) {
     if (server) { try { server.child.kill("SIGTERM"); } catch {} }
     closeControlMaster(host, ctrl);

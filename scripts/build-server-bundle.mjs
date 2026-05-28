@@ -126,6 +126,11 @@ fs.writeFileSync(
 // Bundle relies on Node features (e.g. RegExp v flag) that require Node 20+.
 // Non-interactive SSH sessions skip user shell profile, so nvm-installed
 // versions aren't on PATH — pick the newest under ~/.nvm explicitly.
+// Bundle relies on Node features (e.g. RegExp v flag) that require Node 20+.
+// Non-interactive SSH sessions skip user shell profile, so nvm-installed
+// versions aren't on PATH — pick the newest under ~/.nvm explicitly and
+// prepend its bin dir so child processes (extensions invoking npm, etc.)
+// find the matching toolchain too.
 const launcher = `#!/bin/sh
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 NODE=node
@@ -133,6 +138,8 @@ if [ -d "$HOME/.nvm/versions/node" ]; then
   latest=$(ls "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)
   if [ -n "$latest" ] && [ -x "$HOME/.nvm/versions/node/$latest/bin/node" ]; then
     NODE="$HOME/.nvm/versions/node/$latest/bin/node"
+    PATH="$HOME/.nvm/versions/node/$latest/bin:$PATH"
+    export PATH
   fi
 fi
 exec "$NODE" "$DIR/ashub.mjs" --web "$DIR/web" "$@"

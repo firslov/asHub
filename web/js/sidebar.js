@@ -597,49 +597,119 @@ async function fetchHosts() {
   }
 }
 
-function pickHost(hosts) {
+function openPickerOverlay() {
+  const overlay = document.createElement("div");
+  Object.assign(overlay.style, {
+    position: "fixed", inset: "0", background: "rgba(0,0,0,0.4)",
+    display: "flex", alignItems: "center", justifyContent: "center", zIndex: "9999",
+  });
+  const panel = document.createElement("div");
+  Object.assign(panel.style, {
+    background: "var(--bg, #1e1e1e)", color: "var(--fg, #eaeaea)",
+    padding: "16px 18px", borderRadius: "8px", minWidth: "280px",
+    boxShadow: "0 4px 24px rgba(0,0,0,0.5)", fontSize: "14px",
+  });
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+  return { overlay, panel };
+}
+
+// Resolves to { hostId, cwd } where cwd is undefined for local (caller uses
+// pickDirectory), or set when the user picked a remote host and supplied a
+// path.  Resolves null on cancel.
+function pickHostAndCwd(hosts) {
   return new Promise((resolve) => {
-    if (hosts.length <= 1) { resolve(hosts[0]?.id ?? "local"); return; }
-    const overlay = document.createElement("div");
-    overlay.className = "host-picker-overlay";
-    Object.assign(overlay.style, {
-      position: "fixed", inset: "0", background: "rgba(0,0,0,0.4)",
-      display: "flex", alignItems: "center", justifyContent: "center", zIndex: "9999",
-    });
-    const panel = document.createElement("div");
-    Object.assign(panel.style, {
-      background: "var(--bg, #1e1e1e)", color: "var(--fg, #eaeaea)",
-      padding: "16px 18px", borderRadius: "8px", minWidth: "240px",
-      boxShadow: "0 4px 24px rgba(0,0,0,0.5)", fontSize: "14px",
-    });
-    const title = document.createElement("div");
-    title.textContent = "Spawn on";
-    Object.assign(title.style, { marginBottom: "12px", fontWeight: "600" });
-    panel.appendChild(title);
-    for (const h of hosts) {
-      const btn = document.createElement("button");
-      btn.textContent = h.label + (h.local ? "" : `  (${h.id})`);
-      Object.assign(btn.style, {
-        display: "block", width: "100%", textAlign: "left",
-        padding: "8px 10px", marginBottom: "6px", borderRadius: "4px",
+    if (hosts.length <= 1) { resolve({ hostId: hosts[0]?.id ?? "local" }); return; }
+    const { overlay, panel } = openPickerOverlay();
+
+    const renderHostList = () => {
+      panel.innerHTML = "";
+      const title = document.createElement("div");
+      title.textContent = "Spawn on";
+      Object.assign(title.style, { marginBottom: "12px", fontWeight: "600" });
+      panel.appendChild(title);
+      for (const h of hosts) {
+        const btn = document.createElement("button");
+        btn.textContent = h.label + (h.local ? "" : `  (${h.id})`);
+        Object.assign(btn.style, {
+          display: "block", width: "100%", textAlign: "left",
+          padding: "8px 10px", marginBottom: "6px", borderRadius: "4px",
+          border: "1px solid var(--border, #444)", background: "transparent", color: "inherit",
+          cursor: "pointer", fontSize: "13px",
+        });
+        btn.addEventListener("click", () => {
+          if (h.local) { overlay.remove(); resolve({ hostId: h.id }); }
+          else renderCwdStep(h);
+        });
+        panel.appendChild(btn);
+      }
+      const cancel = document.createElement("button");
+      cancel.textContent = "Cancel";
+      Object.assign(cancel.style, {
+        marginTop: "6px", padding: "6px 10px", borderRadius: "4px",
         border: "1px solid var(--border, #444)", background: "transparent", color: "inherit",
-        cursor: "pointer", fontSize: "13px",
+        cursor: "pointer", fontSize: "12px",
       });
-      btn.addEventListener("click", () => { overlay.remove(); resolve(h.id); });
-      panel.appendChild(btn);
-    }
-    const cancel = document.createElement("button");
-    cancel.textContent = "Cancel";
-    Object.assign(cancel.style, {
-      marginTop: "6px", padding: "6px 10px", borderRadius: "4px",
-      border: "1px solid var(--border, #444)", background: "transparent", color: "inherit",
-      cursor: "pointer", fontSize: "12px",
-    });
-    cancel.addEventListener("click", () => { overlay.remove(); resolve(null); });
-    panel.appendChild(cancel);
-    overlay.appendChild(panel);
+      cancel.addEventListener("click", () => { overlay.remove(); resolve(null); });
+      panel.appendChild(cancel);
+    };
+
+    const renderCwdStep = (host) => {
+      panel.innerHTML = "";
+      const title = document.createElement("div");
+      title.textContent = `Spawn on ${host.label}`;
+      Object.assign(title.style, { marginBottom: "10px", fontWeight: "600" });
+      panel.appendChild(title);
+      const label = document.createElement("div");
+      label.textContent = "Remote working directory:";
+      Object.assign(label.style, { fontSize: "12px", opacity: "0.7", marginBottom: "6px" });
+      panel.appendChild(label);
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = "~";
+      Object.assign(input.style, {
+        display: "block", width: "100%", boxSizing: "border-box",
+        padding: "6px 8px", borderRadius: "4px", marginBottom: "10px",
+        border: "1px solid var(--border, #444)", background: "rgba(0,0,0,0.25)",
+        color: "inherit", fontSize: "13px", fontFamily: "monospace",
+      });
+      panel.appendChild(input);
+      const row = document.createElement("div");
+      Object.assign(row.style, { display: "flex", gap: "6px", justifyContent: "flex-end" });
+      const back = document.createElement("button");
+      back.textContent = "Back";
+      Object.assign(back.style, {
+        padding: "6px 10px", borderRadius: "4px",
+        border: "1px solid var(--border, #444)", background: "transparent", color: "inherit",
+        cursor: "pointer", fontSize: "12px",
+      });
+      back.addEventListener("click", renderHostList);
+      const spawn = document.createElement("button");
+      spawn.textContent = "Spawn";
+      Object.assign(spawn.style, {
+        padding: "6px 14px", borderRadius: "4px",
+        border: "1px solid var(--accent, #6090e0)", background: "var(--accent, #6090e0)", color: "white",
+        cursor: "pointer", fontSize: "12px", fontWeight: "600",
+      });
+      const submit = () => {
+        const cwd = input.value.trim();
+        if (!cwd) return;
+        overlay.remove();
+        resolve({ hostId: host.id, cwd });
+      };
+      spawn.addEventListener("click", submit);
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") submit();
+        else if (ev.key === "Escape") { overlay.remove(); resolve(null); }
+      });
+      row.appendChild(back);
+      row.appendChild(spawn);
+      panel.appendChild(row);
+      setTimeout(() => { input.focus(); input.select(); }, 0);
+    };
+
     overlay.addEventListener("click", (e) => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
-    document.body.appendChild(overlay);
+    renderHostList();
   });
 }
 
@@ -647,8 +717,9 @@ newBtn?.addEventListener("click", async () => {
   newBtn.disabled = true;
   try {
     const hosts = await fetchHosts();
-    const hostId = await pickHost(hosts);
-    if (hostId === null) return;
+    const picked = await pickHostAndCwd(hosts);
+    if (!picked) return;
+    const hostId = picked.hostId;
     const isLocal = hostId === "local";
 
     let cwd = null;
@@ -665,10 +736,7 @@ newBtn?.addEventListener("click", async () => {
         cwd = data.cwd;
       }
     } else {
-      // Remote cwd lives on the remote FS; no picker possible from here.
-      const input = window.prompt(`Remote cwd on ${hostId}:`, "~");
-      if (input === null || !input.trim()) return;
-      cwd = input.trim();
+      cwd = picked.cwd;
     }
 
     try {

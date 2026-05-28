@@ -12,6 +12,7 @@ import { AshBridge } from "./bridges/ash.js";
 import { AcpBridge } from "./bridges/acp.js";
 import { TerminalBridge } from "./bridges/terminal.js";
 import { RemoteBridge } from "./bridges/remote.js";
+import { FakeBridge } from "./bridges/fake.js";
 import { connectRemote } from "./remote/ssh.js";
 import type { ConnectedRemote, RemoteHost } from "./remote/types.js";
 import type { BridgeFactory } from "./bridges/types.js";
@@ -23,7 +24,7 @@ interface Args {
   port: number;
   host: string;
   webRoot: string;
-  backend: "ash" | "acp" | "remote";
+  backend: "ash" | "acp" | "remote" | "fake";
   cmd: string;
   model?: string;
   provider?: string;
@@ -47,7 +48,7 @@ function parseArgs(): Args {
     else if (a === "--host" && v) { out.host = v; i++; }
     else if (a === "--web" && v) { out.webRoot = path.resolve(v); i++; }
     else if (a === "--backend" && v) {
-      if (v !== "ash" && v !== "acp" && v !== "remote") { console.error(`unknown backend: ${v}`); process.exit(2); }
+      if (v !== "ash" && v !== "acp" && v !== "remote" && v !== "fake") { console.error(`unknown backend: ${v}`); process.exit(2); }
       out.backend = v; i++;
     }
     else if (a === "--cmd" && v) { out.cmd = v; i++; }
@@ -67,7 +68,7 @@ Usage:
   ashub [options]
 
 Options:
-  --backend ash|acp|remote   Bridge implementation (default ash)
+  --backend ash|acp|remote|fake  Bridge implementation (default ash)
   --port N                   HTTP port (default 7878)
   --host HOST                Bind host (default 127.0.0.1)
   --web PATH                 Static web root (default ./web)
@@ -82,6 +83,7 @@ Backends:
   ash     In-process agent-sh kernel. No subprocess; one less hop.
   acp     Spawn a JSON-RPC ACP child (agent-sh-acp, claude-code, etc.) per session.
   remote  Bootstrap ashub-server on a remote host over SSH, then proxy via RemoteBridge.
+  fake    Stub backend that echoes input. Useful for testing turn lifecycle without API calls.
 
 Endpoints:
   GET  /                 Redirect to first session, or auto-spawn one
@@ -99,6 +101,12 @@ function makeFactory(args: Args): BridgeFactory {
     return (opts) => {
       if (opts.kind === "terminal") return new TerminalBridge(opts);
       return new AshBridge({ ...opts, model: opts.model ?? args.model, provider: opts.provider ?? args.provider });
+    };
+  }
+  if (args.backend === "fake") {
+    return (opts) => {
+      if (opts.kind === "terminal") return new TerminalBridge(opts);
+      return new FakeBridge(opts);
     };
   }
   const [command, ...spawnArgs] = args.cmd.split(/\s+/);

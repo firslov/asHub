@@ -12,6 +12,24 @@ import type {
   Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy, SessionKind,
 } from "./types.js";
 
+// Frames the local hub synthesizes around bridge.submit() / queued submit /
+// title flow.  The remote hub already wrote them into its own SSE stream;
+// forwarding them through routeEvent would duplicate them on the local
+// SSE.  RemoteBridge consumes lifecycle events for turn tracking but
+// drops them before emitting to the local hub.
+const HUB_SYNTHESIZED = new Set([
+  "agent:query",
+  "agent:processing-start",
+  "agent:processing-done",
+  "agent:response-segment",
+  "agent:response-done",
+  "agent:queued-submit",
+  "agent:queued-done",
+  "session:title",
+  "hub:replay-done",
+  "hub:compaction-marker",
+]);
+
 export interface RemoteBridgeOpts extends BridgeOpts {
   /** Loopback URL of the SSH-forwarded server, e.g. http://127.0.0.1:54321 */
   baseUrl: string;
@@ -108,6 +126,7 @@ export class RemoteBridge extends EventEmitter implements Bridge {
     const name = parsed.meta?.name;
     if (!name) return;
     this.trackTurnLifecycle(name, parsed.payload);
+    if (HUB_SYNTHESIZED.has(name)) return;
     this.emit("event", { name, payload: parsed.payload } satisfies BusEvent);
   }
 

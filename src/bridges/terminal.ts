@@ -6,11 +6,13 @@ import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } f
 const DEFAULT_COLS = 100;
 const DEFAULT_ROWS = 30;
 
-function defaultShell(): string {
+function defaultShell(): { path: string; args: string[] } {
   if (process.platform === "win32") {
-    return process.env.COMSPEC ?? "powershell.exe";
+    const comspec = process.env.COMSPEC;
+    if (comspec) return { path: comspec, args: [] };
+    return { path: "powershell.exe", args: ["-NoLogo", "-NoExit"] };
   }
-  return process.env.SHELL ?? "/bin/bash";
+  return { path: process.env.SHELL ?? "/bin/bash", args: [] };
 }
 
 export class TerminalBridge extends EventEmitter implements Bridge {
@@ -26,24 +28,34 @@ export class TerminalBridge extends EventEmitter implements Bridge {
     const extra = (opts.extra ?? {}) as { cols?: number; rows?: number; shell?: string };
     if (typeof extra.cols === "number" && extra.cols > 0) this.cols = extra.cols;
     if (typeof extra.rows === "number" && extra.rows > 0) this.rows = extra.rows;
-    const shellPath = extra.shell ?? defaultShell();
-    this.initPromise = this.spawn(shellPath, opts.cwd ?? os.homedir());
+    const shell = extra.shell ?? defaultShell();
+    if (typeof shell === "string") {
+      this.initPromise = this.spawn(shell, [], opts.cwd ?? os.homedir());
+    } else {
+      this.initPromise = this.spawn(shell.path, shell.args, opts.cwd ?? os.homedir());
+    }
   }
 
-  private async spawn(shellPath: string, cwd: string): Promise<void> {
+  private async spawn(shellPath: string, shellArgs: string[], cwd: string): Promise<void> {
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) {
       if (typeof v === "string") env[k] = v;
     }
-    env.TERM = env.TERM && env.TERM !== "dumb" ? env.TERM : "xterm-256color";
+    // On Windows, TERM=xterm-256color can confuse cmd.exe; use a safe default.
+    if (process.platform === "win32") {
+      env.TERM = "xterm-256color";
+    } else {
+      env.TERM = env.TERM && env.TERM !== "dumb" ? env.TERM : "xterm-256color";
+    }
     env.COLORTERM = env.COLORTERM ?? "truecolor";
 
-    const proc = pty.spawn(shellPath, [], {
+    const proc = pty.spawn(shellPath, shellArgs, {
       name: env.TERM,
       cols: this.cols,
       rows: this.rows,
       cwd,
       env,
+      ...(process.platform === "win32" ? { conptyInheritCursor: false } : {}),
     });
     this.proc = proc;
 

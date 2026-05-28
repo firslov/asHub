@@ -106,22 +106,59 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   /**
-   * Build an ordered candidate list of providers: the preferred one first
-   * (explicit opts.provider, else settings.defaultProvider if keyed), then
-   * any other keyed providers as fallbacks.  agent-sh's own loop only
-   * falls back when settings.defaultProvider is unset and silently bails
-   * otherwise — we need richer behavior because the first candidate may
-   * also fail at submit time (auth-fail / wrong model), in which case
-   * wire() hot-swaps to the next candidate via config:switch-provider.
+   * Builtin agent-sh providers that supply their own baseURL via an
+   * activator (or use the OpenAI SDK's default).  Used by
+   * isProviderViable() so settings-only entries that lack baseURL (e.g.
+   * a "zai-coding-plan" stub the user added without endpoint info) are
+   * skipped from the fallback chain instead of routing to api.openai.com.
+   */
+  private static readonly BUILTIN_PROVIDERS_WITH_BASE_URL = new Set([
+    "openrouter",
+    "deepseek",
+    "openai",
+  ]);
+
+  private lookupProviderConfig(name: string): { apiKey: string; baseURL?: string; model: string } | null {
+    if (!this.core) return null;
+    const emitPipe = this.core.bus.emitPipe.bind(this.core.bus) as unknown as (
+      n: string,
+      p: { providers: Array<{ id: string; apiKey?: string; baseURL?: string; defaultModel?: string; models?: Array<string | { id: string }> }> },
+    ) => { providers: Array<{ id: string; apiKey?: string; baseURL?: string; defaultModel?: string; models?: Array<string | { id: string }> }> };
+    const { providers } = emitPipe("agent:providers", { providers: [] });
+    const p = providers.find((x) => x.id === name);
+    // Prefer the registered apiKey; fall back to keys.json for settings-only entries.
+    const apiKey = p?.apiKey ?? resolveApiKey(name).key ?? undefined;
+    const baseURL = p?.baseURL ?? resolveProvider(name)?.baseURL;
+    const persisted = getSettings().providers?.[name]?.defaultModel;
+    const firstModel = p?.models?.[0];
+    const fallbackModel = typeof firstModel === "string" ? firstModel : firstModel?.id;
+    const model = persisted ?? p?.defaultModel ?? fallbackModel;
+    if (!apiKey || !model) return null;
+    return { apiKey, baseURL, model };
+  }
+
+  private isProviderViable(name: string): boolean {
+    if (!resolveApiKey(name).key) return false;
+    if (AshBridge.BUILTIN_PROVIDERS_WITH_BASE_URL.has(name)) return true;
+    const p = resolveProvider(name);
+    return !!p?.baseURL;
+  }
+
+  /**
+   * Build an ordered candidate list of viable providers (have key AND a
+   * reachable baseURL): the preferred one first, then the rest.  Stashed
+   * tail is consumed by wire()'s agent:error handler to hot-swap on
+   * first-turn failure — bypassing config:switch-provider so we don't
+   * persist the transient fallback as the new default.
    */
   private resolveEffectiveProvider(): string | undefined {
     const settings = getSettings();
     const ordered: string[] = [];
     const preferred = this.opts.provider ?? settings.defaultProvider;
-    if (preferred && resolveApiKey(preferred).key) ordered.push(preferred);
+    if (preferred && this.isProviderViable(preferred)) ordered.push(preferred);
     for (const name of getProviderNames()) {
       if (name === preferred) continue;
-      if (resolveApiKey(name).key) ordered.push(name);
+      if (this.isProviderViable(name)) ordered.push(name);
     }
     const first = ordered[0];
     this.fallbackCandidates = ordered.slice(1);
@@ -130,7 +167,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       queueMicrotask(() => {
         this.emit("event", {
           name: "ui:info",
-          payload: { message: `Provider "${preferred}" has no key; falling back to "${first}".` },
+          payload: { message: `Provider "${preferred}" not viable (missing key or baseURL); falling back to "${first}".` },
         } satisfies BusEvent);
       });
     }
@@ -304,7 +341,12 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
   }
 
-  // Built-in provider activators inject keys.json keys themselves; user-defined providers have no such activator.
+  // Re-register settings-only providers (no built-in activator) so their
+  // keys.json key flows into resolvedProviders.  Skip entries without a
+  // baseURL: those are either built-ins (which register themselves with
+  // the correct baseURL via activateAgent — re-registering here would
+  // overwrite it with undefined, sending traffic to api.openai.com) or
+  // genuinely under-configured custom providers that can't work anyway.
   private registerUserProviders(extCtx: ReturnType<AgentShellCore["extensionContext"]>): void {
     const ctxAgent = (extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
     if (!ctxAgent?.providers?.register) return;
@@ -312,6 +354,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       const p = resolveProvider(name);
       if (!p) continue;
       if (p.apiKey) continue;
+      if (!p.baseURL) continue;
       const resolved = resolveApiKey(name);
       if (!resolved.key) continue;
       ctxAgent.providers.register({
@@ -456,20 +499,33 @@ export class AshBridge extends EventEmitter implements Bridge {
         this.core
       ) {
         const next = this.fallbackCandidates.shift()!;
-        const prev = this.currentProvider;
-        this.currentProvider = next;
-        this.retryInFlight = true;
-        const query = this.pendingTurnQuery;
-        this.emit("event", {
-          name: "ui:info",
-          payload: { message: `Provider "${prev}" failed (${message}); retrying with "${next}".` },
-        } satisfies BusEvent);
-        const bus = this.core.bus;
-        setTimeout(() => {
-          bus.emit("config:switch-provider", { provider: next });
-          bus.emit("agent:submit", { query });
-        }, 0);
-        return;
+        const cfg = this.lookupProviderConfig(next);
+        if (cfg) {
+          const prev = this.currentProvider;
+          this.currentProvider = next;
+          this.retryInFlight = true;
+          const query = this.pendingTurnQuery;
+          this.emit("event", {
+            name: "ui:info",
+            payload: { message: `Provider "${prev}" failed (${message}); retrying with "${next}".` },
+          } satisfies BusEvent);
+          const bus = this.core.bus;
+          setTimeout(() => {
+            // Reconfigure llmClient directly instead of emitting
+            // config:switch-provider — the latter triggers
+            // config:switch-model whose handler calls
+            // updateSettings({defaultProvider}), which would persist
+            // this transient fallback as the user's new default.
+            try {
+              const llm = this.core!.handlers.call("llm:get-client") as { reconfigure: (c: { apiKey: string; baseURL?: string; model: string }) => void } | undefined;
+              llm?.reconfigure({ apiKey: cfg.apiKey, baseURL: cfg.baseURL, model: cfg.model });
+            } catch (e) {
+              process.stderr.write(`[ash-bridge] llm reconfigure failed: ${e instanceof Error ? e.message : e}\n`);
+            }
+            bus.emit("agent:submit", { query });
+          }, 0);
+          return;
+        }
       }
       this.firstTurnPending = false;
       this.pendingTurnQuery = null;

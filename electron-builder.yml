@@ -4,6 +4,7 @@ copyright: Copyright © 2024
 
 files:
   - dist/**/*
+  - dist-server-tarballs/**/*
   - electron/**/*
   - node_modules/**/*
   - package.json

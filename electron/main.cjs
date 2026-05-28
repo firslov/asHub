@@ -162,6 +162,7 @@ function fallbackToGitHub() {
 
 let mainWindow = null;
 let shutdownHub = null;
+let hostRegistry = null;
 let _shuttingDown = false;
 
 // MRU order so cross-window drag hit-tests pick the topmost window.
@@ -481,13 +482,14 @@ async function startServer() {
   const webRoot = resolveWebRoot();
   const distRoot = path.join(__dirname, "..", "dist");
 
-  let startHub, AshBridge, TerminalBridge;
+  let startHub, AshBridge, TerminalBridge, createHostRegistry, loadHostsFromDisk;
   try {
     const hubMod = await import(pathToFileURL(path.join(distRoot, "hub.js")).href);
     startHub = hubMod.startHub;
     shutdownHub = hubMod.shutdownHub;
     ({ AshBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "ash.js")).href));
     ({ TerminalBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "terminal.js")).href));
+    ({ createHostRegistry, loadHostsFromDisk } = await import(pathToFileURL(path.join(distRoot, "remote", "registry.js")).href));
   } catch (err) {
     console.error("[electron] failed to import dist modules:", err);
     dialog.showErrorBox(
@@ -498,13 +500,21 @@ async function startServer() {
     return;
   }
 
+  const localFactory = (opts) => opts.kind === "terminal" ? new TerminalBridge(opts) : new AshBridge(opts);
+  const remoteHosts = loadHostsFromDisk();
+  if (remoteHosts.length > 0) {
+    hostRegistry = createHostRegistry(localFactory, remoteHosts);
+    console.error(`[electron] registered ${remoteHosts.length} remote host(s): ${remoteHosts.map((h) => h.id).join(", ")}`);
+  }
+
   let server;
   try {
     server = startHub({
       port: HUB_PORT,
       host: "127.0.0.1",
       webRoot,
-      makeBridge: (opts) => opts.kind === "terminal" ? new TerminalBridge(opts) : new AshBridge(opts),
+      makeBridge: localFactory,
+      hosts: hostRegistry,
     });
   } catch (err) {
     console.error("[electron] failed to start hub:", err);
@@ -614,6 +624,7 @@ if (!gotTheLock) {
     event.preventDefault();
     Promise.resolve()
       .then(() => shutdownHub())
+      .then(() => hostRegistry ? hostRegistry.shutdown() : null)
       .catch((err) => console.error("[electron] shutdownHub failed:", err))
       .finally(() => app.exit(0));
   });

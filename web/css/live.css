@@ -1194,6 +1194,22 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-variant-numeric: tabular-nums;
 }
 
+.session-host {
+  display: inline-block;
+  vertical-align: 1px;
+  margin-right: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.6rem;
+  font-size: 0.62rem;
+  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: var(--text-mid);
+  background: color-mix(in srgb, var(--text-mid) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-mid) 22%, transparent);
+}
+
 .session-group-head {
   display: flex;
   align-items: center;

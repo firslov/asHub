@@ -41,7 +41,6 @@ export type CompactionStrategyHook = (
 ) => Promise<unknown> | unknown;
 
 export type ContextStrategy =
-  | { kind: "two-tier-pin"; target: number; keepRecent?: number; force?: boolean }
   | { kind: "rewind"; toIndex: number }
   | { kind: "replace"; messages: unknown[] };
 

@@ -256,21 +256,14 @@ export class RemoteBridge extends EventEmitter implements Bridge {
   async compact(strategy: ContextStrategy): Promise<{ before: number; after: number; evictedCount: number } | null> {
     await this.initPromise;
     if (!this.sessionId) throw new Error("no remote session");
-    // TODO: ContextStrategy → endpoint mapping isn't 1:1.  rewind maps to
-    // /context/rewind, replace has no direct route, two-tier-pin runs
-    // inside the remote bridge's own compactionStrategy hook (which we
-    // can't inject across the wire).  Real fix: a /context/compact
-    // endpoint on the remote that accepts the strategy verbatim.
-    if (strategy.kind === "rewind") {
-      const r = await fetch(`${this.baseUrl}/${this.sessionId}/context/rewind`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toIndex: strategy.toIndex }),
-      });
-      if (!r.ok) throw new Error(`remote rewind failed: ${r.status}`);
-      return await r.json() as { before: number; after: number; evictedCount: number };
-    }
-    throw new Error(`RemoteBridge.compact: ${strategy.kind} not yet supported`);
+    const r = await fetch(`${this.baseUrl}/${this.sessionId}/context/compact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strategy }),
+    });
+    if (!r.ok) throw new Error(`remote compact failed: ${r.status} ${await r.text()}`);
+    const j = await r.json() as { stats?: { before: number; after: number; evictedCount: number } | null };
+    return j.stats ?? null;
   }
 
   close(): void {

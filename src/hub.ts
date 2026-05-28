@@ -15,7 +15,7 @@ import * as os from "node:os";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
+import type { Bridge, BridgeFactory, BusEvent, ContextStrategy, SessionKind } from "./bridges/types.js";
 import { LlmClient } from "agent-sh";
 import { resolveProvider, getSettings, getProviderNames } from "agent-sh/settings";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
@@ -433,6 +433,7 @@ export function startHub(opts: HubOpts): http.Server {
       if (req.method === "POST" && rest === "/context/rewind") return rewindContext(req, res, session);
       if (req.method === "POST" && rest === "/context/rewind-to-turn") return rewindToTurn(req, res, session);
       if (req.method === "POST" && rest === "/context/drop") return dropContext(req, res, session);
+      if (req.method === "POST" && rest === "/context/compact") return compactContext(req, res, session);
       if (req.method === "GET" && rest === "/branch") return branchEndpoint(res, session);
       if (req.method === "GET" && rest === "/git-branch") return gitBranchEndpoint(res, session);
       if (req.method === "GET" && rest === "/tree") return treeEndpoint(res, session);
@@ -1939,6 +1940,42 @@ function truncateReplayToTurnCount(session: Session, keepCount: number): void {
   if (truncateAt < session.replay.length) {
     session.replay.length = truncateAt;
     void persistReplayFile(session.id, session.replay).catch(() => {});
+  }
+}
+
+// Generic compact endpoint — accepts a ContextStrategy verbatim and runs
+// the matching local-side orchestration (tree sync / capture reset / replay
+// truncation).  RemoteBridge.compact targets this; the web client keeps
+// using the narrower /context/rewind and /context/drop endpoints.
+async function compactContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  const body = await readBody(req);
+  let strategy: ContextStrategy;
+  try {
+    const parsed = JSON.parse(body) as { strategy?: ContextStrategy };
+    if (!parsed.strategy || (parsed.strategy.kind !== "rewind" && parsed.strategy.kind !== "replace")) {
+      throw new Error("missing or unsupported strategy");
+    }
+    strategy = parsed.strategy;
+  } catch (err) {
+    res.statusCode = 400; res.end(`invalid body: ${err instanceof Error ? err.message : err}`); return;
+  }
+  try {
+    const stats = await withContextLock(session, async () => {
+      const result = await session.bridge.compact(strategy);
+      if (strategy.kind === "rewind") {
+        await syncTreeAfterRewind(session, strategy.toIndex);
+      } else if (session.capture) {
+        const sanitized = await session.bridge.snapshot();
+        session.capture.resetTo(readEntryIdTags(sanitized.messages));
+      }
+      await truncateReplayAfterCompact(session);
+      return result;
+    });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, stats }));
+  } catch (err) {
+    res.statusCode = 500;
+    res.end(`compact failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 

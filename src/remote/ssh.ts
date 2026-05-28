@@ -16,7 +16,12 @@ import type { RemoteHost, ConnectedRemote } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require_ = createRequire(import.meta.url);
-const LOCAL_VERSION: string = require_(path.join(__dirname, "..", "..", "package.json")).version;
+// Bundled builds substitute ASHUB_VERSION via esbuild's `define`; dev runs
+// read package.json off disk.
+declare const ASHUB_VERSION: string | undefined;
+const LOCAL_VERSION: string = typeof ASHUB_VERSION === "string"
+  ? ASHUB_VERSION
+  : require_(path.join(__dirname, "..", "..", "package.json")).version;
 
 // TODO: real release URL once the per-arch server tarballs ship.  See
 // docs/remote-ssh.md §1 ("Portable server artifact").

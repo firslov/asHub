@@ -111,6 +111,12 @@ function findLocalTarball(version: string, platform: string, arch: string): stri
   return fs.existsSync(candidate) ? candidate : null;
 }
 
+function readLocalBuildId(tarballPath: string): string | null {
+  try {
+    return fs.readFileSync(tarballPath + ".build-id", "utf-8").trim();
+  } catch { return null; }
+}
+
 async function pushTarballOverCtrl(host: RemoteHost, ctrl: string, localPath: string, remotePath: string): Promise<void> {
   // `cat local | ssh ... 'cat > remote'` — uses the control master so no
   // additional auth; works when scp isn't configured or isn't desired.
@@ -131,14 +137,37 @@ async function pushTarballOverCtrl(host: RemoteHost, ctrl: string, localPath: st
 
 async function ensureServer(host: RemoteHost, ctrl: string, version: string): Promise<string> {
   const installDir = `$HOME/.ashub-server/${version}`;
-  const check = await runOverCtrl(host, ctrl, `test -x ${installDir}/bin/ashub && echo ok`);
-  if (check.code === 0 && check.stdout.trim() === "ok") return installDir;
-
   const { platform, arch } = await probePlatform(host, ctrl);
   const source = host.installSource ?? "fetch";
 
+  // Read the local build's BUILD_ID upfront; for "push" we can compare
+  // against the remote's BUILD_ID and force a re-extract on mismatch.
+  // Without this, the version-pinned install dir hides every in-place
+  // dev rebuild — the running server stays frozen at first-install time.
+  const local = source === "push" ? findLocalTarball(version, platform, arch) : null;
+  const localBuildId = local ? readLocalBuildId(local) : null;
+
+  const check = await runOverCtrl(
+    host,
+    ctrl,
+    `test -x ${installDir}/bin/ashub && cat ${installDir}/BUILD_ID 2>/dev/null || true`,
+  );
+  if (check.code === 0) {
+    const remoteBuildId = check.stdout.trim();
+    if (remoteBuildId) {
+      // Local push with sidecar present: gate on equality.  Local push
+      // with no sidecar (older build): trust the existing install.  Fetch
+      // mode: published tarballs are immutable per version, trust it.
+      if (source !== "push" || !localBuildId || remoteBuildId === localBuildId) {
+        return installDir;
+      }
+      // Mismatch → fall through to reinstall.  Wipe first so stale
+      // node_modules etc. don't survive the new extract.
+      await runOverCtrl(host, ctrl, `rm -rf ${installDir}`);
+    }
+  }
+
   if (source === "push") {
-    const local = findLocalTarball(version, platform, arch);
     if (!local) throw new Error(`no local tarball for ${platform}-${arch}@${version} (expected in dist-server-tarballs/)`);
     const remoteTmp = `/tmp/ashub-server-${version}-${Date.now()}.tar.gz`;
     await pushTarballOverCtrl(host, ctrl, local, remoteTmp);

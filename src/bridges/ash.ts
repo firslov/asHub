@@ -57,6 +57,12 @@ function defaultShell(): string {
 
 // Bus events to forward verbatim. Names line up with what the web client
 // already handles (see web/js/client.js handler map).
+//
+// agent:error is intentionally NOT in this list — submit() catches the
+// kernel error and either retries (mid-retry errors stay internal) or
+// surfaces it via Promise rejection, which the hub then synthesizes into
+// a single SSE agent:error frame.  Forwarding here as well would leak
+// every mid-retry failure to the UI.
 const FORWARDED = [
   "agent:info",
   "agent:response-chunk",
@@ -66,7 +72,6 @@ const FORWARDED = [
   "agent:tool-completed",
   "agent:tool-output-chunk",
   "agent:usage",
-  "agent:error",
   "agent:cancelled",
   // Slash-commands extension reports model/thinking/etc state and errors via these.
   "ui:info",
@@ -81,7 +86,6 @@ export class AshBridge extends EventEmitter implements Bridge {
   private core: AgentShellCore | null = null;
   private initPromise: Promise<void>;
   private opts: BridgeOpts;
-  private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
   private queryQueue: string[] = [];
   private shellQueue: string[] = [];
   private closed = false;
@@ -95,9 +99,15 @@ export class AshBridge extends EventEmitter implements Bridge {
   private shellNextId = 1;
   private fallbackCandidates: string[] = [];
   private currentProvider: string | undefined;
-  private firstTurnPending = true;
-  private pendingTurnQuery: string | null = null;
-  private retryInFlight = false;
+  // True once any turn has produced a successful response.  Auto-fallback
+  // only fires on the very first turn — after that we assume the active
+  // provider is the user's intentional choice and let errors surface.
+  private hasCompletedFirstTurn = false;
+  // Active turn settle hook: tryOnce() registers, wire()'s turn listeners
+  // call into it.  null between turns (and during queued/auto-resolved).
+  private inFlight: {
+    settle: (result: { stopReason: string } | { error: Error }) => void;
+  } | null = null;
 
   constructor(opts: BridgeOpts) {
     super();
@@ -464,80 +474,36 @@ export class AshBridge extends EventEmitter implements Bridge {
     // must reject so the UI doesn't spin forever (e.g. missing API key).
     onAny("agent:register-backend", () => { this.backendRegistered = true; });
 
-    // Turn boundaries — consumed internally to resolve submit() promises;
-    // NOT forwarded as BusEvents. The hub synthesizes its own
+    // Turn boundaries — consumed internally to settle the active tryOnce()
+    // promise.  NOT forwarded as BusEvents.  The hub synthesizes its own
     // processing-start/done frames around submit() so the start/done pair
-    // is well-ordered with the user's query and the segment flush. If we
-    // also forwarded the kernel's, the kernel's done would arrive before
-    // the segment flush and re-open a fresh reply, doubling the text.
-    onAny("agent:processing-done", () => {
-      // agent-loop emits processing-done in `finally` even after errors.
-      // If the error handler just queued a fallback retry, swallow this
-      // settle — the next submit() is still in flight on the same turn.
-      if (this.retryInFlight) {
-        this.retryInFlight = false;
-        return;
-      }
-      this.firstTurnPending = false;
-      this.pendingTurnQuery = null;
-      const t = this.pendingTurn;
-      if (t) { this.pendingTurn = null; t.resolve({ stopReason: "end_turn" }); }
-      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
-    });
+    // is well-ordered with the user's query and the segment flush; if we
+    // forwarded the kernel's, its done would arrive before the segment
+    // flush and re-open a fresh reply, doubling the text.
+    //
+    // agent-loop emits all three in `finally`, so a single turn fires
+    // either {error, processing-done} or {cancelled, processing-done} or
+    // just {processing-done}.  We settle on the first signal and let
+    // inFlight=null swallow the trailing processing-done.
+    let pendingError: Error | null = null;
     onAny("agent:error", (payload) => {
-      const message = (payload as { message?: string })?.message ?? "agent error";
-      // First-turn auto-fallback: hot-swap to the next keyed provider and
-      // resubmit the same query.  This catches "key present but auth fails"
-      // and "key present but configured model is wrong" — cases the
-      // pre-init fallback in resolveEffectiveProvider can't detect because
-      // they only surface during the first LLM call.
-      if (
-        this.firstTurnPending &&
-        this.fallbackCandidates.length > 0 &&
-        this.pendingTurn &&
-        this.pendingTurnQuery &&
-        this.core
-      ) {
-        const next = this.fallbackCandidates.shift()!;
-        const cfg = this.lookupProviderConfig(next);
-        if (cfg) {
-          const prev = this.currentProvider;
-          this.currentProvider = next;
-          this.retryInFlight = true;
-          const query = this.pendingTurnQuery;
-          this.emit("event", {
-            name: "ui:info",
-            payload: { message: `Provider "${prev}" failed (${message}); retrying with "${next}".` },
-          } satisfies BusEvent);
-          const bus = this.core.bus;
-          setTimeout(() => {
-            // Reconfigure llmClient directly instead of emitting
-            // config:switch-provider — the latter triggers
-            // config:switch-model whose handler calls
-            // updateSettings({defaultProvider}), which would persist
-            // this transient fallback as the user's new default.
-            try {
-              const llm = this.core!.handlers.call("llm:get-client") as { reconfigure: (c: { apiKey: string; baseURL?: string; model: string }) => void } | undefined;
-              llm?.reconfigure({ apiKey: cfg.apiKey, baseURL: cfg.baseURL, model: cfg.model });
-            } catch (e) {
-              process.stderr.write(`[ash-bridge] llm reconfigure failed: ${e instanceof Error ? e.message : e}\n`);
-            }
-            bus.emit("agent:submit", { query });
-          }, 0);
-          return;
-        }
-      }
-      this.firstTurnPending = false;
-      this.pendingTurnQuery = null;
-      const t = this.pendingTurn;
-      if (t) { this.pendingTurn = null; t.reject(new Error(message)); }
-      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
+      pendingError = new Error((payload as { message?: string })?.message ?? "agent error");
     });
     onAny("agent:cancelled", () => {
-      this.pendingTurnQuery = null;
-      const t = this.pendingTurn;
-      if (t) { this.pendingTurn = null; t.resolve({ stopReason: "cancelled" }); }
-      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
+      const f = this.inFlight;
+      if (f) { this.inFlight = null; pendingError = null; f.settle({ stopReason: "cancelled" }); }
+    });
+    onAny("agent:processing-done", () => {
+      const f = this.inFlight;
+      if (!f) return;
+      this.inFlight = null;
+      if (pendingError) {
+        const err = pendingError;
+        pendingError = null;
+        f.settle({ error: err });
+      } else {
+        f.settle({ stopReason: "end_turn" });
+      }
     });
 
     // Permission gate — forward to UI as an event (so the diff preview
@@ -559,52 +525,115 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   isProcessing(): boolean {
-    return !!this.pendingTurn || this.queryQueue.length > 0;
+    return !!this.inFlight || this.queryQueue.length > 0;
   }
 
   async submit(text: string): Promise<{ stopReason: string }> {
     await this.initPromise;
     if (!this.core) throw new Error("core not initialized");
     if (!this.backendRegistered) throw new Error("No agent backend configured. Check your API key and model in Settings.");
-    if (this.pendingTurn || this.queryQueue.length > 0) {
+    if (this.inFlight || this.queryQueue.length > 0) {
       this.queryQueue.push(text);
       return { stopReason: "queued" };
     }
-    this.pendingTurnQuery = text;
+    try {
+      return await this.submitWithFallback(text);
+    } finally {
+      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
+    }
+  }
+
+  /**
+   * Try the current provider; if its first call fails AND this session
+   * has never produced a turn yet, hot-swap to the next keyed candidate
+   * and try again.  Done as a linear async loop instead of an event-
+   * handler state machine so cancellation, queue draining, and queued-
+   * submit accounting all hang off a single try/finally.
+   */
+  private async submitWithFallback(text: string): Promise<{ stopReason: string }> {
+    const candidates = [this.currentProvider, ...this.fallbackCandidates].filter(Boolean) as string[];
+    let lastErr: Error | undefined;
+    const tried: string[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const provider = candidates[i];
+      if (i > 0) {
+        const cfg = this.lookupProviderConfig(provider);
+        if (!cfg) continue;
+        // Reconfigure llmClient directly instead of emitting
+        // config:switch-provider — the latter triggers config:switch-model
+        // whose handler persists the new provider as the user's default.
+        // Auto-fallback must not mutate user state.
+        try {
+          const llm = this.core!.handlers.call("llm:get-client") as { reconfigure: (c: { apiKey: string; baseURL?: string; model: string }) => void } | undefined;
+          llm?.reconfigure({ apiKey: cfg.apiKey, baseURL: cfg.baseURL, model: cfg.model });
+        } catch (e) {
+          process.stderr.write(`[ash-bridge] reconfigure to ${provider} failed: ${e instanceof Error ? e.message : e}\n`);
+          continue;
+        }
+        this.currentProvider = provider;
+        this.emit("event", {
+          name: "ui:info",
+          payload: { message: `Provider "${tried[tried.length - 1]}" failed (${lastErr?.message ?? "?"}); retrying with "${provider}".` },
+        } satisfies BusEvent);
+      }
+      tried.push(provider);
+      try {
+        const result = await this.tryOnce(text);
+        this.hasCompletedFirstTurn = true;
+        // The fallback list is single-use: once one provider has
+        // produced a turn (success or even a clean cancel), it's the
+        // session's pinned choice.  Drop the alternatives so a later
+        // mid-session auth failure doesn't trigger a silent swap.
+        this.fallbackCandidates = [];
+        return result;
+      } catch (err) {
+        lastErr = err as Error;
+        // No retries past the first turn: the user has been working with
+        // this provider on purpose, surfacing the error is the right call.
+        if (this.hasCompletedFirstTurn) throw err;
+      }
+    }
+    throw lastErr ?? new Error("No agent backend configured.");
+  }
+
+  private tryOnce(text: string): Promise<{ stopReason: string }> {
+    if (!this.core) return Promise.reject(new Error("core not initialized"));
+    const bus = this.core.bus;
     return new Promise<{ stopReason: string }>((resolve, reject) => {
-      this.pendingTurn = { resolve, reject };
-      this.core!.bus.emit("agent:submit", { query: text });
+      this.inFlight = {
+        settle: (r) => { if ("error" in r) reject(r.error); else resolve(r); },
+      };
+      bus.emit("agent:submit", { query: text });
     });
   }
 
   private drainQueue(): void {
-    if (this.pendingTurn) return;
+    if (this.inFlight) return;
     const next = this.queryQueue.shift();
     if (!next || this.closed || !this.core) return;
-    this.pendingTurn = {
-      resolve: () => {
-        this.emit("event", { name: "agent:queued-done", payload: {} } satisfies BusEvent);
-      },
-      reject: () => {
-        this.emit("event", { name: "agent:queued-done", payload: {} } satisfies BusEvent);
-      },
-    };
     this.emit("event", { name: "agent:queued-submit", payload: { query: next } } satisfies BusEvent);
-    this.core.bus.emit("agent:submit", { query: next });
+    // Queued turns run through the same fallback machinery as the
+    // foreground submit().  The "queued-done" frame lets the UI clear
+    // its queued-pending state regardless of outcome.
+    this.submitWithFallback(next)
+      .catch(() => { /* error already surfaced via inFlight rejection */ })
+      .finally(() => {
+        this.emit("event", { name: "agent:queued-done", payload: {} } satisfies BusEvent);
+        setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
+      });
   }
 
   cancel(): void {
     this.core?.bus.emit("agent:cancel-request", {});
-    // If no agent backend is registered (e.g. missing API key), the
-    // cancel-request has no listener and pendingTurn would never settle.
-    // Force-resolve so the hub can push a processing-done frame and the
-    // UI stops showing the spinner.
+    // If no backend is registered, the cancel-request has no listener
+    // and tryOnce() would never settle.  Force-settle so the hub can
+    // push processing-done and the UI stops spinning.
     if (!this.backendRegistered) {
-      const t = this.pendingTurn;
-      if (t) {
-        this.pendingTurn = null;
+      const f = this.inFlight;
+      if (f) {
+        this.inFlight = null;
         this.emit("event", { name: "agent:cancelled", payload: {} } satisfies BusEvent);
-        t.resolve({ stopReason: "cancelled" });
+        f.settle({ stopReason: "cancelled" });
         this.queryQueue.length = 0;
       }
     }
@@ -727,7 +756,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       this.bridgedTerminal.pushInput(data);
       return;
     }
-    if (this.pendingTurn) {
+    if (this.inFlight) {
       this.shellQueue.push(data);
       const command = data.replace(/\r?\n$/, "");
       this.emit("event", { name: "shell:queued", payload: { command } } satisfies BusEvent);

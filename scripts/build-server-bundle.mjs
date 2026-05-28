@@ -18,6 +18,7 @@
  *     package.json        { "type": "module" }
  */
 import * as esbuild from "esbuild";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -123,6 +124,14 @@ fs.writeFileSync(
   JSON.stringify({ name: "ashub-server", version, type: "module", private: true }, null, 2),
 );
 
+// BUILD_ID identifies this exact build so ensureServer() can detect
+// "same version pinned, but the binary on disk is stale" — the common
+// case during local development where the version string doesn't bump
+// between rebuilds.  A fresh random nonce per build is enough; we don't
+// need it to mean anything beyond equality.
+const buildId = crypto.randomBytes(12).toString("hex");
+fs.writeFileSync(path.join(OUT, "BUILD_ID"), buildId + "\n");
+
 // Bundle relies on Node features (e.g. RegExp v flag) that require Node 20+.
 // Non-interactive SSH sessions skip user shell profile, so nvm-installed
 // versions aren't on PATH — pick the newest under ~/.nvm explicitly.
@@ -154,5 +163,9 @@ fs.mkdirSync(path.dirname(tarPath), { recursive: true });
 const r = spawnSync("tar", ["-czf", tarPath, "-C", path.dirname(OUT), path.basename(OUT)], { stdio: "inherit" });
 if (r.status !== 0) { console.error("tar failed"); process.exit(1); }
 
+// Sidecar so ensureServer() can read the build-id without extracting the
+// tarball.  Lives next to the tarball with matching basename + .build-id.
+fs.writeFileSync(tarPath + ".build-id", buildId + "\n");
+
 const sizeMB = (fs.statSync(tarPath).size / (1024 * 1024)).toFixed(1);
-console.log(`\nwrote ${path.relative(ROOT, tarPath)} (${sizeMB} MB)`);
+console.log(`\nwrote ${path.relative(ROOT, tarPath)} (${sizeMB} MB) [build ${buildId}]`);

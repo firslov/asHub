@@ -675,6 +675,7 @@ async function createSession(
   cwd: string,
   existing?: { id: string; title?: string; kind?: SessionKind; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; lastModified?: number },
   spawnKind: SessionKind = "agent",
+  init?: { model?: string; provider?: string },
 ): Promise<Session> {
   const id = existing?.id ?? randomBytes(3).toString("hex");
   const kind: SessionKind = existing?.kind ?? spawnKind;
@@ -719,7 +720,7 @@ async function createSession(
   const isRestored = !!existing;
   const bridge: Bridge = isRestored
     ? null as unknown as Bridge
-    : opts.makeBridge({ cwd, kind, initialMessages, compactionStrategy });
+    : opts.makeBridge({ cwd, kind, initialMessages, compactionStrategy, model: init?.model, provider: init?.provider });
 
   const defaultTitle = isTerminalKind ? `▷ ${path.basename(cwd) || cwd}` : "";
   const session: Session = {
@@ -732,8 +733,8 @@ async function createSession(
     segmentText: "",
     segmentSeq: 0,
     sseClients: new Set(),
-    model: existing?.model,
-    provider: existing?.provider,
+    model: existing?.model ?? init?.model,
+    provider: existing?.provider ?? init?.provider,
     startedAt: existing?.startedAt ?? Date.now(),
     firstTurnDone: !!(initialMessages?.length),
     firstQuery: existing?.firstQuery,
@@ -1102,10 +1103,14 @@ async function spawnSession(
   const body = await readBody(req);
   let kind: SessionKind = "agent";
   let cwd: string | null = null;
+  let model: string | undefined;
+  let provider: string | undefined;
   try {
-    const parsed = JSON.parse(body) as { cwd?: string; kind?: SessionKind };
+    const parsed = JSON.parse(body) as { cwd?: string; kind?: SessionKind; model?: string; provider?: string };
     if (parsed.cwd) cwd = path.resolve(expandHome(parsed.cwd.trim()));
     if (parsed.kind === "terminal" || parsed.kind === "agent" || parsed.kind === "ash-terminal") kind = parsed.kind;
+    if (typeof parsed.model === "string" && parsed.model) model = parsed.model;
+    if (typeof parsed.provider === "string" && parsed.provider) provider = parsed.provider;
   } catch {}
   if (!cwd) cwd = (kind === "terminal" || kind === "ash-terminal") ? os.homedir() : process.cwd();
   try {
@@ -1121,7 +1126,7 @@ async function spawnSession(
     return;
   }
   try {
-    const s = await createSession(sessions, opts, cwd, undefined, kind);
+    const s = await createSession(sessions, opts, cwd, undefined, kind, { model, provider });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ instanceId: s.id, cwd: s.cwd, kind: s.kind }));
   } catch (err) {

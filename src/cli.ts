@@ -28,6 +28,7 @@ interface Args {
   model?: string;
   provider?: string;
   remote?: string;
+  remoteUrl?: string;
 }
 
 function parseArgs(): Args {
@@ -53,6 +54,7 @@ function parseArgs(): Args {
     else if (a === "--model" && v) { out.model = v; i++; }
     else if (a === "--provider" && v) { out.provider = v; i++; }
     else if (a === "--remote" && v) { out.remote = v; out.backend = "remote"; i++; }
+    else if (a === "--remote-url" && v) { out.remoteUrl = v; out.backend = "remote"; i++; }
     else if (a === "--help" || a === "-h") { printHelp(); process.exit(0); }
   }
   return out;
@@ -73,6 +75,7 @@ Options:
   --provider NAME            Provider override (ash backend)
   --cmd "CMD ARGS"           Spawn command for acp backend (default "agent-sh-acp")
   --remote [user@]host[:port]  SSH target; implies --backend remote
+  --remote-url URL           Skip SSH; point RemoteBridge at URL (loopback test)
   -h, --help                 Show this help
 
 Backends:
@@ -123,12 +126,15 @@ function parseRemoteTarget(spec: string): RemoteHost {
   return { id: spec, host: rest, user, port };
 }
 
-function makeRemoteFactory(remote: ConnectedRemote): BridgeFactory {
-  const baseUrl = `http://127.0.0.1:${remote.localPort}`;
+function makeRemoteFactoryFromUrl(baseUrl: string): BridgeFactory {
   return (opts) => {
     if (opts.kind === "terminal") return new TerminalBridge(opts);
     return new RemoteBridge({ ...opts, baseUrl });
   };
+}
+
+function makeRemoteFactory(remote: ConnectedRemote): BridgeFactory {
+  return makeRemoteFactoryFromUrl(`http://127.0.0.1:${remote.localPort}`);
 }
 
 const args = parseArgs();
@@ -138,10 +144,17 @@ let activeRemote: ConnectedRemote | null = null;
 async function main(): Promise<void> {
   let makeBridge: BridgeFactory;
   if (args.backend === "remote") {
-    if (!args.remote) { console.error("--remote requires [user@]host[:port]"); process.exit(2); }
-    activeRemote = await connectRemote(parseRemoteTarget(args.remote));
-    console.error(`[ashub] remote ${args.remote} → 127.0.0.1:${activeRemote.localPort}`);
-    makeBridge = makeRemoteFactory(activeRemote);
+    if (args.remoteUrl) {
+      console.error(`[ashub] remote-url ${args.remoteUrl} (no SSH bootstrap)`);
+      makeBridge = makeRemoteFactoryFromUrl(args.remoteUrl.replace(/\/$/, ""));
+    } else if (args.remote) {
+      activeRemote = await connectRemote(parseRemoteTarget(args.remote));
+      console.error(`[ashub] remote ${args.remote} → 127.0.0.1:${activeRemote.localPort}`);
+      makeBridge = makeRemoteFactory(activeRemote);
+    } else {
+      console.error("--backend remote requires --remote or --remote-url");
+      process.exit(2);
+    }
   } else {
     makeBridge = makeFactory(args);
   }

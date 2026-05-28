@@ -40,12 +40,17 @@ export class RemoteBridge extends EventEmitter implements Bridge {
     if (opts.remoteSessionId) {
       this.sessionId = opts.remoteSessionId;
     } else {
-      // TODO: remote /sessions POST currently accepts { cwd, kind } only.
-      // model/provider/initialMessages would need new fields server-side.
+      // initialMessages still not plumbed remote-side; restored sessions
+      // load from the remote hub's own on-disk store instead.
       const r = await fetch(`${this.baseUrl}/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd: opts.cwd, kind: opts.kind ?? "agent" }),
+        body: JSON.stringify({
+          cwd: opts.cwd,
+          kind: opts.kind ?? "agent",
+          model: opts.model,
+          provider: opts.provider,
+        }),
       });
       if (!r.ok) throw new Error(`remote /sessions failed: ${r.status} ${await r.text()}`);
       const j = await r.json() as { instanceId: string };
@@ -59,7 +64,8 @@ export class RemoteBridge extends EventEmitter implements Bridge {
     this.sseAbort = new AbortController();
     void (async () => {
       try {
-        const r = await fetch(`${this.baseUrl}/${this.sessionId}/events`, {
+        const url = `${this.baseUrl}/events?subs=${this.sessionId}:all`;
+        const r = await fetch(url, {
           headers: { Accept: "text/event-stream" },
           signal: this.sseAbort!.signal,
         });

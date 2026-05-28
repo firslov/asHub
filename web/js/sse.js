@@ -601,8 +601,7 @@ const selectModel = (session, modelId, provider) => {
   session.agentInfo.model = modelId;
   if (provider) session.agentInfo.provider = provider;
   refreshModelChip(session);
-  // Notify backend about model/provider change for this session
-  fetch(`/api/sessions/${session.id}/model`, {
+  fetch(`/${session.id}/model`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: modelId, provider: provider || undefined }),

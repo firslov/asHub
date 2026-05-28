@@ -18,7 +18,8 @@ import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
 import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
-import { getSettings } from "agent-sh/settings";
+import { getSettings, resolveProvider, getProviderNames } from "agent-sh/settings";
+import { resolveApiKey } from "agent-sh/auth";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
 import { Shell } from "agent-sh/shell";
 import { registerShellHandlers } from "agent-sh/shell/host";
@@ -118,6 +119,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     // so ctx.shell.compositor + tui-renderer are wired before the input mode prompt fires.
     if (exposeTerminal) registerShellHandlers(extCtx);
     activateAgent(extCtx);
+    this.registerUserProviders(extCtx);
     const settings = getSettings();
     const headlessDisabled = [
       "file-autocomplete",
@@ -261,6 +263,26 @@ export class AshBridge extends EventEmitter implements Bridge {
       } catch (err) {
         process.stderr.write(`[ash-bridge] failed to inject restored messages: ${err instanceof Error ? err.message : err}\n`);
       }
+    }
+  }
+
+  // Built-in provider activators inject keys.json keys themselves; user-defined providers have no such activator.
+  private registerUserProviders(extCtx: ReturnType<AgentShellCore["extensionContext"]>): void {
+    const ctxAgent = (extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
+    if (!ctxAgent?.providers?.register) return;
+    for (const name of getProviderNames()) {
+      const p = resolveProvider(name);
+      if (!p) continue;
+      if (p.apiKey) continue;
+      const resolved = resolveApiKey(name);
+      if (!resolved.key) continue;
+      ctxAgent.providers.register({
+        id: name,
+        apiKey: resolved.key,
+        baseURL: p.baseURL,
+        defaultModel: p.defaultModel,
+        models: p.models ?? [],
+      });
     }
   }
 
@@ -499,6 +521,15 @@ export class AshBridge extends EventEmitter implements Bridge {
       .filter((m) => !m.isSystemNote);
 
     return snap;
+  }
+
+  async getModels() {
+    await this.initPromise;
+    if (!this.core) throw new Error("core not initialized");
+    // `config:get-models` only registers once AgentLoop activates; `agent:get-modes` is always live.
+    const modes = (this.core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; provider?: string }>;
+    const models = modes.map((m) => ({ model: m.model, provider: m.provider ?? "" }));
+    return { models, active: null };
   }
 
   async compact(strategy: ContextStrategy) {

@@ -34,62 +34,80 @@ let originalConfig = "";
 let serverConfig = "";
 let originalApiKey = "";
 
-const PROVIDERS = {
-  deepseek: {
-    name: "DeepSeek",
-    description: "DeepSeek V4 models with 1M context window",  // i18n'd in updateProviderDesc
-    baseURL: "https://api.deepseek.com",
-    defaultModel: "deepseek-v4-flash",
-    models: [
-      {
-        id: "deepseek-v4-pro",
-        contextWindow: 1000000,
-        maxTokens: 300000,
-        echoReasoning: true,
-      },
-      {
-        id: "deepseek-v4-flash",
-        contextWindow: 1000000,
-        maxTokens: 300000,
-        echoReasoning: true,
-      },
-    ],
-  },
-  zhipu: {
-    name: "Z.AI",
-    description: "GLM models with 200K context window",
-    baseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
-    defaultModel: "glm-5.1",
-    models: [
-      { id: "glm-5.1", contextWindow: 204800, maxTokens: 131072 },
-      { id: "glm-5-turbo", contextWindow: 204800, maxTokens: 131072 },
-      { id: "glm-4.7", contextWindow: 204800, maxTokens: 131072 },
-    ],
-  },
-  openrouter: {
-    name: "OpenRouter",
-    description: "Aggregator — pick any model in the OpenRouter catalog",
-    baseURL: "https://openrouter.ai/api/v1",
-    defaultModel: "",
-    models: [],
-    dynamicModels: true,
-  },
+let providerCatalog = null;
+let providerCatalogPromise = null;
+
+const PROVIDER_LABELS = {
+  deepseek: "DeepSeek",
+  zhipu: "Z.AI",
+  openrouter: "OpenRouter",
 };
 
-const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
-let openrouterCatalog = null;
-let openrouterFetchPromise = null;
+const DYNAMIC_PROVIDERS = new Set(["openrouter"]);
+
+const providerLabel = (id) => PROVIDER_LABELS[id] ?? id;
+
+const providerEntry = (id) =>
+  providerCatalog?.providers?.find((p) => p.name === id) ?? null;
+
+const providerDescription = (id) => {
+  const key = `provider.desc.${id}`;
+  const text = t(key);
+  if (text && text !== key) return text;
+  const p = providerEntry(id);
+  return p?.defaultModel ? `default: ${p.defaultModel}` : "";
+};
+
+const loadProviderCatalog = async ({ force = false } = {}) => {
+  if (providerCatalog && !force) return providerCatalog;
+  if (providerCatalogPromise && !force) return providerCatalogPromise;
+
+  configModelRefresh?.classList.add("loading");
+  providerCatalogPromise = (async () => {
+    try {
+      const r = await fetch("/api/models");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      providerCatalog = await r.json();
+      return providerCatalog;
+    } catch (err) {
+      console.error("[providers] catalog fetch failed:", err);
+      if (configModelHint) configModelHint.textContent = t("model.load.failed");
+      return null;
+    } finally {
+      configModelRefresh?.classList.remove("loading");
+      providerCatalogPromise = null;
+    }
+  })();
+  return providerCatalogPromise;
+};
+
+const populateProviderSelect = () => {
+  if (!configProvider || !providerCatalog) return;
+  const ids = (providerCatalog.providers ?? []).map((p) => p.name);
+  const current = configProvider.value;
+  configProvider.innerHTML = ids
+    .map((id) => `<option value="${id}">${providerLabel(id)}</option>`)
+    .join("");
+  if (current && ids.includes(current)) configProvider.value = current;
+};
+
+const renderModelDatalist = (providerId) => {
+  if (!configModelList) return;
+  const entry = providerEntry(providerId);
+  const models = entry?.models ?? [];
+  configModelList.innerHTML = models
+    .map((m) => `<option value="${m.id}"></option>`)
+    .join("");
+};
 
 const buildConfig = () => {
   const providerId = configProvider.value;
   const apiKey = configApikey.value.trim();
-  const providerDef = PROVIDERS[providerId];
-  if (!providerDef) return null;
+  if (!providerEntry(providerId)) return null;
 
   let existing = {};
   try { existing = JSON.parse(originalConfig || "{}"); } catch {}
 
-  // Preserve existing provider fields, falling back to hardcoded defaults
   const existingProvider =
     existing.providers && typeof existing.providers === "object"
       ? existing.providers[providerId]
@@ -98,41 +116,31 @@ const buildConfig = () => {
     ? existingProvider
     : {};
 
-  const providerCfg = {
-    baseURL: prev.baseURL ?? providerDef.baseURL,
-    apiKey: apiKey || prev.apiKey || "YOUR_API_KEY",
-    defaultModel: prev.defaultModel ?? providerDef.defaultModel,
-  };
-  // Only carry forward explicitly configured models — the app now
-  // auto-discovers model lists from provider APIs and built-in catalog.
-  if (prev.models && Array.isArray(prev.models) && prev.models.length > 0) {
-    providerCfg.models = prev.models;
+  const providerCfg = { ...prev };
+  delete providerCfg.apiKey;
+
+  if (apiKey) {
+    providerCfg.apiKey = apiKey;
+  } else if (typeof prev.apiKey === "string" && prev.apiKey) {
+    providerCfg.apiKey = prev.apiKey;
   }
 
-  if (providerDef.dynamicModels) {
+  if (DYNAMIC_PROVIDERS.has(providerId)) {
     const typed = configModelInput?.value.trim();
     if (typed) {
       providerCfg.defaultModel = typed;
       const known = Array.isArray(prev.models) ? prev.models : [];
-      const meta = openrouterCatalog?.find((m) => m.id === typed);
-      const merged = known.filter((m) => m && m.id !== typed);
-      merged.unshift(meta || { id: typed });
+      const merged = known.filter((m) => {
+        const id = typeof m === "string" ? m : m?.id;
+        return id !== typed;
+      });
+      merged.unshift(typed);
       providerCfg.models = merged;
     }
   }
 
-  // Carry over any extra fields on the existing provider that aren't
-  // part of the standard template (e.g. contextWindow, reasoningShape).
-  for (const [key, val] of Object.entries(prev)) {
-    if (!(key in providerCfg)) {
-      providerCfg[key] = val;
-    }
-  }
-
   const config = {
-    providers: {
-      [providerId]: providerCfg,
-    },
+    providers: { [providerId]: providerCfg },
     defaultProvider: existing.defaultProvider || providerId,
   };
 
@@ -142,9 +150,6 @@ const buildConfig = () => {
     }
   }
 
-  // Preserve providers that were configured outside the simple form
-  // (e.g. manually in advanced mode). Only the currently-selected
-  // provider is rebuilt from the simple form inputs.
   if (existing.providers && typeof existing.providers === "object") {
     for (const [key, val] of Object.entries(existing.providers)) {
       if (!(key in config.providers)) {
@@ -157,8 +162,15 @@ const buildConfig = () => {
 };
 
 const parseConfigToSimple = (config) => {
+  const known = (providerCatalog?.providers ?? []).reduce((acc, p) => {
+    acc[p.name] = p;
+    return acc;
+  }, {});
+  const knownIds = Object.keys(known);
+  const fallback = knownIds[0] ?? "";
+
   if (!config || typeof config !== "object" || Object.keys(config).length === 0) {
-    configProvider.value = "deepseek";
+    configProvider.value = fallback;
     configApikey.value = "";
     return;
   }
@@ -167,14 +179,11 @@ const parseConfigToSimple = (config) => {
   let detectedProvider = null;
   let detectedApiKey = "";
 
-  if (dp && PROVIDERS[dp]) {
+  if (dp && known[dp]) {
     detectedProvider = dp;
   } else if (config.providers && typeof config.providers === "object") {
     for (const key of Object.keys(config.providers)) {
-      if (PROVIDERS[key]) {
-        detectedProvider = key;
-        break;
-      }
+      if (known[key]) { detectedProvider = key; break; }
     }
   }
 
@@ -182,80 +191,26 @@ const parseConfigToSimple = (config) => {
     configProvider.value = detectedProvider;
     if (config.providers && config.providers[detectedProvider]) {
       const p = config.providers[detectedProvider];
-      if (typeof p.apiKey === "string" && p.apiKey !== "YOUR_API_KEY") {
+      if (typeof p.apiKey === "string") {
         detectedApiKey = p.apiKey;
       }
     }
   } else {
-    configProvider.value = "deepseek";
+    configProvider.value = fallback;
   }
 
   configApikey.value = detectedApiKey;
 };
 
 const updateProviderDesc = () => {
-  const providerId = configProvider.value;
-  if (configProviderDesc) {
-    configProviderDesc.textContent = t(`provider.desc.${providerId}`);
-  }
-};
-
-const renderOpenrouterDatalist = () => {
-  if (!configModelList) return;
-  const items = openrouterCatalog || [];
-  configModelList.innerHTML = items
-    .map((m) => {
-      const label = m.name && m.name !== m.id ? `${m.id} — ${m.name}` : m.id;
-      return `<option value="${m.id}" label="${label.replace(/"/g, "&quot;")}"></option>`;
-    })
-    .join("");
-};
-
-const fetchOpenrouterCatalog = async ({ force = false } = {}) => {
-  if (openrouterCatalog && !force) {
-    renderOpenrouterDatalist();
-    return openrouterCatalog;
-  }
-  if (openrouterFetchPromise && !force) return openrouterFetchPromise;
-
-  if (configModelHint) configModelHint.textContent = t("model.loading");
-  configModelRefresh?.classList.add("loading");
-
-  openrouterFetchPromise = (async () => {
-    try {
-      const r = await fetch(OPENROUTER_MODELS_URL);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      const list = Array.isArray(data?.data) ? data.data : [];
-      openrouterCatalog = list
-        .map((m) => ({
-          id: m.id,
-          name: m.name,
-          contextWindow: m.context_length,
-          maxTokens: m.top_provider?.max_completion_tokens ?? undefined,
-        }))
-        .filter((m) => m.id);
-      renderOpenrouterDatalist();
-      if (configModelHint) configModelHint.textContent = t("model.hint");
-      return openrouterCatalog;
-    } catch (err) {
-      console.error("[openrouter] models fetch failed:", err);
-      if (configModelHint) configModelHint.textContent = t("model.load.failed");
-      return null;
-    } finally {
-      configModelRefresh?.classList.remove("loading");
-      openrouterFetchPromise = null;
-    }
-  })();
-
-  return openrouterFetchPromise;
+  if (!configProviderDesc) return;
+  configProviderDesc.textContent = providerDescription(configProvider.value);
 };
 
 const updateModelField = () => {
   if (!configModelField) return;
   const providerId = configProvider.value;
-  const def = PROVIDERS[providerId];
-  const dynamic = !!def?.dynamicModels;
+  const dynamic = DYNAMIC_PROVIDERS.has(providerId);
   configModelField.hidden = !dynamic;
   if (!dynamic) return;
 
@@ -264,21 +219,14 @@ const updateModelField = () => {
     const cfg = JSON.parse(originalConfig || serverConfig || "{}");
     const p = cfg.providers?.[providerId];
     if (p?.defaultModel) saved = p.defaultModel;
-    else if (Array.isArray(p?.models) && p.models[0]?.id) saved = p.models[0].id;
+    else if (Array.isArray(p?.models) && p.models[0]) {
+      const first = p.models[0];
+      saved = typeof first === "string" ? first : first?.id ?? "";
+    }
   } catch {}
   if (configModelInput) configModelInput.value = saved;
 
-  // Seed from cached provider models so the datalist works offline first.
-  try {
-    const cfg = JSON.parse(originalConfig || serverConfig || "{}");
-    const cached = cfg.providers?.[providerId]?.models;
-    if (Array.isArray(cached) && cached.length && !openrouterCatalog) {
-      openrouterCatalog = cached.map((m) => ({ id: m.id, name: m.id, ...m }));
-      renderOpenrouterDatalist();
-    }
-  } catch {}
-
-  fetchOpenrouterCatalog();
+  renderModelDatalist(providerId);
 };
 
 const validateJson = () => {
@@ -307,7 +255,6 @@ const switchConfigMode = (mode) => {
   if (mode === "simple") {
     configBodySimple.removeAttribute("hidden");
     configBodyAdvanced.setAttribute("hidden", "");
-    // Sync editor content so Advanced edits survive a Simple→Save round-trip.
     try {
       const edited = JSON.parse(configEditor.value);
       if (edited && typeof edited === "object" && !Array.isArray(edited)) {
@@ -325,8 +272,6 @@ const switchConfigMode = (mode) => {
   } else {
     configBodySimple.setAttribute("hidden", "");
     configBodyAdvanced.removeAttribute("hidden");
-    // Use current editor content as the base so edits made in Advanced
-    // mode aren't lost when switching Simple → Advanced.
     try {
       const edited = JSON.parse(configEditor.value);
       if (edited && typeof edited === "object" && !Array.isArray(edited)) {
@@ -352,13 +297,11 @@ configApikeyToggle?.addEventListener("click", () => {
 configProvider?.addEventListener("change", () => {
   updateProviderDesc();
   updateModelField();
-  // When switching providers in simple mode, populate the API key
-  // input with the stored key for the newly selected provider (if any).
   try {
     const cfg = JSON.parse(originalConfig || serverConfig || "{}");
     if (cfg.providers && cfg.providers[configProvider.value]) {
       const pk = cfg.providers[configProvider.value].apiKey;
-      const key = (typeof pk === "string" && pk !== "YOUR_API_KEY") ? pk : "";
+      const key = typeof pk === "string" ? pk : "";
       configApikey.value = key;
       originalApiKey = key;
     } else {
@@ -373,7 +316,6 @@ configProvider?.addEventListener("change", () => {
 
 export const setConfigOpen = async (on) => {
   if (on) {
-    // 互斥：关闭其他面板
     setFilesOpen(false);
     setCtxOpen(false);
     setTreeOpen(false);
@@ -386,6 +328,10 @@ export const setConfigOpen = async (on) => {
     configOverlay.removeAttribute("hidden");
     configOverlay.classList.add("open");
     configToggle?.classList.add("active");
+
+    await loadProviderCatalog();
+    populateProviderSelect();
+
     let rawConfig = {};
     try {
       const r = await fetch("/api/config");
@@ -398,14 +344,11 @@ export const setConfigOpen = async (on) => {
     originalApiKey = "";
     if (rawConfig.providers && rawConfig.defaultProvider && rawConfig.providers[rawConfig.defaultProvider]) {
       const pk = rawConfig.providers[rawConfig.defaultProvider].apiKey;
-      if (typeof pk === "string" && pk !== "YOUR_API_KEY") {
+      if (typeof pk === "string") {
         originalApiKey = pk;
       }
     }
 
-    // Always open in simple mode by default. The user can switch to
-    // advanced mode via the tabs if they need to edit providers not
-    // listed in the simple dropdown or tweak advanced settings.
     switchConfigMode("simple");
   } else {
     configOverlay.setAttribute("hidden", "");
@@ -460,8 +403,6 @@ configSaveSimple?.addEventListener("click", async () => {
   const config = buildConfig();
   if (!config) return;
 
-  // If the API key field is empty but we had one from the server,
-  // keep the original key instead of replacing it with a placeholder.
   if (!configApikey.value.trim() && originalApiKey) {
     const providerId = configProvider.value;
     config.providers[providerId].apiKey = originalApiKey;
@@ -484,8 +425,6 @@ configReset?.addEventListener("click", () => {
     originalConfig = serverConfig;
     validateJson();
   } else {
-    // Reset both the simple form and originalConfig to server state,
-    // so a subsequent simple-mode save doesn't resurrect advanced edits.
     originalConfig = serverConfig;
     configEditor.value = serverConfig;
     parseConfigToSimple(JSON.parse(serverConfig || "{}"));
@@ -495,11 +434,12 @@ configReset?.addEventListener("click", () => {
 configToggle?.addEventListener("click", () => setConfigOpen(configOverlay.hasAttribute("hidden")));
 configClose?.addEventListener("click", () => setConfigOpen(false));
 
-configModelRefresh?.addEventListener("click", () => {
-  fetchOpenrouterCatalog({ force: true });
+configModelRefresh?.addEventListener("click", async () => {
+  await loadProviderCatalog({ force: true });
+  populateProviderSelect();
+  updateModelField();
 });
 
-// Refresh provider description when language changes while panel is open
 document.addEventListener("langchange", () => {
   if (configOverlay && !configOverlay.hasAttribute("hidden")) {
     updateProviderDesc();

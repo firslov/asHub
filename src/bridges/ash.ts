@@ -93,6 +93,11 @@ export class AshBridge extends EventEmitter implements Bridge {
   private shellExchanges: ShellExchange[] = [];
   private shellLastInjected = 0;
   private shellNextId = 1;
+  private fallbackCandidates: string[] = [];
+  private currentProvider: string | undefined;
+  private firstTurnPending = true;
+  private pendingTurnQuery: string | null = null;
+  private retryInFlight = false;
 
   constructor(opts: BridgeOpts) {
     super();
@@ -101,32 +106,35 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   /**
-   * agent-sh's registration loop (agent/index.js) only falls back to
-   * "first available provider" when settings.defaultProvider is unset.
-   * If it's set but has no matching key, the loop bails silently and the
-   * session boots with no backend.  Pick a fallback here so the user
-   * preference stays in settings while the runtime quietly switches to a
-   * working provider.
+   * Build an ordered candidate list of providers: the preferred one first
+   * (explicit opts.provider, else settings.defaultProvider if keyed), then
+   * any other keyed providers as fallbacks.  agent-sh's own loop only
+   * falls back when settings.defaultProvider is unset and silently bails
+   * otherwise — we need richer behavior because the first candidate may
+   * also fail at submit time (auth-fail / wrong model), in which case
+   * wire() hot-swaps to the next candidate via config:switch-provider.
    */
   private resolveEffectiveProvider(): string | undefined {
-    if (this.opts.provider) return this.opts.provider;
     const settings = getSettings();
-    const def = settings.defaultProvider;
-    if (def && resolveApiKey(def).key) return def;
-    if (def) {
-      for (const name of getProviderNames()) {
-        if (resolveApiKey(name).key) {
-          queueMicrotask(() => {
-            this.emit("event", {
-              name: "ui:info",
-              payload: { message: `defaultProvider "${def}" has no key; using "${name}" instead.` },
-            } satisfies BusEvent);
-          });
-          return name;
-        }
-      }
+    const ordered: string[] = [];
+    const preferred = this.opts.provider ?? settings.defaultProvider;
+    if (preferred && resolveApiKey(preferred).key) ordered.push(preferred);
+    for (const name of getProviderNames()) {
+      if (name === preferred) continue;
+      if (resolveApiKey(name).key) ordered.push(name);
     }
-    return undefined;
+    const first = ordered[0];
+    this.fallbackCandidates = ordered.slice(1);
+    this.currentProvider = first;
+    if (preferred && first && first !== preferred) {
+      queueMicrotask(() => {
+        this.emit("event", {
+          name: "ui:info",
+          payload: { message: `Provider "${preferred}" has no key; falling back to "${first}".` },
+        } satisfies BusEvent);
+      });
+    }
+    return first;
   }
 
   private async init(): Promise<void> {
@@ -420,17 +428,57 @@ export class AshBridge extends EventEmitter implements Bridge {
     // also forwarded the kernel's, the kernel's done would arrive before
     // the segment flush and re-open a fresh reply, doubling the text.
     onAny("agent:processing-done", () => {
+      // agent-loop emits processing-done in `finally` even after errors.
+      // If the error handler just queued a fallback retry, swallow this
+      // settle — the next submit() is still in flight on the same turn.
+      if (this.retryInFlight) {
+        this.retryInFlight = false;
+        return;
+      }
+      this.firstTurnPending = false;
+      this.pendingTurnQuery = null;
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "end_turn" }); }
       setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
     onAny("agent:error", (payload) => {
       const message = (payload as { message?: string })?.message ?? "agent error";
+      // First-turn auto-fallback: hot-swap to the next keyed provider and
+      // resubmit the same query.  This catches "key present but auth fails"
+      // and "key present but configured model is wrong" — cases the
+      // pre-init fallback in resolveEffectiveProvider can't detect because
+      // they only surface during the first LLM call.
+      if (
+        this.firstTurnPending &&
+        this.fallbackCandidates.length > 0 &&
+        this.pendingTurn &&
+        this.pendingTurnQuery &&
+        this.core
+      ) {
+        const next = this.fallbackCandidates.shift()!;
+        const prev = this.currentProvider;
+        this.currentProvider = next;
+        this.retryInFlight = true;
+        const query = this.pendingTurnQuery;
+        this.emit("event", {
+          name: "ui:info",
+          payload: { message: `Provider "${prev}" failed (${message}); retrying with "${next}".` },
+        } satisfies BusEvent);
+        const bus = this.core.bus;
+        setTimeout(() => {
+          bus.emit("config:switch-provider", { provider: next });
+          bus.emit("agent:submit", { query });
+        }, 0);
+        return;
+      }
+      this.firstTurnPending = false;
+      this.pendingTurnQuery = null;
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.reject(new Error(message)); }
       setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
     onAny("agent:cancelled", () => {
+      this.pendingTurnQuery = null;
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "cancelled" }); }
       setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
@@ -466,6 +514,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       this.queryQueue.push(text);
       return { stopReason: "queued" };
     }
+    this.pendingTurnQuery = text;
     return new Promise<{ stopReason: string }>((resolve, reject) => {
       this.pendingTurn = { resolve, reject };
       this.core!.bus.emit("agent:submit", { query: text });

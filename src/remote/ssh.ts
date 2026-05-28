@@ -104,14 +104,50 @@ async function probePlatform(host: RemoteHost, ctrl: string): Promise<ProbedPlat
   return { platform, arch };
 }
 
+function findLocalTarball(version: string, platform: string, arch: string): string | null {
+  // dist/remote/ssh.js → ../../dist-server-tarballs/
+  const dir = path.resolve(__dirname, "..", "..", "dist-server-tarballs");
+  const candidate = path.join(dir, `ashub-server-${platform}-${arch}-${version}.tar.gz`);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+async function pushTarballOverCtrl(host: RemoteHost, ctrl: string, localPath: string, remotePath: string): Promise<void> {
+  // `cat local | ssh ... 'cat > remote'` — uses the control master so no
+  // additional auth; works when scp isn't configured or isn't desired.
+  return new Promise<void>((resolve, reject) => {
+    const args = [...sshBaseArgs(host), "-T", "-S", ctrl, sshTarget(host), `cat > ${remotePath}`];
+    const ssh = spawn("ssh", args, { stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = "";
+    ssh.stderr.on("data", (d) => { stderr += d.toString(); });
+    ssh.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`tarball push failed (code ${code}): ${stderr.trim()}`));
+    });
+    const file = fs.createReadStream(localPath);
+    file.on("error", reject);
+    file.pipe(ssh.stdin);
+  });
+}
+
 async function ensureServer(host: RemoteHost, ctrl: string, version: string): Promise<string> {
   const installDir = `$HOME/.ashub-server/${version}`;
   const check = await runOverCtrl(host, ctrl, `test -x ${installDir}/bin/ashub && echo ok`);
   if (check.code === 0 && check.stdout.trim() === "ok") return installDir;
 
   const { platform, arch } = await probePlatform(host, ctrl);
+  const source = host.installSource ?? "fetch";
+
+  if (source === "push") {
+    const local = findLocalTarball(version, platform, arch);
+    if (!local) throw new Error(`no local tarball for ${platform}-${arch}@${version} (expected in dist-server-tarballs/)`);
+    const remoteTmp = `/tmp/ashub-server-${version}-${Date.now()}.tar.gz`;
+    await pushTarballOverCtrl(host, ctrl, local, remoteTmp);
+    const extract = await runOverCtrl(host, ctrl, `set -e; mkdir -p ${installDir}; tar -xzf ${remoteTmp} -C ${installDir} --strip-components=1; rm -f ${remoteTmp}`);
+    if (extract.code !== 0) throw new Error(`extract failed: ${extract.stderr.trim()}`);
+    return installDir;
+  }
+
   const url = TARBALL_URL(version, platform, arch);
-  // TODO: checksum verification, scp-push fallback for air-gapped remotes.
   const installCmd = [
     `set -e`,
     `mkdir -p ${installDir}`,

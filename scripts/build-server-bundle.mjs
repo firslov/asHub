@@ -28,12 +28,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const OUT = path.join(ROOT, "dist-server");
 
-const platform = process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : null;
-const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : null;
+// TARGET=<platform>-<arch> overrides the host detection for cross-builds.
+const targetEnv = process.env.TARGET;
+const [tgtPlatform, tgtArch] = targetEnv ? targetEnv.split("-") : [process.platform, process.arch];
+const platform = tgtPlatform === "darwin" ? "darwin" : tgtPlatform === "linux" ? "linux" : null;
+const arch = tgtArch === "arm64" ? "arm64" : (tgtArch === "x64" || tgtArch === "x86_64") ? "x64" : null;
 if (!platform || !arch) {
-  console.error(`unsupported host: ${process.platform}/${process.arch}`);
+  console.error(`unsupported target: ${tgtPlatform}/${tgtArch}`);
   process.exit(2);
 }
+const crossTarget = platform !== process.platform || arch !== process.arch;
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 const version = pkg.version;
@@ -94,6 +98,12 @@ function copyDir(src, dst) {
 for (const dep of ["node-pty", "node-addon-api"]) {
   copyDir(path.join(ROOT, "node_modules", dep), path.join(OUT, "node_modules", dep));
 }
+if (crossTarget) {
+  // node-pty's loader tries build/Release first.  On a cross-target tarball
+  // that binary is for the build host, not the target — strip it so the
+  // loader falls through to prebuilds/<platform>-<arch>/.
+  fs.rmSync(path.join(OUT, "node_modules", "node-pty", "build"), { recursive: true, force: true });
+}
 fs.mkdirSync(path.join(OUT, "node_modules", "@vscode"), { recursive: true });
 copyDir(path.join(ROOT, "node_modules", "@vscode", "ripgrep"), path.join(OUT, "node_modules", "@vscode", "ripgrep"));
 // ripgrep's binary lives in a per-arch sibling package loaded via
@@ -113,9 +123,19 @@ fs.writeFileSync(
   JSON.stringify({ name: "ashub-server", version, type: "module", private: true }, null, 2),
 );
 
+// Bundle relies on Node features (e.g. RegExp v flag) that require Node 20+.
+// Non-interactive SSH sessions skip user shell profile, so nvm-installed
+// versions aren't on PATH — pick the newest under ~/.nvm explicitly.
 const launcher = `#!/bin/sh
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-exec node "$DIR/ashub.mjs" --web "$DIR/web" "$@"
+NODE=node
+if [ -d "$HOME/.nvm/versions/node" ]; then
+  latest=$(ls "$HOME/.nvm/versions/node" 2>/dev/null | sort -V | tail -1)
+  if [ -n "$latest" ] && [ -x "$HOME/.nvm/versions/node/$latest/bin/node" ]; then
+    NODE="$HOME/.nvm/versions/node/$latest/bin/node"
+  fi
+fi
+exec "$NODE" "$DIR/ashub.mjs" --web "$DIR/web" "$@"
 `;
 const launcherPath = path.join(OUT, "bin", "ashub");
 fs.writeFileSync(launcherPath, launcher);

@@ -1127,9 +1127,10 @@ async function spawnSession(
   let model: string | undefined;
   let provider: string | undefined;
   let host: string | undefined;
+  let rawCwd: string | undefined;
   try {
     const parsed = JSON.parse(body) as { cwd?: string; kind?: SessionKind; model?: string; provider?: string; host?: string };
-    if (parsed.cwd) cwd = path.resolve(expandHome(parsed.cwd.trim()));
+    if (parsed.cwd) rawCwd = parsed.cwd.trim();
     if (parsed.kind === "terminal" || parsed.kind === "agent" || parsed.kind === "ash-terminal") kind = parsed.kind;
     if (typeof parsed.model === "string" && parsed.model) model = parsed.model;
     if (typeof parsed.provider === "string" && parsed.provider) provider = parsed.provider;
@@ -1142,10 +1143,14 @@ async function spawnSession(
       return;
     }
   }
+  const isRemoteSpawn = !!(host && host !== LOCAL_HOST_ID);
+  if (rawCwd) {
+    // For remote spawns "~" expands on the remote — send raw.
+    cwd = isRemoteSpawn ? rawCwd : path.resolve(expandHome(rawCwd));
+  }
   if (!cwd) cwd = (kind === "terminal" || kind === "ash-terminal") ? os.homedir() : process.cwd();
   // cwd validity is local-FS specific; skip the check for remote hosts since
   // the path lives on the remote filesystem.
-  const isRemoteSpawn = !!(host && host !== LOCAL_HOST_ID);
   if (!isRemoteSpawn) {
     try {
       const stat = await fs.promises.stat(cwd);

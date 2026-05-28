@@ -233,14 +233,35 @@ async function pushFileOverCtrl(host: RemoteHost, ctrl: string, srcPath: string,
   });
 }
 
+function loadLocalKeyNames(): Set<string> {
+  try {
+    const raw = fs.readFileSync(path.join(os.homedir(), ".agent-sh", "keys.json"), "utf-8");
+    return new Set(Object.keys(JSON.parse(raw)));
+  } catch { return new Set(); }
+}
+
 function extractMinimalSettings(defaultProviderOverride?: string): string | null {
   const localPath = path.join(os.homedir(), ".agent-sh", "settings.json");
   try {
     const raw = fs.readFileSync(localPath, "utf-8");
-    const parsed = JSON.parse(raw) as { providers?: unknown; defaultProvider?: unknown };
+    const parsed = JSON.parse(raw) as { providers?: Record<string, unknown>; defaultProvider?: unknown };
     const out: Record<string, unknown> = {};
     if (parsed.providers) out.providers = parsed.providers;
-    const defaultProvider = defaultProviderOverride ?? (typeof parsed.defaultProvider === "string" ? parsed.defaultProvider : undefined);
+    let defaultProvider = defaultProviderOverride ?? (typeof parsed.defaultProvider === "string" ? parsed.defaultProvider : undefined);
+    // agent-sh silently fails if defaultProvider has no matching key in
+    // keys.json (see agent/index.js — fallback to "first provider" only
+    // fires when defaultProvider is unset).  Validate it ourselves.
+    if (defaultProvider) {
+      const keyNames = loadLocalKeyNames();
+      const providers = parsed.providers ?? {};
+      if (!keyNames.has(defaultProvider)) {
+        const fallback = Object.keys(providers).find((n) => keyNames.has(n));
+        if (fallback) {
+          process.stderr.write(`[ashub] bootstrap: defaultProvider "${defaultProvider}" has no key, falling back to "${fallback}"\n`);
+          defaultProvider = fallback;
+        }
+      }
+    }
     if (defaultProvider) out.defaultProvider = defaultProvider;
     if (Object.keys(out).length === 0) return null;
     return JSON.stringify(out, null, 2) + "\n";

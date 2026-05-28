@@ -460,7 +460,9 @@ export function startHub(opts: HubOpts): http.Server {
     console.error("[hub] session restore error:", err);
   }).finally(() => {
     server.listen(opts.port, opts.host, () => {
-      console.error(`asHub listening on http://${opts.host}:${opts.port}/`);
+      const addr = server.address();
+      const boundPort = (addr && typeof addr === "object") ? addr.port : opts.port;
+      console.error(`asHub listening on http://${opts.host}:${boundPort}/`);
     });
   });
 

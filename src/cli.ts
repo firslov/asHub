@@ -11,6 +11,9 @@ import { startHub, shutdownHub, type HubOpts } from "./hub.js";
 import { AshBridge } from "./bridges/ash.js";
 import { AcpBridge } from "./bridges/acp.js";
 import { TerminalBridge } from "./bridges/terminal.js";
+import { RemoteBridge } from "./bridges/remote.js";
+import { connectRemote } from "./remote/ssh.js";
+import type { ConnectedRemote, RemoteHost } from "./remote/types.js";
 import type { BridgeFactory } from "./bridges/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,10 +23,11 @@ interface Args {
   port: number;
   host: string;
   webRoot: string;
-  backend: "ash" | "acp";
+  backend: "ash" | "acp" | "remote";
   cmd: string;
   model?: string;
   provider?: string;
+  remote?: string;
 }
 
 function parseArgs(): Args {
@@ -42,12 +46,13 @@ function parseArgs(): Args {
     else if (a === "--host" && v) { out.host = v; i++; }
     else if (a === "--web" && v) { out.webRoot = path.resolve(v); i++; }
     else if (a === "--backend" && v) {
-      if (v !== "ash" && v !== "acp") { console.error(`unknown backend: ${v}`); process.exit(2); }
+      if (v !== "ash" && v !== "acp" && v !== "remote") { console.error(`unknown backend: ${v}`); process.exit(2); }
       out.backend = v; i++;
     }
     else if (a === "--cmd" && v) { out.cmd = v; i++; }
     else if (a === "--model" && v) { out.model = v; i++; }
     else if (a === "--provider" && v) { out.provider = v; i++; }
+    else if (a === "--remote" && v) { out.remote = v; out.backend = "remote"; i++; }
     else if (a === "--help" || a === "-h") { printHelp(); process.exit(0); }
   }
   return out;
@@ -60,18 +65,20 @@ Usage:
   ashub [options]
 
 Options:
-  --backend ash|acp     Bridge implementation (default ash)
-  --port N              HTTP port (default 7878)
-  --host HOST           Bind host (default 127.0.0.1)
-  --web PATH            Static web root (default ./web)
-  --model NAME          Model override (ash backend)
-  --provider NAME       Provider override (ash backend)
-  --cmd "CMD ARGS"      Spawn command for acp backend (default "agent-sh-acp")
-  -h, --help            Show this help
+  --backend ash|acp|remote   Bridge implementation (default ash)
+  --port N                   HTTP port (default 7878)
+  --host HOST                Bind host (default 127.0.0.1)
+  --web PATH                 Static web root (default ./web)
+  --model NAME               Model override (ash backend)
+  --provider NAME            Provider override (ash backend)
+  --cmd "CMD ARGS"           Spawn command for acp backend (default "agent-sh-acp")
+  --remote [user@]host[:port]  SSH target; implies --backend remote
+  -h, --help                 Show this help
 
 Backends:
-  ash   In-process agent-sh kernel. No subprocess; one less hop.
-  acp   Spawn a JSON-RPC ACP child (agent-sh-acp, claude-code, etc.) per session.
+  ash     In-process agent-sh kernel. No subprocess; one less hop.
+  acp     Spawn a JSON-RPC ACP child (agent-sh-acp, claude-code, etc.) per session.
+  remote  Bootstrap ashub-server on a remote host over SSH, then proxy via RemoteBridge.
 
 Endpoints:
   GET  /                 Redirect to first session, or auto-spawn one
@@ -101,22 +108,58 @@ function makeFactory(args: Args): BridgeFactory {
   };
 }
 
+function parseRemoteTarget(spec: string): RemoteHost {
+  // [user@]host[:port]
+  let user: string | undefined;
+  let rest = spec;
+  const at = rest.indexOf("@");
+  if (at !== -1) { user = rest.slice(0, at); rest = rest.slice(at + 1); }
+  let port: number | undefined;
+  const colon = rest.lastIndexOf(":");
+  if (colon !== -1) {
+    const tail = rest.slice(colon + 1);
+    if (/^\d+$/.test(tail)) { port = parseInt(tail, 10); rest = rest.slice(0, colon); }
+  }
+  return { id: spec, host: rest, user, port };
+}
+
+function makeRemoteFactory(remote: ConnectedRemote): BridgeFactory {
+  const baseUrl = `http://127.0.0.1:${remote.localPort}`;
+  return (opts) => {
+    if (opts.kind === "terminal") return new TerminalBridge(opts);
+    return new RemoteBridge({ ...opts, baseUrl });
+  };
+}
+
 const args = parseArgs();
 
-const opts: HubOpts = {
-  port: args.port,
-  host: args.host,
-  webRoot: args.webRoot,
-  makeBridge: makeFactory(args),
-};
+let activeRemote: ConnectedRemote | null = null;
 
-startHub(opts);
+async function main(): Promise<void> {
+  let makeBridge: BridgeFactory;
+  if (args.backend === "remote") {
+    if (!args.remote) { console.error("--remote requires [user@]host[:port]"); process.exit(2); }
+    activeRemote = await connectRemote(parseRemoteTarget(args.remote));
+    console.error(`[ashub] remote ${args.remote} → 127.0.0.1:${activeRemote.localPort}`);
+    makeBridge = makeRemoteFactory(activeRemote);
+  } else {
+    makeBridge = makeFactory(args);
+  }
+  const opts: HubOpts = { port: args.port, host: args.host, webRoot: args.webRoot, makeBridge };
+  startHub(opts);
+}
+
+main().catch((err) => {
+  console.error(`[ashub] startup failed: ${err instanceof Error ? err.message : err}`);
+  process.exit(1);
+});
 
 let _shuttingDown = false;
 async function gracefulExit(): Promise<void> {
   if (_shuttingDown) return;
   _shuttingDown = true;
   try { await shutdownHub(); } catch {}
+  if (activeRemote) { try { await activeRemote.close(); } catch {} }
   process.exit(0);
 }
 process.on("SIGINT", () => { void gracefulExit(); });

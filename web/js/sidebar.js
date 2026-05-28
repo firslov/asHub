@@ -209,7 +209,9 @@ const renderSessionItem = (s) => {
   const timeText = s.startedAt ? `<span class="session-time" title="${escape(new Date(s.startedAt).toLocaleString())}">${escape(relativeTime(s.startedAt))}</span>` : "";
   const isRemote = s.host && s.host !== "local";
   const hostTag = isRemote ? `<span class="session-host" title="${escape(s.host)}">${escape(s.host)}</span>` : "";
-  a.innerHTML = `<span class="session-title" title="${title}">${hostTag}${title}</span><span class="session-meta">${cwdText}${timeText}</span>`;
+  // Host pill lives outside .session-title — updateSessionTitle() writes
+  // textContent on .session-title and would otherwise clobber the pill.
+  a.innerHTML = `<span class="session-title-row">${hostTag}<span class="session-title" title="${title}">${title}</span></span><span class="session-meta">${cwdText}${timeText}</span>`;
   li.appendChild(a);
 
   const statusDot = document.createElement("span");

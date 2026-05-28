@@ -1194,10 +1194,16 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-variant-numeric: tabular-nums;
 }
 
+.session-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.session-title-row .session-title { flex: 1; min-width: 0; }
+
 .session-host {
-  display: inline-block;
-  vertical-align: 1px;
-  margin-right: 0.4rem;
+  flex-shrink: 0;
   padding: 0.05rem 0.4rem;
   border-radius: 0.6rem;
   font-size: 0.62rem;

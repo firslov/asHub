@@ -91,6 +91,11 @@ export interface Bridge {
   /** Mutate the context. May throw if backend doesn't support it. */
   compact(strategy: ContextStrategy): Promise<{ before: number; after: number; evictedCount: number } | null>;
 
+  getModels?(): Promise<{
+    models: Array<{ model: string; provider: string }>;
+    active: { model: string; provider: string } | null;
+  }>;
+
   /** Subscribe to BusEvents the bridge produces. Returns an unsubscriber. */
   onEvent(fn: (e: BusEvent) => void): () => void;
 

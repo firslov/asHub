@@ -234,22 +234,36 @@ interface PersistedSession {
   lastModified?: number;
 }
 
-function inferProviderForModel(model: string | undefined): string | undefined {
-  if (!model) return undefined;
+let modelProvidersCache: Map<string, Set<string>> | null = null;
+
+function invalidateModelProviders(): void {
+  modelProvidersCache = null;
+}
+
+function modelToProviders(): Map<string, Set<string>> {
+  if (modelProvidersCache) return modelProvidersCache;
+  const m = new Map<string, Set<string>>();
   for (const name of getProviderNames()) {
     const p = resolveProvider(name);
     if (!p) continue;
-    if (p.defaultModel === model) return name;
-    if (p.models?.includes(model)) return name;
+    const ids = [p.defaultModel, ...(p.models ?? [])].filter((x): x is string => !!x);
+    for (const id of ids) {
+      let set = m.get(id);
+      if (!set) { set = new Set(); m.set(id, set); }
+      set.add(name);
+    }
   }
-  return undefined;
+  return (modelProvidersCache = m);
+}
+
+function inferProviderForModel(model: string | undefined): string | undefined {
+  if (!model) return undefined;
+  return modelToProviders().get(model)?.values().next().value;
 }
 
 function providerHasModel(name: string | undefined, model: string | undefined): boolean {
   if (!name || !model) return false;
-  const p = resolveProvider(name);
-  if (!p) return false;
-  return p.defaultModel === model || (p.models?.includes(model) ?? false);
+  return modelToProviders().get(model)?.has(name) ?? false;
 }
 
 async function migrateLegacySessions(): Promise<void> {
@@ -359,7 +373,7 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "POST" && url === "/api/config/reload") return reloadConfig(res);
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
-    if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res);
+    if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res, sessions);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -475,7 +489,7 @@ async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): 
     // Use resolveProvider to expand $ENV_VAR syntax in apiKey
     const resolved = resolveProvider("deepseek");
     const apiKey = resolved?.apiKey ?? process.env.DEEPSEEK_API_KEY ?? "";
-    if (!apiKey || apiKey === "YOUR_API_KEY") {
+    if (!apiKey) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ is_available: false, error: "no api key" }));
       return;
@@ -509,162 +523,63 @@ async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): 
 
 // ── Models ──────────────────────────────────────────────────────────
 
-// Built-in model catalog for providers that don't require manual model
-// configuration in settings.json. User-configured models are always
-// merged in (deduplicated by id). Keep these lists reasonably current.
-const KNOWN_MODELS: Record<string, string[]> = {
-  deepseek: [
-    "deepseek-v4-flash",
-    "deepseek-v4-pro",
-    "deepseek-reasoner",
-    "deepseek-chat",
-  ],
-  openrouter: [
-    "deepseek/deepseek-v4-flash",
-    "anthropic/claude-sonnet-4-20250514",
-    "anthropic/claude-3.5-sonnet",
-    "openai/gpt-4o",
-    "openai/gpt-4.1",
-    "google/gemini-2.5-pro",
-    "google/gemini-2.5-flash",
-    "meta-llama/llama-4-maverick",
-    "qwen/qwen3-235b-a22b",
-    "qwen/qwen3.7-max",
-  ],
-  zhipu: [
-    "glm-5.1",
-    "glm-5-turbo",
-    "glm-4.7",
-    "glm-4.5",
-    "glm-4-flash",
-    "glm-4-plus",
-    "glm-4-air",
-    "glm-4-airx",
-  ],
-  openai: [
-    "gpt-4.1",
-    "gpt-4o",
-    "gpt-4o-mini",
-    "o3",
-    "o4-mini",
-  ],
-  anthropic: [
-    "claude-sonnet-4-20250514",
-    "claude-3.5-sonnet",
-    "claude-opus-4-20250514",
-    "claude-3.5-haiku",
-  ],
-  google: [
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-  ],
-};
-
-// ── Live model fetching from provider APIs ─────────────────────────
-
-interface ModelsCacheEntry {
-  models: string[];
-  fetchedAt: number;
-}
-const _modelsCache = new Map<string, ModelsCacheEntry>();
-const MODELS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-async function fetchProviderModels(name: string): Promise<string[]> {
-  // Check cache
-  const cached = _modelsCache.get(name);
-  if (cached && Date.now() - cached.fetchedAt < MODELS_CACHE_TTL) {
-    return cached.models;
-  }
-
-  try {
-    const resolved = resolveProvider(name);
-    if (!resolved) return [];
-
-    const apiKey = resolved.apiKey;
-    let url: string | null = null;
-
-    // OpenRouter has a public model list endpoint (no auth needed)
-    if (name === "openrouter") {
-      url = "https://openrouter.ai/api/v1/models";
-    }
-    // DeepSeek / OpenAI-compatible: /v1/models with API key
-    else if (apiKey) {
-      const base = (resolved.baseURL ?? "").replace(/\/+$/, "");
-      if (base) url = `${base}/v1/models`;
-    }
-
-    if (!url) return [];
-
-    const headers: Record<string, string> = {};
-    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-
-    const r = await fetch(url, {
-      headers,
-      signal: AbortSignal.timeout(8_000),
-    });
-
-    if (!r.ok) return [];
-
-    const json = await r.json() as { data?: Array<{ id: string }> };
-    const ids = (json.data ?? []).map((m) => m.id).filter(Boolean);
-    // Cache the result
-    _modelsCache.set(name, { models: ids, fetchedAt: Date.now() });
-    return ids;
-  } catch {
-    // Network errors, timeouts — silently fall back to cache/known models
-    return cached?.models ?? [];
-  }
-}
-
-async function getModels(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+async function getModels(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  sessions: Map<string, Session>,
+): Promise<void> {
   const raw = req.url!.split("/api/models")[1] ?? "";
-  const provider = raw.startsWith("/") ? raw.slice(1).split("?")[0] : "";
+  const single = raw.startsWith("/") ? raw.slice(1).split("?")[0] : "";
 
-  // ── GET /api/models — all configured providers ──────────────────
-  if (!provider) {
-    try {
-      const names = getProviderNames();
-      const providers = await Promise.all(names.map(async (name) => {
-        const resolved = resolveProvider(name);
-        if (!resolved) return null;
-        // Merge: configured → live-fetched → built-in known catalog
-        const configured = resolved.models ?? [];
-        const live = await fetchProviderModels(name);
-        const known = KNOWN_MODELS[name.toLowerCase()] ?? [];
-        const merged = [...new Set([...configured, ...live, ...known])];
-        if (merged.length === 0 && resolved.defaultModel) {
-          merged.push(resolved.defaultModel);
-        }
-        return {
-          name,
-          defaultModel: resolved.defaultModel,
-          models: merged.map((id) => ({ id })),
-        };
-      }));
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ providers: providers.filter(Boolean) }));
-    } catch (err) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
-    }
-    return;
-  }
-
-  // ── GET /api/models/:provider — single provider (legacy) ─────────
   try {
-    const resolved = resolveProvider(provider);
-    if (!resolved) {
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: `unknown provider: ${provider}` }));
+    const names = getProviderNames();
+    const byName = new Map<string, { defaultModel?: string; models: Set<string> }>();
+    for (const name of names) {
+      const resolved = resolveProvider(name);
+      if (!resolved) continue;
+      const set = new Set<string>(resolved.models ?? []);
+      if (resolved.defaultModel) set.add(resolved.defaultModel);
+      byName.set(name, { defaultModel: resolved.defaultModel, models: set });
+    }
+
+    for (const s of sessions.values()) {
+      if (s.kind !== "agent" || !s.bridge || !s.bridge.getModels) continue;
+      try {
+        const { models } = await s.bridge.getModels();
+        for (const { model, provider } of models) {
+          if (!provider || !model) continue;
+          const entry = byName.get(provider);
+          if (entry) entry.models.add(model);
+        }
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    if (single) {
+      const entry = byName.get(single);
+      if (!entry) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `unknown provider: ${single}` }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        provider: single,
+        defaultModel: entry.defaultModel,
+        models: [...entry.models],
+      }));
       return;
     }
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      provider,
-      defaultModel: resolved.defaultModel,
-      models: resolved.models ?? [],
+
+    const providers = [...byName].map(([name, entry]) => ({
+      name,
+      defaultModel: entry.defaultModel,
+      models: [...entry.models].map((id) => ({ id })),
     }));
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ providers }));
   } catch (err) {
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
@@ -732,6 +647,7 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse)
     try {
       const { reloadSettings } = await import("agent-sh/settings");
       reloadSettings();
+      invalidateModelProviders();
     } catch {}
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
@@ -743,7 +659,7 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse)
 
 function reloadConfig(res: http.ServerResponse): void {
   import("agent-sh/settings")
-    .then((m) => { m.reloadSettings(); })
+    .then((m) => { m.reloadSettings(); invalidateModelProviders(); })
     .catch(() => {});
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
@@ -1700,36 +1616,35 @@ async function treeEndpoint(res: http.ServerResponse, session: Session): Promise
 }
 
 async function setModelEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  let body = "";
-  req.on("data", (chunk) => { body += chunk; });
-  req.on("end", () => {
-    try {
-      const { model, provider } = JSON.parse(body);
-      if (!model || typeof model !== "string") {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "invalid model" }));
-        return;
-      }
-      session.model = model;
-      if (provider && typeof provider === "string") session.provider = provider;
-      // Persist to meta file
-      void (async () => {
-        try {
-          const metaPath = path.join(SESSIONS_DIR, `${session.id}.meta.json`);
-          let meta: Record<string, unknown> = {};
-          try { meta = JSON.parse(await fs.promises.readFile(metaPath, "utf-8")); } catch {}
-          meta.model = model;
-          if (provider) meta.provider = provider;
-          await fs.promises.writeFile(metaPath, JSON.stringify(meta, null, 2) + "\n");
-        } catch { /* best-effort */ }
-      })();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, model, provider: session.provider }));
-    } catch {
+  const body = await readBody(req);
+  let model: string;
+  let provider: string | undefined;
+  try {
+    const parsed = JSON.parse(body) as { model?: unknown; provider?: unknown };
+    if (typeof parsed.model !== "string" || !parsed.model) {
       res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "invalid JSON" }));
+      res.end(JSON.stringify({ error: "invalid model" }));
+      return;
     }
-  });
+    model = parsed.model;
+    provider = typeof parsed.provider === "string" ? parsed.provider : undefined;
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "invalid JSON" }));
+    return;
+  }
+
+  if (!session.bridge.execCommand) {
+    res.writeHead(409, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "session does not support model switching" }));
+    return;
+  }
+
+  const target = provider ? `${model}@${provider}` : model;
+  session.bridge.execCommand("/model", target);
+
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, model, provider }));
 }
 
 async function forkEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {

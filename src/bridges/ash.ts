@@ -481,30 +481,25 @@ export class AshBridge extends EventEmitter implements Bridge {
     // forwarded the kernel's, its done would arrive before the segment
     // flush and re-open a fresh reply, doubling the text.
     //
-    // agent-loop emits all three in `finally`, so a single turn fires
-    // either {error, processing-done} or {cancelled, processing-done} or
-    // just {processing-done}.  We settle on the first signal and let
-    // inFlight=null swallow the trailing processing-done.
-    let pendingError: Error | null = null;
-    onAny("agent:error", (payload) => {
-      pendingError = new Error((payload as { message?: string })?.message ?? "agent error");
-    });
-    onAny("agent:cancelled", () => {
-      const f = this.inFlight;
-      if (f) { this.inFlight = null; pendingError = null; f.settle({ stopReason: "cancelled" }); }
-    });
-    onAny("agent:processing-done", () => {
+    // agent-loop's executeLoop runs inside try/catch/finally: it emits
+    // agent:error (catch) or agent:cancelled (finally, on abort) BEFORE
+    // agent:processing-done (finally).  So the first of error/cancelled/
+    // done to arrive owns the settle; we null inFlight and the trailing
+    // processing-done is a no-op.  Settling on the error event itself
+    // (rather than stashing it for processing-done) keeps no cross-turn
+    // state: the retry's reject reaction is a microtask, so the new
+    // inFlight is installed only after this synchronous done is swallowed.
+    const settle = (r: { stopReason: string } | { error: Error }): void => {
       const f = this.inFlight;
       if (!f) return;
       this.inFlight = null;
-      if (pendingError) {
-        const err = pendingError;
-        pendingError = null;
-        f.settle({ error: err });
-      } else {
-        f.settle({ stopReason: "end_turn" });
-      }
+      f.settle(r);
+    };
+    onAny("agent:error", (payload) => {
+      settle({ error: new Error((payload as { message?: string })?.message ?? "agent error") });
     });
+    onAny("agent:cancelled", () => settle({ stopReason: "cancelled" }));
+    onAny("agent:processing-done", () => settle({ stopReason: "end_turn" }));
 
     // Permission gate — forward to UI as an event (so the diff preview
     // renders) and auto-approve. When the web UI grows a prompt, swap the
@@ -613,10 +608,17 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (!next || this.closed || !this.core) return;
     this.emit("event", { name: "agent:queued-submit", payload: { query: next } } satisfies BusEvent);
     // Queued turns run through the same fallback machinery as the
-    // foreground submit().  The "queued-done" frame lets the UI clear
-    // its queued-pending state regardless of outcome.
+    // foreground submit().  Unlike the foreground path there's no hub-side
+    // awaiter to surface a rejection, and agent:error is no longer in
+    // FORWARDED, so emit it here ourselves.  The "queued-done" frame then
+    // lets the UI clear its queued-pending state regardless of outcome.
     this.submitWithFallback(next)
-      .catch(() => { /* error already surfaced via inFlight rejection */ })
+      .catch((err) => {
+        this.emit("event", {
+          name: "agent:error",
+          payload: { message: err instanceof Error ? err.message : String(err) },
+        } satisfies BusEvent);
+      })
       .finally(() => {
         this.emit("event", { name: "agent:queued-done", payload: {} } satisfies BusEvent);
         setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);

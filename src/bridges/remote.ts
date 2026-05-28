@@ -130,27 +130,36 @@ export class RemoteBridge extends EventEmitter implements Bridge {
     try { parsed = JSON.parse(data); } catch { return; }
     const name = parsed.meta?.name;
     if (!name) return;
-    this.trackTurnLifecycle(name, parsed.payload);
-    if (HUB_SYNTHESIZED.has(name)) return;
+    // trackTurnLifecycle returns true when forwarding this frame would
+    // duplicate what the local hub re-synthesizes off the submit() promise.
+    // That only happens for a foreground agent:error: the local hub's
+    // submit().catch pushes its own agent:error frame (matching the local
+    // AshBridge path, where agent:error is NOT forwarded).  cancelled and
+    // processing-done are handled like the local path — cancelled forwards
+    // as a UI signal, processing-done is hub-synthesized — so they don't
+    // suppress.  A queued error (no pending turn) has no hub awaiter, so it
+    // forwards normally.
+    const suppress = this.trackTurnLifecycle(name, parsed.payload);
+    if (HUB_SYNTHESIZED.has(name) || suppress) return;
     this.emit("event", { name, payload: parsed.payload } satisfies BusEvent);
   }
 
-  private trackTurnLifecycle(name: string, payload: unknown): void {
+  private trackTurnLifecycle(name: string, payload: unknown): boolean {
     if (name === "agent:processing-start") {
       this.processing = true;
-      return;
+      return false;
     }
     if (name === "agent:processing-done") {
       this.processing = false;
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "end_turn" }); }
-      return;
+      return false;
     }
     if (name === "agent:cancelled") {
       this.processing = false;
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "cancelled" }); }
-      return;
+      return false;
     }
     if (name === "agent:error") {
       this.processing = false;
@@ -159,8 +168,10 @@ export class RemoteBridge extends EventEmitter implements Bridge {
         this.pendingTurn = null;
         const msg = (payload as { message?: string } | undefined)?.message ?? "remote agent error";
         t.reject(new Error(msg));
+        return true; // foreground: local hub synthesizes the frame
       }
     }
+    return false;
   }
 
   ready(): Promise<void> { return this.initPromise; }

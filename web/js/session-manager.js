@@ -64,6 +64,14 @@ effect(() => {
   for (const [id, el] of sessions) el.hidden = id !== active;
   const kind = active ? sessionKinds.get(active) : null;
   document.querySelector(".app")?.classList.toggle("terminal-active", kind === "terminal" || kind === "ash-terminal");
+  // Restore input focus after session switch (needed on Windows where
+  // the textarea can lose its editable state during DOM toggling).
+  if (active) {
+    const input = document.getElementById("query");
+    if (input && document.activeElement !== input) {
+      setTimeout(() => input.focus(), 0);
+    }
+  }
 });
 
 export const globalConnState = signal(

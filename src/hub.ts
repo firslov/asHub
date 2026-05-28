@@ -785,6 +785,14 @@ async function createSession(
         session.capture = createCapture(bridge, () => session.store ?? null, { onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`) });
       }
     }
+    // Terminal sessions also need event routing — PTY output flows through
+    // shell:pty-data events which must reach SSE clients via routeEvent.
+    if (!isRestored && isTerminalKind) {
+      bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
+      bridge.onClose(() => {
+        try { sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+      });
+    }
     await bridge.ready();
     if (existing && store && session.capture) {
       const { entryIds } = store.buildBranchWithIds();

@@ -3,6 +3,25 @@ import { closeReply } from "./reply.js";
 import { finalizeThinking } from "./thinking.js";
 import { maybeScroll } from "./scroll.js";
 
+// User-shell intent FIFO, keyed by session id.  Each composer.js shell
+// submit pushes an intent before the /pty-input POST; the matching
+// shell:command-start event consumes it.  Mirrors agent-sh#208 — without
+// it, bash DEBUG-trap fires (history-recall echoes, completion edges,
+// agent-tool shell calls) produce phantom user-shell blocks because the
+// OSC 9997 body is whatever bash put there, not always empty.
+const shellIntents = new Map();
+export const pushUserShellIntent = (sessionId) => {
+  if (!sessionId) return;
+  let q = shellIntents.get(sessionId);
+  if (!q) { q = []; shellIntents.set(sessionId, q); }
+  q.push({});
+};
+const consumeUserShellIntent = (sessionId) => {
+  const q = shellIntents.get(sessionId);
+  if (!q?.length) return null;
+  return q.shift();
+};
+
 const highlightBash = (s) => {
   if (!s) return "";
   if (window.hljs) {
@@ -37,11 +56,12 @@ export const queueShellBlock = (session, payload) => {
 
 export const startShellBlock = (session, payload) => {
   if (!session?.streamEl) return null;
-  // shell:command-start fires for any OSC 9997 the kernel sees — including
-  // bash DEBUG-trap noise (history recall, completion edges, the initial
-  // PROMPT_COMMAND firing on shell start).  Real user commands always carry
-  // a non-empty body; orphans don't.  Mirrors guanyilun/agent-sh#202.
-  if (!payload?.command?.trim()) return null;
+  // Only materialize a block when a matching user-shell intent is pending.
+  // Bash DEBUG-trap noise (history recall, completion echoes, agent-tool
+  // shell calls) and the initial PROMPT_COMMAND emit OSC 9997 with bodies
+  // that look like real commands — relying on the body alone produced
+  // phantoms.  Mirrors agent-sh#208.
+  if (!consumeUserShellIntent(session.id)) return null;
   closeReply(session);
   finalizeThinking(session);
   const pending = session.streamEl.querySelector(".shell-block.queued");
@@ -64,14 +84,10 @@ export const startShellBlock = (session, payload) => {
 
 export const finishShellBlock = (session, payload) => {
   if (!session?.streamEl) return;
-  let el = session.shellBlock?.current ?? null;
-  // If the matching start was suppressed as a phantom, don't materialize a
-  // standalone "done" block out of an empty-command done event either.
-  if (!el && !payload?.command?.trim()) return;
-  if (!el) {
-    el = buildBlock({ command: payload?.command, state: "done" });
-    append(session, el);
-  }
+  const el = session.shellBlock?.current ?? null;
+  // If the matching start was suppressed (no intent), drop the done event
+  // entirely instead of materializing an orphan done block.
+  if (!el) return;
   el.classList.remove("running");
   el.classList.add("done");
   const outEl = el.querySelector(".shell-block-output");

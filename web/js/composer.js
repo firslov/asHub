@@ -1,6 +1,7 @@
 import { currentSessionId, state, queryHistory } from "./state.js";
 import { escape } from "./utils.js";
 import { appendAfterPending } from "./stream/tool-group.js";
+import { pushUserShellIntent } from "./stream/shell-block.js";
 import { createUserBox } from "./actions.js";
 import { attachAutocomplete } from "./autocomplete.js";
 import { attachPromptAutocomplete } from "./prompt-manager.js";
@@ -65,6 +66,10 @@ const doShellSubmit = async (raw) => {
   if (!sid) return;
   input.value = "";
   input.style.height = "";
+  // Tell the stream renderer this PTY write is user-initiated so the
+  // resulting shell:command-start gets a block; bash DEBUG-trap and
+  // agent-tool echoes don't push an intent and stay invisible.
+  pushUserShellIntent(sid);
   try {
     await fetch(`/${sid}/pty-input`, {
       method: "POST",

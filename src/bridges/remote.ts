@@ -31,15 +31,17 @@ const HUB_SYNTHESIZED = new Set([
 ]);
 
 export interface RemoteBridgeOpts extends BridgeOpts {
-  /** Loopback URL of the SSH-forwarded server, e.g. http://127.0.0.1:54321 */
-  baseUrl: string;
+  /** Loopback URL of the forwarded server.  Function form lets the host
+   *  registry establish the SSH tunnel lazily on first use. */
+  baseUrl: string | (() => Promise<string>);
   /** Existing remote session id; omit to spawn a fresh one. */
   remoteSessionId?: string;
 }
 
 export class RemoteBridge extends EventEmitter implements Bridge {
   readonly kind?: SessionKind;
-  private baseUrl: string;
+  private baseUrlGetter: () => Promise<string>;
+  private baseUrl: string = "";
   private sessionId: string | null = null;
   private initPromise: Promise<void>;
   private closed = false;
@@ -50,11 +52,14 @@ export class RemoteBridge extends EventEmitter implements Bridge {
   constructor(opts: RemoteBridgeOpts) {
     super();
     this.kind = opts.kind;
-    this.baseUrl = opts.baseUrl.replace(/\/$/, "");
+    this.baseUrlGetter = typeof opts.baseUrl === "function"
+      ? opts.baseUrl
+      : (() => Promise.resolve(opts.baseUrl as string));
     this.initPromise = this.init(opts);
   }
 
   private async init(opts: RemoteBridgeOpts): Promise<void> {
+    this.baseUrl = (await this.baseUrlGetter()).replace(/\/$/, "");
     if (opts.remoteSessionId) {
       this.sessionId = opts.remoteSessionId;
     } else {

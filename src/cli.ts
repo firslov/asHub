@@ -14,6 +14,7 @@ import { TerminalBridge } from "./bridges/terminal.js";
 import { RemoteBridge } from "./bridges/remote.js";
 import { FakeBridge } from "./bridges/fake.js";
 import { connectRemote } from "./remote/ssh.js";
+import { createHostRegistry, loadHostsFromDisk } from "./remote/registry.js";
 import type { ConnectedRemote, RemoteHost } from "./remote/types.js";
 import type { BridgeFactory } from "./bridges/types.js";
 
@@ -148,6 +149,7 @@ function makeRemoteFactory(remote: ConnectedRemote): BridgeFactory {
 const args = parseArgs();
 
 let activeRemote: ConnectedRemote | null = null;
+let hostRegistry: ReturnType<typeof createHostRegistry> | null = null;
 
 async function main(): Promise<void> {
   let makeBridge: BridgeFactory;
@@ -166,7 +168,20 @@ async function main(): Promise<void> {
   } else {
     makeBridge = makeFactory(args);
   }
-  const opts: HubOpts = { port: args.port, host: args.host, webRoot: args.webRoot, makeBridge };
+
+  const hosts = loadHostsFromDisk();
+  if (hosts.length > 0) {
+    hostRegistry = createHostRegistry(makeBridge, hosts);
+    console.error(`[ashub] registered ${hosts.length} remote host(s): ${hosts.map((h) => h.id).join(", ")}`);
+  }
+
+  const opts: HubOpts = {
+    port: args.port,
+    host: args.host,
+    webRoot: args.webRoot,
+    makeBridge,
+    hosts: hostRegistry ?? undefined,
+  };
   startHub(opts);
 }
 
@@ -180,6 +195,7 @@ async function gracefulExit(): Promise<void> {
   if (_shuttingDown) return;
   _shuttingDown = true;
   try { await shutdownHub(); } catch {}
+  if (hostRegistry) { try { await hostRegistry.shutdown(); } catch {} }
   if (activeRemote) { try { await activeRemote.close(); } catch {} }
   process.exit(0);
 }

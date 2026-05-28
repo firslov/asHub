@@ -586,26 +586,97 @@ export const updateSessionTitle = (sid, title) => {
   }
 };
 
+async function fetchHosts() {
+  try {
+    const r = await fetch("/api/hosts");
+    if (!r.ok) return [{ id: "local", label: "local", local: true }];
+    const j = await r.json();
+    return Array.isArray(j.hosts) ? j.hosts : [];
+  } catch {
+    return [{ id: "local", label: "local", local: true }];
+  }
+}
+
+function pickHost(hosts) {
+  return new Promise((resolve) => {
+    if (hosts.length <= 1) { resolve(hosts[0]?.id ?? "local"); return; }
+    const overlay = document.createElement("div");
+    overlay.className = "host-picker-overlay";
+    Object.assign(overlay.style, {
+      position: "fixed", inset: "0", background: "rgba(0,0,0,0.4)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: "9999",
+    });
+    const panel = document.createElement("div");
+    Object.assign(panel.style, {
+      background: "var(--bg, #1e1e1e)", color: "var(--fg, #eaeaea)",
+      padding: "16px 18px", borderRadius: "8px", minWidth: "240px",
+      boxShadow: "0 4px 24px rgba(0,0,0,0.5)", fontSize: "14px",
+    });
+    const title = document.createElement("div");
+    title.textContent = "Spawn on";
+    Object.assign(title.style, { marginBottom: "12px", fontWeight: "600" });
+    panel.appendChild(title);
+    for (const h of hosts) {
+      const btn = document.createElement("button");
+      btn.textContent = h.label + (h.local ? "" : `  (${h.id})`);
+      Object.assign(btn.style, {
+        display: "block", width: "100%", textAlign: "left",
+        padding: "8px 10px", marginBottom: "6px", borderRadius: "4px",
+        border: "1px solid var(--border, #444)", background: "transparent", color: "inherit",
+        cursor: "pointer", fontSize: "13px",
+      });
+      btn.addEventListener("click", () => { overlay.remove(); resolve(h.id); });
+      panel.appendChild(btn);
+    }
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    Object.assign(cancel.style, {
+      marginTop: "6px", padding: "6px 10px", borderRadius: "4px",
+      border: "1px solid var(--border, #444)", background: "transparent", color: "inherit",
+      cursor: "pointer", fontSize: "12px",
+    });
+    cancel.addEventListener("click", () => { overlay.remove(); resolve(null); });
+    panel.appendChild(cancel);
+    overlay.appendChild(panel);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
+    document.body.appendChild(overlay);
+  });
+}
+
 newBtn?.addEventListener("click", async () => {
   newBtn.disabled = true;
   try {
+    const hosts = await fetchHosts();
+    const hostId = await pickHost(hosts);
+    if (hostId === null) return;
+    const isLocal = hostId === "local";
+
     let cwd = null;
-    if (window.electronAPI?.pickDirectory) {
-      const data = await window.electronAPI.pickDirectory();
-      if (data.cancelled || !data.cwd) { newBtn.disabled = false; return; }
-      cwd = data.cwd;
+    if (isLocal) {
+      if (window.electronAPI?.pickDirectory) {
+        const data = await window.electronAPI.pickDirectory();
+        if (data.cancelled || !data.cwd) return;
+        cwd = data.cwd;
+      } else {
+        const r = await fetch("/pick-dir");
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!data.cwd || data.cancelled) return;
+        cwd = data.cwd;
+      }
     } else {
-      const r = await fetch("/pick-dir");
-      if (!r.ok) { newBtn.disabled = false; return; }
-      const data = await r.json();
-      if (!data.cwd || data.cancelled) { newBtn.disabled = false; return; }
-      cwd = data.cwd;
+      // Remote cwd lives on the remote FS; no picker possible from here.
+      const input = window.prompt(`Remote cwd on ${hostId}:`, "~");
+      if (input === null || !input.trim()) return;
+      cwd = input.trim();
     }
+
     try {
+      const body = isLocal ? { cwd } : { cwd, host: hostId };
       const res = await fetch("/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const text = await res.text();
@@ -617,7 +688,6 @@ newBtn?.addEventListener("click", async () => {
     } catch (e) {
       alert(`New session failed: ${e?.message ?? e}`);
     }
-  } catch {
   } finally {
     newBtn.disabled = false;
   }

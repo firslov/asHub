@@ -16,6 +16,8 @@ import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent, ContextStrategy, SessionKind } from "./bridges/types.js";
+import type { HostRegistry } from "./remote/registry.js";
+import { LOCAL_HOST_ID } from "./remote/registry.js";
 import { LlmClient } from "agent-sh";
 import { resolveProvider, getSettings, getProviderNames } from "agent-sh/settings";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
@@ -27,8 +29,11 @@ export interface HubOpts {
   port: number;
   host: string;
   webRoot: string;
-  /** Factory the hub uses to spawn one bridge per session. */
+  /** Factory the hub uses for the implicit "local" host. */
   makeBridge: BridgeFactory;
+  /** Optional registry of additional named hosts (e.g. SSH remotes).  When
+   *  present, POST /sessions accepts `host` to pick which factory runs. */
+  hosts?: HostRegistry;
 }
 
 interface Session {
@@ -46,6 +51,8 @@ interface Session {
   sseClients: Set<http.ServerResponse>;
   model?: string;
   provider?: string;
+  /** Host registry id this session runs against; undefined or "local" = local kernel. */
+  host?: string;
   startedAt: number;
   /** True once the first user→assistant turn has completed (for auto-title). */
   firstTurnDone: boolean;
@@ -142,7 +149,7 @@ async function saveSessionMeta(session: Session): Promise<void> {
   const metaPath = sessionMetaPath(session.id);
   let existing: Record<string, unknown> = {};
   try { existing = JSON.parse(await fs.promises.readFile(metaPath, "utf-8")); } catch {}
-  const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified };
+  const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, cwd: session.cwd, model: session.model, provider: session.provider, host: session.host, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified };
   await fs.promises.writeFile(metaPath, JSON.stringify(merged));
 }
 
@@ -226,6 +233,7 @@ interface PersistedSession {
   cwd: string;
   model?: string;
   provider?: string;
+  host?: string;
   startedAt: number;
   replay: string[];
   messages?: unknown[];
@@ -320,7 +328,7 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
           const parsed = JSON.parse(msgRaw);
           if (Array.isArray(parsed)) messages = parsed;
         } catch {}
-        results.push({ id: meta.id || id, title: meta.title, kind: meta.kind, cwd: meta.cwd, model: meta.model, provider: meta.provider, startedAt: meta.startedAt, replay, messages, firstQuery: meta.firstQuery, userTitle: meta.userTitle, lastModified: meta.lastModified });
+        results.push({ id: meta.id || id, title: meta.title, kind: meta.kind, cwd: meta.cwd, model: meta.model, provider: meta.provider, host: meta.host, startedAt: meta.startedAt, replay, messages, firstQuery: meta.firstQuery, userTitle: meta.userTitle, lastModified: meta.lastModified });
       } catch {}
     }
 
@@ -372,6 +380,12 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "PUT" && url === "/api/config") return updateConfig(req, res);
     if (req.method === "POST" && url === "/api/config/reload") return reloadConfig(res);
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
+    if (req.method === "GET" && url === "/api/hosts") {
+      const hosts = opts.hosts ? opts.hosts.list() : [{ id: LOCAL_HOST_ID, label: "local", local: true }];
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ hosts }));
+      return;
+    }
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
     if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res, sessions);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
@@ -674,10 +688,14 @@ async function createSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
   cwd: string,
-  existing?: { id: string; title?: string; kind?: SessionKind; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; lastModified?: number },
+  existing?: { id: string; title?: string; kind?: SessionKind; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; host?: string; lastModified?: number },
   spawnKind: SessionKind = "agent",
-  init?: { model?: string; provider?: string },
+  init?: { model?: string; provider?: string; host?: string },
 ): Promise<Session> {
+  const hostId = existing?.host ?? init?.host;
+  const makeBridge: BridgeFactory = (hostId && hostId !== LOCAL_HOST_ID && opts.hosts)
+    ? (opts.hosts.factory(hostId) ?? opts.makeBridge)
+    : opts.makeBridge;
   const id = existing?.id ?? randomBytes(3).toString("hex");
   const kind: SessionKind = existing?.kind ?? spawnKind;
   const isAgent = kind === "agent";
@@ -721,7 +739,7 @@ async function createSession(
   const isRestored = !!existing;
   const bridge: Bridge = isRestored
     ? null as unknown as Bridge
-    : opts.makeBridge({ cwd, kind, initialMessages, compactionStrategy, model: init?.model, provider: init?.provider });
+    : makeBridge({ cwd, kind, initialMessages, compactionStrategy, model: init?.model, provider: init?.provider });
 
   const defaultTitle = isTerminalKind ? `▷ ${path.basename(cwd) || cwd}` : "";
   const session: Session = {
@@ -736,6 +754,7 @@ async function createSession(
     sseClients: new Set(),
     model: existing?.model ?? init?.model,
     provider: existing?.provider ?? init?.provider,
+    host: hostId,
     startedAt: existing?.startedAt ?? Date.now(),
     firstTurnDone: !!(initialMessages?.length),
     firstQuery: existing?.firstQuery,
@@ -756,7 +775,7 @@ async function createSession(
     const storeRef = store;
     session._ensureBridge = async () => {
       if (session.bridge) return;
-      const b = opts.makeBridge({ cwd, kind: session.kind, initialMessages, model: session.model, provider: session.provider, compactionStrategy });
+      const b = makeBridge({ cwd, kind: session.kind, initialMessages, model: session.model, provider: session.provider, compactionStrategy });
       session.bridge = b;
       b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       b.onClose(() => {
@@ -864,7 +883,7 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
       continue;
     }
     try {
-      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, kind: p.kind, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle, model: p.model, provider: p.provider, lastModified: p.lastModified });
+      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, kind: p.kind, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle, model: p.model, provider: p.provider, host: p.host, lastModified: p.lastModified });
       console.error(`[hub] restored session ${p.id} (cwd: ${p.cwd})`);
     } catch (err) {
       console.error(`[hub] failed to restore session ${p.id}:`, err);
@@ -1085,6 +1104,7 @@ function listSessions(res: http.ServerResponse, sessions: Map<string, Session>):
       kind: s.kind,
       model: s.model,
       provider: s.provider,
+      host: s.host,
       cwd: s.cwd,
       startedAt: s.startedAt,
       lastModified: s.lastModified,
@@ -1106,30 +1126,44 @@ async function spawnSession(
   let cwd: string | null = null;
   let model: string | undefined;
   let provider: string | undefined;
+  let host: string | undefined;
   try {
-    const parsed = JSON.parse(body) as { cwd?: string; kind?: SessionKind; model?: string; provider?: string };
+    const parsed = JSON.parse(body) as { cwd?: string; kind?: SessionKind; model?: string; provider?: string; host?: string };
     if (parsed.cwd) cwd = path.resolve(expandHome(parsed.cwd.trim()));
     if (parsed.kind === "terminal" || parsed.kind === "agent" || parsed.kind === "ash-terminal") kind = parsed.kind;
     if (typeof parsed.model === "string" && parsed.model) model = parsed.model;
     if (typeof parsed.provider === "string" && parsed.provider) provider = parsed.provider;
+    if (typeof parsed.host === "string" && parsed.host) host = parsed.host;
   } catch {}
-  if (!cwd) cwd = (kind === "terminal" || kind === "ash-terminal") ? os.homedir() : process.cwd();
-  try {
-    const stat = await fs.promises.stat(cwd);
-    if (!stat.isDirectory()) {
+  if (host && host !== LOCAL_HOST_ID) {
+    if (!opts.hosts || !opts.hosts.factory(host)) {
       res.statusCode = 400;
-      res.end(`not a directory: ${cwd}`);
+      res.end(`unknown host: ${host}`);
       return;
     }
-  } catch {
-    res.statusCode = 400;
-    res.end(`no such directory: ${cwd}`);
-    return;
+  }
+  if (!cwd) cwd = (kind === "terminal" || kind === "ash-terminal") ? os.homedir() : process.cwd();
+  // cwd validity is local-FS specific; skip the check for remote hosts since
+  // the path lives on the remote filesystem.
+  const isRemoteSpawn = !!(host && host !== LOCAL_HOST_ID);
+  if (!isRemoteSpawn) {
+    try {
+      const stat = await fs.promises.stat(cwd);
+      if (!stat.isDirectory()) {
+        res.statusCode = 400;
+        res.end(`not a directory: ${cwd}`);
+        return;
+      }
+    } catch {
+      res.statusCode = 400;
+      res.end(`no such directory: ${cwd}`);
+      return;
+    }
   }
   try {
-    const s = await createSession(sessions, opts, cwd, undefined, kind, { model, provider });
+    const s = await createSession(sessions, opts, cwd, undefined, kind, { model, provider, host });
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ instanceId: s.id, cwd: s.cwd, kind: s.kind }));
+    res.end(JSON.stringify({ instanceId: s.id, cwd: s.cwd, kind: s.kind, host: s.host }));
   } catch (err) {
     console.error("[hub] spawn failed:", err);
     res.statusCode = 500;

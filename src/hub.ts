@@ -1243,38 +1243,51 @@ async function listSessions(
   remoteCache: Map<string, SessionListEntry[]>,
   remoteIndex: Map<string, string>,
 ): Promise<void> {
-  // 1. In-memory sessions (local + any attached-remote proxies).  These are
-  //    authoritative when present — an attached remote session supersedes
-  //    its federated/cached entry.
+  // 1. Probe each configured remote host: a successful live fetch means
+  //    online (refresh + persist cache); anything else (not connected, or
+  //    connected-but-unreachable) means offline → serve from cache.
+  const liveByHost = new Map<string, SessionListEntry[]>();
+  if (opts.hosts) {
+    await Promise.all(opts.hosts.remoteIds().map(async (hostId) => {
+      const baseUrl = opts.hosts!.connectedBaseUrl(hostId);
+      if (!baseUrl) return;
+      const entries = await fetchRemoteSessions(baseUrl);
+      if (entries) {
+        liveByHost.set(hostId, entries);
+        remoteCache.set(hostId, entries);
+        saveRemoteCache(remoteCache);
+      }
+    }));
+  }
+
+  // 2. In-memory sessions (local + any attached-remote proxies).  These are
+  //    authoritative for live fields when present.  A remote proxy whose host
+  //    failed the probe is marked offline even though it's still in the Map —
+  //    its RemoteBridge is mid-reconnect and the host is unreachable.
   const byId = new Map<string, SessionListEntry>();
   for (const s of sessions.values()) {
+    const offline = isRemoteSession(s) && !liveByHost.has(s.host!);
     byId.set(s.id, {
       instanceId: s.id, title: s.title, kind: s.kind, model: s.model,
       provider: s.provider, host: s.host, cwd: s.cwd, startedAt: s.startedAt,
       lastModified: s.lastModified, isProcessing: s.isProcessing, hasUnread: s.hasUnread,
+      offline: offline || undefined,
     });
   }
 
-  // 2. Federate each configured remote host: live list if the tunnel is up
-  //    (refresh + persist cache), else the last-known cache marked offline.
+  // 3. Add federated remote entries not already present: live entries for
+  //    online hosts, cached entries (marked offline) for unreachable ones.
   if (opts.hosts) {
-    const ids = opts.hosts.remoteIds();
-    await Promise.all(ids.map(async (hostId) => {
-      const baseUrl = opts.hosts!.connectedBaseUrl(hostId);
-      let entries: SessionListEntry[] | null = null;
-      let offline = false;
-      if (baseUrl) {
-        entries = await fetchRemoteSessions(baseUrl);
-        if (entries) { remoteCache.set(hostId, entries); saveRemoteCache(remoteCache); }
-      }
-      if (!entries) { entries = remoteCache.get(hostId) ?? []; offline = true; }
+    for (const hostId of opts.hosts.remoteIds()) {
+      const live = liveByHost.get(hostId);
+      const entries = live ?? remoteCache.get(hostId) ?? [];
+      const offline = !live;
       for (const e of entries) {
         remoteIndex.set(e.instanceId, hostId);
-        // Don't let a stale cache entry shadow a live attached proxy.
         if (byId.has(e.instanceId)) continue;
-        byId.set(e.instanceId, { ...e, host: hostId, offline });
+        byId.set(e.instanceId, { ...e, host: hostId, offline: offline || undefined });
       }
-    }));
+    }
   }
 
   const list = Array.from(byId.values())

@@ -80,13 +80,23 @@ export function createHostRegistry(localFactory: BridgeFactory, hosts: RemoteHos
     if (h.directBaseUrl) return h.directBaseUrl.replace(/\/$/, "");
     return c ? `http://127.0.0.1:${c.localPort}` : null;
   };
+  // Tear down a host's tunnel (closes the launching SSH channel — which
+  // kills the tethered remote process — and the control master) so the next
+  // ensure() rebuilds it fresh.  Used to recover from a dead remote.
+  const dropTunnel = async (id: string): Promise<void> => {
+    const p = tunnels.get(id);
+    tunnels.delete(id);
+    connected.delete(id);
+    if (p) { try { const c = await p; await c.close(); } catch {} }
+  };
   for (const h of hosts) {
     if (h.id === LOCAL_HOST_ID) continue;
     hostById.set(h.id, h);
     factories.set(h.id, (opts) => {
       if (opts.kind === "terminal") return new TerminalBridge(opts);
-      const getBaseUrl = async (): Promise<string> => {
+      const getBaseUrl = async (o?: { reconnect?: boolean }): Promise<string> => {
         if (h.directBaseUrl) return h.directBaseUrl.replace(/\/$/, "");
+        if (o?.reconnect) await dropTunnel(h.id);
         const c = await ensure(h);
         return `http://127.0.0.1:${c.localPort}`;
       };

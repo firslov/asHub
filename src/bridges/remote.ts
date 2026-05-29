@@ -32,15 +32,20 @@ const HUB_SYNTHESIZED = new Set([
 
 export interface RemoteBridgeOpts extends BridgeOpts {
   /** Loopback URL of the forwarded server.  Function form lets the host
-   *  registry establish the SSH tunnel lazily on first use. */
-  baseUrl: string | (() => Promise<string>);
+   *  registry establish the SSH tunnel lazily on first use; passing
+   *  `{reconnect:true}` forces it to drop and re-establish a dead tunnel. */
+  baseUrl: string | ((opts?: { reconnect?: boolean }) => Promise<string>);
   /** Existing remote session id; omit to spawn a fresh one. */
   remoteSessionId?: string;
 }
 
+const MAX_SSE_ATTEMPTS = 8;
+const sseBackoffMs = (attempt: number): number => Math.min(500 * 2 ** (attempt - 1), 8000);
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 export class RemoteBridge extends EventEmitter implements Bridge {
   readonly kind?: SessionKind;
-  private baseUrlGetter: () => Promise<string>;
+  private baseUrlGetter: (opts?: { reconnect?: boolean }) => Promise<string>;
   private baseUrl: string = "";
   private sessionId: string | null = null;
   private initPromise: Promise<void>;
@@ -48,12 +53,11 @@ export class RemoteBridge extends EventEmitter implements Bridge {
   private processing = false;
   private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
   private sseAbort: AbortController | null = null;
-  // The remote replays its session history (agent:query, response-segment,
-  // …) before the hub:replay-done marker.  Those are HUB_SYNTHESIZED — we
-  // normally drop them because the local hub re-synthesizes live turns — but
-  // during the replay phase they ARE the prior conversation, so forward them
-  // so a reattached session shows its history.  Flips false at replay-done.
-  private replayPhase = true;
+  // Highest remote SSE frame id seen, used as Last-Event-ID to resume after a
+  // drop so the remote replays only what we missed instead of the whole
+  // history.  Numeric string (the remote hub's frameSeq).
+  private lastEventId: string | null = null;
+  private sseAttempt = 0;
 
   constructor(opts: RemoteBridgeOpts) {
     super();
@@ -85,30 +89,55 @@ export class RemoteBridge extends EventEmitter implements Bridge {
       const j = await r.json() as { instanceId: string };
       this.sessionId = j.instanceId;
     }
-    this.startSse();
+    void this.runSseLoop();
   }
 
-  private startSse(): void {
+  private emitInfo(message: string): void {
+    this.emit("event", { name: "ui:info", payload: { message } } satisfies BusEvent);
+  }
+
+  // Maintain the SSE subscription across drops.  The remote process is
+  // tethered to its launching SSH channel, so a tunnel death also kills the
+  // remote process — but its session is persisted, so on reconnect we
+  // relaunch (fresh process restores it) and resume via Last-Event-ID.
+  private async runSseLoop(): Promise<void> {
     if (!this.sessionId) return;
-    // Each connection re-replays history first.
-    this.replayPhase = true;
-    this.sseAbort = new AbortController();
-    void (async () => {
+    while (!this.closed) {
+      const attempt = this.sseAttempt;
       try {
-        const url = `${this.baseUrl}/events?subs=${this.sessionId}:all`;
-        const r = await fetch(url, {
-          headers: { Accept: "text/event-stream" },
-          signal: this.sseAbort!.signal,
+        // First retry reuses the current tunnel (cheap, covers transient
+        // blips); later attempts force a tunnel reconnect (relaunch + new
+        // forward) to recover from a dead remote process.
+        if (attempt >= 2) {
+          this.baseUrl = (await this.baseUrlGetter({ reconnect: true })).replace(/\/$/, "");
+        }
+        const resume = !!this.lastEventId;
+        const tail = resume ? "0" : "all";
+        const headers: Record<string, string> = { Accept: "text/event-stream" };
+        if (resume) headers["Last-Event-ID"] = this.lastEventId!;
+        this.sseAbort = new AbortController();
+        const r = await fetch(`${this.baseUrl}/events?subs=${this.sessionId}:${tail}`, {
+          headers,
+          signal: this.sseAbort.signal,
         });
         if (!r.ok || !r.body) throw new Error(`SSE connect failed: ${r.status}`);
+        if (attempt > 0) this.emitInfo("Reconnected to remote.");
+        this.sseAttempt = 0;
         await this.consumeSse(r.body);
+        if (this.closed) return;
+        // Clean stream end while we're still open counts as a drop.
+        throw new Error("remote stream ended");
       } catch (err) {
         if (this.closed) return;
-        // TODO: reconnect-with-Last-Event-ID on tunnel drop.  For now the
-        // hub surfaces the error and the session goes dead.
-        this.emit("error", err instanceof Error ? err : new Error(String(err)));
+        this.sseAttempt = attempt + 1;
+        if (this.sseAttempt > MAX_SSE_ATTEMPTS) {
+          this.emit("error", err instanceof Error ? err : new Error(String(err)));
+          return;
+        }
+        if (this.sseAttempt === 1) this.emitInfo("Connection to remote lost; reconnecting…");
+        await delay(sseBackoffMs(this.sseAttempt));
       }
-    })();
+    }
   }
 
   private async consumeSse(body: ReadableStream<Uint8Array>): Promise<void> {
@@ -130,32 +159,35 @@ export class RemoteBridge extends EventEmitter implements Bridge {
 
   private dispatchFrame(frame: string): void {
     let data = "";
+    let evId = "";
     for (const line of frame.split("\n")) {
       if (line.startsWith("data: ")) data += line.slice(6);
+      else if (line.startsWith("id: ")) evId = line.slice(4).trim();
     }
+    if (evId) this.lastEventId = evId;
     if (!data) return;
     let parsed: { meta?: { name?: string }; payload?: unknown };
     try { parsed = JSON.parse(data); } catch { return; }
     const name = parsed.meta?.name;
     if (!name) return;
-    // trackTurnLifecycle returns true when forwarding this frame would
-    // duplicate what the local hub re-synthesizes off the submit() promise.
-    // That only happens for a foreground agent:error: the local hub's
-    // submit().catch pushes its own agent:error frame (matching the local
-    // AshBridge path, where agent:error is NOT forwarded).  cancelled and
-    // processing-done are handled like the local path — cancelled forwards
-    // as a UI signal, processing-done is hub-synthesized — so they don't
-    // suppress.  A queued error (no pending turn) has no hub awaiter, so it
-    // forwards normally.
+    // A local submit() is in flight iff pendingTurn is set.  Capture it
+    // BEFORE trackTurnLifecycle, which clears it on processing-done.
+    const hadPending = !!this.pendingTurn;
+    // trackTurnLifecycle returns true when forwarding would duplicate the
+    // frame the local hub synthesizes off submit().catch — a foreground
+    // agent:error.  cancelled/processing-done don't suppress (cancelled
+    // forwards as a UI signal; processing-done is hub-synthesized via the
+    // filter below).  A queued error (no pending turn) forwards normally.
     const suppress = this.trackTurnLifecycle(name, parsed.payload);
-    // hub:replay-done ends the history replay; consume it (the local hub
-    // emits its own replay-done to local clients) and switch to live mode.
-    if (name === "hub:replay-done") { this.replayPhase = false; return; }
+    // The local hub emits its own replay-done to local clients.
+    if (name === "hub:replay-done") return;
     if (suppress) return;
-    // During replay, forward synthesized history frames so the reattached
-    // session shows its prior conversation; after replay, drop them (the
-    // local hub synthesizes them around live submit()).
-    if (HUB_SYNTHESIZED.has(name) && !this.replayPhase) return;
+    // HUB_SYNTHESIZED frames (agent:query, response-segment, processing-*)
+    // are dropped ONLY while a local submit is in flight — there the local
+    // hub synthesizes its own around submit().  With no local submit (initial
+    // history replay, resume catch-up, or activity from another client) they
+    // ARE the real conversation and must be forwarded.
+    if (HUB_SYNTHESIZED.has(name) && hadPending) return;
     this.emit("event", { name, payload: parsed.payload } satisfies BusEvent);
   }
 

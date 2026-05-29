@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
 import { LlmClient } from "agent-sh";
 import { resolveProvider, getSettings, getProviderNames } from "agent-sh/settings";
+import { listAllProviders } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
 import { extractText, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
@@ -532,14 +533,12 @@ async function getModels(
   const single = raw.startsWith("/") ? raw.slice(1).split("?")[0] : "";
 
   try {
-    const names = getProviderNames();
     const byName = new Map<string, { defaultModel?: string; models: Set<string> }>();
-    for (const name of names) {
-      const resolved = resolveProvider(name);
-      if (!resolved) continue;
-      const set = new Set<string>(resolved.models ?? []);
-      if (resolved.defaultModel) set.add(resolved.defaultModel);
-      byName.set(name, { defaultModel: resolved.defaultModel, models: set });
+    for (const { id } of listAllProviders()) {
+      const resolved = resolveProvider(id);
+      const set = new Set<string>(resolved?.models ?? []);
+      if (resolved?.defaultModel) set.add(resolved.defaultModel);
+      byName.set(id, { defaultModel: resolved?.defaultModel, models: set });
     }
 
     for (const s of sessions.values()) {
@@ -548,8 +547,12 @@ async function getModels(
         const { models } = await s.bridge.getModels();
         for (const { model, provider } of models) {
           if (!provider || !model) continue;
-          const entry = byName.get(provider);
-          if (entry) entry.models.add(model);
+          let entry = byName.get(provider);
+          if (!entry) {
+            entry = { defaultModel: model, models: new Set() };
+            byName.set(provider, entry);
+          }
+          entry.models.add(model);
         }
         break;
       } catch {

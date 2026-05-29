@@ -743,8 +743,7 @@ function pickHostAndCwd(hosts) {
       });
       panel.appendChild(input);
 
-      // Remote directory browser: as the user types, list matching dirs on
-      // the remote (proxied through the hub) and let them click to descend.
+      // Remote directory browser (proxied through the hub).
       const list = document.createElement("div");
       Object.assign(list.style, {
         maxHeight: "160px", overflowY: "auto", marginBottom: "10px",
@@ -848,8 +847,7 @@ newBtn?.addEventListener("click", async () => {
       cwd = picked.cwd;
     }
 
-    // First connect to a remote can be slow (tarball push + launch); the
-    // POST blocks the whole time, so show a connecting toast meanwhile.
+    // First connect blocks the POST (tarball push + launch) — show a toast.
     const toast = isLocal ? null : showConnectingToast(hostId);
     try {
       const body = isLocal ? { cwd } : { cwd, host: hostId };

@@ -42,8 +42,7 @@ class SessionView extends HTMLElement {
     if (this.host) void this.checkRemoteReadiness();
   }
 
-  // On opening a remote session, verify the host has credentials + a provider
-  // so the agent can actually run; if not, surface a guided auth banner.
+  // Surface the auth banner if the host lacks credentials/a provider.
   async checkRemoteReadiness() {
     if (!this.host) return;
     try {
@@ -90,8 +89,7 @@ class SessionView extends HTMLElement {
     el.appendChild(btn);
   }
 
-  // Config is on the host now, but a live session can't re-register its
-  // backend — recovery is a fresh session, which picks up the new config.
+  // A live session can't re-register its backend, so recovery is a fresh one.
   renderAuthReady() {
     const el = this.authBannerEl;
     el.innerHTML = "";
@@ -138,17 +136,13 @@ class SessionView extends HTMLElement {
     this.modelDropdownEl = this.querySelector(".model-dropdown");
     this.cwdEl = this.querySelector(".usage-cwd");
 
-    // Sticky remote-connection banner (reconnecting / offline). Lives at the
-    // top of the session view, above the stream; hidden until a remote:status
-    // event (or attach) flips it.
+    // Sticky remote-connection banner (reconnecting / offline).
     this.remoteBannerEl = document.createElement("div");
     this.remoteBannerEl.className = "remote-banner";
     this.remoteBannerEl.hidden = true;
     this.insertBefore(this.remoteBannerEl, this.firstChild);
 
-    // Auth banner: shown when a remote host is missing credentials/providers
-    // so the agent can't run.  Carries an action (push local config) since a
-    // live session can't re-register its backend after the fact.
+    // Missing-credentials banner with a push-config action.
     this.authBannerEl = document.createElement("div");
     this.authBannerEl.className = "auth-banner";
     this.authBannerEl.hidden = true;

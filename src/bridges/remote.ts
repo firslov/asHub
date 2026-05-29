@@ -12,11 +12,8 @@ import type {
   Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy, SessionKind,
 } from "./types.js";
 
-// Frames the local hub synthesizes around bridge.submit() / queued submit /
-// title flow.  The remote hub already wrote them into its own SSE stream;
-// forwarding them through routeEvent would duplicate them on the local
-// SSE.  RemoteBridge consumes lifecycle events for turn tracking but
-// drops them before emitting to the local hub.
+// Frames the local hub re-synthesizes around its own submit(); forwarding
+// the remote's copies too would double them on the local SSE.
 const HUB_SYNTHESIZED = new Set([
   "agent:query",
   "agent:processing-start",
@@ -92,25 +89,20 @@ export class RemoteBridge extends EventEmitter implements Bridge {
     void this.runSseLoop();
   }
 
-  // Structured connection-state signal the local hub forwards and the web
-  // client renders as a sticky banner / header indicator (not a buried chat
-  // line).  phase: "reconnecting" | "connected" | "offline".
   private emitStatus(phase: "reconnecting" | "connected" | "offline"): void {
     this.emit("event", { name: "remote:status", payload: { phase } } satisfies BusEvent);
   }
 
-  // Maintain the SSE subscription across drops.  The remote process is
-  // tethered to its launching SSH channel, so a tunnel death also kills the
-  // remote process — but its session is persisted, so on reconnect we
-  // relaunch (fresh process restores it) and resume via Last-Event-ID.
+  // The remote process is tethered to its launching SSH channel, so a tunnel
+  // death kills it too — but the session is persisted, so reconnect relaunches
+  // (fresh process restores it) and resumes via Last-Event-ID.
   private async runSseLoop(): Promise<void> {
     if (!this.sessionId) return;
     while (!this.closed) {
       const attempt = this.sseAttempt;
       try {
-        // First retry reuses the current tunnel (cheap, covers transient
-        // blips); later attempts force a tunnel reconnect (relaunch + new
-        // forward) to recover from a dead remote process.
+        // First retry reuses the tunnel (transient blip); later ones force a
+        // relaunch to recover a dead remote process.
         if (attempt >= 2) {
           this.baseUrl = (await this.baseUrlGetter({ reconnect: true })).replace(/\/$/, "");
         }
@@ -124,14 +116,13 @@ export class RemoteBridge extends EventEmitter implements Bridge {
           signal: this.sseAbort.signal,
         });
         if (!r.ok || !r.body) throw new Error(`SSE connect failed: ${r.status}`);
-        // Emit on every successful connect (not just reconnects) so opening a
-        // session the sidebar listed offline clears its banner once we're in.
+        // On every connect (not just reconnects) so opening a listed-offline
+        // session clears its banner.
         this.emitStatus("connected");
         this.sseAttempt = 0;
         await this.consumeSse(r.body);
         if (this.closed) return;
-        // Clean stream end while we're still open counts as a drop.
-        throw new Error("remote stream ended");
+        throw new Error("remote stream ended"); // clean end while open = drop
       } catch (err) {
         if (this.closed) return;
         this.sseAttempt = attempt + 1;
@@ -176,23 +167,13 @@ export class RemoteBridge extends EventEmitter implements Bridge {
     try { parsed = JSON.parse(data); } catch { return; }
     const name = parsed.meta?.name;
     if (!name) return;
-    // A local submit() is in flight iff pendingTurn is set.  Capture it
-    // BEFORE trackTurnLifecycle, which clears it on processing-done.
+    // Capture before trackTurnLifecycle, which clears pendingTurn on done.
     const hadPending = !!this.pendingTurn;
-    // trackTurnLifecycle returns true when forwarding would duplicate the
-    // frame the local hub synthesizes off submit().catch — a foreground
-    // agent:error.  cancelled/processing-done don't suppress (cancelled
-    // forwards as a UI signal; processing-done is hub-synthesized via the
-    // filter below).  A queued error (no pending turn) forwards normally.
     const suppress = this.trackTurnLifecycle(name, parsed.payload);
-    // The local hub emits its own replay-done to local clients.
     if (name === "hub:replay-done") return;
     if (suppress) return;
-    // HUB_SYNTHESIZED frames (agent:query, response-segment, processing-*)
-    // are dropped ONLY while a local submit is in flight — there the local
-    // hub synthesizes its own around submit().  With no local submit (initial
-    // history replay, resume catch-up, or activity from another client) they
-    // ARE the real conversation and must be forwarded.
+    // Drop synthesized frames only while a local submit is in flight (the hub
+    // synthesizes its own); otherwise they're real history/catch-up — forward.
     if (HUB_SYNTHESIZED.has(name) && hadPending) return;
     this.emit("event", { name, payload: parsed.payload } satisfies BusEvent);
   }
@@ -221,7 +202,7 @@ export class RemoteBridge extends EventEmitter implements Bridge {
         this.pendingTurn = null;
         const msg = (payload as { message?: string } | undefined)?.message ?? "remote agent error";
         t.reject(new Error(msg));
-        return true; // foreground: local hub synthesizes the frame
+        return true;
       }
     }
     return false;

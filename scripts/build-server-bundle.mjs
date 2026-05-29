@@ -124,11 +124,8 @@ fs.writeFileSync(
   JSON.stringify({ name: "ashub-server", version, type: "module", private: true }, null, 2),
 );
 
-// BUILD_ID identifies this exact build so ensureServer() can detect
-// "same version pinned, but the binary on disk is stale" — the common
-// case during local development where the version string doesn't bump
-// between rebuilds.  A fresh random nonce per build is enough; we don't
-// need it to mean anything beyond equality.
+// Per-build nonce so ensureServer() can tell "same version, stale binary"
+// (the dev case where the version string doesn't bump between rebuilds).
 const buildId = crypto.randomBytes(12).toString("hex");
 fs.writeFileSync(path.join(OUT, "BUILD_ID"), buildId + "\n");
 
@@ -163,8 +160,7 @@ fs.mkdirSync(path.dirname(tarPath), { recursive: true });
 const r = spawnSync("tar", ["-czf", tarPath, "-C", path.dirname(OUT), path.basename(OUT)], { stdio: "inherit" });
 if (r.status !== 0) { console.error("tar failed"); process.exit(1); }
 
-// Sidecar so ensureServer() can read the build-id without extracting the
-// tarball.  Lives next to the tarball with matching basename + .build-id.
+// Sidecar so ensureServer() reads the build-id without extracting the tarball.
 fs.writeFileSync(tarPath + ".build-id", buildId + "\n");
 
 const sizeMB = (fs.statSync(tarPath).size / (1024 * 1024)).toFixed(1);

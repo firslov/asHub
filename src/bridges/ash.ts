@@ -56,13 +56,9 @@ function defaultShell(): string {
 }
 
 // Bus events to forward verbatim. Names line up with what the web client
-// already handles (see web/js/client.js handler map).
-//
-// agent:error is intentionally NOT in this list — submit() catches the
-// kernel error and either retries (mid-retry errors stay internal) or
-// surfaces it via Promise rejection, which the hub then synthesizes into
-// a single SSE agent:error frame.  Forwarding here as well would leak
-// every mid-retry failure to the UI.
+// already handles (see web/js/client.js handler map).  agent:error is
+// deliberately absent: submit() owns it (retries internally, else rejects),
+// so forwarding would leak every mid-retry failure.
 const FORWARDED = [
   "agent:info",
   "agent:response-chunk",
@@ -115,13 +111,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.initPromise = this.init();
   }
 
-  /**
-   * Builtin agent-sh providers that supply their own baseURL via an
-   * activator (or use the OpenAI SDK's default).  Used by
-   * isProviderViable() so settings-only entries that lack baseURL (e.g.
-   * a "zai-coding-plan" stub the user added without endpoint info) are
-   * skipped from the fallback chain instead of routing to api.openai.com.
-   */
+  // Builtins carry their own baseURL via an activator; a settings-only entry
+  // without one is unusable (would route to api.openai.com), so isProviderViable
+  // skips it.
   private static readonly BUILTIN_PROVIDERS_WITH_BASE_URL = new Set([
     "openrouter",
     "deepseek",
@@ -154,13 +146,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     return !!p?.baseURL;
   }
 
-  /**
-   * Build an ordered candidate list of viable providers (have key AND a
-   * reachable baseURL): the preferred one first, then the rest.  Stashed
-   * tail is consumed by wire()'s agent:error handler to hot-swap on
-   * first-turn failure — bypassing config:switch-provider so we don't
-   * persist the transient fallback as the new default.
-   */
+  // Ordered viable-provider candidates (preferred first); the tail is the
+  // first-turn fallback chain consumed by submitWithFallback.
   private resolveEffectiveProvider(): string | undefined {
     const settings = getSettings();
     const ordered: string[] = [];
@@ -351,12 +338,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
   }
 
-  // Re-register settings-only providers (no built-in activator) so their
-  // keys.json key flows into resolvedProviders.  Skip entries without a
-  // baseURL: those are either built-ins (which register themselves with
-  // the correct baseURL via activateAgent — re-registering here would
-  // overwrite it with undefined, sending traffic to api.openai.com) or
-  // genuinely under-configured custom providers that can't work anyway.
+  // Register settings-only providers so their keys.json key reaches
+  // resolvedProviders.  Skip ones without a baseURL: re-registering a builtin
+  // here would clobber its baseURL with undefined → traffic to api.openai.com.
   private registerUserProviders(extCtx: ReturnType<AgentShellCore["extensionContext"]>): void {
     const ctxAgent = (extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
     if (!ctxAgent?.providers?.register) return;
@@ -474,21 +458,13 @@ export class AshBridge extends EventEmitter implements Bridge {
     // must reject so the UI doesn't spin forever (e.g. missing API key).
     onAny("agent:register-backend", () => { this.backendRegistered = true; });
 
-    // Turn boundaries — consumed internally to settle the active tryOnce()
-    // promise.  NOT forwarded as BusEvents.  The hub synthesizes its own
-    // processing-start/done frames around submit() so the start/done pair
-    // is well-ordered with the user's query and the segment flush; if we
-    // forwarded the kernel's, its done would arrive before the segment
-    // flush and re-open a fresh reply, doubling the text.
-    //
-    // agent-loop's executeLoop runs inside try/catch/finally: it emits
-    // agent:error (catch) or agent:cancelled (finally, on abort) BEFORE
-    // agent:processing-done (finally).  So the first of error/cancelled/
-    // done to arrive owns the settle; we null inFlight and the trailing
-    // processing-done is a no-op.  Settling on the error event itself
-    // (rather than stashing it for processing-done) keeps no cross-turn
-    // state: the retry's reject reaction is a microtask, so the new
-    // inFlight is installed only after this synchronous done is swallowed.
+    // Turn boundaries settle the active turn but are NOT forwarded — the hub
+    // synthesizes its own processing frames around submit() (forwarding the
+    // kernel's too would double the reply text).  agent-loop emits
+    // error/cancelled before the trailing processing-done, so the first
+    // signal owns the settle and clearing inFlight makes done a no-op.  A
+    // retry's reject reaction is a microtask, so its new inFlight installs
+    // only after this synchronous done is swallowed — no cross-turn state.
     const settle = (r: { stopReason: string } | { error: Error }): void => {
       const f = this.inFlight;
       if (!f) return;
@@ -538,13 +514,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
   }
 
-  /**
-   * Try the current provider; if its first call fails AND this session
-   * has never produced a turn yet, hot-swap to the next keyed candidate
-   * and try again.  Done as a linear async loop instead of an event-
-   * handler state machine so cancellation, queue draining, and queued-
-   * submit accounting all hang off a single try/finally.
-   */
+  // First turn only: if a provider's first call fails, hot-swap to the next
+  // viable candidate and retry.
   private async submitWithFallback(text: string): Promise<{ stopReason: string }> {
     const candidates = [this.currentProvider, ...this.fallbackCandidates].filter(Boolean) as string[];
     let lastErr: Error | undefined;
@@ -554,10 +525,8 @@ export class AshBridge extends EventEmitter implements Bridge {
       if (i > 0) {
         const cfg = this.lookupProviderConfig(provider);
         if (!cfg) continue;
-        // Reconfigure llmClient directly instead of emitting
-        // config:switch-provider — the latter triggers config:switch-model
-        // whose handler persists the new provider as the user's default.
-        // Auto-fallback must not mutate user state.
+        // Reconfigure directly; config:switch-provider would persist the
+        // fallback as the user's default, which auto-fallback must not do.
         try {
           const llm = this.core!.handlers.call("llm:get-client") as { reconfigure: (c: { apiKey: string; baseURL?: string; model: string }) => void } | undefined;
           llm?.reconfigure({ apiKey: cfg.apiKey, baseURL: cfg.baseURL, model: cfg.model });
@@ -575,16 +544,12 @@ export class AshBridge extends EventEmitter implements Bridge {
       try {
         const result = await this.tryOnce(text);
         this.hasCompletedFirstTurn = true;
-        // The fallback list is single-use: once one provider has
-        // produced a turn (success or even a clean cancel), it's the
-        // session's pinned choice.  Drop the alternatives so a later
-        // mid-session auth failure doesn't trigger a silent swap.
+        // Once a provider has produced a turn it's the session's pinned
+        // choice — drop the alternatives so a later failure doesn't swap.
         this.fallbackCandidates = [];
         return result;
       } catch (err) {
         lastErr = err as Error;
-        // No retries past the first turn: the user has been working with
-        // this provider on purpose, surfacing the error is the right call.
         if (this.hasCompletedFirstTurn) throw err;
       }
     }
@@ -607,11 +572,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     const next = this.queryQueue.shift();
     if (!next || this.closed || !this.core) return;
     this.emit("event", { name: "agent:queued-submit", payload: { query: next } } satisfies BusEvent);
-    // Queued turns run through the same fallback machinery as the
-    // foreground submit().  Unlike the foreground path there's no hub-side
-    // awaiter to surface a rejection, and agent:error is no longer in
-    // FORWARDED, so emit it here ourselves.  The "queued-done" frame then
-    // lets the UI clear its queued-pending state regardless of outcome.
+    // No hub-side awaiter for queued turns and agent:error isn't forwarded,
+    // so emit the error here ourselves.
     this.submitWithFallback(next)
       .catch((err) => {
         this.emit("event", {

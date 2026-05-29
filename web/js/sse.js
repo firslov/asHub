@@ -449,9 +449,7 @@ export const seedSessionInfo = (session, info) => {
   if (!session || !info) return;
   if (info.host && info.host !== "local") session.host = info.host;
   if (info.cwd && !session.state.cwd) session.state.cwd = info.cwd;
-  // Reflect a listed-offline remote session in the sticky banner — but only
-  // until a live remote:status arrives (which is authoritative; avoids a
-  // stale seed racing a live "connected").
+  // Seed offline from the list, but a live remote:status always wins.
   if (info.offline && session.host && !session._liveStatusSeen) session.setRemoteStatus?.("offline");
   if (info.model && !session.agentInfo.model) session.agentInfo.model = info.model;
   if (info.provider && !session.agentInfo.provider) session.agentInfo.provider = info.provider;

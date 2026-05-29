@@ -140,10 +140,8 @@ async function ensureServer(host: RemoteHost, ctrl: string, version: string): Pr
   const { platform, arch } = await probePlatform(host, ctrl);
   const source = host.installSource ?? "fetch";
 
-  // Read the local build's BUILD_ID upfront; for "push" we can compare
-  // against the remote's BUILD_ID and force a re-extract on mismatch.
-  // Without this, the version-pinned install dir hides every in-place
-  // dev rebuild — the running server stays frozen at first-install time.
+  // Compare BUILD_IDs so an in-place rebuild re-deploys; without it the
+  // version-pinned install dir freezes the remote at first-install time.
   const local = source === "push" ? findLocalTarball(version, platform, arch) : null;
   const localBuildId = local ? readLocalBuildId(local) : null;
 
@@ -155,15 +153,12 @@ async function ensureServer(host: RemoteHost, ctrl: string, version: string): Pr
   if (check.code === 0) {
     const remoteBuildId = check.stdout.trim();
     if (remoteBuildId) {
-      // Local push with sidecar present: gate on equality.  Local push
-      // with no sidecar (older build): trust the existing install.  Fetch
-      // mode: published tarballs are immutable per version, trust it.
+      // Trust unless it's a push with a sidecar id that differs (fetch
+      // tarballs are immutable per version; a missing sidecar is an old build).
       if (source !== "push" || !localBuildId || remoteBuildId === localBuildId) {
         return installDir;
       }
-      // Mismatch → fall through to reinstall.  Wipe first so stale
-      // node_modules etc. don't survive the new extract.
-      await runOverCtrl(host, ctrl, `rm -rf ${installDir}`);
+      await runOverCtrl(host, ctrl, `rm -rf ${installDir}`); // wipe stale install
     }
   }
 

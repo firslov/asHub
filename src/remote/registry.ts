@@ -59,8 +59,7 @@ export interface HostRegistry {
 
 export function createHostRegistry(localFactory: BridgeFactory, hosts: RemoteHost[]): HostRegistry {
   const tunnels = new Map<string, Promise<ConnectedRemote>>();
-  // Resolved tunnels, populated when the connect promise settles, so
-  // connectedBaseUrl() can answer synchronously without awaiting.
+  // Settled tunnels, so connectedBaseUrl() can answer without awaiting.
   const connected = new Map<string, ConnectedRemote>();
   const factories = new Map<string, BridgeFactory>();
   const hostById = new Map<string, RemoteHost>();
@@ -80,9 +79,8 @@ export function createHostRegistry(localFactory: BridgeFactory, hosts: RemoteHos
     if (h.directBaseUrl) return h.directBaseUrl.replace(/\/$/, "");
     return c ? `http://127.0.0.1:${c.localPort}` : null;
   };
-  // Tear down a host's tunnel (closes the launching SSH channel — which
-  // kills the tethered remote process — and the control master) so the next
-  // ensure() rebuilds it fresh.  Used to recover from a dead remote.
+  // Close a host's tunnel (and its tethered remote process) so the next
+  // ensure() rebuilds fresh — recovery from a dead remote.
   const dropTunnel = async (id: string): Promise<void> => {
     const p = tunnels.get(id);
     tunnels.delete(id);

@@ -14,9 +14,10 @@
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc --noEmit -p web/jsconfig.json",
     "electron:dev": "npm run build && electron .",
-    "electron:pack": "npm run build && electron-builder --dir",
-    "electron:dist:mac": "npm run build && electron-builder --mac",
-    "electron:dist:win": "bash scripts/pre-dist-win.sh && npm run build && electron-builder --win",
+    "build:server": "npm run build && node scripts/build-server-tarballs.mjs",
+    "electron:pack": "npm run build:server && electron-builder --dir",
+    "electron:dist:mac": "npm run build:server && electron-builder --mac",
+    "electron:dist:win": "bash scripts/pre-dist-win.sh && npm run build:server && electron-builder --win",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {

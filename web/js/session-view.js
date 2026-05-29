@@ -39,6 +39,83 @@ class SessionView extends HTMLElement {
       const info = Array.isArray(list) ? list.find((s) => s.instanceId === this.id) : null;
       if (info) seedSessionInfo(this, info);
     } catch {}
+    if (this.host) void this.checkRemoteReadiness();
+  }
+
+  // On opening a remote session, verify the host has credentials + a provider
+  // so the agent can actually run; if not, surface a guided auth banner.
+  async checkRemoteReadiness() {
+    if (!this.host) return;
+    try {
+      const r = await fetch(`/api/hosts/${encodeURIComponent(this.host)}/status`);
+      if (!r.ok) return;
+      const ready = (await r.json()).readiness;
+      if (!ready) return;
+      if (ready.keys && ready.providers) { this.authBannerEl.hidden = true; return; }
+      const missing = [];
+      if (!ready.keys) missing.push("keys.json");
+      if (!ready.providers) missing.push("a provider");
+      this.renderAuthBanner(missing);
+    } catch { /* probe failure is non-fatal */ }
+  }
+
+  renderAuthBanner(missing) {
+    const el = this.authBannerEl;
+    if (!el) return;
+    el.hidden = false;
+    el.innerHTML = "";
+    const msg = document.createElement("span");
+    msg.textContent = `${this.host} is missing ${missing.join(" and ")} — the agent can't run here yet.`;
+    el.appendChild(msg);
+    const btn = document.createElement("button");
+    btn.className = "auth-banner-btn";
+    btn.textContent = "Push local config";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true; btn.textContent = "Pushing…";
+      try {
+        const pr = await fetch(`/api/hosts/${encodeURIComponent(this.host)}/bootstrap`, { method: "POST" });
+        if (!pr.ok) { msg.textContent = `Push failed: ${await pr.text()}`; btn.disabled = false; btn.textContent = "Retry"; return; }
+        const r2 = (await pr.json()).readiness;
+        if (r2?.keys && r2?.providers) this.renderAuthReady();
+        else {
+          const still = [!r2?.keys && "keys.json", !r2?.providers && "a provider"].filter(Boolean);
+          msg.textContent = `Pushed; still missing ${still.join(" and ")}.`;
+          btn.disabled = false; btn.textContent = "Retry";
+        }
+      } catch (e) {
+        msg.textContent = `Push failed: ${e?.message ?? e}`;
+        btn.disabled = false; btn.textContent = "Retry";
+      }
+    });
+    el.appendChild(btn);
+  }
+
+  // Config is on the host now, but a live session can't re-register its
+  // backend — recovery is a fresh session, which picks up the new config.
+  renderAuthReady() {
+    const el = this.authBannerEl;
+    el.innerHTML = "";
+    el.classList.add("ready");
+    const msg = document.createElement("span");
+    msg.textContent = `${this.host} is configured. Start a new session to use it.`;
+    el.appendChild(msg);
+    const btn = document.createElement("button");
+    btn.className = "auth-banner-btn";
+    btn.textContent = `New session on ${this.host}`;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        const res = await fetch("/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ host: this.host, cwd: this.state?.cwd || "~" }),
+        });
+        if (!res.ok) { btn.disabled = false; return; }
+        const sess = await res.json();
+        if (sess.instanceId) window.location.href = `/${sess.instanceId}/`;
+      } catch { btn.disabled = false; }
+    });
+    el.appendChild(btn);
   }
 
   initStreamShell() {
@@ -68,6 +145,14 @@ class SessionView extends HTMLElement {
     this.remoteBannerEl.className = "remote-banner";
     this.remoteBannerEl.hidden = true;
     this.insertBefore(this.remoteBannerEl, this.firstChild);
+
+    // Auth banner: shown when a remote host is missing credentials/providers
+    // so the agent can't run.  Carries an action (push local config) since a
+    // live session can't re-register its backend after the fact.
+    this.authBannerEl = document.createElement("div");
+    this.authBannerEl.className = "auth-banner";
+    this.authBannerEl.hidden = true;
+    this.insertBefore(this.authBannerEl, this.remoteBannerEl);
 
     this.state = { ...STATE_DEFAULTS };
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };

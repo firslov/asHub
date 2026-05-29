@@ -20,7 +20,7 @@ fail() { red "error: $1" >&2; exit 1; }
 command -v curl >/dev/null || fail "curl is required."
 command -v unzip >/dev/null || fail "unzip is required."
 
-bold "Looking up the latest asHub release…"
+bold "Looking up the latest asHub release..."
 url=$(
   curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
     | grep -o '"browser_download_url"[^,]*-arm64\.zip"' \
@@ -32,23 +32,23 @@ url=$(
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-bold "Downloading $(basename "$url")…"
+bold "Downloading $(basename "$url")..."
 curl -fSL --progress-bar "$url" -o "$tmp/ashub.zip"
 
-bold "Unpacking…"
+bold "Unpacking..."
 unzip -q "$tmp/ashub.zip" -d "$tmp"
 [ -d "$tmp/$APP" ] || fail "archive did not contain $APP."
 
 if [ -d "$DEST/$APP" ]; then
-  bold "Removing the previous install at $DEST/$APP…"
+  bold "Removing the previous install at $DEST/$APP..."
   rm -rf "$DEST/$APP"
 fi
 
-bold "Installing to $DEST/$APP…"
+bold "Installing to $DEST/$APP..."
 # ditto preserves the bundle signature; mv across volumes can corrupt it.
 ditto "$tmp/$APP" "$DEST/$APP"
 
 /usr/bin/xattr -dr com.apple.quarantine "$DEST/$APP" 2>/dev/null || true
 
-green "✓ asHub installed to $DEST/$APP"
+green "asHub installed to $DEST/$APP"
 echo "Launch it from Spotlight or: open \"$DEST/$APP\""

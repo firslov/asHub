@@ -50,6 +50,19 @@ const flushReply = (session) => {
     if (!delta) return;
     const tmp = document.createElement("div");
     tmp.innerHTML = mdToHtml(delta);
+    // If the delta continues inline (no paragraph break at the boundary
+    // between already-rendered text and the new delta), merge its first
+    // block into the last existing paragraph to avoid fragmenting
+    // continuous prose into many tiny <p> tags.
+    const prevText = r.text.slice(0, Math.max(0, prevLen));
+    const boundary = prevText.slice(-2) + delta.slice(0, 2);
+    const hasParaBreak = /\n\s*\n/.test(boundary);
+    const lastP = r.current.querySelector(":scope > p:last-of-type");
+    const firstBlock = tmp.firstElementChild;
+    if (lastP && firstBlock && firstBlock.tagName === "P" && !hasParaBreak) {
+      lastP.innerHTML += firstBlock.innerHTML;
+      firstBlock.remove();
+    }
     while (tmp.firstChild) {
       r.current.appendChild(tmp.firstChild);
     }

@@ -14,7 +14,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import path from "node:path";
 import * as os from "node:os";
-import { createCore, type AgentShellCore } from "agent-sh";
+import { createCore, type AgentShellCore, NoopHistory } from "agent-sh";
 import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
@@ -101,7 +101,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   private async init(): Promise<void> {
-    const core = createCore({ model: this.opts.model, provider: this.opts.provider });
+    const core = createCore({ model: this.opts.model, provider: this.opts.provider, history: new NoopHistory() });
     this.core = core;
 
     this.wire(core);

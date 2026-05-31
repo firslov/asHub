@@ -270,18 +270,22 @@ export class AshBridge extends EventEmitter implements Bridge {
   private registerUserProviders(extCtx: ReturnType<AgentShellCore["extensionContext"]>): void {
     const ctxAgent = (extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
     if (!ctxAgent?.providers?.register) return;
+    // register() replaces the whole contribution, so merge over a built-in's prior registration.
+    const prior = this.core?.bus.emitPipe("agent:providers", { providers: [] }).providers ?? [];
+    const priorById = new Map(prior.map((reg) => [reg.id, reg] as const));
     for (const name of getProviderNames()) {
       const p = resolveProvider(name);
       if (!p) continue;
       if (p.apiKey) continue;
       const resolved = resolveApiKey(name);
       if (!resolved.key) continue;
+      const base = priorById.get(name);
       ctxAgent.providers.register({
         id: name,
         apiKey: resolved.key,
-        baseURL: p.baseURL,
-        defaultModel: p.defaultModel,
-        models: p.models ?? [],
+        baseURL: p.baseURL ?? base?.baseURL,
+        defaultModel: p.defaultModel ?? base?.defaultModel,
+        models: p.modelsExplicit ? p.models : (base?.models ?? p.models),
       });
     }
   }

@@ -313,18 +313,26 @@ export class AshBridge extends EventEmitter implements Bridge {
       lastCacheMiss = 0;
     });
     onAny("llm:chunk", (payload) => {
-      const chunk = (payload as { chunk?: { usage?: { prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number } } })?.chunk;
-      if (chunk?.usage) {
-        // Overwrite rather than accumulate: Anthropic's streaming usage is
-        // cumulative (not delta), and OpenAI SDK normally sends usage only
-        // in the final chunk. A later chunk may only contain one of the two
-        // fields, so we only update when the field is present.
-        if (typeof chunk.usage.prompt_cache_hit_tokens === "number") {
-          lastCacheHit = chunk.usage.prompt_cache_hit_tokens;
-        }
-        if (typeof chunk.usage.prompt_cache_miss_tokens === "number") {
-          lastCacheMiss = chunk.usage.prompt_cache_miss_tokens;
-        }
+      const usage = (payload as { chunk?: { usage?: {
+        prompt_tokens?: number;
+        prompt_cache_hit_tokens?: number;
+        prompt_cache_miss_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+      } } })?.chunk?.usage;
+      if (!usage) return;
+      // Overwrite, don't accumulate: usage may arrive partially across chunks.
+      if (typeof usage.prompt_cache_hit_tokens === "number") {
+        lastCacheHit = usage.prompt_cache_hit_tokens;
+      }
+      if (typeof usage.prompt_cache_miss_tokens === "number") {
+        lastCacheMiss = usage.prompt_cache_miss_tokens;
+      }
+      // OpenAI-standard caching (OpenRouter): derive hit/miss from cached_tokens.
+      const cached = usage.prompt_tokens_details?.cached_tokens;
+      if (typeof usage.prompt_cache_hit_tokens !== "number"
+        && typeof cached === "number" && typeof usage.prompt_tokens === "number") {
+        lastCacheHit = cached;
+        lastCacheMiss = Math.max(0, usage.prompt_tokens - cached);
       }
     });
 

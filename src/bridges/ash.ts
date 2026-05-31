@@ -158,6 +158,27 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.handlers.define("conversation:format-prior-history", () => null);
 
     core.bus.emit("core:extensions-loaded", { names: [...builtinNames, ...userNames] });
+
+    // Strip image_url from conversation when model lacks image support.
+    // agent-sh 0.14.11 handles user-submitted images but tool results
+    // (read_file on a PNG) still inject image_url unconditionally.
+    core.handlers.advise("conversation:prepare", (next, messages) => {
+      try {
+        const modeInfo = core.handlers.call("agent:get-mode") as { model?: string } | undefined;
+        const modes = (core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; modalities?: string[] }>;
+        const activeMode = modes.find((m) => m.model === modeInfo?.model);
+        if (activeMode?.modalities?.includes("image")) return next(messages);
+      } catch { /* fall through — strip to be safe */ }
+      return (messages as Array<Record<string, unknown>>).map((msg) => {
+        if (Array.isArray(msg.content)) {
+          msg = { ...msg, content: (msg.content as Array<Record<string, unknown>>).filter(
+            (part) => part.type !== "image_url"
+          ) };
+        }
+        return msg;
+      });
+    });
+
     await core.activateBackend();
 
     const startCwd = this.opts.cwd ? path.resolve(this.opts.cwd) : os.homedir();
@@ -372,9 +393,18 @@ export class AshBridge extends EventEmitter implements Bridge {
       onAny(name, (payload) => {
         if (name === "agent:info") {
           const think = readThinking();
+          // Query multimodal capabilities from agent-sh's mode system.
+          let modalities: string[] | undefined;
+          try {
+            const modes = (core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; modalities?: string[] }>;
+            const info = payload as Record<string, unknown>;
+            const currentMode = modes.find((m) => m.model === info.model);
+            modalities = currentMode?.modalities;
+          } catch { /* not available yet */ }
           const enriched = {
             ...(payload as Record<string, unknown>),
             ...(think ? { thinkingLevel: think.level, thinkingSupported: think.supported } : {}),
+            ...(modalities ? { modalities } : {}),
           };
           this.emit("event", { name, payload: enriched } satisfies BusEvent);
           return;
@@ -469,9 +499,24 @@ export class AshBridge extends EventEmitter implements Bridge {
       this.queryQueue.push(text);
       return { stopReason: "queued" };
     }
+    // Check for multimodal payload: { query, images: [{ data, mimeType }] }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let images: any;
+    let query = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.query && Array.isArray(parsed.images)) {
+        query = parsed.query;
+        images = parsed.images.map((img: { data: string; mimeType: string }) => ({
+          type: "image" as const, data: img.data, mimeType: img.mimeType,
+        }));
+      }
+    } catch { /* plain text */ }
     return new Promise<{ stopReason: string }>((resolve, reject) => {
       this.pendingTurn = { resolve, reject };
-      this.core!.bus.emit("agent:submit", { query: text });
+      // agent-sh 0.14.11+ handles images natively: auto-drops for
+      // non-multimodal models and builds multimodal content from images.
+      this.core!.bus.emit("agent:submit", { query, images });
     });
   }
 
@@ -559,9 +604,8 @@ export class AshBridge extends EventEmitter implements Bridge {
   async getModels() {
     await this.initPromise;
     if (!this.core) throw new Error("core not initialized");
-    // `config:get-models` only registers once AgentLoop activates; `agent:get-modes` is always live.
-    const modes = (this.core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; provider?: string }>;
-    const models = modes.map((m) => ({ model: m.model, provider: m.provider ?? "" }));
+    const modes = (this.core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; provider?: string; modalities?: string[] }>;
+    const models = modes.map((m) => ({ model: m.model, provider: m.provider ?? "", modalities: m.modalities }));
     return { models, active: null };
   }
 

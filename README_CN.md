@@ -15,6 +15,10 @@
 - **会话持久化** —— 重启后对话依然保留
 - **实时流式输出** —— SSE 支持 Markdown、语法高亮代码、Diff 视图和工具调用
 - **推理过程折叠** —— 连续的 think→tool 轮次自动折叠为可展开的单一块
+- **图片支持** —— 多模态模型（GPT-4o、Claude、Gemini、GLM）支持粘贴/上传图片
+- **模型选择器** —— 按 provider 分组、可搜索的下拉列表，展示全部已配置模型
+- **缓存命中率** —— 圆形进度环展示 prompt cache 命中效率
+- **DeepSeek 余额** —— 按会话独立显示 DeepSeek provider 余额
 - **跨平台** —— 已打包支持 macOS (Apple Silicon)、Windows (x64) 和 Linux (AppImage)
 
 ## 安装

@@ -15,6 +15,10 @@ Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent
 - **Session persistence** — conversations survive restarts
 - **Live streaming** — SSE with Markdown, syntax-highlighted code, diff views, and tool calls
 - **Reasoning compaction** — consecutive think→tool rounds auto-collapse into a single expandable block
+- **Image support** — paste/upload images for multimodal models (GPT-4o, Claude, Gemini, GLM)
+- **Model picker** — searchable dropdown grouped by provider with all configured models
+- **Cache hit ratio** — circular progress ring showing prompt cache efficiency
+- **DeepSeek balance** — per-session balance display for DeepSeek provider
 - **Cross-platform** — packaged for macOS (Apple Silicon), Windows (x64), and Linux (AppImage)
 
 ## Install

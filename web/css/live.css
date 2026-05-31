@@ -3074,7 +3074,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .live-input {
   position: relative;
   display: flex;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.55rem;
   padding: var(--ui-input-padding-y, 0.9rem) 1.15rem;
   border-top: 1px solid var(--border);
@@ -3151,6 +3152,110 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 #query[data-ui-input-focus-ring="false"]:focus-visible {
   outline: none;
   box-shadow: none;
+}
+
+/* ── Image previews in composer ──────────────────────────────────── */
+.image-previews {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 8px;
+  flex-wrap: wrap;
+  flex-basis: 100%;
+}
+
+.image-previews[hidden] { display: none; }
+
+.image-preview-item {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  flex-shrink: 0;
+}
+
+.image-preview-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-preview-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.image-preview-item:hover .image-preview-remove { opacity: 1; }
+
+/* ── Vision indicator (multimodal model badge + image upload) ──── */
+.vision-indicator {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.vision-indicator:hover { color: var(--cyan); }
+
+.vision-indicator[hidden] { display: none; }
+
+/* ── Inline images in chat ───────────────────────────────────────── */
+.agent-box-img {
+  max-width: 320px;
+  max-height: 240px;
+  border-radius: 10px;
+  margin: 6px 0 2px;
+  border: 1px solid var(--border);
+  object-fit: contain;
+  background: var(--bg-elevated);
+  cursor: pointer;
+  transition: transform 0.15s var(--ease-out-expo);
+}
+
+.agent-box-img:hover { transform: scale(1.02); }
+
+/* Full-size lightbox overlay */
+.img-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0,0,0,0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  animation: fadeIn 0.15s;
+}
+
+.img-lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
 }
 
 /* ── Bar buttons ─────────────────────────────────────────────────── */

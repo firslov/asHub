@@ -22,6 +22,9 @@ class SessionView extends HTMLElement {
     this.initStreamShell();
 
     registerSession(this);
+    // Show usage strip immediately to avoid layout flash when async
+    // data (model, balance, branch) arrives later via SSE events.
+    if (this.usageStripEl) this.usageStripEl.hidden = false;
     if (this.id) {
       this.enterReplayMode();
       subscribeSession(this.id);

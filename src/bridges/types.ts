@@ -92,7 +92,7 @@ export interface Bridge {
   compact(strategy: ContextStrategy): Promise<{ before: number; after: number; evictedCount: number } | null>;
 
   getModels?(): Promise<{
-    models: Array<{ model: string; provider: string }>;
+    models: Array<{ model: string; provider: string; modalities?: string[] }>;
     active: { model: string; provider: string } | null;
   }>;
 

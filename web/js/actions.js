@@ -30,14 +30,21 @@ const rewindFromBox = async (box) => {
   activeSession.peek()?.resync({ force: true });
 };
 
-export const createUserBox = (queryText) => {
+export const createUserBox = (queryText, images) => {
   const box = document.createElement("div");
   box.className = "agent-box";
+  let imagesHtml = "";
+  if (images && images.length > 0) {
+    imagesHtml = images.map((img) =>
+      `<img class="agent-box-img" src="data:${img.mimeType};base64,${img.data}" alt="attached image">`
+    ).join("");
+  }
   box.innerHTML = `
     <div class="agent-box-head">
       <span class="abh-l">&gt;</span>
       <span class="abh-r">${t("you")}</span>
     </div>
+    ${imagesHtml}
     <div class="q-text">${escape(queryText)}</div>`;
   const actions = document.createElement("div");
   actions.className = "msg-actions";
@@ -46,5 +53,17 @@ export const createUserBox = (queryText) => {
   actions.querySelector('[data-action="rewind"]')?.addEventListener("click", () => rewindFromBox(box));
   box.appendChild(actions);
   box._queryText = queryText;
+  // Image lightbox
+  box.querySelectorAll(".agent-box-img").forEach((img) => {
+    img.addEventListener("click", () => {
+      const overlay = document.createElement("div");
+      overlay.className = "img-lightbox";
+      const full = document.createElement("img");
+      full.src = img.src;
+      overlay.appendChild(full);
+      overlay.addEventListener("click", () => overlay.remove());
+      document.body.appendChild(overlay);
+    });
+  });
   return box;
 };

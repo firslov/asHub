@@ -6,11 +6,107 @@ import { attachAutocomplete } from "./autocomplete.js";
 import { attachPromptAutocomplete } from "./prompt-manager.js";
 import { attachAtMentionAutocomplete } from "./at-mention.js";
 import { activeSession } from "./session-manager.js";
+import { modelSupportsImages } from "./sse.js";
 import { effect } from "../vendor/signals-core.js";
 
 const form = document.getElementById("form");
 const input = document.getElementById("query");
 const cancelBtn = document.getElementById("cancel-turn");
+const imagePreviews = document.getElementById("image-previews");
+const visionIndicator = document.getElementById("vision-indicator");
+
+// ── Image attachments ──────────────────────────────────────────────
+
+let attachedImages = [];  // [{ data: "<base64>", mimeType: "image/png" }]
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+
+const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
+  if (file.size > MAX_IMAGE_BYTES) {
+    reject(new Error("Image too large (max 5MB)"));
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result;
+    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    resolve({ data: base64, mimeType: file.type || "image/png" });
+  };
+  reader.onerror = () => reject(reader.error);
+  reader.readAsDataURL(file);
+});
+
+const addImage = async (file) => {
+  try {
+    const img = await readFileAsBase64(file);
+    attachedImages.push(img);
+    renderImagePreviews();
+  } catch (e) {
+    console.error("Failed to attach image:", e);
+  }
+};
+
+const removeImage = (index) => {
+  attachedImages.splice(index, 1);
+  renderImagePreviews();
+};
+
+const renderImagePreviews = () => {
+  if (!imagePreviews) return;
+  imagePreviews.innerHTML = "";
+  imagePreviews.hidden = attachedImages.length === 0;
+  for (let i = 0; i < attachedImages.length; i++) {
+    const img = attachedImages[i];
+    const wrap = document.createElement("div");
+    wrap.className = "image-preview-item";
+    wrap.innerHTML =
+      `<img src="data:${img.mimeType};base64,${img.data}" alt="preview">` +
+      `<button type="button" class="image-preview-remove" data-i18n-title="remove" title="Remove">&times;</button>`;
+    wrap.querySelector(".image-preview-remove").addEventListener("click", () => removeImage(i));
+    imagePreviews.appendChild(wrap);
+  }
+};
+
+// Paste handler for images
+document.addEventListener("paste", (ev) => {
+  const session = activeSession.peek();
+  if (!session) return;
+  const ai = session.agentInfo;
+  // Check agent info first (set by agent:info event), fall back to model catalog.
+  const hasVision = ai?.modalities?.includes("image") || modelSupportsImages(ai?.model, ai?.provider);
+  if (!hasVision) return;
+  if (document.activeElement !== input) return;
+  const items = ev.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith("image/")) {
+      ev.preventDefault();
+      addImage(item.getAsFile());
+      break;
+    }
+  }
+});
+
+// Upload button
+visionIndicator?.addEventListener("click", () => {
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = "image/png,image/jpeg,image/gif,image/webp";
+  inp.multiple = true;
+  inp.onchange = () => {
+    for (const file of inp.files) addImage(file);
+    inp.remove();
+  };
+  inp.click();
+});
+
+// Show/hide upload button based on model capabilities
+effect(() => {
+  const session = activeSession.value;
+  const ai = session?.agentInfo;
+  const hasVision = ai?.modalities?.includes("image") || modelSupportsImages(ai?.model, ai?.provider);
+  if (visionIndicator) visionIndicator.hidden = !hasVision;
+});
 
 effect(() => {
   const hasSession = !!activeSession.value;
@@ -147,7 +243,7 @@ const doSubmit = async (query) => {
       `<span class="turn-line"></span>`;
     const sv = activeSession.peek();
     appendAfterPending(sv, optimisticSep);
-    optimisticBox = createUserBox(query);
+    optimisticBox = createUserBox(query, attachedImages.length > 0 ? attachedImages : null);
     optimisticBox.classList.add("pending");
     optimisticBox.dataset.queued = query;
     appendAfterPending(sv, optimisticBox);
@@ -156,6 +252,15 @@ const doSubmit = async (query) => {
   try {
     if (query.startsWith("/")) {
       await submitSlash(query);
+    } else if (attachedImages.length > 0) {
+      const body = JSON.stringify({ query, images: attachedImages });
+      await fetch(`/${currentSessionId()}/submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      attachedImages = [];
+      renderImagePreviews();
     } else {
       await fetch(`/${currentSessionId()}/submit`, {
         method: "POST",

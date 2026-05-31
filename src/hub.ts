@@ -16,9 +16,8 @@ import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
-import { LlmClient } from "agent-sh";
-import { resolveProvider, getSettings, getProviderNames } from "agent-sh/settings";
-import { listAllProviders } from "agent-sh/auth";
+import { resolveProvider, getProviderNames } from "agent-sh/settings";
+import { listAllProviders, resolveApiKey } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
 import { extractText, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
@@ -479,46 +478,51 @@ async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): 
     return;
   }
 
-  // Only DeepSeek supports balance checking via their API
-  if (provider !== "deepseek") {
+  const ok = (body: unknown) => {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ is_available: false }));
-    return;
-  }
+    res.end(JSON.stringify(body));
+  };
 
   try {
-    // Use resolveProvider to expand $ENV_VAR syntax in apiKey
-    const resolved = resolveProvider("deepseek");
-    const apiKey = resolved?.apiKey ?? process.env.DEEPSEEK_API_KEY ?? "";
-    if (!apiKey) {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ is_available: false, error: "no api key" }));
+    if (provider === "deepseek") {
+      const apiKey = resolveApiKey("deepseek").key ?? "";
+      if (!apiKey) { ok({ is_available: false, error: "no api key" }); return; }
+
+      const baseURL = resolveProvider("deepseek")?.baseURL ?? "https://api.deepseek.com";
+      // Balance API is at the root, not under /v1 — use origin
+      let balanceURL: string;
+      try { balanceURL = `${new URL(baseURL).origin}/user/balance`; }
+      catch { balanceURL = `${baseURL.replace(/\/+$/, "")}/user/balance`; }
+
+      const r = await fetch(balanceURL, {
+        headers: { "Authorization": `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!r.ok) { ok({ is_available: false, error: `HTTP ${r.status}` }); return; }
+      ok(await r.json());
       return;
     }
 
-    const baseURL = resolved?.baseURL ?? "https://api.deepseek.com";
-    // Balance API is at the root, not under /v1 — use origin
-    let balanceURL: string;
-    try { balanceURL = `${new URL(baseURL).origin}/user/balance`; }
-    catch { balanceURL = `${baseURL.replace(/\/+$/, "")}/user/balance`; }
+    if (provider === "openrouter") {
+      const apiKey = resolveApiKey("openrouter").key ?? "";
+      if (!apiKey) { ok({ is_available: false, error: "no api key" }); return; }
 
-    const r = await fetch(balanceURL, {
-      headers: { "Authorization": `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(10_000),
-    });
+      const baseURL = resolveProvider("openrouter")?.baseURL ?? "https://openrouter.ai/api/v1";
+      const r = await fetch(`${baseURL.replace(/\/+$/, "")}/credits`, {
+        headers: { "Authorization": `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!r.ok) { ok({ is_available: false, error: `HTTP ${r.status}` }); return; }
 
-    if (!r.ok) {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ is_available: false, error: `HTTP ${r.status}` }));
+      const { data } = await r.json() as { data?: { total_credits?: number; total_usage?: number } };
+      const remaining = (data?.total_credits ?? 0) - (data?.total_usage ?? 0);
+      ok({ is_available: true, balance_infos: [{ currency: "USD", total_balance: remaining.toFixed(2) }] });
       return;
     }
 
-    const data = await r.json();
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(data));
+    ok({ is_available: false });
   } catch (err) {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ is_available: false, error: err instanceof Error ? err.message : String(err) }));
+    ok({ is_available: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -1037,33 +1041,12 @@ async function generateTitleAsync(session: Session): Promise<void> {
 
   const fallback = query.slice(0, 80);
 
-  const providerName = session.provider || getSettings().defaultProvider;
-  if (!providerName) { await setSessionTitle(session, fallback); return; }
-  const resolved = resolveProvider(providerName);
-  if (!resolved?.apiKey) { await setSessionTitle(session, fallback); return; }
-  const model = session.model || resolved.defaultModel;
-  if (!model) { await setSessionTitle(session, fallback); return; }
-
-  const client = new LlmClient({
-    apiKey: resolved.apiKey,
-    baseURL: resolved.baseURL,
-    model,
-    appName: "asHub",
-  });
-
   try {
-    const stream = await client.stream({
-      messages: [
-        { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 10 words, no quotes). Return ONLY the title text, nothing else." },
-        { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
-      ],
-      max_tokens: 4096,
-    });
-    let raw = "";
-    for await (const chunk of stream) {
-      raw += chunk?.choices?.[0]?.delta?.content ?? "";
-    }
-    const title = raw.trim().replace(/^"|"$/g, "");
+    const raw = await session.bridge?.complete?.([
+      { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 10 words, no quotes). Return ONLY the title text, nothing else." },
+      { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
+    ], { maxTokens: 4096 });
+    const title = raw?.trim().replace(/^"|"$/g, "");
     if (title && !session.userTitle) { await setSessionTitle(session, title); return; }
   } catch {
     // LLM call failed — fall through to fallback.

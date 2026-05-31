@@ -30,9 +30,11 @@ export const renderUsage = (session) => {
   const totalTok = st.lastUsage.total_tokens ?? (inTok + outTok);
   const cacheTotal = cacheHit + cacheMiss;
   const cacheRatio = cacheTotal > 0 ? cacheHit / cacheTotal : 0;
-  const cacheRatioPct = Math.round(cacheRatio * 100);
+  const cacheRatioPct = cacheRatio * 100;
   const cacheRatioClass = cacheRatioPct >= 80 ? "high" : cacheRatioPct >= 40 ? "mid" : "low";
-  const cacheTooltip = `${t("usage.cache")}: ${fmtNum(cacheHit)} / ${fmtNum(cacheMiss)} (${cacheRatioPct}%)`;
+  // Floor to 1 decimal so a near-miss (e.g. 99.85%) never reads as a perfect 100%.
+  const cachePctLabel = (Math.floor(cacheRatioPct * 10) / 10).toFixed(1);
+  const cacheTooltip = `${t("usage.cache")}: ${fmtNum(cacheHit)} / ${fmtNum(cacheMiss)} (${cachePctLabel}%)`;
   // SVG ring: r=9, circumference ≈ 56.5487
   const ringCircum = 56.5487;
   const ringOffset = ringCircum * (1 - cacheRatio);
@@ -43,7 +45,7 @@ export const renderUsage = (session) => {
           `<circle class="cache-ring-fill ${cacheRatioClass}" cx="12" cy="12" r="9"` +
             ` stroke-dasharray="${ringCircum}" stroke-dashoffset="${ringOffset.toFixed(2)}"/>` +
         `</svg>` +
-        `<span class="cache-pct ${cacheRatioClass}">${cacheRatioPct}%</span>` +
+        `<span class="cache-pct ${cacheRatioClass}">${cachePctLabel}%</span>` +
       `</span>`
     : "";
 

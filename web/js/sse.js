@@ -53,63 +53,63 @@ export const hidePageLoader = () => {
   }, 200);
 };
 
-// ── Balance display (DeepSeek) — rendered in each session's usage strip ──
+// ── Balance display (DeepSeek, OpenRouter) — follows the active session's provider ──
 
+const BALANCE_PROVIDERS = new Set(["deepseek", "openrouter"]);
 const BALANCE_CACHE_TTL = 120_000;
 let _balanceCache = null;
 let _balanceCacheTs = 0;
+let _balanceCacheProvider = null;
+
+const setBalanceLabel = (el, text, title) => {
+  if (!el) return;
+  el.textContent = text;
+  el.title = title;
+  el.hidden = false;
+};
 
 const updateBalanceDisplay = async () => {
-  const provider = activeSession.peek()?.agentInfo?.provider ?? "";
-  if (provider !== "deepseek") {
-    for (const [_, s] of sessions) s.balanceEl && (s.balanceEl.hidden = true);
-    return;
-  }
+  // Each tab can be a different provider; show only the active session's, in its own strip.
+  const session = activeSession.peek();
+  const el = session?.balanceEl;
+  if (!el) return;
+  const provider = session.agentInfo?.provider ?? "";
+  if (!BALANCE_PROVIDERS.has(provider)) { el.hidden = true; return; }
 
-  // Serve from cache if fresh
-  if (_balanceCache && Date.now() - _balanceCacheTs < BALANCE_CACHE_TTL) {
-    renderBalance(_balanceCache);
+  // Serve from cache if fresh and for the same provider
+  if (_balanceCache && _balanceCacheProvider === provider && Date.now() - _balanceCacheTs < BALANCE_CACHE_TTL) {
+    renderBalance(el, _balanceCache);
     return;
   }
 
   try {
-    const r = await fetch("/api/balance?provider=deepseek");
+    const r = await fetch(`/api/balance?provider=${provider}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     _balanceCache = data;
     _balanceCacheTs = Date.now();
-    renderBalance(data);
+    _balanceCacheProvider = provider;
+    renderBalance(el, data);
   } catch {
-    const label = "💰 —";
-    for (const [_, s] of sessions) {
-      if (s.balanceEl) { s.balanceEl.textContent = label; s.balanceEl.title = "Balance unavailable"; s.balanceEl.hidden = false; }
-    }
+    setBalanceLabel(el, "💰 —", "Balance unavailable");
   }
 };
 
-function renderBalance(data) {
+function renderBalance(el, data) {
+  if (!el) return;
   if (!data?.is_available || !Array.isArray(data?.balance_infos) || !data.balance_infos.length) {
-    const label = "💰 —";
-    for (const [_, s] of sessions) {
-      if (s.balanceEl) { s.balanceEl.textContent = label; s.balanceEl.title = "Balance unavailable"; s.balanceEl.hidden = false; }
-    }
+    setBalanceLabel(el, "💰 —", "Balance unavailable");
     return;
   }
+  const curSym = (cur) => cur === "CNY" ? "¥" : cur === "USD" ? "$" : (cur ?? "");
   const info = data.balance_infos[0];
-  const currency = info.currency === "CNY" ? "¥" : (info.currency ?? "");
   const total = info.total_balance ?? "—";
-  const label = `💰 ${currency}${total}`;
+  const label = `💰 ${curSym(info.currency)}${total}`;
   const tooltip = data.balance_infos.map((bi) => {
-    const c = bi.currency === "CNY" ? "¥" : (bi.currency ?? "");
+    const c = curSym(bi.currency);
     return `Total: ${c}${bi.total_balance ?? "—"}  |  Top-up: ${c}${bi.topped_up_balance ?? "—"}  |  Grant: ${c}${bi.granted_balance ?? "—"}`;
   }).join("\n");
-  for (const [_, s] of sessions) {
-    if (s.balanceEl) {
-      s.balanceEl.textContent = label;
-      s.balanceEl.title = tooltip;
-      s.balanceEl.hidden = false;
-    }
-  }
+  setBalanceLabel(el, label, tooltip);
 }
 
 effect(() => {
@@ -139,6 +139,7 @@ effect(() => {
   const busy = !!s?.state?.isProcessing;
   if (spinnerEl) spinnerEl.hidden = !busy;
   if (cancelBtnEl) cancelBtnEl.hidden = !busy;
+  updateBalanceDisplay();
 });
 
 export const REPLAY_FLUSH_DELAY = 12;  // ms
@@ -450,6 +451,7 @@ export const seedSessionInfo = (session, info) => {
   refreshModelChip(session);
   refreshCwdChip(session);
   refreshGitBranch(session);
+  if (session === activeSession.peek()) updateBalanceDisplay();
 };
 
 const refreshModelChip = (session) => {

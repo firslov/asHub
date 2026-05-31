@@ -120,6 +120,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (exposeTerminal) registerShellHandlers(extCtx);
     activateAgent(extCtx);
     this.registerUserProviders(extCtx);
+    this.gateImageToolResults(extCtx);
     const settings = getSettings();
     const headlessDisabled = [
       "file-autocomplete",
@@ -270,20 +271,44 @@ export class AshBridge extends EventEmitter implements Bridge {
   private registerUserProviders(extCtx: ReturnType<AgentShellCore["extensionContext"]>): void {
     const ctxAgent = (extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
     if (!ctxAgent?.providers?.register) return;
+    // register() replaces the whole contribution, so merge over a built-in's prior registration.
+    const prior = this.core?.bus.emitPipe("agent:providers", { providers: [] }).providers ?? [];
+    const priorById = new Map(prior.map((reg) => [reg.id, reg] as const));
     for (const name of getProviderNames()) {
       const p = resolveProvider(name);
       if (!p) continue;
       if (p.apiKey) continue;
       const resolved = resolveApiKey(name);
       if (!resolved.key) continue;
+      const base = priorById.get(name);
       ctxAgent.providers.register({
         id: name,
         apiKey: resolved.key,
-        baseURL: p.baseURL,
-        defaultModel: p.defaultModel,
-        models: p.models ?? [],
+        baseURL: p.baseURL ?? base?.baseURL,
+        defaultModel: p.defaultModel ?? base?.defaultModel,
+        models: p.modelsExplicit ? p.models : (base?.models ?? p.models),
       });
     }
+  }
+
+  private activeModelSupportsImage(): boolean {
+    if (!this.core) return false;
+    const model = (this.core.handlers.call("llm:get-client") as { model?: string } | undefined)?.model;
+    if (!model) return false;
+    const modes = (this.core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; modalities?: string[] }>;
+    return modes.some((m) => m.model === model && m.modalities?.includes("image"));
+  }
+
+  // Fail closed for kernels lacking the gate: non-vision models error on image content.
+  private gateImageToolResults(extCtx: ReturnType<AgentShellCore["extensionContext"]>): void {
+    extCtx.advise("tool:execute", async (next, toolCtx) => {
+      const result = await next(toolCtx) as { content?: unknown } | undefined;
+      if (result && Array.isArray(result.content) && !this.activeModelSupportsImage()) {
+        const name = (toolCtx as { name?: string })?.name ?? "tool";
+        return { ...result, content: `[${name} returned image content, but the current model has no image input support, so the image was not loaded.]` };
+      }
+      return result;
+    });
   }
 
   private wire(core: AgentShellCore): void {
@@ -309,18 +334,26 @@ export class AshBridge extends EventEmitter implements Bridge {
       lastCacheMiss = 0;
     });
     onAny("llm:chunk", (payload) => {
-      const chunk = (payload as { chunk?: { usage?: { prompt_cache_hit_tokens?: number; prompt_cache_miss_tokens?: number } } })?.chunk;
-      if (chunk?.usage) {
-        // Overwrite rather than accumulate: Anthropic's streaming usage is
-        // cumulative (not delta), and OpenAI SDK normally sends usage only
-        // in the final chunk. A later chunk may only contain one of the two
-        // fields, so we only update when the field is present.
-        if (typeof chunk.usage.prompt_cache_hit_tokens === "number") {
-          lastCacheHit = chunk.usage.prompt_cache_hit_tokens;
-        }
-        if (typeof chunk.usage.prompt_cache_miss_tokens === "number") {
-          lastCacheMiss = chunk.usage.prompt_cache_miss_tokens;
-        }
+      const usage = (payload as { chunk?: { usage?: {
+        prompt_tokens?: number;
+        prompt_cache_hit_tokens?: number;
+        prompt_cache_miss_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+      } } })?.chunk?.usage;
+      if (!usage) return;
+      // Overwrite, don't accumulate: usage may arrive partially across chunks.
+      if (typeof usage.prompt_cache_hit_tokens === "number") {
+        lastCacheHit = usage.prompt_cache_hit_tokens;
+      }
+      if (typeof usage.prompt_cache_miss_tokens === "number") {
+        lastCacheMiss = usage.prompt_cache_miss_tokens;
+      }
+      // OpenAI-standard caching (OpenRouter): derive hit/miss from cached_tokens.
+      const cached = usage.prompt_tokens_details?.cached_tokens;
+      if (typeof usage.prompt_cache_hit_tokens !== "number"
+        && typeof cached === "number" && typeof usage.prompt_tokens === "number") {
+        lastCacheHit = cached;
+        lastCacheMiss = Math.max(0, usage.prompt_tokens - cached);
       }
     });
 
@@ -530,6 +563,16 @@ export class AshBridge extends EventEmitter implements Bridge {
     const modes = (this.core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; provider?: string }>;
     const models = modes.map((m) => ({ model: m.model, provider: m.provider ?? "" }));
     return { models, active: null };
+  }
+
+  async complete(
+    messages: Array<{ role: string; content: string }>,
+    opts?: { maxTokens?: number; model?: string },
+  ): Promise<string | null> {
+    await this.initPromise;
+    if (!this.core) return null;
+    const text = (await this.core.handlers.call("llm:invoke", messages, opts)) as string;
+    return text?.trim() ? text : null;
   }
 
   async compact(strategy: ContextStrategy) {

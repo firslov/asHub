@@ -536,6 +536,16 @@ export class AshBridge extends EventEmitter implements Bridge {
     return { models, active: null };
   }
 
+  async complete(
+    messages: Array<{ role: string; content: string }>,
+    opts?: { maxTokens?: number; model?: string },
+  ): Promise<string | null> {
+    await this.initPromise;
+    if (!this.core) return null;
+    const text = (await this.core.handlers.call("llm:invoke", messages, opts)) as string;
+    return text?.trim() ? text : null;
+  }
+
   async compact(strategy: ContextStrategy) {
     await this.initPromise;
     if (!this.core) throw new Error("core not initialized");

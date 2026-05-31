@@ -96,6 +96,12 @@ export interface Bridge {
     active: { model: string; provider: string } | null;
   }>;
 
+  /** One-off LLM completion via the session's resolved provider (key/baseURL/model). Returns text, or null if unsupported. */
+  complete?(
+    messages: Array<{ role: string; content: string }>,
+    opts?: { maxTokens?: number; model?: string },
+  ): Promise<string | null>;
+
   /** Subscribe to BusEvents the bridge produces. Returns an unsubscriber. */
   onEvent(fn: (e: BusEvent) => void): () => void;
 

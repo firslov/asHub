@@ -16,8 +16,7 @@ import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
-import { LlmClient } from "agent-sh";
-import { resolveProvider, getSettings, getProviderNames } from "agent-sh/settings";
+import { resolveProvider, getProviderNames } from "agent-sh/settings";
 import { listAllProviders, resolveApiKey } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
@@ -1035,33 +1034,12 @@ async function generateTitleAsync(session: Session): Promise<void> {
 
   const fallback = query.slice(0, 80);
 
-  const providerName = session.provider || getSettings().defaultProvider;
-  if (!providerName) { await setSessionTitle(session, fallback); return; }
-  const resolved = resolveProvider(providerName);
-  if (!resolved?.apiKey) { await setSessionTitle(session, fallback); return; }
-  const model = session.model || resolved.defaultModel;
-  if (!model) { await setSessionTitle(session, fallback); return; }
-
-  const client = new LlmClient({
-    apiKey: resolved.apiKey,
-    baseURL: resolved.baseURL,
-    model,
-    appName: "asHub",
-  });
-
   try {
-    const stream = await client.stream({
-      messages: [
-        { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 10 words, no quotes). Return ONLY the title text, nothing else." },
-        { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
-      ],
-      max_tokens: 4096,
-    });
-    let raw = "";
-    for await (const chunk of stream) {
-      raw += chunk?.choices?.[0]?.delta?.content ?? "";
-    }
-    const title = raw.trim().replace(/^"|"$/g, "");
+    const raw = await session.bridge?.complete?.([
+      { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 10 words, no quotes). Return ONLY the title text, nothing else." },
+      { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
+    ], { maxTokens: 4096 });
+    const title = raw?.trim().replace(/^"|"$/g, "");
     if (title && !session.userTitle) { await setSessionTitle(session, title); return; }
   } catch {
     // LLM call failed — fall through to fallback.

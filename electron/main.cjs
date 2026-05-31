@@ -278,7 +278,8 @@ function createWindow() {
   }
 
   if (isDev) {
-    mainWindow.webContents.openDevTools();
+    // DevTools available via Cmd+Opt+I — auto-opening triggers
+    // C++-level protocol errors (Autofill) that can't be suppressed.
   }
 }
 

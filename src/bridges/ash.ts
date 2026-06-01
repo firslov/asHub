@@ -181,21 +181,13 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     // OpenRouter fetches models asynchronously. When it completes,
     // push a fresh agent:info so the frontend picks up updated modalities.
-    if (process.env.ASHUB_DEBUG) process.stderr.write("[ash-bridge] registering agent:providers:changed listener\n");
     core.bus.on("agent:providers:changed", () => {
-      if (process.env.ASHUB_DEBUG) process.stderr.write("[ash-bridge] agent:providers:changed fired\n");
-      // Defer to next tick so agent:get-modes reflects the update.
       setTimeout(() => {
-        if (process.env.ASHUB_DEBUG) process.stderr.write("[ash-bridge] providers:changed timeout fired\n");
         try {
           const modes = (core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; modalities?: string[]; provider?: string; contextWindow?: number }>;
-          if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] providers:changed modesLen=${modes.length}\n`);
           const modeInfo = core.handlers.call("agent:get-mode") as { model?: string } | undefined;
           const m = modes.find((x) => x.model === modeInfo?.model);
-          if (!m) {
-            if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] providers:changed: model ${modeInfo?.model} not found in ${modes.length} modes\n`);
-            return;
-          }
+          if (!m) return;
           this.emit("event", {
             name: "agent:info",
             payload: {
@@ -206,18 +198,8 @@ export class AshBridge extends EventEmitter implements Bridge {
               modalities: m.modalities,
             },
           } satisfies BusEvent);
-        } catch (e) {
-          if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] providers:changed error: ${e}\n`);
-        }
+        } catch { /* ignore */ }
       }, 0);
-    });
-
-    // Debug: verify config:switch-model and agent:info on the bus.
-    core.bus.on("config:switch-model", (payload) => {
-      if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] config:switch-model on bus: ${JSON.stringify(payload)}\n`);
-    });
-    core.bus.on("agent:info", (payload) => {
-      if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] raw agent:info on bus: model=${(payload as any)?.model}\n`);
     });
 
     await core.activateBackend();
@@ -441,12 +423,7 @@ export class AshBridge extends EventEmitter implements Bridge {
             const info = payload as Record<string, unknown>;
             const currentMode = modes.find((m) => m.model === info.model);
             modalities = currentMode?.modalities;
-            if (process.env.ASHUB_DEBUG) {
-              process.stderr.write(`[ash-bridge] agent:info enrichment: model=${info.model}, found=${!!currentMode}, modesLen=${modes.length}, modalities=${JSON.stringify(modalities)}\n`);
-            }
-          } catch (e) {
-            if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] agent:info enrichment error: ${e}\n`);
-          }
+          } catch { /* not available yet */ }
           const enriched = {
             ...(payload as Record<string, unknown>),
             ...(think ? { thinkingLevel: think.level, thinkingSupported: think.supported } : {}),
@@ -600,7 +577,6 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   execCommand(name: string, args: string): void {
-    if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] execCommand: ${name} ${args}\n`);
     if (name === "/model" && args) {
       // Bypass slash-commands extension and emit directly.
       this.core?.bus.emit("config:switch-model", { model: args });

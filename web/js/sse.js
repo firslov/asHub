@@ -175,9 +175,6 @@ export const handlers = {
     if (typeof p?.thinkingLevel === "string") this.agentInfo.thinkingLevel = p.thinkingLevel;
     if (typeof p?.thinkingSupported === "boolean") this.agentInfo.thinkingSupported = p.thinkingSupported;
     this.agentInfo.modalities = Array.isArray(p?.modalities) ? p.modalities : undefined;
-    if (process.env.ASHUB_DEBUG || true) {
-      console.log("[sse] agent:info:", { model: p?.model, provider: p?.provider, modalities: p?.modalities, isActive: this === activeSession.peek() });
-    }
     // Update image upload button visibility for the active session.
     if (this === activeSession.peek()) {
       const btn = document.getElementById("vision-indicator");
@@ -665,11 +662,7 @@ const selectModel = (session, modelId, provider) => {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: modelId, provider: provider || undefined }),
-  }).then(() => {
-    console.log("[selectModel] PUT succeeded, waiting for agent:info...");
-  }).catch((e) => {
-    console.error("[selectModel] PUT failed:", e);
-  });
+  }).catch(() => {});
 };
 
 const escapeAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

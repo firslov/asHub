@@ -168,9 +168,6 @@ class SessionView extends HTMLElement {
       this.loadingEl.hidden = true;
     }
     const fn = handlers[frame?.meta?.name];
-    if (frame?.meta?.name === "agent:info") {
-      console.log("[session-view] receiveFrame agent:info, handler exists:", !!fn);
-    }
     if (fn) {
       try { fn.call(this, frame.payload, frame.meta); }
       catch (e) { console.error(frame.meta.name, e); }

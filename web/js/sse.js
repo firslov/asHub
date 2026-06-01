@@ -175,6 +175,7 @@ export const handlers = {
     if (typeof p?.thinkingLevel === "string") this.agentInfo.thinkingLevel = p.thinkingLevel;
     if (typeof p?.thinkingSupported === "boolean") this.agentInfo.thinkingSupported = p.thinkingSupported;
     this.agentInfo.modalities = Array.isArray(p?.modalities) ? p.modalities : undefined;
+    if (typeof document !== "undefined") document.title = `[${this.agentInfo.modalities?.join(",") || "text"}]`;
     // Update image upload button visibility for the active session.
     if (this === activeSession.peek()) {
       const btn = document.getElementById("vision-indicator");

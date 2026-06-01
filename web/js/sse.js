@@ -53,76 +53,70 @@ export const hidePageLoader = () => {
   }, 200);
 };
 
-// ── Balance display (DeepSeek) — rendered in each session's usage strip ──
+// ── Balance display (DeepSeek, OpenRouter) — follows the active session's provider ──
 
+const BALANCE_PROVIDERS = new Set(["deepseek", "openrouter"]);
 const BALANCE_CACHE_TTL = 120_000;
 let _balanceCache = null;
 let _balanceCacheTs = 0;
+let _balanceCacheProvider = null;
+
+const setBalanceLabel = (el, text, title) => {
+  if (!el) return;
+  el.textContent = text;
+  el.title = title;
+  el.hidden = false;
+};
 
 const updateBalanceDisplay = async () => {
   const session = activeSession.peek();
-  if (!session?.balanceEl) return;
+  const el = session?.balanceEl;
+  if (!el) return;
   const provider = session.agentInfo?.provider ?? "";
-  if (provider !== "deepseek") {
-    session.balanceEl.hidden = true;
-    return;
-  }
+  if (!BALANCE_PROVIDERS.has(provider)) { el.hidden = true; return; }
 
-  if (_balanceCache && Date.now() - _balanceCacheTs < BALANCE_CACHE_TTL) {
-    renderBalance(session, _balanceCache);
+  if (_balanceCache && _balanceCacheProvider === provider && Date.now() - _balanceCacheTs < BALANCE_CACHE_TTL) {
+    renderBalance(el, _balanceCache);
     return;
   }
 
   try {
-    const r = await fetch("/api/balance?provider=deepseek");
+    const r = await fetch(`/api/balance?provider=${provider}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     _balanceCache = data;
     _balanceCacheTs = Date.now();
-    renderBalance(session, data);
+    _balanceCacheProvider = provider;
+    renderBalance(el, data);
   } catch {
-    session.balanceEl.textContent = "💰 —";
-    session.balanceEl.title = "Balance unavailable";
-    session.balanceEl.hidden = false;
+    setBalanceLabel(el, "💰 —", "Balance unavailable");
   }
 };
 
-function renderBalance(session, data) {
-  if (!session?.balanceEl) return;
+function renderBalance(el, data) {
+  if (!el) return;
   if (!data?.is_available || !Array.isArray(data?.balance_infos) || !data.balance_infos.length) {
-    session.balanceEl.textContent = "💰 —";
-    session.balanceEl.title = "Balance unavailable";
-    session.balanceEl.hidden = false;
+    setBalanceLabel(el, "💰 —", "Balance unavailable");
     return;
   }
+  const curSym = (cur) => cur === "CNY" ? "¥" : cur === "USD" ? "$" : (cur ?? "");
   const info = data.balance_infos[0];
-  const currency = info.currency === "CNY" ? "¥" : (info.currency ?? "");
   const total = info.total_balance ?? "—";
-  session.balanceEl.textContent = `💰 ${currency}${total}`;
-  session.balanceEl.title = data.balance_infos.map((bi) => {
-    const c = bi.currency === "CNY" ? "¥" : (bi.currency ?? "");
+  const label = `💰 ${curSym(info.currency)}${total}`;
+  const tooltip = data.balance_infos.map((bi) => {
+    const c = curSym(bi.currency);
     return `Total: ${c}${bi.total_balance ?? "—"}  |  Top-up: ${c}${bi.topped_up_balance ?? "—"}  |  Grant: ${c}${bi.granted_balance ?? "—"}`;
   }).join("\n");
-  session.balanceEl.hidden = false;
+  setBalanceLabel(el, label, tooltip);
 }
 
-// Hide balance on session switch, then re-show if DeepSeek.
+// Hide balance on switch; re-show immediately if provider supports it.
 effect(() => {
   activeSession.value;
   const s = activeSession.peek();
-  if (s?.balanceEl) {
-    s.balanceEl.hidden = true;
-    // For cached sessions (SPA switch-back), agent:info won't re-fire.
-    // Use the already-loaded agentInfo to decide whether to show.
-    if (s.agentInfo?.provider === "deepseek") updateBalanceDisplay();
-  }
-});
-
-// Hide balance on session switch — agent:info will re-show for supported providers.
-effect(() => {
-  activeSession.value;
-  const s = activeSession.peek();
-  if (s?.balanceEl) s.balanceEl.hidden = true;
+  if (!s?.balanceEl) return;
+  s.balanceEl.hidden = true;
+  if (BALANCE_PROVIDERS.has(s.agentInfo?.provider ?? "")) updateBalanceDisplay();
 });
 
 effect(() => {

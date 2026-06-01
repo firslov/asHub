@@ -174,7 +174,9 @@ export const handlers = {
     if (p?.provider) this.agentInfo.provider = p.provider;
     if (typeof p?.thinkingLevel === "string") this.agentInfo.thinkingLevel = p.thinkingLevel;
     if (typeof p?.thinkingSupported === "boolean") this.agentInfo.thinkingSupported = p.thinkingSupported;
+    // Set or clear modalities based on agent:info payload.
     if (Array.isArray(p?.modalities)) this.agentInfo.modalities = p.modalities;
+    else if (!p?.modalities) this.agentInfo.modalities = undefined;
     // Update image upload button visibility for the active session.
     if (this === activeSession.peek()) {
       const btn = document.getElementById("vision-indicator");

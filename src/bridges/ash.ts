@@ -179,6 +179,30 @@ export class AshBridge extends EventEmitter implements Bridge {
       });
     });
 
+    // OpenRouter fetches models asynchronously. When it completes,
+    // push a fresh agent:info so the frontend picks up updated modalities.
+    core.bus.on("agent:providers:changed", () => {
+      // Defer so agent:get-modes reflects the new registration.
+      setTimeout(() => {
+        try {
+          const modes = (core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; modalities?: string[]; provider?: string; contextWindow?: number }>;
+          const modeInfo = core.handlers.call("agent:get-mode") as { model?: string } | undefined;
+          const m = modes.find((x) => x.model === modeInfo?.model);
+          if (!m) return;
+          this.emit("event", {
+            name: "agent:info",
+            payload: {
+              name: "ash",
+              model: m.model,
+              provider: m.provider ?? "",
+              contextWindow: m.contextWindow,
+              modalities: m.modalities,
+            },
+          } satisfies BusEvent);
+        } catch { /* ignore */ }
+      }, 500);
+    });
+
     await core.activateBackend();
 
     const startCwd = this.opts.cwd ? path.resolve(this.opts.cwd) : os.homedir();

@@ -662,7 +662,11 @@ const selectModel = (session, modelId, provider) => {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: modelId, provider: provider || undefined }),
-  }).catch(() => {});
+  }).then(() => {
+    console.log("[selectModel] PUT succeeded, waiting for agent:info...");
+  }).catch((e) => {
+    console.error("[selectModel] PUT failed:", e);
+  });
 };
 
 const escapeAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

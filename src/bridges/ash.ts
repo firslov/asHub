@@ -583,6 +583,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   execCommand(name: string, args: string): void {
+    if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] execCommand: ${name} ${args}\n`);
     this.core?.bus.emit("command:execute", { name, args });
   }
 

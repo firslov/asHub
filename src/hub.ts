@@ -20,7 +20,7 @@ import { resolveProvider, getProviderNames } from "agent-sh/settings";
 import { listAllProviders, resolveApiKey } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
-import { extractText, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
+import { extractText, extractImages, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
 import { createCompactionStrategy } from "./history/compaction-strategy.js";
 
 export interface HubOpts {
@@ -761,6 +761,17 @@ async function createSession(
     store,
     contextLock: Promise.resolve(),
   };
+
+  // Rebuild replay from store messages so image data is included
+  // (the persisted replay has raw SSE frames without image content).
+  if (isRestored && store && initialMessages?.length) {
+    try {
+      const { entryIds: restoredIds } = store.buildBranchWithIds();
+      session.replay = synthesizeBranchFrames(session, initialMessages, restoredIds);
+    } catch (err) {
+      console.error(`[hub] replay rebuild failed for ${id}:`, err);
+    }
+  }
 
   // For restored sessions, store a factory to lazily create + wire the
   // bridge.  The factory is called from openSseMulti / spawnSession flow.
@@ -1827,7 +1838,10 @@ function synthesizeBranchFrames(
     }
     if (m.role === "user") {
       closeTurn();
-      frames.push(sseFrame(meta("agent:query"), { query: extractText(m.content) }));
+      const images = extractImages(m.content);
+      const payload: Record<string, unknown> = { query: extractText(m.content) };
+      if (images.length > 0) payload.images = images;
+      frames.push(sseFrame(meta("agent:query"), payload));
       frames.push(sseFrame(meta("agent:processing-start"), {}));
       turnStarted = true;
       continue;

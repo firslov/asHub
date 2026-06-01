@@ -246,6 +246,7 @@ export const handlers = {
     resetCompletedTools(this);
     startNewSegment(this);
     const queryText = p?.query ?? "";
+    const images = Array.isArray(p?.images) ? p.images : null;
     // Match optimistic boxes: first by data-queued (replay), then by
     // _queryText (composer.js live path).
     let matched = this.streamEl?.querySelector(`.agent-box.pending[data-queued="${CSS.escape(queryText)}"]`) ?? null;
@@ -263,7 +264,7 @@ export const handlers = {
     }
     this.state.currentTurn++;
     renderTurnSep(this, meta?.ts);
-    const box = createUserBox(queryText);
+    const box = createUserBox(queryText, images);
     box.dataset.turn = String(this.state.currentTurn);
     append(this, box);
   },

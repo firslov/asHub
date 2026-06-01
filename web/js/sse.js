@@ -127,10 +127,15 @@ async function refreshProviderBalance(provider) {
   }
 }
 
-// On session switch, sync chips (uses already-cached data, no fetch).
+// On session switch, sync chips and usage-strip toggle.
 effect(() => {
   activeSession.value;
   syncAllBalanceChips();
+  const s = activeSession.peek();
+  const btn = document.getElementById("usage-strip-toggle");
+  if (btn && s?.usageStripEl) {
+    btn.classList.toggle("collapsed", s.usageStripEl.classList.contains("collapsed"));
+  }
 });
 
 // On agent response, refresh the active provider's balance.
@@ -699,3 +704,12 @@ const refreshGitBranch = async (session) => {
 
 // Fetch balance for all supported providers on startup.
 for (const p of BALANCE_PROVIDERS) fetchProviderBalance(p);
+
+// Global usage strip toggle on the input row.
+document.getElementById("usage-strip-toggle")?.addEventListener("click", () => {
+  const s = activeSession.peek();
+  if (!s?.usageStripEl) return;
+  s.usageStripEl.classList.toggle("collapsed");
+  const btn = document.getElementById("usage-strip-toggle");
+  if (btn) btn.classList.toggle("collapsed", s.usageStripEl.classList.contains("collapsed"));
+});

@@ -2902,12 +2902,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .usage-strip[hidden] { display: none; }
 
-/* ── Usage strip toggle ─────────────────────────────────────────── */
+/* ── Usage strip toggle (on the input row) ─────────────────────── */
 .usage-strip-toggle {
   flex-shrink: 0;
   margin-left: auto;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   border: 1px solid var(--border-light);
   border-radius: 50%;
   background: transparent;
@@ -2918,6 +2918,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: center;
   transition: all 0.2s var(--ease-out-expo);
   padding: 0;
+  margin-left: 2px;
 }
 
 .usage-strip-toggle:hover {
@@ -2930,36 +2931,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transition: transform 0.25s var(--ease-out-expo);
 }
 
-/* Collapsed: hide chips, show only the toggle */
-.usage-strip.collapsed .usage-model,
-.usage-strip.collapsed .usage-balance,
-.usage-strip.collapsed .usage-cwd,
-.usage-strip.collapsed .usage-branch,
-.usage-strip.collapsed .terminal-usage {
-  display: none !important;
+.usage-strip-toggle.collapsed svg {
+  transform: rotate(180deg);
 }
-
-.usage-strip.collapsed .model-picker { display: none; }
 
 .usage-strip.collapsed {
-  padding: 2px 1.15rem;
-  gap: 0;
-  background: transparent;
-  border-top-color: transparent;
-  min-height: auto;
-}
-
-.usage-strip.collapsed .usage-strip-toggle {
-  border-color: var(--border-light);
-  margin-left: 0;
-}
-
-.usage-strip.collapsed .usage-strip-toggle {
-  border-color: transparent;
-}
-
-.usage-strip.collapsed .usage-strip-toggle svg {
-  transform: rotate(180deg);
+  display: none !important;
 }
 
 .terminal-wrap[data-ui-usage-align="left"] .usage-strip { justify-content: flex-start; }

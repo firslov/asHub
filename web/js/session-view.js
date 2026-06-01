@@ -95,14 +95,6 @@ class SessionView extends HTMLElement {
       document.getElementById("query")?.focus();
     }, { signal: ac });
 
-    // Toggle usage strip collapse
-    const toggleBtn = this.querySelector(".usage-strip-toggle");
-    if (toggleBtn && this.usageStripEl) {
-      toggleBtn.addEventListener("click", () => {
-        this.usageStripEl.classList.toggle("collapsed");
-      }, { signal: ac });
-    }
-
     // Quick-start suggestion cards: click to fill the input
     const populateSuggestions = () => {
       this.querySelectorAll(".sugg-card").forEach((card) => {

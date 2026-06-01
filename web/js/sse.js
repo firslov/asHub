@@ -175,6 +175,9 @@ export const handlers = {
     if (typeof p?.thinkingLevel === "string") this.agentInfo.thinkingLevel = p.thinkingLevel;
     if (typeof p?.thinkingSupported === "boolean") this.agentInfo.thinkingSupported = p.thinkingSupported;
     this.agentInfo.modalities = Array.isArray(p?.modalities) ? p.modalities : undefined;
+    if (process.env.ASHUB_DEBUG || true) {
+      console.log("[sse] agent:info:", { model: p?.model, provider: p?.provider, modalities: p?.modalities, isActive: this === activeSession.peek() });
+    }
     // Update image upload button visibility for the active session.
     if (this === activeSession.peek()) {
       const btn = document.getElementById("vision-indicator");

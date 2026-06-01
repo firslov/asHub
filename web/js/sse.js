@@ -80,15 +80,20 @@ const updateBalanceDisplay = async () => {
     return;
   }
 
+  // Capture session id to avoid rendering on a stale element after await.
+  const sid = session.id;
   try {
     const r = await fetch(`/api/balance?provider=${provider}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
+    // Only render if this session is still the active one.
+    if (activeSession.peek()?.id !== sid) return;
     _balanceCache = data;
     _balanceCacheTs = Date.now();
     _balanceCacheProvider = provider;
     renderBalance(el, data);
   } catch {
+    if (activeSession.peek()?.id !== sid) return;
     setBalanceLabel(el, "💰 —", "Balance unavailable");
   }
 };

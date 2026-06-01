@@ -54,6 +54,28 @@ const updateToolGroupHead = (g) => {
   head.textContent = `🔧 ${t("n.tools", { n: toolCount(g) })}`;
 };
 
+const setToolGroupCollapsed = (g, collapsed) => {
+  const { body } = groupState.get(g);
+  if (collapsed === g.classList.contains("collapsed")) return;
+  if (collapsed) {
+    body.style.maxHeight = body.scrollHeight + "px";
+    body.offsetHeight;
+    g.classList.add("collapsed");
+    body.style.maxHeight = "0";
+  } else {
+    body.style.maxHeight = "0";
+    g.classList.remove("collapsed");
+    body.offsetHeight;
+    body.style.maxHeight = body.scrollHeight + "px";
+    const onEnd = (ev) => {
+      if (ev.propertyName !== "max-height") return;
+      body.style.maxHeight = "";
+      body.removeEventListener("transitionend", onEnd);
+    };
+    body.addEventListener("transitionend", onEnd);
+  }
+};
+
 const openToolGroup = (session) => {
   if (session?.toolGroup.current) return session.toolGroup.current;
   const g = document.createElement("div");
@@ -64,7 +86,7 @@ const openToolGroup = (session) => {
   head.hidden = true;
   head.addEventListener("click", () => {
     g.dataset.userToggled = "1";
-    g.classList.toggle("collapsed");
+    setToolGroupCollapsed(g, !g.classList.contains("collapsed"));
     updateToolGroupHead(g);
   });
   const body = document.createElement("div");
@@ -99,7 +121,7 @@ const closeToolGroup = (session) => {
   session.toolGroup.current = null;
   if (groupState.get(g).body.children.length === 0) { g.remove(); return; }
   if (toolCount(g) >= TOOL_GROUP_COLLAPSE) {
-    if (!g.dataset.userToggled) g.classList.add("collapsed");
+    if (!g.dataset.userToggled) setToolGroupCollapsed(g, true);
     updateToolGroupHead(g);
   }
 };

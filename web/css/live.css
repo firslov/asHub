@@ -4479,6 +4479,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .tool-group-body {
   padding: 0.35rem 0.9rem;
 }
+.tool-group:not(.collapsed) .tool-group-body {
+  max-height: none;
+}
 .thinking-block.collapsed .thinking-block-body,
 .tool-group.collapsed .tool-group-body {
   max-height: 0;

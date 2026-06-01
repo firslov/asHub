@@ -547,11 +547,7 @@ const MODEL_CAPABILITIES: Record<string, { modalities?: string[] }> = {
   "gemini-2.5-flash": { modalities: ["text", "image"] },
   "gemini-2.0-flash": { modalities: ["text", "image"] },
   // Zhipu GLM
-  "glm-5.1": { modalities: ["text", "image"] },
-  "glm-5-turbo": { modalities: ["text", "image"] },
-  "glm-4.7": { modalities: ["text", "image"] },
-  "glm-4.5": { modalities: ["text", "image"] },
-  "glm-4-plus": { modalities: ["text", "image"] },
+  // Zhipu — text-only, no image support
   // OpenRouter — key multimodal models
   "anthropic/claude-sonnet-4-20250514": { modalities: ["text", "image"] },
   "openai/gpt-4o": { modalities: ["text", "image"] },

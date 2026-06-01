@@ -104,7 +104,10 @@ visionIndicator?.addEventListener("click", () => {
 effect(() => {
   const session = activeSession.value;
   const ai = session?.agentInfo;
-  const hasVision = ai?.modalities?.includes("image") || modelSupportsImages(ai?.model, ai?.provider);
+  // agent:info is authoritative once provider is known.
+  const hasVision = Array.isArray(ai?.modalities)
+    ? ai.modalities.includes("image")
+    : !ai?.provider && modelSupportsImages(ai?.model, ai?.provider);
   if (visionIndicator) visionIndicator.hidden = !hasVision;
 });
 

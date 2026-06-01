@@ -179,7 +179,11 @@ export const handlers = {
     if (this === activeSession.peek()) {
       const btn = document.getElementById("vision-indicator");
       if (btn) {
-        const hasVision = this.agentInfo.modalities?.includes("image") || modelSupportsImages(this.agentInfo.model, this.agentInfo.provider);
+        // agent:info is authoritative once provider is known; only fall
+        // back to model cache when agent:info hasn't fired yet.
+        const hasVision = Array.isArray(this.agentInfo.modalities)
+          ? this.agentInfo.modalities.includes("image")
+          : !this.agentInfo.provider && modelSupportsImages(this.agentInfo.model, this.agentInfo.provider);
         btn.hidden = !hasVision;
       }
     }

@@ -115,13 +115,14 @@ function renderBalance(el, data) {
   setBalanceLabel(el, label, tooltip);
 }
 
-// Hide balance on switch; re-show immediately if provider supports it.
+// Hide balance on switch; agent:info / agent:response-done will re-show
+// for supported providers. We avoid showing from cached agentInfo because
+// a stale provider (e.g. from a previous session context) could flash the
+// wrong balance.
 effect(() => {
   activeSession.value;
   const s = activeSession.peek();
-  if (!s?.balanceEl) return;
-  s.balanceEl.hidden = true;
-  if (BALANCE_PROVIDERS.has(s.agentInfo?.provider ?? "")) updateBalanceDisplay();
+  if (s?.balanceEl) s.balanceEl.hidden = true;
 });
 
 effect(() => {
@@ -460,6 +461,7 @@ export const onReplayDone = (session) => {
   refreshGitBranch(session);
   refreshModelChip(session);
   refreshCwdChip(session);
+  updateBalanceDisplay();
 };
 
 export const seedSessionInfo = (session, info) => {

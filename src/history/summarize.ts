@@ -19,6 +19,22 @@ export function extractText(content: unknown): string {
   return "";
 }
 
+/** Extract image data from multimodal content arrays (user/tool messages). */
+export function extractImages(content: unknown): Array<{ data: string; mimeType: string }> {
+  if (!Array.isArray(content)) return [];
+  const images: Array<{ data: string; mimeType: string }> = [];
+  for (const part of content) {
+    if (typeof part !== "object" || !part) continue;
+    const p = part as { type?: string; image_url?: { url?: string } };
+    if (p.type === "image_url" && p.image_url?.url) {
+      const url = p.image_url.url;
+      const m = url.match(/^data:(.+);base64,(.+)$/);
+      if (m) images.push({ mimeType: m[1]!, data: m[2]! });
+    }
+  }
+  return images;
+}
+
 export function snippet(text: string, max: number): string {
   const cleaned = String(text ?? "").replace(/\s+/g, " ").trim();
   if (cleaned.length <= max) return cleaned || "(empty)";

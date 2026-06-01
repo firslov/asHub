@@ -164,9 +164,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     // (read_file on a PNG) still inject image_url unconditionally.
     core.handlers.advise("conversation:prepare", (next, messages) => {
       try {
-        const modeInfo = core.handlers.call("agent:get-mode") as { model?: string } | undefined;
-        const modes = (core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; modalities?: string[] }>;
-        const activeMode = modes.find((m) => m.model === modeInfo?.model);
+        const modeInfo = core.handlers.call("agent:get-model") as { model?: string } | undefined;
+        const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[] }>;
+        const activeMode = modes.find((m) => m.id === modeInfo?.model);
         if (activeMode?.modalities?.includes("image")) return next(messages);
       } catch { /* fall through — strip to be safe */ }
       return (messages as Array<Record<string, unknown>>).map((msg) => {
@@ -184,15 +184,15 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.bus.on("agent:providers:changed", () => {
       setTimeout(() => {
         try {
-          const modes = (core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; modalities?: string[]; provider?: string; contextWindow?: number }>;
-          const modeInfo = core.handlers.call("agent:get-mode") as { model?: string } | undefined;
-          const m = modes.find((x) => x.model === modeInfo?.model);
+          const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[]; provider?: string; contextWindow?: number }>;
+          const modeInfo = core.handlers.call("agent:get-model") as { model?: string } | undefined;
+          const m = modes.find((x) => x.id === modeInfo?.model);
           if (!m || !m.modalities?.length) return;
           this.emit("event", {
             name: "agent:info",
             payload: {
               name: "ash",
-              model: m.model,
+              model: m.id,
               provider: m.provider ?? "",
               contextWindow: m.contextWindow,
               modalities: m.modalities,
@@ -339,8 +339,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (!this.core) return false;
     const model = (this.core.handlers.call("llm:get-client") as { model?: string } | undefined)?.model;
     if (!model) return false;
-    const modes = (this.core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; modalities?: string[] }>;
-    return modes.some((m) => m.model === model && m.modalities?.includes("image"));
+    const modes = (this.core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[] }>;
+    return modes.some((m) => m.id === model && m.modalities?.includes("image"));
   }
 
   // Fail closed for kernels lacking the gate: non-vision models error on image content.
@@ -419,9 +419,9 @@ export class AshBridge extends EventEmitter implements Bridge {
           // Query multimodal capabilities from agent-sh's mode system.
           let modalities: string[] | undefined;
           try {
-            const modes = (core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; modalities?: string[] }>;
+            const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[] }>;
             const info = payload as Record<string, unknown>;
-            const currentMode = modes.find((m) => m.model === info.model);
+            const currentMode = modes.find((m) => m.id === info.model);
             modalities = currentMode?.modalities;
           } catch { /* not available yet */ }
           const enriched = {
@@ -578,8 +578,16 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   execCommand(name: string, args: string): void {
     if (name === "/model" && args) {
-      // Bypass slash-commands extension and emit directly.
-      this.core?.bus.emit("config:switch-model", { model: args });
+      // Bypass slash-commands; resolve the string (id or id@provider) to the
+      // (id, provider) pair the switch event now carries.
+      const models = (this.core?.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider: string }>;
+      const at = args.lastIndexOf("@");
+      const id = at > 0 ? args.slice(0, at) : args;
+      const providerHint = at > 0 ? args.slice(at + 1) : undefined;
+      const found = models.find((m) => m.id === id && (!providerHint || m.provider === providerHint));
+      this.core?.bus.emit("config:switch-model", found
+        ? { id: found.id, provider: found.provider }
+        : { id, provider: providerHint ?? "" });
       return;
     }
     this.core?.bus.emit("command:execute", { name, args });
@@ -632,8 +640,8 @@ export class AshBridge extends EventEmitter implements Bridge {
   async getModels() {
     await this.initPromise;
     if (!this.core) throw new Error("core not initialized");
-    const modes = (this.core.handlers.call("agent:get-modes") ?? []) as Array<{ model: string; provider?: string; modalities?: string[] }>;
-    const models = modes.map((m) => ({ model: m.model, provider: m.provider ?? "", modalities: m.modalities }));
+    const modes = (this.core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; modalities?: string[] }>;
+    const models = modes.map((m) => ({ model: m.id, provider: m.provider ?? "", modalities: m.modalities }));
     return { models, active: null };
   }
 

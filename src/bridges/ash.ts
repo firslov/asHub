@@ -212,6 +212,14 @@ export class AshBridge extends EventEmitter implements Bridge {
       }, 0);
     });
 
+    // Debug: verify config:switch-model and agent:info on the bus.
+    core.bus.on("config:switch-model", (payload) => {
+      if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] config:switch-model on bus: ${JSON.stringify(payload)}\n`);
+    });
+    core.bus.on("agent:info", (payload) => {
+      if (process.env.ASHUB_DEBUG) process.stderr.write(`[ash-bridge] raw agent:info on bus: model=${(payload as any)?.model}\n`);
+    });
+
     await core.activateBackend();
 
     const startCwd = this.opts.cwd ? path.resolve(this.opts.cwd) : os.homedir();

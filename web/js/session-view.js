@@ -168,6 +168,16 @@ class SessionView extends HTMLElement {
       this.loadingEl.hidden = true;
     }
     const fn = handlers[frame?.meta?.name];
+    if (frame?.meta?.name === "agent:info") {
+      try {
+        fn.call(this, frame.payload, frame.meta);
+        console.log("[receiveFrame] agent:info handler succeeded");
+      } catch (e) {
+        console.error("[receiveFrame] agent:info handler failed:", e);
+      }
+      this.scheduleReplayFlush();
+      return;
+    }
     if (fn) {
       try { fn.call(this, frame.payload, frame.meta); }
       catch (e) { console.error(frame.meta.name, e); }

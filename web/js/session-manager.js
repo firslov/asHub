@@ -113,6 +113,9 @@ const reopen = () => {
     if (id > lastSeenId) lastSeenId = id;
     let frame;
     try { frame = JSON.parse(ev.data); } catch { return; }
+    if (frame?.meta?.name === "agent:info") {
+      console.log("[sse] onmessage agent:info", frame.meta.source, "modalities:", frame.payload?.modalities);
+    }
     sessions.get(frame?.meta?.source)?.receiveFrame?.(frame);
   };
 };

@@ -6,7 +6,6 @@ import { attachAutocomplete } from "./autocomplete.js";
 import { attachPromptAutocomplete } from "./prompt-manager.js";
 import { attachAtMentionAutocomplete } from "./at-mention.js";
 import { activeSession } from "./session-manager.js";
-import { modelSupportsImages } from "./sse.js";
 import { effect } from "../vendor/signals-core.js";
 
 const form = document.getElementById("form");
@@ -70,11 +69,7 @@ const renderImagePreviews = () => {
 // Paste handler for images
 document.addEventListener("paste", (ev) => {
   const session = activeSession.peek();
-  if (!session) return;
-  const ai = session.agentInfo;
-  // Check agent info first (set by agent:info event), fall back to model catalog.
-  const hasVision = ai?.modalities?.includes("image") || modelSupportsImages(ai?.model, ai?.provider);
-  if (!hasVision) return;
+  if (!session?.agentInfo?.modalities?.includes("image")) return;
   if (document.activeElement !== input) return;
   const items = ev.clipboardData?.items;
   if (!items) return;
@@ -103,11 +98,7 @@ visionIndicator?.addEventListener("click", () => {
 // Show/hide upload button based on model capabilities
 effect(() => {
   const session = activeSession.value;
-  const ai = session?.agentInfo;
-  // agent:info is authoritative once provider is known.
-  const hasVision = Array.isArray(ai?.modalities)
-    ? ai.modalities.includes("image")
-    : !ai?.provider && modelSupportsImages(ai?.model, ai?.provider);
+  const hasVision = !!session?.agentInfo?.modalities?.includes("image");
   if (visionIndicator) visionIndicator.hidden = !hasVision;
 });
 

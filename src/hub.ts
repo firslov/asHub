@@ -528,36 +528,6 @@ async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): 
 
 // ── Models ──────────────────────────────────────────────────────────
 
-// Model capabilities that agent-sh's provider backends don't report.
-// Maps model ID to its capabilities.  Used to enrich /api/models.
-const MODEL_CAPABILITIES: Record<string, { modalities?: string[] }> = {
-  // OpenAI
-  "gpt-4o": { modalities: ["text", "image"] },
-  "gpt-4.1": { modalities: ["text", "image"] },
-  "gpt-4o-mini": { modalities: ["text", "image"] },
-  "o3": { modalities: ["text", "image"] },
-  "o4-mini": { modalities: ["text", "image"] },
-  // Anthropic
-  "claude-sonnet-4-20250514": { modalities: ["text", "image"] },
-  "claude-3.5-sonnet": { modalities: ["text", "image"] },
-  "claude-opus-4-20250514": { modalities: ["text", "image"] },
-  "claude-3.5-haiku": { modalities: ["text", "image"] },
-  // Google
-  "gemini-2.5-pro": { modalities: ["text", "image"] },
-  "gemini-2.5-flash": { modalities: ["text", "image"] },
-  "gemini-2.0-flash": { modalities: ["text", "image"] },
-  // Zhipu GLM
-  // Zhipu — text-only, no image support
-  // OpenRouter — key multimodal models
-  "anthropic/claude-sonnet-4-20250514": { modalities: ["text", "image"] },
-  "openai/gpt-4o": { modalities: ["text", "image"] },
-  "openai/gpt-4.1": { modalities: ["text", "image"] },
-  "google/gemini-2.5-pro": { modalities: ["text", "image"] },
-  "google/gemini-2.5-flash": { modalities: ["text", "image"] },
-  "qwen/qwen3-235b-a22b": { modalities: ["text", "image"] },
-  "qwen/qwen3.7-max": { modalities: ["text", "image"] },
-};
-
 async function getModels(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -611,7 +581,6 @@ async function getModels(
         models: [...entry.models].map((id) => ({
 	        id,
 	        modalities: modelModalities.get(`${single}:${id}`)
-	          ?? MODEL_CAPABILITIES[id]?.modalities,
 	      })),
       }));
       return;
@@ -623,7 +592,6 @@ async function getModels(
       models: [...entry.models].map((id) => ({
 	        id,
 	        modalities: modelModalities.get(`${name}:${id}`)
-	          ?? MODEL_CAPABILITIES[name]?.modalities,
 	      })),
     }));
     res.writeHead(200, { "Content-Type": "application/json" });

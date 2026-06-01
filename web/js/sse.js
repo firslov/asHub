@@ -174,20 +174,11 @@ export const handlers = {
     if (p?.provider) this.agentInfo.provider = p.provider;
     if (typeof p?.thinkingLevel === "string") this.agentInfo.thinkingLevel = p.thinkingLevel;
     if (typeof p?.thinkingSupported === "boolean") this.agentInfo.thinkingSupported = p.thinkingSupported;
-    // Set or clear modalities based on agent:info payload.
-    if (Array.isArray(p?.modalities)) this.agentInfo.modalities = p.modalities;
-    else if (!p?.modalities) this.agentInfo.modalities = undefined;
+    this.agentInfo.modalities = Array.isArray(p?.modalities) ? p.modalities : undefined;
     // Update image upload button visibility for the active session.
     if (this === activeSession.peek()) {
       const btn = document.getElementById("vision-indicator");
-      if (btn) {
-        // agent:info is authoritative once provider is known; only fall
-        // back to model cache when agent:info hasn't fired yet.
-        const hasVision = Array.isArray(this.agentInfo.modalities)
-          ? this.agentInfo.modalities.includes("image")
-          : !this.agentInfo.provider && modelSupportsImages(this.agentInfo.model, this.agentInfo.provider);
-        btn.hidden = !hasVision;
-      }
+      if (btn) btn.hidden = !this.agentInfo.modalities?.includes("image");
     }
     if (typeof p?.contextWindow === "number" && p.contextWindow > 0) {
       this.state.contextWindow = p.contextWindow;

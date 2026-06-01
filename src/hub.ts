@@ -978,6 +978,7 @@ function routeEvent(session: Session, e: BusEvent): void {
   if (e.name === "agent:tool-started") flushSegment(session);
 
   if (e.name === "agent:info") {
+    if (process.env.ASHUB_DEBUG) process.stderr.write(`[hub] agent:info routeEvent, payload keys: ${Object.keys(e.payload as object).join(",")}\n`);
     const info = e.payload as Record<string, unknown> | undefined;
     if (info && typeof info === "object") {
       session.lastAgentInfo ??= {};

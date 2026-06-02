@@ -598,7 +598,13 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   reloadProviders(): void {
-    this.core?.bus.emit("agent:providers:changed", {});
+    if (!this.core) return;
+    this.core.bus.emit("agent:providers:changed", {});
+    // Re-apply current model to pick up new provider config (apiKey).
+    const mode = this.core.handlers.call("agent:get-mode") as { model?: string; provider?: string } | undefined;
+    if (mode?.model) {
+      this.core.bus.emit("config:switch-model", { id: mode.model, provider: mode.provider ?? "" });
+    }
   }
 
   async autocomplete(buffer: string): Promise<Array<{ name: string; description: string }> | null> {

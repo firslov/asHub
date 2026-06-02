@@ -1,5 +1,5 @@
 import { currentSessionId, state, queryHistory } from "./state.js";
-import { escape } from "./utils.js";
+import { escape, toBlobUrl } from "./utils.js";
 import { appendAfterPending } from "./stream/tool-group.js";
 import { createUserBox } from "./actions.js";
 import { attachAutocomplete } from "./autocomplete.js";
@@ -18,27 +18,52 @@ const visionIndicator = document.getElementById("vision-indicator");
 
 let attachedImages = [];  // [{ data: "<base64>", mimeType: "image/png" }]
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+const MAX_IMAGE_PX = 1920; // max width/height in pixels
 
-const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
-  if (file.size > MAX_IMAGE_BYTES) {
-    reject(new Error("Image too large (max 5MB)"));
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    const dataUrl = reader.result;
-    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-    resolve({ data: base64, mimeType: file.type || "image/png" });
+/** Compress image to max dimension, return base64 string. */
+const compressImage = (file) => new Promise((resolve, reject) => {
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    const { width, height } = img;
+    if (width <= MAX_IMAGE_PX && height <= MAX_IMAGE_PX) {
+      // No resize needed — passthrough
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        resolve(dataUrl.slice(dataUrl.indexOf(",") + 1));
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+      return;
+    }
+    // Scale down
+    const scale = MAX_IMAGE_PX / Math.max(width, height);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) { reject(new Error("canvas toBlob failed")); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        resolve(dataUrl.slice(dataUrl.indexOf(",") + 1));
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    }, file.type || "image/png", 0.85);
   };
-  reader.onerror = () => reject(reader.error);
-  reader.readAsDataURL(file);
+  img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("image load failed")); };
+  img.src = url;
 });
 
 const addImage = async (file) => {
   try {
-    const img = await readFileAsBase64(file);
-    attachedImages.push(img);
+    const data = await compressImage(file);
+    attachedImages.push({ data, mimeType: file.type || "image/png" });
     renderImagePreviews();
   } catch (e) {
     console.error("Failed to attach image:", e);
@@ -52,14 +77,19 @@ const removeImage = (index) => {
 
 const renderImagePreviews = () => {
   if (!imagePreviews) return;
+  // Revoke old blob URLs before replacing
+  imagePreviews.querySelectorAll("img").forEach((img) => {
+    if (img.src?.startsWith("blob:")) URL.revokeObjectURL(img.src);
+  });
   imagePreviews.innerHTML = "";
   imagePreviews.hidden = attachedImages.length === 0;
   for (let i = 0; i < attachedImages.length; i++) {
     const img = attachedImages[i];
     const wrap = document.createElement("div");
     wrap.className = "image-preview-item";
+    const url = toBlobUrl(img.data, img.mimeType);
     wrap.innerHTML =
-      `<img src="data:${img.mimeType};base64,${img.data}" alt="preview">` +
+      `<img src="${url}" alt="preview">` +
       `<button type="button" class="image-preview-remove" data-i18n-title="remove" title="Remove">&times;</button>`;
     wrap.querySelector(".image-preview-remove").addEventListener("click", () => removeImage(i));
     imagePreviews.appendChild(wrap);

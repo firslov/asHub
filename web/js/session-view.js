@@ -160,6 +160,10 @@ class SessionView extends HTMLElement {
     this.controller?.abort();
     if (this.id) unsubscribeSession(this.id);
     unregisterSession(this);
+    // Free Blob URLs created by createUserBox for this session's images.
+    this.querySelectorAll?.(".agent-box-img").forEach((img) => {
+      if (img.src?.startsWith("blob:")) URL.revokeObjectURL(img.src);
+    });
   }
 
   receiveFrame(frame) {

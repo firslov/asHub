@@ -18,7 +18,7 @@ const visionIndicator = document.getElementById("vision-indicator");
 
 let attachedImages = [];  // [{ data: "<base64>", mimeType: "image/png" }]
 
-const MAX_IMAGE_PX = 1920; // max width/height in pixels
+const MAX_IMAGE_PX = 1200; // max width/height in pixels
 
 /** Compress image to max dimension, return base64 string. */
 const compressImage = (file) => new Promise((resolve, reject) => {

@@ -369,7 +369,7 @@ export function startHub(opts: HubOpts): http.Server {
     const url = req.url ?? "/";
 
     if (req.method === "GET" && url === "/api/config") return getConfig(res);
-    if (req.method === "PUT" && url === "/api/config") return updateConfig(req, res);
+    if (req.method === "PUT" && url === "/api/config") return updateConfig(req, res, sessions);
     if (req.method === "POST" && url === "/api/config/reload") return reloadConfig(res);
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
@@ -641,7 +641,7 @@ function getConfig(res: http.ServerResponse): void {
   });
 }
 
-async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse, sessions: Map<string, Session>): Promise<void> {
   const body = await readBody(req);
   let parsed: Record<string, unknown>;
   try {
@@ -664,6 +664,7 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse)
       const { reloadSettings } = await import("agent-sh/settings");
       reloadSettings();
       invalidateModelProviders();
+      for (const s of sessions.values()) { s.bridge?.reloadProviders?.(); }
     } catch {}
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));

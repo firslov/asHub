@@ -597,6 +597,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.core?.bus.emit("config:set-thinking", { level });
   }
 
+  reloadProviders(): void {
+    this.core?.bus.emit("agent:providers:changed", {});
+  }
+
   async autocomplete(buffer: string): Promise<Array<{ name: string; description: string }> | null> {
     if (!this.core) return null;
     // Arg-completion handlers in slash-commands.ts gate on `payload.command`

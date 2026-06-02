@@ -102,6 +102,10 @@ export interface Bridge {
     opts?: { maxTokens?: number; model?: string },
   ): Promise<string | null>;
 
+  /** Notify the backend that provider settings have changed (e.g. new API key saved).
+   *  The bridge should re-resolve provider registrations. */
+  reloadProviders?(): void;
+
   /** Subscribe to BusEvents the bridge produces. Returns an unsubscriber. */
   onEvent(fn: (e: BusEvent) => void): () => void;
 

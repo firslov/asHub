@@ -516,6 +516,9 @@ const refreshModelChip = (session) => {
 
 let _allModelsCache = null;  // { providers: [{ name, models: [{id, modalities}] }] }
 
+// Exposed for config panel to invalidate after provider changes.
+export const invalidateModelCache = () => { _allModelsCache = null; };
+
 // Build a quick lookup: "provider:model" -> modalities or undefined.
 const getModelCapabilities = () => {
   if (!_allModelsCache) return null;

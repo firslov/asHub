@@ -2,6 +2,7 @@ import { setFilesOpen } from "./files-panel.js";
 import { setCtxOpen } from "./context-panel.js";
 import { setTreeOpen } from "./tree-panel.js";
 import { t } from "./i18n.js";
+import { invalidateModelCache } from "./sse.js";
 
 const configOverlay = document.getElementById("config-overlay");
 const configToggle = document.getElementById("config-toggle");
@@ -388,6 +389,7 @@ let doSave = async (jsonStr) => {
     });
     if (!r.ok) throw new Error(await r.text());
     originalConfig = jsonStr;
+    invalidateModelCache();
     setConfigOpen(false);
   } catch (e) {
     alert(t("config.save.failed", { msg: e.message ?? e }));

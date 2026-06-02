@@ -187,3 +187,15 @@ export const copyToClipboard = async (text, btn) => {
     }
   } catch (e) { console.error("clipboard", e); }
 };
+
+// ── Blob URL helpers ─────────────────────────────────────────────
+
+export function toBlobUrl(data, mimeType) {
+  try {
+    const bytes = atob(data);
+    const buf = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+    const blob = new Blob([buf], { type: mimeType });
+    return URL.createObjectURL(blob);
+  } catch { return ""; }
+}

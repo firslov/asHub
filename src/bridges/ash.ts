@@ -598,13 +598,22 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   reloadProviders(): void {
+    // agent-sh's settingsProviders is populated at module load and never
+    // refreshed — computeResolvedProviders() sees stale data after config
+    // save. Work around by directly reconfiguring the LLM client with
+    // fresh settings.
     if (!this.core) return;
+    try {
+      const mode = this.core.handlers.call("agent:get-mode") as { model?: string; provider?: string } | undefined;
+      if (!mode?.provider) return;
+      const key = resolveApiKey(mode.provider).key ?? "";
+      if (!key) return;
+      const provider = resolveProvider(mode.provider);
+      const baseURL = provider?.baseURL;
+      (this.core.handlers.call("llm:get-client") as { reconfigure: (c: { apiKey: string; baseURL?: string; model: string }) => void })
+        .reconfigure({ apiKey: key, baseURL, model: mode.model! });
+    } catch { /* ignore */ }
     this.core.bus.emit("agent:providers:changed", {});
-    // Re-apply current model to pick up new provider config (apiKey).
-    const mode = this.core.handlers.call("agent:get-mode") as { model?: string; provider?: string } | undefined;
-    if (mode?.model) {
-      this.core.bus.emit("config:switch-model", { id: mode.model, provider: mode.provider ?? "" });
-    }
   }
 
   async autocomplete(buffer: string): Promise<Array<{ name: string; description: string }> | null> {

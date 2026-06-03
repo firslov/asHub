@@ -1,4 +1,4 @@
-import { escape, toBlobUrl } from "./utils.js";
+import { escape } from "./utils.js";
 import { currentSessionId, state } from "./state.js";
 import { activeSession } from "./session-manager.js";
 import { setComposerText } from "./composer.js";
@@ -35,10 +35,9 @@ export const createUserBox = (queryText, images) => {
   box.className = "agent-box";
   let imagesHtml = "";
   if (images && images.length > 0) {
-    imagesHtml = images.map((img) => {
-      const url = toBlobUrl(img.data, img.mimeType);
-      return `<img class="agent-box-img" src="${url}" alt="attached image">`;
-    }).join("");
+    imagesHtml = images.map((img) =>
+      `<img class="agent-box-img" src="data:${img.mimeType};base64,${img.data}" alt="attached image">`
+    ).join("");
   }
   box.innerHTML = `
     <div class="agent-box-head">

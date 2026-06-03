@@ -60,7 +60,11 @@ const flushReply = (session) => {
     const lastP = r.current.querySelector(":scope > p:last-of-type");
     const firstBlock = tmp.firstElementChild;
     if (lastP && firstBlock && firstBlock.tagName === "P" && !hasParaBreak) {
-      lastP.innerHTML += firstBlock.innerHTML;
+      // Move child nodes instead of innerHTML += to avoid
+      // serialise → concat → parse churn on every flush.
+      while (firstBlock.firstChild) {
+        lastP.appendChild(firstBlock.firstChild);
+      }
       firstBlock.remove();
     }
     while (tmp.firstChild) {

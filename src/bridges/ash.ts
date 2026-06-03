@@ -622,6 +622,12 @@ export class AshBridge extends EventEmitter implements Bridge {
             apiKey: key || undefined,
             baseURL: provider?.baseURL,
           });
+          // OpenRouter model catalog is fetched asynchronously only once
+          // during extension activation. When the apiKey changes we must
+          // re-fetch it ourselves so the model list updates immediately.
+          if (mode.provider === "openrouter" && key) {
+            this.refetchOpenRouterModels(ctxAgent, key);
+          }
         }
       }
     } catch { /* ignore */ }
@@ -631,6 +637,54 @@ export class AshBridge extends EventEmitter implements Bridge {
       const mode = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
       if (mode?.model && mode?.provider) {
         this.core.bus.emit("config:switch-model", { id: mode.model, provider: mode.provider });
+      }
+    } catch { /* ignore */ }
+  }
+
+  private async refetchOpenRouterModels(
+    ctxAgent: { providers?: { register: (reg: Record<string, unknown>) => unknown } },
+    apiKey: string,
+  ): Promise<void> {
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!res.ok || !ctxAgent.providers?.register) return;
+      const data = (await res.json()) as { data?: Array<{ id: string; supported_parameters?: string[]; context_length?: number; architecture?: { input_modalities?: string[] } }> };
+      const models = data.data ?? [];
+      if (models.length === 0) return;
+      ctxAgent.providers.register({
+        id: "openrouter",
+        apiKey,
+        baseURL: "https://openrouter.ai/api/v1",
+        defaultModel: "deepseek/deepseek-v4-flash",
+        supportsReasoningEffort: true,
+        models: models.map((m) => {
+          const inputMods = (m.architecture?.input_modalities ?? []) as string[];
+          const mods = inputMods.filter((v: string) => v === "text" || v === "image");
+          return {
+            id: m.id,
+            reasoning: m.supported_parameters?.includes("reasoning") ?? false,
+            contextWindow: m.context_length,
+            modalities: mods.length ? mods : undefined,
+          };
+        }),
+      });
+      // Push a fresh agent:info so the frontend picks up updated modalities.
+      const modes = (this.core!.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[]; provider?: string; contextWindow?: number }>;
+      const modeInfo = this.core!.handlers.call("agent:get-model") as { model?: string } | undefined;
+      const m = modes.find((x) => x.id === modeInfo?.model);
+      if (m) {
+        this.emit("event", {
+          name: "agent:info",
+          payload: {
+            name: "ash",
+            model: m.id,
+            provider: m.provider ?? "",
+            contextWindow: m.contextWindow,
+            modalities: m.modalities,
+          },
+        } satisfies BusEvent);
       }
     } catch { /* ignore */ }
   }

@@ -81,6 +81,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private core: AgentShellCore | null = null;
   private initPromise: Promise<void>;
   private opts: BridgeOpts;
+  private extCtx: ReturnType<AgentShellCore["extensionContext"]> | null = null;
   private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
   private queryQueue: string[] = [];
   private shellQueue: string[] = [];
@@ -111,6 +112,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.handlers.define("config:get-history-mode", () => "none");
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
+    this.extCtx = extCtx;
     // Activate the ash agent backend so backends can register themselves
     // before core:extensions-loaded fires and activateBackend() runs.
     // This matches the CLI init order in agent-sh/dist/cli/index.js.
@@ -604,21 +606,17 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   reloadProviders(): void {
     // agent-sh's settingsProviders is populated at module load and never
-    // refreshed — computeResolvedProviders() sees stale data after config
-    // save. Work around by directly reconfiguring the LLM client with
-    // fresh settings.
-    if (!this.core) return;
-    try {
-      const mode = this.core.handlers.call("agent:get-mode") as { model?: string; provider?: string } | undefined;
-      if (!mode?.provider) return;
-      const key = resolveApiKey(mode.provider).key ?? "";
-      if (!key) return;
-      const provider = resolveProvider(mode.provider);
-      const baseURL = provider?.baseURL;
-      (this.core.handlers.call("llm:get-client") as { reconfigure: (c: { apiKey: string; baseURL?: string; model: string }) => void })
-        .reconfigure({ apiKey: key, baseURL, model: mode.model! });
-    } catch { /* ignore */ }
+    // refreshed. Re-register all providers with fresh settings, then
+    // re-apply the current model so llmClient picks up new apiKey.
+    if (!this.core || !this.extCtx) return;
+    this.registerUserProviders(this.extCtx);
     this.core.bus.emit("agent:providers:changed", {});
+    try {
+      const mode = this.core.handlers.call("agent:get-model") as { id?: string; provider?: string } | undefined;
+      if (mode?.id) {
+        this.core.bus.emit("config:switch-model", { id: mode.id, provider: mode.provider ?? "" });
+      }
+    } catch { /* ignore */ }
   }
 
   async autocomplete(buffer: string): Promise<Array<{ name: string; description: string }> | null> {

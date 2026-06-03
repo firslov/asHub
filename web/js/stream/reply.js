@@ -31,6 +31,7 @@ export const addReplyCopyBtn = (el, text) => {
 // incremental avoids blocking the main thread when r.text grows large
 // (e.g. long code generation, background-tab catch-up).
 const INCREMENTAL_THRESHOLD = 2000;
+const HIGHLIGHT_DEBOUNCE_MS = 100; // re-highlight at most 10×/second during streaming
 
 const flushReply = (session) => {
   const r = session?.reply;
@@ -60,7 +61,11 @@ const flushReply = (session) => {
     const lastP = r.current.querySelector(":scope > p:last-of-type");
     const firstBlock = tmp.firstElementChild;
     if (lastP && firstBlock && firstBlock.tagName === "P" && !hasParaBreak) {
-      lastP.innerHTML += firstBlock.innerHTML;
+      // Move child nodes instead of innerHTML += to avoid
+      // serialise → concat → parse churn on every flush.
+      while (firstBlock.firstChild) {
+        lastP.appendChild(firstBlock.firstChild);
+      }
       firstBlock.remove();
     }
     while (tmp.firstChild) {
@@ -68,8 +73,18 @@ const flushReply = (session) => {
     }
     r._renderedLen = fullLen;
   }
-  renderMathIn(r.current);
-  highlightWithin(r.current);
+
+  // Debounce syntax highlighting & math rendering during live streaming.
+  // highlightWithin scans every <code> tag in the reply DOM, which for
+  // long code generation (50KB+) wastes hundreds of ms per second.
+  // At turn end (closeReply) we always do a final pass.
+  const now = Date.now();
+  if (!r._lastHighlightAt || now - r._lastHighlightAt >= HIGHLIGHT_DEBOUNCE_MS) {
+    renderMathIn(r.current);
+    highlightWithin(r.current);
+    r._lastHighlightAt = now;
+  }
+
   maybeScroll(session);
 };
 

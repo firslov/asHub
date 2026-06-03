@@ -69,7 +69,7 @@ interface Session {
   contextLock: Promise<void>;
 }
 
-const REPLAY_LIMIT = 1000;
+const REPLAY_LIMIT = 3000;
 
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;
@@ -148,6 +148,7 @@ async function saveSessionMeta(session: Session): Promise<void> {
 
 const _writeBufs = new Map<string, { frames: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 const _writeLocks = new Map<string, Promise<void>>();
+const _mkdirDone = new Set<string>();
 const BATCH_FLUSH_MS = 2000;
 
 function _flushBuf(sessionId: string): void {
@@ -155,18 +156,16 @@ function _flushBuf(sessionId: string): void {
   if (!buf || buf.frames.length === 0) return;
   if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
   const frames = buf.frames.splice(0);
-  try { fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch {}
+  const filePath = path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`);
   const prev = _writeLocks.get(sessionId) ?? Promise.resolve();
-  const p = prev.then(() => new Promise<void>((resolve) => {
-    fs.appendFile(
-      path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`),
-      frames.join(""),
-      () => {
-        if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
-        resolve();
-      },
-    );
-  }));
+  const p = prev.then(async () => {
+    if (!_mkdirDone.has(SESSIONS_DIR)) {
+      await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
+      _mkdirDone.add(SESSIONS_DIR);
+    }
+    await fs.promises.appendFile(filePath, frames.join(""));
+    if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
+  });
   _writeLocks.set(sessionId, p);
 }
 
@@ -195,18 +194,16 @@ function persistReplayFile(sessionId: string, frames: string[]): Promise<void> {
     if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
     buf.frames.length = 0;
   }
-  try { fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch {}
+  const filePath = path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`);
   const prev = _writeLocks.get(sessionId) ?? Promise.resolve();
-  const p = prev.then(() => new Promise<void>((resolve) => {
-    fs.writeFile(
-      path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`),
-      frames.join(""),
-      () => {
-        if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
-        resolve();
-      },
-    );
-  }));
+  const p = prev.then(async () => {
+    if (!_mkdirDone.has(SESSIONS_DIR)) {
+      await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
+      _mkdirDone.add(SESSIONS_DIR);
+    }
+    await fs.promises.writeFile(filePath, frames.join(""));
+    if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
+  });
   _writeLocks.set(sessionId, p);
   return p;
 }

@@ -518,6 +518,7 @@ let _allModelsCache = null;  // { providers: [{ name, models: [{id, modalities}]
 
 // Exposed for config panel to invalidate after provider changes.
 export const invalidateModelCache = () => { _allModelsCache = null; };
+export const setModelCache = (data) => { _allModelsCache = data; };
 
 // Build a quick lookup: "provider:model" -> modalities or undefined.
 const getModelCapabilities = () => {

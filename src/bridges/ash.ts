@@ -342,6 +342,27 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
   }
 
+  /** Re-register all providers with fresh settings — used on config reload. */
+  private refreshAllProviders(extCtx: ReturnType<AgentShellCore["extensionContext"]>): void {
+    const ctxAgent = (extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
+    if (!ctxAgent?.providers?.register) return;
+    const prior = this.core?.bus.emitPipe("agent:providers", { providers: [] }).providers ?? [];
+    const priorById = new Map(prior.map((reg) => [reg.id, reg] as const));
+    for (const name of getProviderNames()) {
+      const p = resolveProvider(name);
+      if (!p) continue;
+      const key = resolveApiKey(name).key ?? "";
+      const base = priorById.get(name);
+      ctxAgent.providers.register({
+        id: name,
+        apiKey: key || undefined,
+        baseURL: p.baseURL ?? base?.baseURL,
+        defaultModel: p.defaultModel ?? base?.defaultModel,
+        models: p.modelsExplicit ? p.models : (base?.models ?? p.models),
+      });
+    }
+  }
+
   private activeModelSupportsImage(): boolean {
     if (!this.core) return false;
     const model = (this.core.handlers.call("llm:get-client") as { model?: string } | undefined)?.model;
@@ -609,7 +630,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     // refreshed. Re-register all providers with fresh settings, then
     // re-apply the current model so llmClient picks up new apiKey.
     if (!this.core || !this.extCtx) return;
-    this.registerUserProviders(this.extCtx);
+    this.refreshAllProviders(this.extCtx);
     this.core.bus.emit("agent:providers:changed", {});
     try {
       const mode = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;

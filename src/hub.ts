@@ -1124,11 +1124,11 @@ async function generateTitleAsync(session: Session): Promise<void> {
     const raw = await session.bridge?.complete?.([
       { role: "system", content: "You are a title generator. Given a user's first message to an AI assistant, generate a concise, descriptive title (max 10 words, no quotes). Return ONLY the title text, nothing else." },
       { role: "user", content: `Generate a short title for a conversation that starts with: "${query}"` },
-    ], { maxTokens: 4096 });
+    ], { maxTokens: 256 });
     const title = raw?.trim().replace(/^"|"$/g, "");
     if (title && !session.userTitle) { await setSessionTitle(session, title); return; }
-  } catch {
-    // LLM call failed — fall through to fallback.
+  } catch (err) {
+    console.error(`[hub] auto-title LLM call failed for ${session.id}:`, err);
   }
 
   // Fallback: use the first query text as title.

@@ -737,8 +737,13 @@ export class AshBridge extends EventEmitter implements Bridge {
   ): Promise<string | null> {
     await this.initPromise;
     if (!this.core) return null;
-    const text = (await this.core.handlers.call("llm:invoke", messages, opts)) as string;
-    return text?.trim() ? text : null;
+    try {
+      const text = (await this.core.handlers.call("llm:invoke", messages, opts)) as string;
+      return text?.trim() ? text : null;
+    } catch (err) {
+      console.error(`[ash-bridge] complete error:`, err);
+      return null;
+    }
   }
 
   async compact(strategy: ContextStrategy) {

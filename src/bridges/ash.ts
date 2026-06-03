@@ -169,14 +169,19 @@ export class AshBridge extends EventEmitter implements Bridge {
         const activeMode = modes.find((m) => m.id === modeInfo?.model);
         if (activeMode?.modalities?.includes("image")) return next(messages);
       } catch { /* fall through — strip to be safe */ }
-      return (messages as Array<Record<string, unknown>>).map((msg) => {
-        if (Array.isArray(msg.content)) {
-          msg = { ...msg, content: (msg.content as Array<Record<string, unknown>>).filter(
-            (part) => part.type !== "image_url"
-          ) };
+      // Fast path: only mutate messages with array content.
+      const msgs = messages as Array<Record<string, unknown>>;
+      for (let i = 0; i < msgs.length; i++) {
+        const c = msgs[i]!.content;
+        if (!Array.isArray(c)) continue;
+        const parts = (c as Array<Record<string, unknown>>).filter(
+          (p) => p.type !== "image_url"
+        );
+        if (parts.length !== c.length) {
+          msgs[i] = { ...msgs[i], content: parts };
         }
-        return msg;
-      });
+      }
+      return next(messages);
     });
 
     // OpenRouter fetches models asynchronously. When it completes,

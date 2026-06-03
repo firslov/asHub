@@ -63,8 +63,21 @@ const setThinkingCollapsed = (block, collapsed) => {
   }
 };
 
-export const appendThinkingChunk = (session, text) => {
-  if (!text || !session) return;
+// ── Thinking batching ─────────────────────────────────────────────
+// Each thinking-chunk is just a few chars. On very long conversations,
+// hundreds of individual DOM insertions per second cause layout
+// thrashing and block the event loop. Batch chunks per animation frame.
+
+const _thinkingBuf = new WeakMap();  // session -> pending text
+
+const flushThinkingBuf = (session) => {
+  const text = _thinkingBuf.get(session);
+  if (!text) return;
+  _thinkingBuf.delete(session);
+  if (session._thinkingRaf) {
+    cancelAnimationFrame(session._thinkingRaf);
+    session._thinkingRaf = null;
+  }
   if (!session.thinking.block) {
     const block = document.createElement("div");
     block.className = "thinking-block";
@@ -83,13 +96,35 @@ export const appendThinkingChunk = (session, text) => {
     block.append(head, body);
     append(session, block);
   }
+  // Append batched text, preserving the single-container style.
   const inner = session.thinking.block.querySelector(".thinking-block-inner");
-  inner.textContent = (inner.textContent ?? "") + text;
+  const last = inner.lastElementChild;
+  if (last && last.tagName === "DIV") {
+    last.textContent += text;
+  } else {
+    const div = document.createElement("div");
+    div.textContent = text;
+    inner.appendChild(div);
+  }
   inner.scrollTop = inner.scrollHeight;
   maybeScroll(session);
 };
 
+export const appendThinkingChunk = (session, text) => {
+  if (!text || !session) return;
+  const prev = _thinkingBuf.get(session) || "";
+  _thinkingBuf.set(session, prev + text);
+  if (!session._thinkingRaf) {
+    session._thinkingRaf = requestAnimationFrame(() => {
+      session._thinkingRaf = null;
+      flushThinkingBuf(session);
+    });
+  }
+};
+
 export const finalizeThinking = (session) => {
+  // Flush any remaining batched chunks.
+  flushThinkingBuf(session);
   const block = session?.thinking.block;
   if (!block) return;
   const inner = block.querySelector(".thinking-block-inner");

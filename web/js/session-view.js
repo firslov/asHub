@@ -9,6 +9,10 @@ const evictDOMCache = () => {
   if (_cachedDOMs.size <= MAX_CACHED_DOMS) return;
   const oldest = [..._cachedDOMs][0];
   _cachedDOMs.delete(oldest);
+  // Revoke Blob URLs before clearing DOM to free Oilpan memory.
+  oldest.querySelectorAll?.(".agent-box-img").forEach((img) => {
+    if (img.src?.startsWith("blob:")) URL.revokeObjectURL(img.src);
+  });
   oldest.innerHTML = "";
   oldest._replayFrag = null;
 }

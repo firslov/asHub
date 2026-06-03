@@ -81,6 +81,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private core: AgentShellCore | null = null;
   private initPromise: Promise<void>;
   private opts: BridgeOpts;
+  private extCtx: ReturnType<AgentShellCore["extensionContext"]> | null = null;
   private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
   private queryQueue: string[] = [];
   private shellQueue: string[] = [];
@@ -111,6 +112,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.handlers.define("config:get-history-mode", () => "none");
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
+    this.extCtx = extCtx;
     // Activate the ash agent backend so backends can register themselves
     // before core:extensions-loaded fires and activateBackend() runs.
     // This matches the CLI init order in agent-sh/dist/cli/index.js.
@@ -603,17 +605,32 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   reloadProviders(): void {
-    // agent-sh's settingsProviders is populated at module load and never
-    // refreshed. Directly reconfigure llmClient to bypass stale cache.
-    if (!this.core) return;
+    // Re-register provider with fresh apiKey, then emit
+    // providers:changed + config:switch-model so agent-loop
+    // resolves a new activeEndpoint and reconfigures llmClient.
+    if (!this.core || !this.extCtx) return;
+    // Re-register current provider with fresh apiKey.
+    try {
+      const ctxAgent = (this.extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
+      if (ctxAgent?.providers?.register) {
+        const mode = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+        if (mode?.provider) {
+          const key = resolveApiKey(mode.provider).key ?? "";
+          const provider = resolveProvider(mode.provider);
+          ctxAgent.providers.register({
+            id: mode.provider,
+            apiKey: key || undefined,
+            baseURL: provider?.baseURL,
+          });
+        }
+      }
+    } catch { /* ignore */ }
     this.core.bus.emit("agent:providers:changed", {});
+    // Force agent-loop to re-resolve activeEndpoint with fresh apiKey.
     try {
       const mode = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
       if (mode?.model && mode?.provider) {
-        const key = resolveApiKey(mode.provider).key ?? "";
-        const provider = resolveProvider(mode.provider);
-        (this.core.handlers.call("llm:get-client") as { reconfigure: (c: { apiKey: string; baseURL?: string; model: string }) => void })
-          .reconfigure({ apiKey: key, baseURL: provider?.baseURL, model: mode.model });
+        this.core.bus.emit("config:switch-model", { id: mode.model, provider: mode.provider });
       }
     } catch { /* ignore */ }
   }

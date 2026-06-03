@@ -551,6 +551,11 @@ async function getModels(
       if (s.kind !== "agent" || !s.bridge || !s.bridge.getModels) continue;
       try {
         const { models } = await s.bridge.getModels();
+        if (process.env.ASHUB_DEBUG) {
+          const openRouterModels = models.filter((m: { provider: string }) => m.provider === "openrouter");
+          process.stderr.write(`[hub] getModels from session ${s.id}: ${openRouterModels.length} openrouter models
+`);
+        }
         for (const { model, provider, modalities } of models) {
           if (!provider || !model) continue;
           let entry = byName.get(provider);

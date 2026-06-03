@@ -563,13 +563,18 @@ const toggleModelDropdown = async (session) => {
     }
   });
 
-  // Fetch all models if not cached
-  if (!_allModelsCache) {
+  // Fetch all models if not cached, or if cache seems stale (OpenRouter
+  // only has 1 model — its async catalog fetch likely completed since
+  // the last time we cached).
+  const needsRefresh = !_allModelsCache || (
+    _allModelsCache.providers?.some((p) => p.name === "openrouter" && (p.models?.length || 0) <= 1)
+  );
+  if (needsRefresh) {
     try {
       const r = await fetch("/api/models");
       _allModelsCache = await r.json();
     } catch {
-      return;
+      if (!_allModelsCache) return;
     }
   }
 

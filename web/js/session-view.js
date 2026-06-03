@@ -1,5 +1,17 @@
 import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
+
+const MAX_CACHED_DOMS = 3;
+const _cachedDOMs = new Set();  // session view elements with live DOM
+
+const evictDOMCache = () => {
+  // Release oldest cached DOM if over limit.
+  if (_cachedDOMs.size <= MAX_CACHED_DOMS) return;
+  const oldest = [..._cachedDOMs][0];
+  _cachedDOMs.delete(oldest);
+  oldest.innerHTML = "";
+  oldest._replayFrag = null;
+}
 import { STATE_DEFAULTS } from "./state.js";
 import { t, scanI18n } from "./i18n.js";
 
@@ -135,10 +147,13 @@ class SessionView extends HTMLElement {
     // forced (rewind / branch-switch) or when there is no content yet.
     if (!force && this.streamEl && this.streamEl.children.length > 0) {
       this.exitReplayMode();
+      _cachedDOMs.add(this);
+      evictDOMCache();
       subscribeSession(this.id);
       return;
     }
     this.innerHTML = "";
+    _cachedDOMs.delete(this);
     this.initStreamShell();
     this.enterReplayMode();
     resyncSession(this.id);
@@ -160,6 +175,7 @@ class SessionView extends HTMLElement {
     this.controller?.abort();
     if (this.id) unsubscribeSession(this.id);
     unregisterSession(this);
+    _cachedDOMs.delete(this);
     // Free Blob URLs created by createUserBox for this session's images.
     this.querySelectorAll?.(".agent-box-img").forEach((img) => {
       if (img.src?.startsWith("blob:")) URL.revokeObjectURL(img.src);

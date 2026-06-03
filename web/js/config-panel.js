@@ -390,25 +390,28 @@ let doSave = async (jsonStr) => {
     if (!r.ok) throw new Error(await r.text());
     originalConfig = jsonStr;
     invalidateModelCache();
-    // OpenRouter fetches its model catalog asynchronously after
-    // re-registration. Poll until the model count grows beyond
-    // the initial default (typically 1-2 models).
+    // OpenRouter fetches models asynchronously after re-registration.
+    // Poll for up to 12 seconds, then cache whatever is available.
     let attempts = 0;
     const pollModels = async () => {
-      if (attempts++ > 10) return;
+      if (attempts++ > 12) {
+        // Final fetch to pick up current state
+        try {
+          const r = await fetch("/api/models");
+          if (r.ok) setModelCache(await r.json());
+        } catch { /* ignore */ }
+        return;
+      }
       try {
         const r = await fetch("/api/models");
         if (!r.ok) return;
         const data = await r.json();
-        const total = (data.providers || []).reduce((s, p) => s + (p.models?.length || 0), 0);
-        if (total > 5) {
-          setModelCache(data);
-          return;
-        }
+        const hasOpenRouter = (data.providers || []).some((p) => p.name === "openrouter" && (p.models?.length || 0) > 1);
+        if (hasOpenRouter) { setModelCache(data); return; }
       } catch { /* ignore */ }
       setTimeout(pollModels, 1000);
     };
-    setTimeout(pollModels, 1000);
+    setTimeout(pollModels, 1500);
     setConfigOpen(false);
   } catch (e) {
     alert(t("config.save.failed", { msg: e.message ?? e }));

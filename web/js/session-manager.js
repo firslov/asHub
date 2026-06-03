@@ -139,6 +139,18 @@ export const resyncSession = (id) => {
   scheduleReopen();
 };
 
+export const pauseSSE = () => {
+  es?.close();
+  es = null;
+  globalConnState.value = "reconnecting";
+};
+
+export const resumeSSE = () => {
+  if (es) return; // already connected
+  if (subState.size === 0) return;
+  scheduleReopen();
+};
+
 export const preloadSession = (id, kind) => {
   if (!id) throw new Error("preloadSession: id required");
   if (sessions.has(id)) return sessions.get(id);

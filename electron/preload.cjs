@@ -17,4 +17,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onAcceptTab: (cb) => onChannel("accept-tab", cb),
   tabDragUpdate: (pos, phase) => ipcRenderer.send("tab-drag-update", pos, phase),
   onTabDragHover: (cb) => onChannel("tab-drag-hover", (payload) => cb(payload || {})),
+  onSuspend: (cb) => onChannel("app:suspend", cb),
+  onResume: (cb) => onChannel("app:resume", cb),
 });

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -602,6 +602,18 @@ if (!gotTheLock) {
         console.error("[updater] initial check failed:", err.message);
       });
     }
+
+    // Pause / resume SSE and rendering when the system sleeps or wakes.
+    powerMonitor.on("suspend", () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("app:suspend");
+      }
+    });
+    powerMonitor.on("resume", () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("app:resume");
+      }
+    });
   });
 
   app.on("window-all-closed", () => {

@@ -605,34 +605,28 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   reloadProviders(): void {
-    // Re-register provider with fresh apiKey, then emit
-    // providers:changed + config:switch-model so agent-loop
-    // resolves a new activeEndpoint and reconfigures llmClient.
-    if (!this.core || !this.extCtx) return;
-    // Re-register current provider with fresh apiKey.
+    // agent-sh 0.15.3 calls refreshSettingsProviders() on
+    // providers:changed, which re-reads settings.json and
+    // merges fresh apiKey/baseURL with the existing provider
+    // contributions (which retain the async-fetched model list).
+    // config:switch-model then forces agent-loop to re-resolve
+    // activeEndpoint and reconfigure llmClient immediately.
+    if (!this.core) return;
+    // For OpenRouter, re-fetch the full model catalog with the
+    // new apiKey so the model list updates without restart.
     try {
-      const ctxAgent = (this.extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
-      if (ctxAgent?.providers?.register) {
-        const mode = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
-        if (mode?.provider) {
-          const key = resolveApiKey(mode.provider).key ?? "";
-          const provider = resolveProvider(mode.provider);
-          ctxAgent.providers.register({
-            id: mode.provider,
-            apiKey: key || undefined,
-            baseURL: provider?.baseURL,
-          });
-          // OpenRouter model catalog is fetched asynchronously only once
-          // during extension activation. When the apiKey changes we must
-          // re-fetch it ourselves so the model list updates immediately.
-          if (mode.provider === "openrouter" && key) {
+      const mode = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+      if (mode?.provider === "openrouter") {
+        const key = resolveApiKey(mode.provider).key ?? "";
+        if (key) {
+          const ctxAgent = (this.extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
+          if (ctxAgent?.providers?.register) {
             this.refetchOpenRouterModels(ctxAgent, key);
           }
         }
       }
     } catch { /* ignore */ }
     this.core.bus.emit("agent:providers:changed", {});
-    // Force agent-loop to re-resolve activeEndpoint with fresh apiKey.
     try {
       const mode = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
       if (mode?.model && mode?.provider) {
@@ -670,9 +664,7 @@ export class AshBridge extends EventEmitter implements Bridge {
           };
         }),
       });
-      // Rebuild resolvedProviders so agent:get-models returns the full catalog.
       this.core!.bus.emit("agent:providers:changed", {});
-      // Push a fresh agent:info so the frontend picks up updated modalities.
       const modes = (this.core!.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[]; provider?: string; contextWindow?: number }>;
       const modeInfo = this.core!.handlers.call("agent:get-model") as { model?: string } | undefined;
       const m = modes.find((x) => x.id === modeInfo?.model);

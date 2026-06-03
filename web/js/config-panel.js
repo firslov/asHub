@@ -117,6 +117,10 @@ const buildConfig = () => {
 
   const providerCfg = { ...prev };
   delete providerCfg.apiKey;
+  // Models are managed by provider backends dynamically — remove
+  // any stale explicit model lists from previous config versions.
+  delete providerCfg.models;
+  delete providerCfg.defaultModel;
 
   if (apiKey) {
     providerCfg.apiKey = apiKey;

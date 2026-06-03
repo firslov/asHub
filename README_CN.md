@@ -15,10 +15,14 @@
 - **会话持久化** —— 重启后对话依然保留
 - **实时流式输出** —— SSE 支持 Markdown、语法高亮代码、Diff 视图和工具调用
 - **推理过程折叠** —— 连续的 think→tool 轮次自动折叠为可展开的单一块
-- **图片支持** —— 多模态模型（GPT-4o、Claude、Gemini、GLM）支持粘贴/上传图片
-- **模型选择器** —— 按 provider 分组、可搜索的下拉列表，展示全部已配置模型
+- **图片支持** —— 多模态模型支持粘贴/上传图片，自动压缩并使用 Blob URL 渲染
+- **模型选择器** —— 按 provider 分组、可搜索的下拉列表，实时同步 OpenRouter 目录（300+ 模型）
+- **多模态指示器** —— 输入框左侧图标标识当前模型是否支持图片
 - **缓存命中率** —— 圆形进度环展示 prompt cache 命中效率
-- **DeepSeek 余额** —— 按会话独立显示 DeepSeek provider 余额
+- **Provider 余额** —— 按会话独立显示 DeepSeek、OpenRouter 余额
+- **热重载** —— apiKey 和 provider 配置修改后立即生效，无需重启
+- **流式性能优化** —— 批量 DOM 更新、防抖语法高亮、SPA DOM 缓存，长对话流畅不卡顿
+- **休眠保护** —— 系统休眠时自动暂停 SSE，唤醒后无缝恢复
 - **跨平台** —— 已打包支持 macOS (Apple Silicon)、Windows (x64) 和 Linux (AppImage)
 
 ## 安装

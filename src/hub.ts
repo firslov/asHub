@@ -537,15 +537,11 @@ async function getModels(
   const single = raw.startsWith("/") ? raw.slice(1).split("?")[0] : "";
 
   try {
-    const byName = new Map<string, { defaultModel?: string; models: Set<string> }>();
-	    const modelModalities = new Map<string, string[] | undefined>();  // provider:model -> modalities
-	    let _modelsWarmedUp = false;
-    for (const { id } of listAllProviders()) {
-      const resolved = resolveProvider(id);
-      const set = new Set<string>(resolved?.models ?? []);
-      if (resolved?.defaultModel) set.add(resolved.defaultModel);
-      byName.set(id, { defaultModel: resolved?.defaultModel, models: set });
-    }
+    // Bridge models are authoritative — collect them first, then
+    // fill in settings-based models only for providers the bridge
+    // didn't cover.
+    const bridgeModels = new Map<string, { defaultModel?: string; models: Set<string> }>();
+    const modelModalities = new Map<string, string[] | undefined>();
 
     for (const s of sessions.values()) {
       if (s.kind !== "agent" || !s.bridge || !s.bridge.getModels) continue;
@@ -553,18 +549,31 @@ async function getModels(
         const { models } = await s.bridge.getModels();
         for (const { model, provider, modalities } of models) {
           if (!provider || !model) continue;
-          let entry = byName.get(provider);
+          let entry = bridgeModels.get(provider);
           if (!entry) {
             entry = { defaultModel: model, models: new Set() };
-            byName.set(provider, entry);
+            bridgeModels.set(provider, entry);
           }
           entry.models.add(model);
-	          if (modalities) modelModalities.set(`${provider}:${model}`, modalities);
+          if (modalities) modelModalities.set(`${provider}:${model}`, modalities);
         }
-	        break;
+        break;
       } catch {
         continue;
       }
+    }
+
+    const byName = new Map<string, { defaultModel?: string; models: Set<string> }>();
+    for (const { id } of listAllProviders()) {
+      const bridged = bridgeModels.get(id);
+      if (bridged) {
+        byName.set(id, bridged);
+        continue;
+      }
+      const resolved = resolveProvider(id);
+      const set = new Set<string>(resolved?.models ?? []);
+      if (resolved?.defaultModel) set.add(resolved.defaultModel);
+      byName.set(id, { defaultModel: resolved?.defaultModel, models: set });
     }
 
     if (single) {

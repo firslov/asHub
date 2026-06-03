@@ -81,7 +81,6 @@ export class AshBridge extends EventEmitter implements Bridge {
   private core: AgentShellCore | null = null;
   private initPromise: Promise<void>;
   private opts: BridgeOpts;
-  private extCtx: ReturnType<AgentShellCore["extensionContext"]> | null = null;
   private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
   private queryQueue: string[] = [];
   private shellQueue: string[] = [];
@@ -112,7 +111,6 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.handlers.define("config:get-history-mode", () => "none");
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
-    this.extCtx = extCtx;
     // Activate the ash agent backend so backends can register themselves
     // before core:extensions-loaded fires and activateBackend() runs.
     // This matches the CLI init order in agent-sh/dist/cli/index.js.
@@ -335,27 +333,6 @@ export class AshBridge extends EventEmitter implements Bridge {
       ctxAgent.providers.register({
         id: name,
         apiKey: resolved.key,
-        baseURL: p.baseURL ?? base?.baseURL,
-        defaultModel: p.defaultModel ?? base?.defaultModel,
-        models: p.modelsExplicit ? p.models : (base?.models ?? p.models),
-      });
-    }
-  }
-
-  /** Re-register all providers with fresh settings — used on config reload. */
-  private refreshAllProviders(extCtx: ReturnType<AgentShellCore["extensionContext"]>): void {
-    const ctxAgent = (extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
-    if (!ctxAgent?.providers?.register) return;
-    const prior = this.core?.bus.emitPipe("agent:providers", { providers: [] }).providers ?? [];
-    const priorById = new Map(prior.map((reg) => [reg.id, reg] as const));
-    for (const name of getProviderNames()) {
-      const p = resolveProvider(name);
-      if (!p) continue;
-      const key = resolveApiKey(name).key ?? "";
-      const base = priorById.get(name);
-      ctxAgent.providers.register({
-        id: name,
-        apiKey: key || undefined,
         baseURL: p.baseURL ?? base?.baseURL,
         defaultModel: p.defaultModel ?? base?.defaultModel,
         models: p.modelsExplicit ? p.models : (base?.models ?? p.models),

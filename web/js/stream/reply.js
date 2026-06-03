@@ -27,10 +27,10 @@ export const addReplyCopyBtn = (el, text) => {
 };
 
 // Threshold (characters) above which we switch from full re-render
-// to incremental DOM append.  Full re-render is fast for short text;
-// incremental avoids blocking the main thread when r.text grows large
-// (e.g. long code generation, background-tab catch-up).
-const INCREMENTAL_THRESHOLD = 2000;
+// to incremental DOM append.  Keeping this high prevents Markdown
+// parsing artefacts that occur when rendering a partial text delta
+// without full block-level context (lists, tables, code fences).
+const INCREMENTAL_THRESHOLD = 8000;
 const HIGHLIGHT_DEBOUNCE_MS = 100; // re-highlight at most 10×/second during streaming
 
 const flushReply = (session) => {

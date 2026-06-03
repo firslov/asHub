@@ -612,9 +612,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.registerUserProviders(this.extCtx);
     this.core.bus.emit("agent:providers:changed", {});
     try {
-      const mode = this.core.handlers.call("agent:get-model") as { id?: string; provider?: string } | undefined;
-      if (mode?.id) {
-        this.core.bus.emit("config:switch-model", { id: mode.id, provider: mode.provider ?? "" });
+      const mode = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+      if (mode?.model) {
+        this.core.bus.emit("config:switch-model", { id: mode.model, provider: mode.provider ?? "" });
       }
     } catch { /* ignore */ }
   }

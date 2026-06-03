@@ -520,6 +520,19 @@ let _allModelsCache = null;  // { providers: [{ name, models: [{id, modalities}]
 export const invalidateModelCache = () => { _allModelsCache = null; };
 export const setModelCache = (data) => { _allModelsCache = data; };
 
+// Log model cache for debugging
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", () => {
+    setTimeout(async () => {
+      try {
+        const r = await fetch("/api/models");
+        const data = await r.json();
+        console.log("[sse] initial model fetch:", JSON.stringify((data.providers || []).map(p => ({ name: p.name, count: p.models?.length }))));
+      } catch (e) { console.error("[sse] initial model fetch failed:", e); }
+    }, 3000);
+  });
+}
+
 // Build a quick lookup: "provider:model" -> modalities or undefined.
 const getModelCapabilities = () => {
   if (!_allModelsCache) return null;

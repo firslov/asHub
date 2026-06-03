@@ -670,6 +670,8 @@ export class AshBridge extends EventEmitter implements Bridge {
           };
         }),
       });
+      // Rebuild resolvedProviders so agent:get-models returns the full catalog.
+      this.core!.bus.emit("agent:providers:changed", {});
       // Push a fresh agent:info so the frontend picks up updated modalities.
       const modes = (this.core!.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[]; provider?: string; contextWindow?: number }>;
       const modeInfo = this.core!.handlers.call("agent:get-model") as { model?: string } | undefined;

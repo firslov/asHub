@@ -26,11 +26,6 @@ export const addReplyCopyBtn = (el, text) => {
   el.appendChild(btn);
 };
 
-// Threshold (characters) above which we switch from full re-render
-// to incremental DOM append.  Keeping this high prevents Markdown
-// parsing artefacts that occur when rendering a partial text delta
-// without full block-level context (lists, tables, code fences).
-const INCREMENTAL_THRESHOLD = 8000;
 const HIGHLIGHT_DEBOUNCE_MS = 100; // re-highlight at most 10×/second during streaming
 
 const flushReply = (session) => {
@@ -39,45 +34,37 @@ const flushReply = (session) => {
   r.pendingChunkRender = false;
   if (!r.current) return;
 
+  // Full render is the source of truth — guarantees correct Markdown.
+  const tmp = document.createElement("div");
+  tmp.innerHTML = mdToHtml(r.text);
+
+  const newBlocks = Array.from(tmp.children);
+  const prevCount = r._renderedBlockCount ?? 0;
   const fullLen = r.text.length;
-  if (fullLen < INCREMENTAL_THRESHOLD) {
-    // Short — full re-render is cheap and guarantees correctness.
-    r.current.innerHTML = mdToHtml(r.text);
-    r._renderedLen = fullLen;
+
+  if (prevCount === 0 || newBlocks.length < prevCount) {
+    // First render, or block count decreased (e.g. unclosed code fence
+    // turned into a real <pre> — structural change). Full replace.
+    r.current.replaceChildren();
+    while (tmp.firstChild) r.current.appendChild(tmp.firstChild);
   } else {
-    // Long — only render the new tail to avoid O(n²) mdToHtml cost.
-    const prevLen = r._renderedLen ?? 0;
-    const delta = r.text.slice(prevLen);
-    if (!delta) return;
-    const tmp = document.createElement("div");
-    tmp.innerHTML = mdToHtml(delta);
-    // If the delta continues inline (no paragraph break at the boundary
-    // between already-rendered text and the new delta), merge its first
-    // block into the last existing paragraph to avoid fragmenting
-    // continuous prose into many tiny <p> tags.
-    const prevText = r.text.slice(0, Math.max(0, prevLen));
-    const boundary = prevText.slice(-2) + delta.slice(0, 2);
-    const hasParaBreak = /\n\s*\n/.test(boundary);
-    const lastP = r.current.querySelector(":scope > p:last-of-type");
-    const firstBlock = tmp.firstElementChild;
-    if (lastP && firstBlock && firstBlock.tagName === "P" && !hasParaBreak) {
-      // Move child nodes instead of innerHTML += to avoid
-      // serialise → concat → parse churn on every flush.
-      while (firstBlock.firstChild) {
-        lastP.appendChild(firstBlock.firstChild);
-      }
-      firstBlock.remove();
+    // Remove the last previously-rendered block and anything beyond it
+    // (the last block's type/content may have changed). Keep earlier
+    // blocks as-is — they are Markdown-immutable.
+    const keepCount = Math.max(0, prevCount - 1);
+    while (r.current.children.length > keepCount) {
+      r.current.lastChild!.remove();
     }
-    while (tmp.firstChild) {
-      r.current.appendChild(tmp.firstChild);
+    // Append fresh blocks from keepCount to end.
+    for (let i = keepCount; i < newBlocks.length; i++) {
+      r.current.appendChild(newBlocks[i]);
     }
-    r._renderedLen = fullLen;
   }
 
+  r._renderedBlockCount = newBlocks.length;
+  r._renderedLen = fullLen;
+
   // Debounce syntax highlighting & math rendering during live streaming.
-  // highlightWithin scans every <code> tag in the reply DOM, which for
-  // long code generation (50KB+) wastes hundreds of ms per second.
-  // At turn end (closeReply) we always do a final pass.
   const now = Date.now();
   if (!r._lastHighlightAt || now - r._lastHighlightAt >= HIGHLIGHT_DEBOUNCE_MS) {
     renderMathIn(r.current);
@@ -107,6 +94,7 @@ export const appendReplyChunk = (session, delta) => {
     r.current.className = "agent-reply streaming";
     r.current.dataset.turn = String(session.state.currentTurn);
     r._renderedLen = 0;
+    r._renderedBlockCount = 0;
     append(session, r.current);
   }
   r.text += stripAnsi(delta);
@@ -119,11 +107,14 @@ export const fillFinalReply = (session, text) => {
   if (!r?.current || !text) return;
   const full = stripAnsi(text);
   if (full === r.text) return;
-  // Final payload wins over accumulated chunks — heals gaps from SSE reopens
-  // and any incremental-render artefacts (e.g. cross-chunk markdown breaks).
+  // Final payload wins over accumulated chunks — heals gaps from SSE reopens.
   r.text = full;
-  r.current.innerHTML = mdToHtml(r.text);
+  r.current.replaceChildren();
+  const tmp = document.createElement("div");
+  tmp.innerHTML = mdToHtml(r.text);
+  while (tmp.firstChild) r.current.appendChild(tmp.firstChild);
   r._renderedLen = full.length;
+  r._renderedBlockCount = tmp.children.length;
   renderMathIn(r.current);
 };
 

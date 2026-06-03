@@ -44,8 +44,6 @@ const PROVIDER_LABELS = {
   openrouter: "OpenRouter",
 };
 
-const DYNAMIC_PROVIDERS = new Set(["openrouter"]);
-
 const providerLabel = (id) => PROVIDER_LABELS[id] ?? id;
 
 const providerEntry = (id) =>
@@ -126,20 +124,6 @@ const buildConfig = () => {
     providerCfg.apiKey = prev.apiKey;
   }
 
-  if (DYNAMIC_PROVIDERS.has(providerId)) {
-    const typed = configModelInput?.value.trim();
-    if (typed) {
-      providerCfg.defaultModel = typed;
-      const known = Array.isArray(prev.models) ? prev.models : [];
-      const merged = known.filter((m) => {
-        const id = typeof m === "string" ? m : m?.id;
-        return id !== typed;
-      });
-      merged.unshift(typed);
-      providerCfg.models = merged;
-    }
-  }
-
   const config = {
     providers: { [providerId]: providerCfg },
     defaultProvider: existing.defaultProvider || providerId,
@@ -209,25 +193,9 @@ const updateProviderDesc = () => {
 };
 
 const updateModelField = () => {
-  if (!configModelField) return;
-  const providerId = configProvider.value;
-  const dynamic = DYNAMIC_PROVIDERS.has(providerId);
-  configModelField.hidden = !dynamic;
-  if (!dynamic) return;
-
-  let saved = "";
-  try {
-    const cfg = JSON.parse(originalConfig || serverConfig || "{}");
-    const p = cfg.providers?.[providerId];
-    if (p?.defaultModel) saved = p.defaultModel;
-    else if (Array.isArray(p?.models) && p.models[0]) {
-      const first = p.models[0];
-      saved = typeof first === "string" ? first : first?.id ?? "";
-    }
-  } catch {}
-  if (configModelInput) configModelInput.value = saved;
-
-  renderModelDatalist(providerId);
+  // Model catalog is managed automatically by each provider backend.
+  // No manual model selection is needed in the settings panel.
+  if (configModelField) configModelField.hidden = true;
 };
 
 const validateJson = () => {

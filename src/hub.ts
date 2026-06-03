@@ -525,11 +525,47 @@ async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): 
 
 // ── Models ──────────────────────────────────────────────────────────
 
+// Server-side cache: when OpenRouter async model fetch completes,
+// the cached result is served immediately, skipping any wait.
+let _serverModelCache: {
+  providers: Array<{ name: string; defaultModel?: string; models: Array<{ id: string; modalities?: string[] }> }>;
+  ts: number;
+} | null = null;
+const SERVER_MODEL_CACHE_TTL = 30_000; // 30 seconds
+
+function scheduleOpenRouterRefresh(sessions: Map<string, Session>): void {
+  // Fire-and-forget: after async fetch completes, recompute and cache.
+  (async () => {
+    await new Promise((r) => setTimeout(r, 3000));
+    for (const s of sessions.values()) {
+      if (s.kind !== "agent" || !s.bridge?.getModels) continue;
+      try {
+        const { models } = await s.bridge.getModels();
+        const orModels = models.filter((m) => m.provider === "openrouter");
+        if (orModels.length <= 1) continue;
+        invalidateServerModelCache();
+        break;
+      } catch { continue; }
+    }
+  })().catch(() => {});
+}
+
+function invalidateServerModelCache(): void {
+  _serverModelCache = null;
+}
+
 async function getModels(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   sessions: Map<string, Session>,
 ): Promise<void> {
+  // Serve from server-side cache if fresh (avoids blocking the UI on every open).
+  if (_serverModelCache && Date.now() - _serverModelCache.ts < SERVER_MODEL_CACHE_TTL) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(_serverModelCache));
+    return;
+  }
+
   const raw = req.url!.split("/api/models")[1] ?? "";
   const single = raw.startsWith("/") ? raw.slice(1).split("?")[0] : "";
 
@@ -574,23 +610,12 @@ async function getModels(
     }
 
     // OpenRouter fetches its catalog asynchronously after registration.
-    // If only the default model is present, wait for the fetch to complete
-    // and retry once so the client gets the full list.
+    // If only the default model is present, return what we have now and
+    // schedule an async refresh so the next request gets the full list.
+    // A short-lived server-side cache avoids blocking the UI on every open.
     const orEntry = byName.get("openrouter");
     if (orEntry && orEntry.models.size <= 1) {
-      await new Promise((r) => setTimeout(r, 2500));
-      for (const s of sessions.values()) {
-        if (s.kind !== "agent" || !s.bridge?.getModels) continue;
-        try {
-          const { models } = await s.bridge.getModels();
-          for (const { model, provider, modalities } of models) {
-            if (provider !== "openrouter" || !model) continue;
-            orEntry.models.add(model);
-            if (modalities) modelModalities.set(`${provider}:${model}`, modalities);
-          }
-          break;
-        } catch { continue; }
-      }
+      scheduleOpenRouterRefresh(sessions);
     }
 
     if (single) {
@@ -621,7 +646,14 @@ async function getModels(
 	      })),
     }));
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ providers }));
+    const body = { providers };
+    // Only cache when OpenRouter entries are complete (>1 model) or absent,
+    // otherwise the incomplete result would block the async refresh.
+    const orProv = (body.providers as Array<{ name: string; models: Array<unknown> }>).find((p) => p.name === "openrouter");
+    if (!orProv || orProv.models.length > 1) {
+      _serverModelCache = { ...body, ts: Date.now() };
+    }
+    res.end(JSON.stringify(body));
   } catch (err) {
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
@@ -691,6 +723,7 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
       reloadSettings();
       invalidateModelProviders();
       for (const s of sessions.values()) { s.bridge?.reloadProviders?.(); }
+      invalidateServerModelCache();
     } catch {}
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
@@ -702,7 +735,7 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
 
 function reloadConfig(res: http.ServerResponse): void {
   import("agent-sh/settings")
-    .then((m) => { m.reloadSettings(); invalidateModelProviders(); })
+    .then((m) => { m.reloadSettings(); invalidateModelProviders(); invalidateServerModelCache(); })
     .catch(() => {});
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));

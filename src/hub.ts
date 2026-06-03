@@ -576,6 +576,26 @@ async function getModels(
       byName.set(id, { defaultModel: resolved?.defaultModel, models: set });
     }
 
+    // OpenRouter fetches its catalog asynchronously after registration.
+    // If only the default model is present, wait for the fetch to complete
+    // and retry once so the client gets the full list.
+    const orEntry = byName.get("openrouter");
+    if (orEntry && orEntry.models.size <= 1) {
+      await new Promise((r) => setTimeout(r, 2500));
+      for (const s of sessions.values()) {
+        if (s.kind !== "agent" || !s.bridge?.getModels) continue;
+        try {
+          const { models } = await s.bridge.getModels();
+          for (const { model, provider, modalities } of models) {
+            if (provider !== "openrouter" || !model) continue;
+            orEntry.models.add(model);
+            if (modalities) modelModalities.set(`${provider}:${model}`, modalities);
+          }
+          break;
+        } catch { continue; }
+      }
+    }
+
     if (single) {
       const entry = byName.get(single);
       if (!entry) {

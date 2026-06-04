@@ -5136,3 +5136,35 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Skills panel ──────────────────────────────────────────────────── */
+
+.skills-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.skills-search-wrap{flex:1;position:relative}
+.skills-search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-mid);pointer-events:none}
+.skills-search-input{padding-left:32px!important;width:100%}
+.skills-header-count{font-size:.75rem;color:var(--text-mid);white-space:nowrap}
+.skills-list{display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto;margin-bottom:20px;scroll-behavior:smooth}
+.skill-card{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;transition:border-color .15s,box-shadow .15s}
+.skill-card:hover{border-color:var(--accent-dim);box-shadow:0 1px 6px rgba(0,0,0,.05)}
+.skill-card-main{flex:1;min-width:0}
+.skill-card-header{display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap}
+.skill-avatar{border-radius:50%;flex-shrink:0}
+.skill-name{font-weight:600;font-size:.85rem;color:var(--text)}
+.skill-tag{font-size:.65rem;padding:1px 6px;border-radius:4px;background:var(--bg);color:var(--text-mid);border:1px solid var(--border)}
+.skill-desc{font-size:.75rem;color:var(--text-mid);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:4px}
+.skill-meta{display:flex;gap:12px;font-size:.7rem;color:var(--text-mid);align-items:center}
+.skill-stars{font-weight:500;color:var(--text)}
+.skill-author{opacity:.8}
+.skill-updated{opacity:.6}
+.skill-install-btn{flex-shrink:0;padding:6px 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-size:.78rem;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s;white-space:nowrap}
+.skill-install-btn:hover{opacity:.9}
+.skill-install-btn.installed{background:transparent;color:var(--accent);border-color:var(--accent)}
+.skills-installed-section{border-top:1px solid var(--border);padding-top:14px}
+.skills-installed-list{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.skill-installed-item{display:flex;align-items:center;gap:10px;padding:6px 10px;font-size:.8rem;border-radius:6px}
+.skill-installed-name{font-weight:500;color:var(--accent)}
+.skill-installed-path{font-family:var(--mono,"JetBrains Mono",monospace);font-size:.68rem;color:var(--text-mid);opacity:.7}
+.skills-empty,.skills-loading,.skills-error{text-align:center;padding:28px 16px;color:var(--text-mid);font-size:.82rem}
+.skills-error{color:#c0392b}
+@media(max-width:700px){.skill-card{flex-direction:column;align-items:stretch}.skill-install-btn{align-self:flex-end}}

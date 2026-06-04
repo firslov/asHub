@@ -371,6 +371,10 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
     if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res, sessions);
+    if (req.method === "GET" && url === "/api/skills") return searchSkills(req, res);
+    if (req.method === "GET" && url === "/api/skills/installed") return listInstalledSkills(res);
+    if (req.method === "POST" && url === "/api/skills/install") return installSkill(req, res);
+    if (req.method === "POST" && url === "/api/skills/uninstall") return uninstallSkill(req, res);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -2085,6 +2089,133 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
   } catch (err) {
     res.statusCode = 500;
     res.end(`rewind-to-turn failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+// ── Skills ────────────────────────────────────────────────────────────
+
+const SKILLS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+let _skillsCache: { data: Array<Record<string, unknown>>; ts: number } | null = null;
+
+async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const url = new URL(req.url!, `http://${req.headers.host || "localhost"}`);
+  const q = url.searchParams.get("q") || "";
+  const sort = url.searchParams.get("sort") || "stars";
+
+  try {
+    if (_skillsCache && Date.now() - _skillsCache.ts < SKILLS_CACHE_TTL) {
+      let list = _skillsCache.data;
+      if (q) list = list.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ skills: list }));
+      return;
+    }
+
+    // Fetch from GitHub topic search
+    const query = "topic:agent-skills+topic:agentskills";
+    const apiUrl = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=${sort}&per_page=50`;
+    const ghRes = await fetch(apiUrl, {
+      headers: { "User-Agent": "asHub", "Accept": "application/vnd.github.v3+json" },
+    });
+    if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`);
+    const ghData = (await ghRes.json()) as { items?: Array<{ full_name: string; description: string; stargazers_count: number; updated_at: string; owner: { login: string; avatar_url: string }; topics: string[]; default_branch: string }> };
+    const items = ghData.items ?? [];
+
+    const skills = items.map((r) => ({
+      id: r.full_name,
+      name: r.full_name.split("/")[1] || r.full_name,
+      author: r.owner.login,
+      avatar: r.owner.avatar_url,
+      description: (r.description || "").slice(0, 200),
+      stars: r.stargazers_count,
+      updated: r.updated_at?.slice(0, 10),
+      topics: r.topics?.filter((t) => t !== "agent-skills" && t !== "agentskills").slice(0, 5) ?? [],
+      defaultBranch: r.default_branch || "main",
+    }));
+
+    _skillsCache = { data: skills, ts: Date.now() };
+
+    let list = skills;
+    if (q) list = skills.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ skills: list }));
+  } catch (err) {
+    // Serve stale cache on error
+    if (_skillsCache) {
+      let list = _skillsCache.data;
+      if (q) list = list.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ skills: list, cached: true }));
+      return;
+    }
+    res.writeHead(502, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+  }
+}
+
+function listInstalledSkills(res: http.ServerResponse): void {
+  const dir = path.join(os.homedir(), ".agent-sh", "skills");
+  const list: Array<{ name: string; path: string }> = [];
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      const skillPath = path.join(dir, name);
+      if (fs.statSync(skillPath).isDirectory() && fs.existsSync(path.join(skillPath, "SKILL.md"))) {
+        list.push({ name, path: skillPath });
+      }
+    }
+  } catch {}
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ installed: list }));
+}
+
+async function installSkill(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const body = await readBody(req);
+  let fullName: string;
+  try { fullName = JSON.parse(body).id; } catch { res.statusCode = 400; res.end("invalid JSON"); return; }
+  if (!fullName?.includes("/")) { res.statusCode = 400; res.end("invalid repo id (owner/repo)"); return; }
+
+  const skillDir = path.join(os.homedir(), ".agent-sh", "skills");
+  const dest = path.join(skillDir, fullName.split("/")[1]!);
+  const cloneUrl = `https://github.com/${fullName}.git`;
+
+  try {
+    await fs.promises.mkdir(skillDir, { recursive: true });
+    if (fs.existsSync(dest)) {
+      // Already installed — pull latest
+      await new Promise<void>((resolve, reject) => {
+        execFile("git", ["-C", dest, "pull", "--ff-only"], { timeout: 30_000 }, (err) => {
+          err ? reject(err) : resolve();
+        });
+      });
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        execFile("git", ["clone", "--depth", "1", cloneUrl, dest], { timeout: 60_000 }, (err) => {
+          err ? reject(err) : resolve();
+        });
+      });
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, path: dest }));
+  } catch (err) {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+  }
+}
+
+async function uninstallSkill(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const body = await readBody(req);
+  let name: string;
+  try { name = JSON.parse(body).name; } catch { res.statusCode = 400; res.end("invalid JSON"); return; }
+  if (!name || name.includes("..") || name.includes("/")) { res.statusCode = 400; res.end("invalid name"); return; }
+
+  const dest = path.join(os.homedir(), ".agent-sh", "skills", name);
+  try {
+    await fs.promises.rm(dest, { recursive: true, force: true });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+  } catch (err) {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
   }
 }
 

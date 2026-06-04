@@ -225,6 +225,16 @@ const switchConfigMode = (mode) => {
     tab.classList.toggle("active", tab.dataset.mode === mode);
   });
 
+  const bodySkills = document.getElementById("config-body-skills");
+  if (mode === "skills") {
+    configBodySimple.setAttribute("hidden", "");
+    configBodyAdvanced.setAttribute("hidden", "");
+    bodySkills?.removeAttribute("hidden");
+    import("./skills-panel.js").then((m) => m.initSkillsPanel?.());
+    return;
+  }
+  bodySkills?.setAttribute("hidden", "");
+
   if (mode === "simple") {
     configBodySimple.removeAttribute("hidden");
     configBodyAdvanced.setAttribute("hidden", "");

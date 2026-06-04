@@ -53,7 +53,7 @@ const flushReply = (session) => {
     // blocks as-is — they are Markdown-immutable.
     const keepCount = Math.max(0, prevCount - 1);
     while (r.current.children.length > keepCount) {
-      r.current.lastChild!.remove();
+      r.current.lastChild?.remove();
     }
     // Append fresh blocks from keepCount to end.
     for (let i = keepCount; i < newBlocks.length; i++) {

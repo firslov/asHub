@@ -7,8 +7,12 @@ const installedList = document.getElementById("skills-installed-list");
 let allSkills = [];
 let installed = new Set();
 
+let _initialized = false;
+
 export const initSkillsPanel = () => {
+  if (_initialized) return;
   if (!skillsSearch || !skillsList) return;
+  _initialized = true;
   skillsSearch.addEventListener("input", () => renderSkills(skillsSearch.value));
   refreshSkills();
 };

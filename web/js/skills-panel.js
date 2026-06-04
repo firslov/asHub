@@ -22,11 +22,19 @@ export const setSkillsOpen = (on) => {
   }
 };
 
-skillsToggle?.addEventListener("click", () => setSkillsOpen(true));
-skillsClose?.addEventListener("click", () => setSkillsOpen(false));
-skillsOverlay?.addEventListener("click", (e) => {
-  if (e.target === skillsOverlay) setSkillsOpen(false);
-});
+if (skillsToggle) {
+  skillsToggle.addEventListener("click", () => setSkillsOpen(true));
+} else {
+  console.error("[skills] toggle button not found");
+}
+if (skillsClose) {
+  skillsClose.addEventListener("click", () => setSkillsOpen(false));
+}
+if (skillsOverlay) {
+  skillsOverlay.addEventListener("click", (e) => {
+    if (e.target === skillsOverlay) setSkillsOpen(false);
+  });
+}
 
 // ── Panel logic ──
 

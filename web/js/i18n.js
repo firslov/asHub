@@ -233,7 +233,7 @@ const translations = {
     "model.loading": "加载模型中…",
     "search.models": "搜索模型…",
     "search.skills": "搜索 skills…",
-    "skills": "Skills",
+    "skills": "技能市场",
     "skills.install": "安装",
     "skills.installed": "已安装",
     "skills.none": "未安装任何 skill",

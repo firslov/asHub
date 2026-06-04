@@ -1,11 +1,34 @@
 import { t } from "./i18n.js";
 
+const skillsOverlay = document.getElementById("skills-overlay");
+const skillsToggle = document.getElementById("skills-toggle");
+const skillsClose = document.getElementById("skills-close");
 const skillsList = document.getElementById("skills-list");
 const skillsCount = document.getElementById("skills-count");
 const skillsSearch = document.getElementById("skills-search");
 const installedList = document.getElementById("skills-installed-list");
 let allSkills = [];
 let installed = new Set();
+
+// ── Overlay toggle ──
+
+export const setSkillsOpen = (on) => {
+  if (!skillsOverlay) return;
+  if (on) {
+    skillsOverlay.removeAttribute("hidden");
+    initSkillsPanel();
+  } else {
+    skillsOverlay.setAttribute("hidden", "");
+  }
+};
+
+skillsToggle?.addEventListener("click", () => setSkillsOpen(true));
+skillsClose?.addEventListener("click", () => setSkillsOpen(false));
+skillsOverlay?.addEventListener("click", (e) => {
+  if (e.target === skillsOverlay) setSkillsOpen(false);
+});
+
+// ── Panel logic ──
 
 let _initialized = false;
 

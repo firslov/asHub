@@ -331,6 +331,14 @@
         </svg>
       </button>
       <div class="toolbar-sep"></div>
+      <button class="toolbar-btn" id="skills-toggle" data-i18n-title="skills" title="Skills">
+        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="1.5" y="1.5" width="4" height="4" rx="0.8"/>
+          <rect x="8.5" y="1.5" width="4" height="4" rx="0.8"/>
+          <rect x="1.5" y="8.5" width="4" height="4" rx="0.8"/>
+          <rect x="8.5" y="8.5" width="4" height="4" rx="0.8"/>
+        </svg>
+      </button>
       <button class="toolbar-btn" id="config-toggle" data-i18n-title="settings" title="Settings">
         <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
           <line x1="1.5" y1="4" x2="12.5" y2="4"/>
@@ -351,6 +359,43 @@
       </button>
     </nav>
 
+    <div class="config-overlay" id="skills-overlay" hidden>
+      <div class="config-modal">
+        <div class="config-head">
+          <span class="config-title" data-i18n="skills">Skills</span>
+          <span class="config-path">~/.agent-sh/skills/</span>
+          <div class="config-head-actions">
+            <button class="bar-btn icon" id="skills-close" data-i18n-title="close" title="Close">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <line x1="2" y1="2" x2="10" y2="10"></line>
+                <line x1="10" y1="2" x2="2" y2="10"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="config-body">
+          <div class="skills-toolbar">
+            <div class="skills-search-wrap">
+              <svg class="skills-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <circle cx="6" cy="6" r="4.5"/><line x1="9.5" y1="9.5" x2="13" y2="13"/>
+              </svg>
+              <input id="skills-search" class="config-input skills-search-input" type="text" data-i18n-placeholder="search.skills" placeholder="Search skills..." autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="skills-header-count" id="skills-count"></div>
+          </div>
+          <div class="skills-list" id="skills-list">
+            <div class="skills-loading" data-i18n="skills.loading">Loading skills…</div>
+          </div>
+          <div class="skills-installed-section">
+            <div class="config-section-title" data-i18n="skills.installed">Installed</div>
+            <div class="skills-installed-list" id="skills-installed-list">
+              <div class="skills-empty" data-i18n="skills.none">No skills installed</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="config-overlay" id="config-overlay" hidden>
       <div class="config-modal">
         <div class="config-head">
@@ -358,7 +403,6 @@
           <div class="config-mode-tabs" id="config-mode-tabs">
             <button class="config-mode-tab active" data-mode="simple" data-i18n="simple">Simple</button>
             <button class="config-mode-tab" data-mode="advanced" data-i18n="advanced">Advanced</button>
-            <button class="config-mode-tab" data-mode="skills" data-i18n="skills">Skills</button>
           </div>
           <span class="config-path" id="config-path">~/.agent-sh/settings.json</span>
           <div class="config-head-actions">
@@ -435,26 +479,6 @@
           <div class="config-actions">
             <button class="bar-btn config-btn-save" id="config-save" data-i18n="save.reload">save & reload</button>
             <button class="bar-btn" id="config-format" data-i18n="format">format</button>
-          </div>
-        </div>
-        <div class="config-body" id="config-body-skills" hidden>
-          <div class="skills-toolbar">
-            <div class="skills-search-wrap">
-              <svg class="skills-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                <circle cx="6" cy="6" r="4.5"/><line x1="9.5" y1="9.5" x2="13" y2="13"/>
-              </svg>
-              <input id="skills-search" class="config-input skills-search-input" type="text" data-i18n-placeholder="search.skills" placeholder="Search skills..." autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="skills-header-count" id="skills-count"></div>
-          </div>
-          <div class="skills-list" id="skills-list">
-            <div class="skills-loading" data-i18n="loading">Loading...</div>
-          </div>
-          <div class="skills-installed-section">
-            <div class="config-section-title" data-i18n="skills.installed">Installed</div>
-            <div class="skills-installed-list" id="skills-installed-list">
-              <div class="skills-empty" data-i18n="skills.none">No skills installed</div>
-            </div>
           </div>
         </div>
       </div>

@@ -20,6 +20,11 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
     const configOverlay = document.getElementById("config-overlay");
     if (configOverlay && !configOverlay.hidden) { setConfigOpen(false); return; }
+    const skillsOverlay = document.getElementById("skills-overlay");
+    if (skillsOverlay && !skillsOverlay.hidden) {
+      import("./skills-panel.js").then((m) => m.setSkillsOpen(false));
+      return;
+    }
     cancelTurn();
     return;
   }

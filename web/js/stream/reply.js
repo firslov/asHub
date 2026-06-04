@@ -112,9 +112,10 @@ export const fillFinalReply = (session, text) => {
   r.current.replaceChildren();
   const tmp = document.createElement("div");
   tmp.innerHTML = mdToHtml(r.text);
+  const blockCount = tmp.children.length;
   while (tmp.firstChild) r.current.appendChild(tmp.firstChild);
   r._renderedLen = full.length;
-  r._renderedBlockCount = tmp.children.length;
+  r._renderedBlockCount = blockCount;
   renderMathIn(r.current);
 };
 
@@ -132,6 +133,7 @@ export const closeReply = (session) => {
   r.current = null;
   r.text = "";
   r._renderedLen = 0;
+  r._renderedBlockCount = 0;
 };
 
 export const cancelReply = (session) => {

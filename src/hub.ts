@@ -371,10 +371,10 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
     if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res, sessions);
-    if (req.method === "GET" && url === "/api/skills") return searchSkills(req, res);
     if (req.method === "GET" && url === "/api/skills/installed") return listInstalledSkills(res);
     if (req.method === "POST" && url === "/api/skills/install") return installSkill(req, res);
     if (req.method === "POST" && url === "/api/skills/uninstall") return uninstallSkill(req, res);
+    if (req.method === "GET" && url.startsWith("/api/skills")) return searchSkills(req, res);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -2095,7 +2095,7 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
 // ── Skills ────────────────────────────────────────────────────────────
 
 const SKILLS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-let _skillsCache: { data: Array<Record<string, unknown>>; ts: number } | null = null;
+let _skillsCache: { key: string; data: Array<Record<string, unknown>>; ts: number } | null = null;
 
 async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url!, `http://${req.headers.host || "localhost"}`);
@@ -2103,7 +2103,9 @@ async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse)
   const sort = url.searchParams.get("sort") || "stars";
 
   try {
-    if (_skillsCache && Date.now() - _skillsCache.ts < SKILLS_CACHE_TTL) {
+    // Cache key includes sort order
+    const cacheKey = `skills_${sort}`;
+    if (_skillsCache && _skillsCache.key === cacheKey && Date.now() - _skillsCache.ts < SKILLS_CACHE_TTL) {
       let list = _skillsCache.data;
       if (q) list = list.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -2133,7 +2135,7 @@ async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse)
       defaultBranch: r.default_branch || "main",
     }));
 
-    _skillsCache = { data: skills, ts: Date.now() };
+    _skillsCache = { key: cacheKey, data: skills, ts: Date.now() };
 
     let list = skills;
     if (q) list = skills.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));

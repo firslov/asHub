@@ -99,8 +99,6 @@ const REPLAY_NAMES = new Set([
   "agent:queued-submit",
   "agent:queued-done",
   "permission:request",
-  "ui:info",
-  "ui:error",
   "session:title",
   "hub:compaction-marker",
   "shell:command-start",
@@ -308,7 +306,8 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
         let replay: string[] = [];
         try {
           const replayRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, `${id}.replay.jsonl`), "utf-8");
-          replay = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n");
+          replay = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n")
+            .filter((f) => { const n = parseFrameName(f); return n !== "ui:error" && n !== "ui:info"; });
           if (replay.length > REPLAY_LIMIT) replay = replay.slice(-REPLAY_LIMIT);
         } catch {}
         let messages: unknown[] | undefined;
@@ -1064,6 +1063,11 @@ function routeEvent(session: Session, e: BusEvent): void {
     session.isProcessing = false;
   }
 
+  if (e.name === "ui:error" || e.name === "ui:info") {
+    pushFrame(session, e.name, sseFrame(meta, e.payload), { transient: true });
+    return;
+  }
+
   pushFrame(session, e.name, sseFrame(meta, e.payload));
 }
 
@@ -1611,7 +1615,7 @@ async function execCommand(
   });
   pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query: args ? `${name} ${args}` : name }));
   try { session.bridge.execCommand(name, args); } catch (err) {
-    pushFrame(session, "ui:error", sseFrame(meta("ui:error"), { message: String(err) }));
+    pushFrame(session, "ui:error", sseFrame(meta("ui:error"), { message: String(err) }), { transient: true });
   }
   saveSessionMeta(session).catch(() => {});
   res.writeHead(200, { "Content-Type": "application/json" });

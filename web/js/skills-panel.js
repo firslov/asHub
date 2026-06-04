@@ -41,7 +41,7 @@ export const initSkillsPanel = () => {
 };
 
 const refreshSkills = async () => {
-  if (skillsList) skillsList.innerHTML = `<div class="skills-loading">${t("loading")}</div>`;
+  if (skillsList) skillsList.innerHTML = `<div class="skills-loading">${t("skills.loading")}</div>`;
   try {
     const [markerRes, instRes] = await Promise.all([
       fetch("/api/skills"),
@@ -64,7 +64,7 @@ const renderSkills = (query) => {
     const q = query.toLowerCase();
     list = list.filter((s) => `${s.name} ${s.description} ${s.topics?.join(" ")}`.toLowerCase().includes(q));
   }
-  skillsCount.textContent = list.length ? `${list.length} skills` : "";
+  skillsCount.textContent = list.length ? `${list.length} ${t("skills.count")}` : "";
 
   skillsList.innerHTML = list.map((s) => {
     const isInstalled = installed.has(s.name);
@@ -78,7 +78,7 @@ const renderSkills = (query) => {
         <div class="skill-desc">${esc(s.description || "")}</div>
         <div class="skill-meta">
           <span class="skill-stars">⭐ ${s.stars?.toLocaleString() || 0}</span>
-          <span class="skill-author">by ${esc(s.author)}</span>
+          <span class="skill-author">${esc(s.author)}</span>
           <span class="skill-updated">${s.updated || ""}</span>
         </div>
       </div>

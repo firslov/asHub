@@ -3,6 +3,7 @@ import { cancelTurn } from "./composer.js";
 import { setConfigOpen } from "./config-panel.js";
 import { switchTo, openTabs, activeSessionId, closeTab } from "./session-manager.js";
 import "./prefs.js";
+import "./skills-panel.js";
 import "./links.js";
 import "./version.js";
 import "./sidebar.js";

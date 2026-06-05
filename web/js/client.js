@@ -3,6 +3,7 @@ import { cancelTurn } from "./composer.js";
 import { setConfigOpen } from "./config-panel.js";
 import { switchTo, openTabs, activeSessionId, closeTab } from "./session-manager.js";
 import "./prefs.js";
+import "./skills-panel.js";
 import "./links.js";
 import "./version.js";
 import "./sidebar.js";
@@ -20,6 +21,11 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
     const configOverlay = document.getElementById("config-overlay");
     if (configOverlay && !configOverlay.hidden) { setConfigOpen(false); return; }
+    const skillsOverlay = document.getElementById("skills-overlay");
+    if (skillsOverlay && !skillsOverlay.hidden) {
+      import("./skills-panel.js").then((m) => m.setSkillsOpen(false));
+      return;
+    }
     cancelTurn();
     return;
   }

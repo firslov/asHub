@@ -16,12 +16,13 @@ import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
-import { resolveProvider, getProviderNames } from "agent-sh/settings";
+import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
 import { listAllProviders, resolveApiKey } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
 import { extractText, extractImages, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
 import { createCompactionStrategy } from "./history/compaction-strategy.js";
+import { invalidateGlobalSkillsCache } from "agent-sh/skills";
 
 export interface HubOpts {
   port: number;
@@ -67,6 +68,12 @@ interface Session {
   store?: SessionStore;
   capture?: Capture;
   contextLock: Promise<void>;
+  /** Highest frameSeq ever emitted for this session — persisted in meta. */
+  lastFrameSeq: number;
+  /** True until the session has been fully restored from disk (lazy Phase 2). */
+  _needsRestore?: boolean;
+  /** Guards against concurrent _ensureBridge calls (page HTML + SSE arriving together). */
+  _restorePromise?: Promise<void>;
 }
 
 const REPLAY_LIMIT = 3000;
@@ -129,6 +136,24 @@ const SESSIONS_DIR = path.join(
   "hub-sessions",
 );
 
+const FRAME_SEQ_FILE = path.join(SESSIONS_DIR, ".frame-seq");
+
+// Persist the global frameSeq counter so reconnections work across restarts.
+async function saveFrameSeq(): Promise<void> {
+  try {
+    await ensureSessionsDir();
+    await fs.promises.writeFile(FRAME_SEQ_FILE, String(frameSeq));
+  } catch {}
+}
+
+async function loadFrameSeq(): Promise<void> {
+  try {
+    const raw = await fs.promises.readFile(FRAME_SEQ_FILE, "utf-8");
+    const n = Number(raw.trim());
+    if (n > frameSeq) frameSeq = n;
+  } catch {}
+}
+
 async function ensureSessionsDir(): Promise<void> {
   await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
 }
@@ -142,7 +167,7 @@ async function saveSessionMeta(session: Session): Promise<void> {
   const metaPath = sessionMetaPath(session.id);
   let existing: Record<string, unknown> = {};
   try { existing = JSON.parse(await fs.promises.readFile(metaPath, "utf-8")); } catch {}
-  const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified };
+  const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified, lastFrameSeq: session.lastFrameSeq };
   await fs.promises.writeFile(metaPath, JSON.stringify(merged));
 }
 
@@ -229,6 +254,7 @@ interface PersistedSession {
   firstQuery?: string;
   userTitle?: string;
   lastModified?: number;
+  lastFrameSeq?: number;
 }
 
 let modelProvidersCache: Map<string, Set<string>> | null = null;
@@ -298,28 +324,31 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
   try {
     await ensureSessionsDir();
     const files = await fs.promises.readdir(SESSIONS_DIR);
-    const results: PersistedSession[] = [];
-    for (const file of files) {
-      if (!file.endsWith(".meta.json")) continue;
+    const metaFiles = files.filter((f) => f.endsWith(".meta.json"));
+
+    // Phase 1: parallel read of meta.json only (tiny files, minimal I/O)
+    const results = (await Promise.all(metaFiles.map(async (file) => {
       const id = file.slice(0, -".meta.json".length);
       try {
         const metaRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, file), "utf-8");
         const meta = JSON.parse(metaRaw);
-        let replay: string[] = [];
-        try {
-          const replayRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, `${id}.replay.jsonl`), "utf-8");
-          replay = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n");
-          if (replay.length > REPLAY_LIMIT) replay = replay.slice(-REPLAY_LIMIT);
-        } catch {}
-        let messages: unknown[] | undefined;
-        try {
-          const msgRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, `${id}.messages.json`), "utf-8");
-          const parsed = JSON.parse(msgRaw);
-          if (Array.isArray(parsed)) messages = parsed;
-        } catch {}
-        results.push({ id: meta.id || id, title: meta.title, kind: meta.kind, cwd: meta.cwd, model: meta.model, provider: meta.provider, startedAt: meta.startedAt, replay, messages, firstQuery: meta.firstQuery, userTitle: meta.userTitle, lastModified: meta.lastModified });
-      } catch {}
-    }
+        return {
+          id: meta.id || id,
+          title: meta.title,
+          kind: meta.kind,
+          cwd: meta.cwd,
+          model: meta.model,
+          provider: meta.provider,
+          startedAt: meta.startedAt,
+          replay: [] as string[], // lazy-loaded on first SSE connect
+          messages: undefined,    // lazy-loaded on first SSE connect
+          firstQuery: meta.firstQuery,
+          userTitle: meta.userTitle,
+          lastModified: meta.lastModified,
+          lastFrameSeq: meta.lastFrameSeq as number | undefined,
+        } as PersistedSession;
+      } catch { return null; }
+    }))).filter((s): s is PersistedSession => s !== null);
 
     // Fallback for dynamic-catalog models that never appear in any static `models` list.
     const observed = new Map<string, string>();
@@ -338,7 +367,6 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
           console.log(`[hub] backfilled provider="${inferred}" for session ${s.id} (model=${s.model})`);
         }
       } else if (staticMatch && staticMatch !== s.provider && !providerHasModel(s.provider, s.model)) {
-        // Heal persisted pairings written while a stale defaultProvider was active.
         console.log(`[hub] corrected stale provider for session ${s.id}: "${s.provider}" → "${staticMatch}" (model=${s.model})`);
         s.provider = staticMatch;
       }
@@ -371,7 +399,7 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
     if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res, sessions);
-    if (req.method === "GET" && url === "/api/skills/installed") return listInstalledSkills(res);
+    if (req.method === "GET" && url.startsWith("/api/skills/installed")) return listInstalledSkills(req, res);
     if (req.method === "POST" && url === "/api/skills/install") return installSkill(req, res);
     if (req.method === "POST" && url === "/api/skills/uninstall") return uninstallSkill(req, res);
     if (req.method === "GET" && url.startsWith("/api/skills")) return searchSkills(req, res);
@@ -751,18 +779,22 @@ async function createSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
   cwd: string,
-  existing?: { id: string; title?: string; kind?: SessionKind; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; lastModified?: number },
+  existing?: { id: string; title?: string; kind?: SessionKind; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; lastModified?: number; lastFrameSeq?: number },
   spawnKind: SessionKind = "agent",
 ): Promise<Session> {
   const id = existing?.id ?? randomBytes(3).toString("hex");
   const kind: SessionKind = existing?.kind ?? spawnKind;
   const isAgent = kind === "agent";
   const isTerminalKind = kind === "terminal" || kind === "ash-terminal";
+  const isRestored = !!existing;
+  const needsLazyRestore = isRestored && isAgent && existing!.replay.length === 0;
 
   let store: SessionStore | undefined;
+  let initialMessages: unknown[] | undefined;
   const treePath = path.join(SESSIONS_DIR, `${id}.jsonl`);
-  try {
-    if (isAgent) {
+
+  if (isAgent && !needsLazyRestore) {
+    try {
       if (existing && fs.existsSync(treePath)) {
         store = new SessionStore(treePath, { metaPath: sessionMetaPath(id) });
       } else if (!existing) {
@@ -771,18 +803,17 @@ async function createSession(
           metaPath: sessionMetaPath(id),
         });
       } else {
-        // Restored session whose tree file is missing — re-create it
         store = new SessionStore(treePath, {
           create: { cwd, sessionId: id },
           metaPath: sessionMetaPath(id),
         });
       }
+    } catch (err) {
+      console.error(`[hub] failed to attach tree store for ${id}:`, err);
     }
-  } catch (err) {
-    console.error(`[hub] failed to attach tree store for ${id}:`, err);
+    initialMessages = existing && store ? store.buildMessages() : existing?.messages;
   }
 
-  const initialMessages = existing && store ? store.buildMessages() : existing?.messages;
   const compactionStrategy = isAgent
     ? createCompactionStrategy(
         () => session?.store ?? null,
@@ -793,8 +824,7 @@ async function createSession(
         },
       )
     : undefined;
-  // New sessions create the bridge immediately; restored sessions defer.
-  const isRestored = !!existing;
+
   const bridge: Bridge = isRestored
     ? null as unknown as Bridge
     : opts.makeBridge({ cwd, kind, initialMessages, compactionStrategy });
@@ -824,11 +854,12 @@ async function createSession(
     lastAgentInfo: null,
     store,
     contextLock: Promise.resolve(),
+    lastFrameSeq: existing?.lastFrameSeq ?? 0,
+    _needsRestore: needsLazyRestore || undefined,
   };
 
-  // Rebuild replay from store messages so image data is included
-  // (the persisted replay has raw SSE frames without image content).
-  if (isRestored && store && initialMessages?.length) {
+  // Rebuild replay from store messages so image data is included.
+  if (isRestored && store && initialMessages?.length && !needsLazyRestore) {
     try {
       const { entryIds: restoredIds } = store.buildBranchWithIds();
       session.replay = synthesizeBranchFrames(session, initialMessages, restoredIds);
@@ -837,33 +868,100 @@ async function createSession(
     }
   }
 
-  // For restored sessions, store a factory to lazily create + wire the
-  // bridge.  The factory is called from openSseMulti / spawnSession flow.
+  // For restored sessions, store a factory to lazily create + wire the bridge.
   if (isRestored && isAgent) {
-    const storeRef = store;
     session._ensureBridge = async () => {
       if (session.bridge) return;
-      const b = opts.makeBridge({ cwd, kind: session.kind, initialMessages, model: session.model, provider: session.provider, compactionStrategy });
-      session.bridge = b;
-      b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
-      b.onClose(() => {
-        try { sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
-      });
-      b.onError((err) => {
-        try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
-      });
-      if (storeRef) {
-        session.capture = createCapture(b, () => session.store ?? null, { onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`) });
-        const { entryIds } = storeRef.buildBranchWithIds();
-        session.capture.resetTo(entryIds);
-      }
-      await b.ready();
-      session._ensureBridge = undefined;
+
+      // Guard against concurrent calls (page HTML + SSE arriving simultaneously).
+      if (session._restorePromise) return session._restorePromise;
+      const restoreTask = (async () => {
+        // ── Phase 2 lazy restore: load replay + messages from disk ──
+        if (session._needsRestore) {
+          try {
+            // Load replay file
+            try {
+              const replayRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, `${id}.replay.jsonl`), "utf-8");
+              const replayFrames = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n");
+              session.replay = replayFrames.length > REPLAY_LIMIT ? replayFrames.slice(-REPLAY_LIMIT) : replayFrames;
+            } catch {}
+
+            // Load / create SessionStore
+            if (!session.store) {
+              try {
+                if (fs.existsSync(treePath)) {
+                  session.store = new SessionStore(treePath, { metaPath: sessionMetaPath(id) });
+                } else {
+                  session.store = new SessionStore(treePath, {
+                    create: { cwd: session.cwd, sessionId: id },
+                    metaPath: sessionMetaPath(id),
+                  });
+                }
+              } catch (err) {
+                console.error(`[hub] lazy store init failed for ${id}:`, err);
+              }
+            }
+
+            // Rebuild replay from messages (includes image data)
+            if (session.store) {
+              const msgs = session.store.buildMessages();
+              if (msgs.length > 0) {
+                const { entryIds: restoredIds } = session.store.buildBranchWithIds();
+                session.replay = synthesizeBranchFrames(session, msgs, restoredIds);
+              }
+            }
+
+            // Detect dangling agent:processing-start (app closed mid-response)
+            // and inject an agent:cancelled frame so UI doesn't get stuck thinking.
+            if (session.replay.length > 0) {
+              let hasDangling = false;
+              for (let i = session.replay.length - 1; i >= 0; i--) {
+                const name = parseFrameName(session.replay[i]!);
+                if (name === "agent:processing-done" || name === "agent:cancelled" || name === "agent:error") break;
+                if (name === "agent:processing-start") { hasDangling = true; break; }
+              }
+              if (hasDangling) {
+                session.replay.push(sseFrame(
+                  { source: id, ts: Date.now(), id: `hub:${id}:recovery`, name: "agent:cancelled" },
+                  {},
+                ));
+                if (session.replay.length > REPLAY_LIMIT) session.replay.shift();
+              }
+            }
+
+            session._needsRestore = false;
+          } catch (err) {
+            console.error(`[hub] lazy restore failed for ${id}:`, err);
+          }
+        }
+
+        const storeRef = session.store;
+        const msgs = storeRef ? storeRef.buildMessages() : undefined;
+        const b = opts.makeBridge({ cwd, kind: session.kind, initialMessages: msgs, model: session.model, provider: session.provider, compactionStrategy });
+        session.bridge = b;
+        session.firstTurnDone = !!(msgs?.length);
+        b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
+        b.onClose(() => {
+          try { sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+        });
+        b.onError((err) => {
+          try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
+        });
+        if (storeRef) {
+          session.capture = createCapture(b, () => session.store ?? null, { onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`) });
+          const { entryIds } = storeRef.buildBranchWithIds();
+          session.capture.resetTo(entryIds);
+        }
+        await b.ready();
+        session._restorePromise = undefined;
+        session._ensureBridge = undefined;
+      })();
+      session._restorePromise = restoreTask;
+      return restoreTask;
     };
   }
 
   if (bridge) {
-    // Wire event handlers for new sessions (restored sessions defer to _ensureBridge).
     if (!isRestored && isAgent) {
       bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       bridge.onClose(() => {
@@ -927,31 +1025,35 @@ async function createSession(
 
 async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): Promise<void> {
   await migrateLegacySessions();
+  // Load global frameSeq counter as safety net for old sessions without per-session lastFrameSeq.
+  await loadFrameSeq();
   const persisted = await loadPersistedSessions();
   if (persisted.length === 0) return;
-  // Sort by lastModified descending so the most recently active sessions
-  // appear first in the sidebar — mirroring listSessions.
+
+  // Sort by lastModified descending so most recent sessions appear first.
   persisted.sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
-  // Restart safety: client's Last-Event-ID stays valid because we keep growing
-  // past the highest persisted id.
+
+  // Restore frameSeq from cached lastFrameSeq values (no replay scanning needed).
+  let maxSeq = 0;
   for (const p of persisted) {
-    for (const line of p.replay) {
-      const m = line.match(frameIdRe);
-      if (m) {
-        const n = Number(m[1]);
-        if (n > frameSeq) frameSeq = n;
-      }
-    }
+    if (p.lastFrameSeq && p.lastFrameSeq > maxSeq) maxSeq = p.lastFrameSeq;
   }
-  console.error(`[hub] restoring ${persisted.length} session(s)…`);
+  if (maxSeq > frameSeq) frameSeq = maxSeq;
+
+  console.error(`[hub] restoring ${persisted.length} session(s) (lightweight, lazy load on open)…`);
   for (const p of persisted) {
     if (p.kind === "terminal" || p.kind === "ash-terminal") {
       await deleteSessionFiles(p.id);
       continue;
     }
     try {
-      await createSession(sessions, opts, p.cwd, { id: p.id, title: p.title, kind: p.kind, replay: p.replay, startedAt: p.startedAt, messages: p.messages, firstQuery: p.firstQuery, userTitle: p.userTitle, model: p.model, provider: p.provider, lastModified: p.lastModified });
-      console.error(`[hub] restored session ${p.id} (cwd: ${p.cwd})`);
+      await createSession(sessions, opts, p.cwd, {
+        id: p.id, title: p.title, kind: p.kind, replay: p.replay,
+        startedAt: p.startedAt, messages: p.messages,
+        firstQuery: p.firstQuery, userTitle: p.userTitle,
+        model: p.model, provider: p.provider,
+        lastModified: p.lastModified, lastFrameSeq: p.lastFrameSeq,
+      });
     } catch (err) {
       console.error(`[hub] failed to restore session ${p.id}:`, err);
       await deleteSessionFiles(p.id);
@@ -1096,6 +1198,13 @@ function pushFrame(session: Session, name: string, frame: string, opts?: { trans
     session.replay.push(frame);
     if (session.replay.length > REPLAY_LIMIT) session.replay.shift();
     persistReplayFrame(session.id, frame);
+    // Track highest frameSeq per-session for fast restore
+    const m = frame.match(frameIdRe);
+    if (m) {
+      session.lastFrameSeq = Math.max(session.lastFrameSeq, Number(m[1]));
+      // Persist global counter (debounced by the replay write buffer)
+      void saveFrameSeq().catch(() => {});
+    }
   }
   for (const r of session.sseClients) { try { r.write(frame); } catch {} }
 }
@@ -1354,13 +1463,13 @@ async function generateTitle(req: http.IncomingMessage, res: http.ServerResponse
 
 // subs=A:50,B:0 — sessionId:tail. tail>0 fresh-replays; tail=0 + since
 // catches up missed frames via the monotonic id stream.
-function openSseMulti(
+async function openSseMulti(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   sessions: Map<string, Session>,
   subsParam: string,
   sinceParam: string,
-): void {
+): Promise<void> {
   const subs = subsParam.split(",").map((s) => {
     const [id, tailStr] = s.split(":");
     const tail = tailStr === "all" ? Infinity : Math.max(0, Number(tailStr ?? "50") || 0);
@@ -1385,8 +1494,8 @@ function openSseMulti(
   for (const { id, tail } of subs) {
     const session = sessions.get(id);
     if (!session) continue;
-    // Lazily create bridge if this is a restored session.
-    void session._ensureBridge?.();
+    // Lazily create bridge + restore session data if needed.
+    await session._ensureBridge?.();
     if (tail > 0) {
       session.hasUnread = false;
       for (const line of session.replay.slice(-tail)) {
@@ -2095,17 +2204,19 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
 // ── Skills ────────────────────────────────────────────────────────────
 
 const SKILLS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-let _skillsCache: { key: string; data: Array<Record<string, unknown>>; ts: number } | null = null;
+const SKILL_SOURCES = [
+  { owner: "anthropics", repo: "skills", branch: "main", author: "anthropics" },
+  { owner: "affaan-m",   repo: "ECC",         branch: "main", author: "affaan-m" },
+  { owner: "obra",       repo: "superpowers", branch: "main", author: "obra" },
+];
+let _skillsCache: { data: Array<Record<string, unknown>>; ts: number } | null = null;
 
 async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url!, `http://${req.headers.host || "localhost"}`);
   const q = url.searchParams.get("q") || "";
-  const sort = url.searchParams.get("sort") || "stars";
 
   try {
-    // Cache key includes sort order
-    const cacheKey = `skills_${sort}`;
-    if (_skillsCache && _skillsCache.key === cacheKey && Date.now() - _skillsCache.ts < SKILLS_CACHE_TTL) {
+    if (_skillsCache && Date.now() - _skillsCache.ts < SKILLS_CACHE_TTL) {
       let list = _skillsCache.data;
       if (q) list = list.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -2113,36 +2224,58 @@ async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse)
       return;
     }
 
-    // Fetch from GitHub topic search
-    const query = "topic:agent-skills+topic:agentskills";
-    const apiUrl = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=${sort}&per_page=50`;
-    const ghRes = await fetch(apiUrl, {
-      headers: { "User-Agent": "asHub", "Accept": "application/vnd.github.v3+json" },
-    });
-    if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`);
-    const ghData = (await ghRes.json()) as { items?: Array<{ full_name: string; description: string; stargazers_count: number; updated_at: string; owner: { login: string; avatar_url: string }; topics: string[]; default_branch: string }> };
-    const items = ghData.items ?? [];
+    // Fetch skills from all configured sources
+    const allSkills: Array<Record<string, unknown>> = [];
+    for (const src of SKILL_SOURCES) {
+      try {
+        const dirsRes = await fetch(
+          `https://api.github.com/repos/${src.owner}/${src.repo}/contents/skills`,
+          { headers: { "User-Agent": "asHub", "Accept": "application/vnd.github.v3+json" } },
+        );
+        if (!dirsRes.ok) continue;
+        const dirs = (await dirsRes.json()) as Array<{ name: string; type: string }>;
+        const skillDirs = dirs.filter((d) => d.type === "dir");
 
-    const skills = items.map((r) => ({
-      id: r.full_name,
-      name: r.full_name.split("/")[1] || r.full_name,
-      author: r.owner.login,
-      avatar: r.owner.avatar_url,
-      description: (r.description || "").slice(0, 200),
-      stars: r.stargazers_count,
-      updated: r.updated_at?.slice(0, 10),
-      topics: r.topics?.filter((t) => t !== "agent-skills" && t !== "agentskills").slice(0, 5) ?? [],
-      defaultBranch: r.default_branch || "main",
-    }));
+        const skills = await Promise.all(skillDirs.map(async (d) => {
+          try {
+            const fileRes = await fetch(
+              `https://raw.githubusercontent.com/${src.owner}/${src.repo}/${src.branch}/skills/${d.name}/SKILL.md`,
+              { headers: { "User-Agent": "asHub" } },
+            );
+            if (!fileRes.ok) return null;
+            const content = await fileRes.text();
+            const fm = content.match(/^---\s*\n([\s\S]*?)\n---/);
+            let name = d.name;
+            let description = "";
+            if (fm) {
+              const nameMatch = fm[1].match(/^name:\s*(.+)$/m);
+              const descMatch = fm[1].match(/^description:\s*(.+)$/m);
+              if (nameMatch) name = nameMatch[1].trim();
+              if (descMatch) description = descMatch[1].trim().slice(0, 200);
+            }
+            return {
+              id: `${src.owner}/${src.repo}/${d.name}`,
+              name: d.name,
+              displayName: name,
+              author: src.author,
+              avatar: `https://github.com/${src.owner}.png?`,
+              description,
+              updated: "",
+              topics: [],
+            };
+          } catch { return null; }
+        }));
+        allSkills.push(...skills.filter(Boolean) as Array<Record<string, unknown>>);
+      } catch { /* source unavailable, skip */ }
+    }
 
-    _skillsCache = { key: cacheKey, data: skills, ts: Date.now() };
+    _skillsCache = { data: allSkills, ts: Date.now() };
 
-    let list = skills;
-    if (q) list = skills.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
+    let result = allSkills;
+    if (q) result = allSkills.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ skills: list }));
+    res.end(JSON.stringify({ skills: result }));
   } catch (err) {
-    // Serve stale cache on error
     if (_skillsCache) {
       let list = _skillsCache.data;
       if (q) list = list.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
@@ -2155,30 +2288,78 @@ async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse)
   }
 }
 
-function listInstalledSkills(res: http.ServerResponse): void {
-  const dir = path.join(os.homedir(), ".agent-sh", "skills");
+function listInstalledSkills(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const url = new URL(req.url!, `http://${req.headers.host || "localhost"}`);
+  const cwd = url.searchParams.get("cwd") || undefined;
   const list: Array<{ name: string; path: string }> = [];
-  try {
-    for (const name of fs.readdirSync(dir)) {
-      const skillPath = path.join(dir, name);
-      if (fs.statSync(skillPath).isDirectory() && fs.existsSync(path.join(skillPath, "SKILL.md"))) {
-        list.push({ name, path: skillPath });
+  const seen = new Set<string>();
+
+  const addFromDir = (dir: string) => {
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        const skillPath = path.join(dir, name);
+        try { if (!fs.statSync(skillPath).isDirectory()) continue; } catch { continue; }
+        if (_hasSkillMd(skillPath) && !seen.has(name)) {
+          seen.add(name);
+          list.push({ name, path: skillPath });
+        }
       }
+    } catch {}
+  };
+
+  // Global skills
+  addFromDir(path.join(os.homedir(), ".agent-sh", "skills"));
+  addFromDir(path.join(os.homedir(), ".agents", "skills"));
+
+  // Additional skill paths from settings (e.g. custom install locations)
+  const settings = getSettings();
+  for (const p of settings.skillPaths ?? []) {
+    const resolved = p.startsWith("~/") || p === "~"
+      ? path.join(os.homedir(), p.slice(1))
+      : path.resolve(p);
+    addFromDir(resolved);
+  }
+
+  // Project skills: .agents/skills/ in cwd and ancestor dirs (up to home)
+  if (cwd) {
+    const home = path.resolve(os.homedir());
+    let current = path.resolve(cwd);
+    while (true) {
+      addFromDir(path.join(current, ".agents", "skills"));
+      if (current === home) break;
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
     }
-  } catch {}
+  }
+
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ installed: list }));
 }
 
+function _hasSkillMd(dir: string): boolean {
+  try {
+    if (fs.existsSync(path.join(dir, "SKILL.md"))) return true;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      if (entry.isDirectory() && _hasSkillMd(path.join(dir, entry.name))) return true;
+    }
+  } catch {}
+  return false;
+}
+
 async function installSkill(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const body = await readBody(req);
-  let fullName: string;
-  try { fullName = JSON.parse(body).id; } catch { res.statusCode = 400; res.end("invalid JSON"); return; }
-  if (!fullName?.includes("/")) { res.statusCode = 400; res.end("invalid repo id (owner/repo)"); return; }
+  let fullId: string;
+  try { fullId = JSON.parse(body).id; } catch { res.statusCode = 400; res.end("invalid JSON"); return; }
+  const parts = fullId.split("/");
+  if (parts.length < 2) { res.statusCode = 400; res.end("invalid repo id (owner/repo or owner/repo/skill)"); return; }
 
+  const isSparseSkills = parts.length === 3; // owner/repo/skill → sparse checkout skills/<name>
+  const skillName = isSparseSkills ? parts[2]! : parts[1]!;
   const skillDir = path.join(os.homedir(), ".agent-sh", "skills");
-  const dest = path.join(skillDir, fullName.split("/")[1]!);
-  const cloneUrl = `https://github.com/${fullName}.git`;
+  const dest = path.join(skillDir, skillName);
+  const cloneUrl = `https://github.com/${parts[0]}/${parts[1]}.git`;
 
   try {
     await fs.promises.mkdir(skillDir, { recursive: true });
@@ -2189,6 +2370,23 @@ async function installSkill(req: http.IncomingMessage, res: http.ServerResponse)
           err ? reject(err) : resolve();
         });
       });
+    } else if (isSparseSkills) {
+      // Sparse checkout: clone only the specific skill directory
+      const tmpDir = path.join(skillDir, `.tmp-${skillName}`);
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      await new Promise<void>((resolve, reject) => {
+        execFile("git", ["clone", "--depth", "1", "--filter=blob:none", "--sparse", cloneUrl, tmpDir], { timeout: 60_000 }, (err) => {
+          if (err) { reject(err); return; }
+          execFile("git", ["-C", tmpDir, "sparse-checkout", "set", `skills/${skillName}`], { timeout: 10_000 }, (err2) => {
+            if (err2) { reject(err2); return; }
+            // Copy the skill dir out of the sparse checkout
+            const srcDir = path.join(tmpDir, "skills", skillName);
+            fs.promises.cp(srcDir, dest, { recursive: true }).then(() => {
+              fs.promises.rm(tmpDir, { recursive: true, force: true }).then(resolve).catch(resolve);
+            }).catch(reject);
+          });
+        });
+      });
     } else {
       await new Promise<void>((resolve, reject) => {
         execFile("git", ["clone", "--depth", "1", cloneUrl, dest], { timeout: 60_000 }, (err) => {
@@ -2196,6 +2394,7 @@ async function installSkill(req: http.IncomingMessage, res: http.ServerResponse)
         });
       });
     }
+    invalidateGlobalSkillsCache();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, path: dest }));
   } catch (err) {
@@ -2213,6 +2412,7 @@ async function uninstallSkill(req: http.IncomingMessage, res: http.ServerRespons
   const dest = path.join(os.homedir(), ".agent-sh", "skills", name);
   try {
     await fs.promises.rm(dest, { recursive: true, force: true });
+    invalidateGlobalSkillsCache();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
   } catch (err) {

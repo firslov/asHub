@@ -16,9 +16,11 @@ export const setSkillsOpen = (on) => {
   if (!skillsOverlay) return;
   if (on) {
     skillsOverlay.removeAttribute("hidden");
+    skillsOverlay.classList.add("open");
     initSkillsPanel();
   } else {
     skillsOverlay.setAttribute("hidden", "");
+    skillsOverlay.classList.remove("open");
   }
 };
 

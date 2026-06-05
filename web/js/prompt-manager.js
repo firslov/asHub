@@ -171,15 +171,29 @@ export const setPromptOpen = (on) => {
     if (ctxPanel && !ctxPanel.hasAttribute("hidden")) {
       ctxPanel.setAttribute("hidden", "");
       document.getElementById("ctx-toggle")?.classList.remove("active");
+      document.querySelector(".app")?.classList.remove("ctx-open");
     }
     if (filesPanel && !filesPanel.hasAttribute("hidden")) {
       filesPanel.setAttribute("hidden", "");
       document.getElementById("files-toggle")?.classList.remove("active");
+      document.querySelector(".app")?.classList.remove("files-open");
     }
     if (configOverlay && !configOverlay.hasAttribute("hidden")) {
       configOverlay.setAttribute("hidden", "");
       configOverlay.classList.remove("open");
       document.getElementById("config-toggle")?.classList.remove("active");
+    }
+    const skillsOverlay = document.getElementById("skills-overlay");
+    if (skillsOverlay && !skillsOverlay.hasAttribute("hidden")) {
+      skillsOverlay.setAttribute("hidden", "");
+      skillsOverlay.classList.remove("open");
+      document.getElementById("skills-toggle")?.classList.remove("active");
+    }
+    const treePanel = document.getElementById("tree-panel");
+    if (treePanel && !treePanel.hasAttribute("hidden")) {
+      treePanel.setAttribute("hidden", "");
+      document.getElementById("tree-toggle")?.classList.remove("active");
+      document.querySelector(".app")?.classList.remove("tree-open");
     }
 
     promptOverlay.removeAttribute("hidden");

@@ -19,6 +19,16 @@ export const setTreeOpen = (open) => {
     setFilesOpen(false);
     setCtxOpen(false);
     setConfigOpen(false);
+    const skillsOverlay = document.getElementById("skills-overlay");
+    if (skillsOverlay && !skillsOverlay.hidden) {
+      import("./skills-panel.js").then((m) => m.setSkillsOpen(false));
+    }
+    const promptOverlay = document.getElementById("prompt-overlay");
+    if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
+      promptOverlay.setAttribute("hidden", "");
+      promptOverlay.classList.remove("open");
+      document.getElementById("prompt-toggle")?.classList.remove("active");
+    }
     panel.removeAttribute("hidden");
     app?.classList.add("tree-open");
     toggle?.classList.add("active");

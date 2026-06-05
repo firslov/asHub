@@ -279,6 +279,10 @@ const setCtxOpen = (on) => {
     setFilesOpen(false);
     setConfigOpen(false);
     setTreeOpen(false);
+    const skillsOverlay = document.getElementById("skills-overlay");
+    if (skillsOverlay && !skillsOverlay.hidden) {
+      import("./skills-panel.js").then((m) => m.setSkillsOpen(false));
+    }
     const promptOverlay = document.getElementById("prompt-overlay");
     if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
       promptOverlay.setAttribute("hidden", "");

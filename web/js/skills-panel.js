@@ -9,8 +9,20 @@ const skillsCount = document.getElementById("skills-count");
 const skillsSearch = document.getElementById("skills-search");
 const installedList = document.getElementById("skills-installed-list");
 const skillsTabs = document.getElementById("skills-tabs");
+const skillsSourceTabs = document.getElementById("skills-source-tabs");
 let allSkills = [];
 let installed = new Set();
+let currentSource = "gitee";
+
+// ── Source switching ──
+
+skillsSourceTabs?.addEventListener("click", (e) => {
+  const tab = e.target.closest(".skills-source-tab");
+  if (!tab || tab.classList.contains("active")) return;
+  skillsSourceTabs.querySelectorAll(".skills-source-tab").forEach((t) => t.classList.toggle("active", t === tab));
+  currentSource = tab.dataset.source;
+  refreshSkills();
+});
 
 // ── Tab switching ──
 
@@ -29,17 +41,30 @@ skillsTabs?.addEventListener("click", (e) => {
 export const setSkillsOpen = (on) => {
   if (!skillsOverlay) return;
   if (on) {
+    // Close other panels for mutual exclusion
+    import("./files-panel.js").then((m) => m.setFilesOpen?.(false));
+    import("./context-panel.js").then((m) => m.setCtxOpen?.(false));
+    import("./tree-panel.js").then((m) => m.setTreeOpen?.(false));
+    import("./config-panel.js").then((m) => m.setConfigOpen(false));
+    const promptOverlay = document.getElementById("prompt-overlay");
+    if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
+      promptOverlay.setAttribute("hidden", "");
+      promptOverlay.classList.remove("open");
+      document.getElementById("prompt-toggle")?.classList.remove("active");
+    }
     skillsOverlay.removeAttribute("hidden");
     skillsOverlay.classList.add("open");
+    skillsToggle?.classList.add("active");
     initSkillsPanel();
   } else {
     skillsOverlay.setAttribute("hidden", "");
     skillsOverlay.classList.remove("open");
+    skillsToggle?.classList.remove("active");
   }
 };
 
 if (skillsToggle) {
-  skillsToggle.addEventListener("click", () => setSkillsOpen(true));
+  skillsToggle.addEventListener("click", () => setSkillsOpen(skillsOverlay.hasAttribute("hidden")));
 } else {
   console.error("[skills] toggle button not found");
 }
@@ -69,7 +94,7 @@ const refreshSkills = async () => {
   const cwd = activeSession.peek()?.state?.cwd || "";
   try {
     const [markerRes, instRes] = await Promise.all([
-      fetch("/api/skills"),
+      fetch(`/api/skills?source=${currentSource}`),
       fetch(`/api/skills/installed${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`),
     ]);
     const marker = await markerRes.json();

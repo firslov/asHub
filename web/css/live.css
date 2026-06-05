@@ -5179,3 +5179,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .skills-tab-panel[hidden]{display:none}
 .skills-tab-panel .skills-list{flex:1;min-height:0;max-height:none}
 .skills-tab-panel .skills-installed-list{flex:1;min-height:0;overflow-y:auto}
+
+.skills-source-tabs{display:flex;gap:0;background:var(--bg);border:1px solid var(--border);border-radius:7px;overflow:hidden;align-self:flex-start;margin-bottom:14px}
+.skills-source-tab{padding:4px 10px;font-size:.7rem;font-weight:500;color:var(--text-mid);background:transparent;border:none;cursor:pointer;transition:color .15s,background .15s;font-family:inherit;line-height:1.5}
+.skills-source-tab:hover{color:var(--text)}
+.skills-source-tab.active{color:#fff;background:var(--accent)}

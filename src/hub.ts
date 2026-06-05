@@ -2208,80 +2208,104 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
 // ── Skills ────────────────────────────────────────────────────────────
 
 const SKILLS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-const SKILL_SOURCES = [
-  { owner: "anthropics", repo: "skills", branch: "main", author: "anthropics" },
-  { owner: "affaan-m",   repo: "ECC",         branch: "main", author: "affaan-m" },
-  { owner: "obra",       repo: "superpowers", branch: "main", author: "obra" },
+
+interface SkillSource {
+  host: "github" | "gitee";
+  owner: string;
+  repo: string;
+  branch: string;
+  author: string;
+}
+
+const SKILL_SOURCES: SkillSource[] = [
+  { host: "github", owner: "anthropics", repo: "skills",      branch: "main", author: "anthropics" },
+  { host: "github", owner: "affaan-m",   repo: "ECC",         branch: "main", author: "affaan-m" },
+  { host: "github", owner: "obra",       repo: "superpowers", branch: "main", author: "obra" },
 ];
-let _skillsCache: { data: Array<Record<string, unknown>>; ts: number } | null = null;
+
+function skillApiUrl(src: SkillSource, subpath: string): string {
+  if (src.host === "gitee") return `https://gitee.com/api/v5/repos/${src.owner}/${src.repo}/contents/${subpath}`;
+  return `https://api.github.com/repos/${src.owner}/${src.repo}/contents/${subpath}`;
+}
+
+function skillRawUrl(src: SkillSource, name: string): string {
+  if (src.host === "gitee") return `https://gitee.com/${src.owner}/${src.repo}/raw/${src.branch}/skills/${name}/SKILL.md`;
+  return `https://raw.githubusercontent.com/${src.owner}/${src.repo}/${src.branch}/skills/${name}/SKILL.md`;
+}
+
+function skillCloneUrl(host: string, owner: string, repo: string): string {
+  if (host === "gitee") return `https://gitee.com/${owner}/${repo}.git`;
+  return `https://github.com/${owner}/${repo}.git`;
+}
+
+function skillAvatarUrl(src: SkillSource): string {
+  if (src.host === "gitee") return `https://gitee.com/${src.owner}.png?`;
+  return `https://github.com/${src.owner}.png?`;
+}
+
+/** Process items with limited concurrency to avoid rate-limiting. */
+async function batchFetch<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let idx = 0;
+  const worker = async () => {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
+let _skillsCache: Map<string, { data: Array<Record<string, unknown>>; ts: number }> | null = null;
 
 async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url!, `http://${req.headers.host || "localhost"}`);
   const q = url.searchParams.get("q") || "";
+  const filterHost = url.searchParams.get("source") || ""; // "github" | "gitee" | ""
+  const FETCH_TIMEOUT = 15_000;
 
   try {
-    if (_skillsCache && Date.now() - _skillsCache.ts < SKILLS_CACHE_TTL) {
-      let list = _skillsCache.data;
-      if (q) list = list.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ skills: list }));
-      return;
+    // Lazy-init per-source cache
+    if (!_skillsCache) _skillsCache = new Map();
+
+    // Fetch requested source if not cached or expired
+    const needsFetch = (host: string) => {
+      const c = _skillsCache!.get(host);
+      return !c || Date.now() - c.ts >= SKILLS_CACHE_TTL;
+    };
+
+    if ((filterHost === "gitee" || !filterHost) && needsFetch("gitee")) {
+      await fetchGiteeSkills(FETCH_TIMEOUT);
+    }
+    if ((filterHost === "github" || !filterHost) && needsFetch("github")) {
+      await fetchGithubSkills(FETCH_TIMEOUT);
     }
 
-    // Fetch skills from all configured sources
-    const allSkills: Array<Record<string, unknown>> = [];
-    for (const src of SKILL_SOURCES) {
-      try {
-        const dirsRes = await fetch(
-          `https://api.github.com/repos/${src.owner}/${src.repo}/contents/skills`,
-          { headers: { "User-Agent": "asHub", "Accept": "application/vnd.github.v3+json" } },
-        );
-        if (!dirsRes.ok) continue;
-        const dirs = (await dirsRes.json()) as Array<{ name: string; type: string }>;
-        const skillDirs = dirs.filter((d) => d.type === "dir");
-
-        const skills = await Promise.all(skillDirs.map(async (d) => {
-          try {
-            const fileRes = await fetch(
-              `https://raw.githubusercontent.com/${src.owner}/${src.repo}/${src.branch}/skills/${d.name}/SKILL.md`,
-              { headers: { "User-Agent": "asHub" } },
-            );
-            if (!fileRes.ok) return null;
-            const content = await fileRes.text();
-            const fm = content.match(/^---\s*\n([\s\S]*?)\n---/);
-            let name = d.name;
-            let description = "";
-            if (fm) {
-              const nameMatch = fm[1].match(/^name:\s*(.+)$/m);
-              const descMatch = fm[1].match(/^description:\s*(.+)$/m);
-              if (nameMatch) name = nameMatch[1].trim();
-              if (descMatch) description = descMatch[1].trim().slice(0, 200);
-            }
-            return {
-              id: `${src.owner}/${src.repo}/${d.name}`,
-              name: d.name,
-              displayName: name,
-              author: src.author,
-              avatar: `https://github.com/${src.owner}.png?`,
-              description,
-              updated: "",
-              topics: [],
-            };
-          } catch { return null; }
-        }));
-        allSkills.push(...skills.filter(Boolean) as Array<Record<string, unknown>>);
-      } catch { /* source unavailable, skip */ }
+    // Gather from cache
+    let list: Array<Record<string, unknown>> = [];
+    if (filterHost) {
+      list = _skillsCache.get(filterHost)?.data ?? [];
+    } else {
+      for (const host of ["gitee", "github"]) {
+        list.push(...(_skillsCache.get(host)?.data ?? []));
+      }
     }
 
-    _skillsCache = { data: allSkills, ts: Date.now() };
-
-    let result = allSkills;
-    if (q) result = allSkills.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
+    if (q) list = list.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ skills: result }));
+    res.end(JSON.stringify({ skills: list }));
   } catch (err) {
-    if (_skillsCache) {
-      let list = _skillsCache.data;
+    // Serve from any available cache on error
+    if (_skillsCache && _skillsCache.size > 0) {
+      let list: Array<Record<string, unknown>> = [];
+      if (filterHost) {
+        list = _skillsCache.get(filterHost)?.data ?? [];
+      } else {
+        for (const host of ["gitee", "github"]) {
+          list.push(...(_skillsCache.get(host)?.data ?? []));
+        }
+      }
       if (q) list = list.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ skills: list, cached: true }));
@@ -2290,6 +2314,78 @@ async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse)
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }
+}
+
+async function fetchGiteeSkills(timeout: number): Promise<void> {
+  try {
+    const res = await fetch(
+      "https://gitee.com/firslov/ashub_skills/raw/main/skills_index.json",
+      { headers: { "User-Agent": "asHub" }, signal: AbortSignal.timeout(timeout) },
+    );
+    if (!res.ok) return;
+    const items = await res.json() as Array<{ name: string; description: string; source: string; origin_tag: string }>;
+    const skills = items.map((s) => ({
+      id: `gitee:firslov/ashub_skills/${s.name}`,
+      name: s.name,
+      displayName: s.name,
+      author: s.source || "firslov",
+      avatar: "https://gitee.com/firslov.png?",
+      source: "gitee",
+      description: s.description || "",
+      updated: "",
+      topics: s.origin_tag ? [s.origin_tag] : [],
+    }));
+    _skillsCache!.set("gitee", { data: skills as Array<Record<string, unknown>>, ts: Date.now() });
+  } catch { /* source unavailable, keep stale cache */ }
+}
+
+async function fetchGithubSkills(timeout: number): Promise<void> {
+  const githubSources = SKILL_SOURCES.filter((s) => s.host === "github");
+  const allSkills: Array<Record<string, unknown>> = [];
+  for (const src of githubSources) {
+    try {
+      const dirsRes = await fetch(
+        skillApiUrl(src, "skills"),
+        { headers: { "User-Agent": "asHub", "Accept": "application/vnd.github.v3+json" }, signal: AbortSignal.timeout(timeout) },
+      );
+      if (!dirsRes.ok) continue;
+      const dirs = (await dirsRes.json()) as Array<{ name: string; type: string }>;
+      const skillDirs = dirs.filter((d) => d.type === "dir");
+
+      const skills = await batchFetch(skillDirs, 15, async (d) => {
+        try {
+          const fileRes = await fetch(
+            skillRawUrl(src, d.name),
+            { headers: { "User-Agent": "asHub" }, signal: AbortSignal.timeout(timeout) },
+          );
+          if (!fileRes.ok) return null;
+          const content = await fileRes.text();
+          const fm = content.match(/^---\s*\n([\s\S]*?)\n---/);
+          let name = d.name;
+          let description = "";
+          if (fm) {
+            const nameMatch = fm[1].match(/^name:\s*(.+)$/m);
+            const descMatch = fm[1].match(/^description:\s*(.+)$/m);
+            if (nameMatch) name = nameMatch[1].trim();
+            if (descMatch) description = descMatch[1].trim().slice(0, 200);
+          }
+          return {
+            id: `github:${src.owner}/${src.repo}/${d.name}`,
+            name: d.name,
+            displayName: name,
+            author: src.author,
+            avatar: skillAvatarUrl(src),
+            source: "github",
+            description,
+            updated: "",
+            topics: [],
+          };
+        } catch { return null; }
+      });
+      allSkills.push(...skills.filter(Boolean) as Array<Record<string, unknown>>);
+    } catch { /* source unavailable, skip */ }
+  }
+  _skillsCache!.set("github", { data: allSkills, ts: Date.now() });
 }
 
 function listInstalledSkills(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -2356,26 +2452,31 @@ async function installSkill(req: http.IncomingMessage, res: http.ServerResponse)
   const body = await readBody(req);
   let fullId: string;
   try { fullId = JSON.parse(body).id; } catch { res.statusCode = 400; res.end("invalid JSON"); return; }
-  const parts = fullId.split("/");
-  if (parts.length < 2) { res.statusCode = 400; res.end("invalid repo id (owner/repo or owner/repo/skill)"); return; }
 
-  const isSparseSkills = parts.length === 3; // owner/repo/skill → sparse checkout skills/<name>
+  // Parse "host:owner/repo/name" or "owner/repo/name" (legacy)
+  let host = "github";
+  let rest = fullId;
+  if (fullId.includes(":") && !fullId.includes("://")) {
+    [host, rest] = fullId.split(":") as [string, string];
+  }
+  const parts = rest.split("/");
+  if (parts.length < 2) { res.statusCode = 400; res.end("invalid repo id"); return; }
+
+  const isSparseSkills = parts.length === 3;
   const skillName = isSparseSkills ? parts[2]! : parts[1]!;
   const skillDir = path.join(os.homedir(), ".agent-sh", "skills");
   const dest = path.join(skillDir, skillName);
-  const cloneUrl = `https://github.com/${parts[0]}/${parts[1]}.git`;
+  const cloneUrl = skillCloneUrl(host, parts[0]!, parts[1]!);
 
   try {
     await fs.promises.mkdir(skillDir, { recursive: true });
     if (fs.existsSync(dest)) {
-      // Already installed — pull latest
       await new Promise<void>((resolve, reject) => {
         execFile("git", ["-C", dest, "pull", "--ff-only"], { timeout: 30_000 }, (err) => {
           err ? reject(err) : resolve();
         });
       });
     } else if (isSparseSkills) {
-      // Sparse checkout: clone only the specific skill directory
       const tmpDir = path.join(skillDir, `.tmp-${skillName}`);
       await fs.promises.rm(tmpDir, { recursive: true, force: true });
       await new Promise<void>((resolve, reject) => {
@@ -2383,7 +2484,6 @@ async function installSkill(req: http.IncomingMessage, res: http.ServerResponse)
           if (err) { reject(err); return; }
           execFile("git", ["-C", tmpDir, "sparse-checkout", "set", `skills/${skillName}`], { timeout: 10_000 }, (err2) => {
             if (err2) { reject(err2); return; }
-            // Copy the skill dir out of the sparse checkout
             const srcDir = path.join(tmpDir, "skills", skillName);
             fs.promises.cp(srcDir, dest, { recursive: true }).then(() => {
               fs.promises.rm(tmpDir, { recursive: true, force: true }).then(resolve).catch(resolve);

@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { activeSession } from "./session-manager.js";
 
 const skillsOverlay = document.getElementById("skills-overlay");
 const skillsToggle = document.getElementById("skills-toggle");
@@ -65,10 +66,11 @@ export const initSkillsPanel = () => {
 
 const refreshSkills = async () => {
   if (skillsList) skillsList.innerHTML = `<div class="skills-loading">${t("skills.loading")}</div>`;
+  const cwd = activeSession.peek()?.state?.cwd || "";
   try {
     const [markerRes, instRes] = await Promise.all([
       fetch("/api/skills"),
-      fetch("/api/skills/installed"),
+      fetch(`/api/skills/installed${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`),
     ]);
     const marker = await markerRes.json();
     const inst = await instRes.json();
@@ -101,7 +103,6 @@ const renderSkills = (query) => {
         </div>
         <div class="skill-desc">${esc(s.description || "")}</div>
         <div class="skill-meta">
-          <span class="skill-stars">⭐ ${s.stars?.toLocaleString() || 0}</span>
           <span class="skill-author">${esc(s.author)}</span>
           <span class="skill-updated">${s.updated || ""}</span>
         </div>
@@ -155,7 +156,8 @@ const renderSkills = (query) => {
 const refreshInstalled = async () => {
   if (!installedList) return;
   try {
-    const r = await fetch("/api/skills/installed");
+    const cwd = activeSession.peek()?.state?.cwd || "";
+    const r = await fetch(`/api/skills/installed${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`);
     const d = await r.json();
     const list = d.installed || [];
     installed = new Set(list.map((s) => s.name));

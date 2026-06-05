@@ -16,13 +16,13 @@ import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
-import { resolveProvider, getProviderNames } from "agent-sh/settings";
+import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
 import { listAllProviders, resolveApiKey } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
 import { extractText, extractImages, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
 import { createCompactionStrategy } from "./history/compaction-strategy.js";
-import { discoverGlobalSkills, invalidateGlobalSkillsCache } from "agent-sh/skills";
+import { invalidateGlobalSkillsCache } from "agent-sh/skills";
 
 export interface HubOpts {
   port: number;
@@ -399,7 +399,7 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
     if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res, sessions);
-    if (req.method === "GET" && url === "/api/skills/installed") return listInstalledSkills(res);
+    if (req.method === "GET" && url.startsWith("/api/skills/installed")) return listInstalledSkills(req, res);
     if (req.method === "POST" && url === "/api/skills/install") return installSkill(req, res);
     if (req.method === "POST" && url === "/api/skills/uninstall") return uninstallSkill(req, res);
     if (req.method === "GET" && url.startsWith("/api/skills")) return searchSkills(req, res);
@@ -2258,9 +2258,8 @@ async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse)
               name: d.name,
               displayName: name,
               author: src.author,
-              avatar: `https://github.com/${src.owner}.png`,
+              avatar: `https://github.com/${src.owner}.png?`,
               description,
-              stars: 0,
               updated: "",
               topics: [],
             };
@@ -2289,11 +2288,64 @@ async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse)
   }
 }
 
-function listInstalledSkills(res: http.ServerResponse): void {
-  const skills = discoverGlobalSkills();
-  const list = skills.map((s) => ({ name: s.name, path: s.filePath }));
+function listInstalledSkills(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const url = new URL(req.url!, `http://${req.headers.host || "localhost"}`);
+  const cwd = url.searchParams.get("cwd") || undefined;
+  const list: Array<{ name: string; path: string }> = [];
+  const seen = new Set<string>();
+
+  const addFromDir = (dir: string) => {
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        const skillPath = path.join(dir, name);
+        try { if (!fs.statSync(skillPath).isDirectory()) continue; } catch { continue; }
+        if (_hasSkillMd(skillPath) && !seen.has(name)) {
+          seen.add(name);
+          list.push({ name, path: skillPath });
+        }
+      }
+    } catch {}
+  };
+
+  // Global skills
+  addFromDir(path.join(os.homedir(), ".agent-sh", "skills"));
+  addFromDir(path.join(os.homedir(), ".agents", "skills"));
+
+  // Additional skill paths from settings (e.g. custom install locations)
+  const settings = getSettings();
+  for (const p of settings.skillPaths ?? []) {
+    const resolved = p.startsWith("~/") || p === "~"
+      ? path.join(os.homedir(), p.slice(1))
+      : path.resolve(p);
+    addFromDir(resolved);
+  }
+
+  // Project skills: .agents/skills/ in cwd and ancestor dirs (up to home)
+  if (cwd) {
+    const home = path.resolve(os.homedir());
+    let current = path.resolve(cwd);
+    while (true) {
+      addFromDir(path.join(current, ".agents", "skills"));
+      if (current === home) break;
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ installed: list }));
+}
+
+function _hasSkillMd(dir: string): boolean {
+  try {
+    if (fs.existsSync(path.join(dir, "SKILL.md"))) return true;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      if (entry.isDirectory() && _hasSkillMd(path.join(dir, entry.name))) return true;
+    }
+  } catch {}
+  return false;
 }
 
 async function installSkill(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

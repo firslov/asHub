@@ -2204,7 +2204,11 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
 // ── Skills ────────────────────────────────────────────────────────────
 
 const SKILLS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-const SKILLS_REPO = "anthropics/skills";
+const SKILL_SOURCES = [
+  { owner: "anthropics", repo: "skills", branch: "main", author: "anthropics" },
+  { owner: "affaan-m",   repo: "ECC",         branch: "main", author: "affaan-m" },
+  { owner: "obra",       repo: "superpowers", branch: "main", author: "obra" },
+];
 let _skillsCache: { data: Array<Record<string, unknown>>; ts: number } | null = null;
 
 async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -2220,52 +2224,56 @@ async function searchSkills(req: http.IncomingMessage, res: http.ServerResponse)
       return;
     }
 
-    // Fetch skill directories from Anthropic's official skills repo
-    const dirsRes = await fetch(
-      `https://api.github.com/repos/${SKILLS_REPO}/contents/skills`,
-      { headers: { "User-Agent": "asHub", "Accept": "application/vnd.github.v3+json" } },
-    );
-    if (!dirsRes.ok) throw new Error(`GitHub API ${dirsRes.status}`);
-    const dirs = (await dirsRes.json()) as Array<{ name: string; type: string }>;
-    const skillDirs = dirs.filter((d) => d.type === "dir");
-
-    // Fetch SKILL.md from each directory to extract name + description
-    const skills = await Promise.all(skillDirs.map(async (d) => {
+    // Fetch skills from all configured sources
+    const allSkills: Array<Record<string, unknown>> = [];
+    for (const src of SKILL_SOURCES) {
       try {
-        const fileRes = await fetch(
-          `https://raw.githubusercontent.com/${SKILLS_REPO}/main/skills/${d.name}/SKILL.md`,
-          { headers: { "User-Agent": "asHub" } },
+        const dirsRes = await fetch(
+          `https://api.github.com/repos/${src.owner}/${src.repo}/contents/skills`,
+          { headers: { "User-Agent": "asHub", "Accept": "application/vnd.github.v3+json" } },
         );
-        if (!fileRes.ok) return null;
-        const content = await fileRes.text();
-        const fm = content.match(/^---\s*\n([\s\S]*?)\n---/);
-        let name = d.name;
-        let description = "";
-        if (fm) {
-          const nameMatch = fm[1].match(/^name:\s*(.+)$/m);
-          const descMatch = fm[1].match(/^description:\s*(.+)$/m);
-          if (nameMatch) name = nameMatch[1].trim();
-          if (descMatch) description = descMatch[1].trim().slice(0, 200);
-        }
-        return {
-          id: `${SKILLS_REPO}/${d.name}`,
-          name: d.name,
-          displayName: name,
-          author: "anthropics",
-          avatar: "https://avatars.githubusercontent.com/u/28846848?s=40",
-          description,
-          stars: 0,
-          updated: "",
-          topics: [],
-        };
-      } catch { return null; }
-    }));
+        if (!dirsRes.ok) continue;
+        const dirs = (await dirsRes.json()) as Array<{ name: string; type: string }>;
+        const skillDirs = dirs.filter((d) => d.type === "dir");
 
-    const list = skills.filter(Boolean) as Array<Record<string, unknown>>;
-    _skillsCache = { data: list, ts: Date.now() };
+        const skills = await Promise.all(skillDirs.map(async (d) => {
+          try {
+            const fileRes = await fetch(
+              `https://raw.githubusercontent.com/${src.owner}/${src.repo}/${src.branch}/skills/${d.name}/SKILL.md`,
+              { headers: { "User-Agent": "asHub" } },
+            );
+            if (!fileRes.ok) return null;
+            const content = await fileRes.text();
+            const fm = content.match(/^---\s*\n([\s\S]*?)\n---/);
+            let name = d.name;
+            let description = "";
+            if (fm) {
+              const nameMatch = fm[1].match(/^name:\s*(.+)$/m);
+              const descMatch = fm[1].match(/^description:\s*(.+)$/m);
+              if (nameMatch) name = nameMatch[1].trim();
+              if (descMatch) description = descMatch[1].trim().slice(0, 200);
+            }
+            return {
+              id: `${src.owner}/${src.repo}/${d.name}`,
+              name: d.name,
+              displayName: name,
+              author: src.author,
+              avatar: `https://github.com/${src.owner}.png`,
+              description,
+              stars: 0,
+              updated: "",
+              topics: [],
+            };
+          } catch { return null; }
+        }));
+        allSkills.push(...skills.filter(Boolean) as Array<Record<string, unknown>>);
+      } catch { /* source unavailable, skip */ }
+    }
 
-    let result = list;
-    if (q) result = list.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
+    _skillsCache = { data: allSkills, ts: Date.now() };
+
+    let result = allSkills;
+    if (q) result = allSkills.filter((s) => `${s.name} ${s.description}`.toLowerCase().includes(q.toLowerCase()));
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ skills: result }));
   } catch (err) {
@@ -2295,8 +2303,8 @@ async function installSkill(req: http.IncomingMessage, res: http.ServerResponse)
   const parts = fullId.split("/");
   if (parts.length < 2) { res.statusCode = 400; res.end("invalid repo id (owner/repo or owner/repo/skill)"); return; }
 
-  const isAnthropic = parts[0] === "anthropics" && parts[1] === "skills" && parts.length === 3;
-  const skillName = isAnthropic ? parts[2]! : parts[1]!;
+  const isSparseSkills = parts.length === 3; // owner/repo/skill → sparse checkout skills/<name>
+  const skillName = isSparseSkills ? parts[2]! : parts[1]!;
   const skillDir = path.join(os.homedir(), ".agent-sh", "skills");
   const dest = path.join(skillDir, skillName);
   const cloneUrl = `https://github.com/${parts[0]}/${parts[1]}.git`;
@@ -2310,7 +2318,7 @@ async function installSkill(req: http.IncomingMessage, res: http.ServerResponse)
           err ? reject(err) : resolve();
         });
       });
-    } else if (isAnthropic) {
+    } else if (isSparseSkills) {
       // Sparse checkout: clone only the specific skill directory
       const tmpDir = path.join(skillDir, `.tmp-${skillName}`);
       await fs.promises.rm(tmpDir, { recursive: true, force: true });

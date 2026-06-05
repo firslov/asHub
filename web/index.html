@@ -374,20 +374,25 @@
           </div>
         </div>
         <div class="config-body">
-          <div class="skills-toolbar">
-            <div class="skills-search-wrap">
-              <svg class="skills-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                <circle cx="6" cy="6" r="4.5"/><line x1="9.5" y1="9.5" x2="13" y2="13"/>
-              </svg>
-              <input id="skills-search" class="config-input skills-search-input" type="text" data-i18n-placeholder="search.skills" placeholder="Search skills..." autocomplete="off" spellcheck="false" />
+          <div class="skills-tabs" id="skills-tabs">
+            <button class="skills-tab active" data-tab="market" data-i18n="skills.market">Marketplace</button>
+            <button class="skills-tab" data-tab="installed" data-i18n="skills.installed">Installed</button>
+          </div>
+          <div class="skills-tab-panel" id="skills-panel-market">
+            <div class="skills-toolbar">
+              <div class="skills-search-wrap">
+                <svg class="skills-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <circle cx="6" cy="6" r="4.5"/><line x1="9.5" y1="9.5" x2="13" y2="13"/>
+                </svg>
+                <input id="skills-search" class="config-input skills-search-input" type="text" data-i18n-placeholder="search.skills" placeholder="Search skills..." autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="skills-header-count" id="skills-count"></div>
             </div>
-            <div class="skills-header-count" id="skills-count"></div>
+            <div class="skills-list" id="skills-list">
+              <div class="skills-loading" data-i18n="skills.loading">Loading skills…</div>
+            </div>
           </div>
-          <div class="skills-list" id="skills-list">
-            <div class="skills-loading" data-i18n="skills.loading">Loading skills…</div>
-          </div>
-          <div class="skills-installed-section">
-            <div class="config-section-title" data-i18n="skills.installed">Installed</div>
+          <div class="skills-tab-panel" id="skills-panel-installed" hidden>
             <div class="skills-installed-list" id="skills-installed-list">
               <div class="skills-empty" data-i18n="skills.none">No skills installed</div>
             </div>

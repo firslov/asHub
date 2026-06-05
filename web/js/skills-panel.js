@@ -7,8 +7,21 @@ const skillsList = document.getElementById("skills-list");
 const skillsCount = document.getElementById("skills-count");
 const skillsSearch = document.getElementById("skills-search");
 const installedList = document.getElementById("skills-installed-list");
+const skillsTabs = document.getElementById("skills-tabs");
 let allSkills = [];
 let installed = new Set();
+
+// ── Tab switching ──
+
+skillsTabs?.addEventListener("click", (e) => {
+  const tab = e.target.closest(".skills-tab");
+  if (!tab) return;
+  const panel = tab.dataset.tab;
+  skillsTabs.querySelectorAll(".skills-tab").forEach((t) => t.classList.toggle("active", t === tab));
+  document.getElementById("skills-panel-market")?.toggleAttribute("hidden", panel !== "market");
+  document.getElementById("skills-panel-installed")?.toggleAttribute("hidden", panel !== "installed");
+  if (panel === "installed") refreshInstalled();
+});
 
 // ── Overlay toggle ──
 
@@ -62,6 +75,7 @@ const refreshSkills = async () => {
     allSkills = marker.skills || [];
     installed = new Set((inst.installed || []).map((s) => s.name));
     renderSkills(skillsSearch?.value || "");
+    refreshInstalled();
   } catch (err) {
     if (skillsList) skillsList.innerHTML = `<div class="skills-error">${err.message}</div>`;
   }
@@ -82,7 +96,7 @@ const renderSkills = (query) => {
       <div class="skill-card-main">
         <div class="skill-card-header">
           <img class="skill-avatar" src="${s.avatar}&s=40" alt="" width="20" height="20" loading="lazy" />
-          <span class="skill-name">${esc(s.name)}</span>
+          <span class="skill-name">${esc(s.displayName || s.name)}</span>
           ${s.topics?.slice(0, 3).map((tag) => `<span class="skill-tag">${esc(tag)}</span>`).join("") || ""}
         </div>
         <div class="skill-desc">${esc(s.description || "")}</div>
@@ -148,9 +162,31 @@ const refreshInstalled = async () => {
     installedList.innerHTML = list.length
       ? list.map((s) => `<div class="skill-installed-item">
           <span class="skill-installed-name">${esc(s.name)}</span>
-          <span class="skill-installed-path">${esc(s.path.replace(/^\/Users\/[^/]+/, "~"))}</span>
+          <button class="skill-remove-btn" data-name="${esc(s.name)}" title="${t("skills.uninstall")}">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/>
+            </svg>
+          </button>
         </div>`).join("")
       : `<div class="skills-empty">${t("skills.none")}</div>`;
+    // Attach remove handlers
+    installedList.querySelectorAll(".skill-remove-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const name = btn.dataset.name;
+        if (!name) return;
+        btn.disabled = true;
+        try {
+          await fetch("/api/skills/uninstall", { method: "POST", body: JSON.stringify({ name }) });
+          installed.delete(name);
+          refreshInstalled();
+          renderSkills(skillsSearch?.value || "");
+        } catch {
+          btn.disabled = false;
+        }
+      });
+    });
+    // Re-render cards to update install/uninstall buttons
+    renderSkills(skillsSearch?.value || "");
   } catch {}
 };
 

@@ -5160,11 +5160,22 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .skill-install-btn{flex-shrink:0;padding:6px 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-size:.78rem;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s;white-space:nowrap}
 .skill-install-btn:hover{opacity:.9}
 .skill-install-btn.installed{background:transparent;color:var(--accent);border-color:var(--accent)}
-.skills-installed-section{border-top:1px solid var(--border);padding-top:14px}
 .skills-installed-list{display:flex;flex-direction:column;gap:4px;margin-top:8px}
 .skill-installed-item{display:flex;align-items:center;gap:10px;padding:6px 10px;font-size:.8rem;border-radius:6px}
 .skill-installed-name{font-weight:500;color:var(--accent)}
-.skill-installed-path{font-family:var(--mono,"JetBrains Mono",monospace);font-size:.68rem;color:var(--text-mid);opacity:.7}
+.skill-remove-btn{flex-shrink:0;width:28px;height:28px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--text-mid);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:color .15s,background .15s,border-color .15s;margin-left:auto}
+.skill-remove-btn:hover{color:#c0392b;background:rgba(192,57,43,.08);border-color:rgba(192,57,43,.2)}
+.skill-remove-btn:disabled{opacity:.4;pointer-events:none}
 .skills-empty,.skills-loading,.skills-error{text-align:center;padding:28px 16px;color:var(--text-mid);font-size:.82rem}
 .skills-error{color:#c0392b}
 @media(max-width:700px){.skill-card{flex-direction:column;align-items:stretch}.skill-install-btn{align-self:flex-end}}
+
+
+.skills-tabs{display:flex;gap:0;margin-bottom:14px;border-bottom:1px solid var(--border)}
+.skills-tab{padding:7px 16px;font-size:.78rem;font-weight:500;color:var(--text-mid);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:color .15s,border-color .15s;font-family:inherit}
+.skills-tab:hover{color:var(--text)}
+.skills-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.skills-tab-panel{flex:1;min-height:0;display:flex;flex-direction:column}
+.skills-tab-panel[hidden]{display:none}
+.skills-tab-panel .skills-list{flex:1;min-height:0;max-height:none}
+.skills-tab-panel .skills-installed-list{flex:1;min-height:0;overflow-y:auto}

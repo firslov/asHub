@@ -246,10 +246,11 @@ const doSubmit = async (query) => {
     await doShellSubmit(query.startsWith("!") ? query.slice(1) : query);
     return;
   }
-  if (state.isSubmitting) return;
-  state.lastQuery = query;
+  const sv = activeSession.peek();
+  if (!sv || sv.state.isSubmitting) return;
+  sv.state.lastQuery = query;
   queryHistory.push(query);
-  state.isSubmitting = true;
+  sv.state.isSubmitting = true;
   input.value = "";
   input.style.height = "";
   slashAc.close();
@@ -262,10 +263,9 @@ const doSubmit = async (query) => {
     optimisticSep.className = "turn-sep";
     optimisticSep.innerHTML =
       `<span class="turn-line"></span>` +
-      (state.cwd ? `<span class="turn-cwd">${escape(state.cwd)}</span>` : "") +
+      (sv.state.cwd ? `<span class="turn-cwd">${escape(sv.state.cwd)}</span>` : "") +
       `<span class="turn-time">${new Date().toLocaleTimeString()}</span>` +
       `<span class="turn-line"></span>`;
-    const sv = activeSession.peek();
     appendAfterPending(sv, optimisticSep);
     optimisticBox = createUserBox(query, attachedImages.length > 0 ? attachedImages : null);
     optimisticBox.classList.add("pending");
@@ -273,12 +273,13 @@ const doSubmit = async (query) => {
     appendAfterPending(sv, optimisticBox);
   }
   input.disabled = true;
+  const sid = sv.id;
   try {
     if (query.startsWith("/")) {
       await submitSlash(query);
     } else if (attachedImages.length > 0) {
       const body = JSON.stringify({ query, images: attachedImages });
-      await fetch(`/${currentSessionId()}/submit`, {
+      await fetch(`/${sid}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body,
@@ -286,7 +287,7 @@ const doSubmit = async (query) => {
       attachedImages = [];
       renderImagePreviews();
     } else {
-      await fetch(`/${currentSessionId()}/submit`, {
+      await fetch(`/${sid}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query }),
@@ -297,7 +298,7 @@ const doSubmit = async (query) => {
     optimisticBox?.remove();
     optimisticSep?.remove();
   } finally {
-    state.isSubmitting = false;
+    sv.state.isSubmitting = false;
     input.disabled = false;
     input.focus();
   }

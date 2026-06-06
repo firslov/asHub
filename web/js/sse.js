@@ -462,6 +462,12 @@ export const handlers = {
   "hub:replay-done"() {
     if (this.state.replaying) this.exitReplayMode();
   },
+
+  // Keepalive sent by server before _ensureBridge to prevent the 500ms
+  // safety timer from firing during lazy session restore.
+  "hub:replay-starting"() {
+    // receiveFrame → scheduleReplayFlush already clears the safety timer.
+  },
 };
 
 // Heavy work deferred until replay batch completes — invoked by

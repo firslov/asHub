@@ -1506,6 +1506,11 @@ async function openSseMulti(
   for (const { id, tail } of subs) {
     const session = sessions.get(id);
     if (!session) continue;
+    // Send keepalive before potentially-slow _ensureBridge so the
+    // client's 500ms safety timer is reset and doesn't fire prematurely.
+    if (tail > 0) {
+      try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "hub:replay-starting" } })}\n\n`); } catch { return; }
+    }
     // Lazily create bridge + restore session data if needed.
     await session._ensureBridge?.();
     if (tail > 0) {

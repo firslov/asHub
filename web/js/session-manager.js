@@ -113,7 +113,9 @@ const reopen = () => {
     if (id > lastSeenId) lastSeenId = id;
     let frame;
     try { frame = JSON.parse(ev.data); } catch { return; }
-    sessions.get(frame?.meta?.source)?.receiveFrame?.(frame);
+    const target = sessions.get(frame?.meta?.source);
+    if (!target) return;
+    target.receiveFrame?.(frame);
   };
 };
 

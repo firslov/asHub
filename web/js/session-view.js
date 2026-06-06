@@ -1,5 +1,6 @@
 import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
+import { compactReasoning } from "./stream/compact.js";
 
 const MAX_CACHED_DOMS = 3;
 const _cachedDOMs = new Set();  // session view elements with live DOM
@@ -164,9 +165,11 @@ class SessionView extends HTMLElement {
   }
 
   resetForBranchSwitch() {
+    const wasReplaying = this.state.replaying;
     if (this.streamEl) this.streamEl.innerHTML = "";
     this._replayFrag = null;
     this.state = { ...STATE_DEFAULTS };
+    this.state.replaying = wasReplaying; // preserve replay mode across branch resets
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };
     this.thinking = { el: null, block: null };
     this.toolGroup = { current: null };
@@ -191,6 +194,9 @@ class SessionView extends HTMLElement {
     if (this.state.replaying && this.loadingEl && !this.loadingEl.hidden) {
       this.loadingEl.hidden = true;
     }
+    if (this.state.replaying) {
+      this._replayFrameCount++;
+    }
     const fn = handlers[frame?.meta?.name];
     if (fn) {
       try { fn.call(this, frame.payload, frame.meta); }
@@ -201,6 +207,8 @@ class SessionView extends HTMLElement {
 
   enterReplayMode() {
     this.state.replaying = true;
+    this._replayEnterTs = performance.now();
+    this._replayFrameCount = 0;
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
     // Hide empty state immediately to prevent flash on SPA session switch.
     // If replay yields no content, exitReplayMode will restore it.
@@ -222,8 +230,11 @@ class SessionView extends HTMLElement {
   exitReplayMode() {
     this.state.replaying = false;
     if (this.replayFlushTimer) { clearTimeout(this.replayFlushTimer); this.replayFlushTimer = null; }
-    // Flush batched replay fragment to the real DOM in a single operation.
+    // Run compaction on the fragment BEFORE appending to live DOM.
+    // This avoids an extra layout pass: the fragment is not yet attached,
+    // so DOM mutations here are free.
     if (this._replayFrag && this._replayFrag.childNodes.length > 0 && this.streamEl) {
+      compactReasoning(this._replayFrag);
       this.streamEl.appendChild(this._replayFrag);
     }
     this._replayFrag = null;

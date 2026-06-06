@@ -877,12 +877,17 @@ async function createSession(
         // ── Phase 2 lazy restore: load replay + messages from disk ──
         if (session._needsRestore) {
           try {
+            let loadedReplay = false;
             // Load replay file
             try {
-              const replayRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, `${id}.replay.jsonl`), "utf-8");
+              const replayPath = path.join(SESSIONS_DIR, `${id}.replay.jsonl`);
+              const replayRaw = await fs.promises.readFile(replayPath, "utf-8");
               const replayFrames = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n")
                 .filter((f) => { const n = parseFrameName(f); return n !== "ui:error" && n !== "ui:info"; });
-              session.replay = replayFrames.length > REPLAY_LIMIT ? replayFrames.slice(-REPLAY_LIMIT) : replayFrames;
+              if (replayFrames.length > 0) {
+                session.replay = replayFrames.length > REPLAY_LIMIT ? replayFrames.slice(-REPLAY_LIMIT) : replayFrames;
+                loadedReplay = true;
+              }
             } catch {}
 
             // Load / create SessionStore
@@ -901,8 +906,11 @@ async function createSession(
               }
             }
 
-            // Rebuild replay from messages (includes image data)
-            if (session.store) {
+            // Rebuild replay from messages only when the replay file is
+            // missing (legacy session, compaction not yet persisted, etc.).
+            // When replay.jsonl is present it is already authoritative —
+            // rebuildReplay() writes it after every compaction.
+            if (session.store && !loadedReplay) {
               const msgs = session.store.buildMessages();
               if (msgs.length > 0) {
                 const { entryIds: restoredIds } = session.store.buildBranchWithIds();

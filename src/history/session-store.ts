@@ -232,6 +232,26 @@ export class SessionStore {
         entryIds.push(e.id);
       }
     }
+
+    // Sanitize: if the last message is an assistant with tool_calls that
+    // lack corresponding tool-result messages (e.g. session terminated
+    // mid-execution), strip the orphaned tool_calls to avoid API errors.
+    const last = messages[messages.length - 1];
+    if (last?.role === "assistant" && Array.isArray(last.tool_calls) && last.tool_calls.length > 0) {
+      // Collect tool_call_ids that have matching tool responses
+      const answeredIds = new Set<string>();
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i]!;
+        if (m.role === "tool" && m.tool_call_id) answeredIds.add(m.tool_call_id);
+      }
+      const dangling = last.tool_calls.filter((tc) => !answeredIds.has(tc.id ?? ""));
+      if (dangling.length > 0) {
+        // Strip only the orphaned tool_calls, keep text content if any
+        last.tool_calls = last.tool_calls.filter((tc) => answeredIds.has(tc.id ?? ""));
+        if (last.tool_calls.length === 0) delete last.tool_calls;
+      }
+    }
+
     return { messages, entryIds };
   }
 

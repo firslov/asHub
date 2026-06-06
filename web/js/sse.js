@@ -25,8 +25,8 @@ import { createUserBox } from "./actions.js";
 import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
 import { refreshTreeIfOpen } from "./tree-panel.js";
-import { compactReasoning } from "./stream/compact.js";
 import { startShellBlock, finishShellBlock, queueShellBlock } from "./stream/shell-block.js";
+import { compactReasoning } from "./stream/compact.js";
 import { activeSession, globalConnState, sessions } from "./session-manager.js";
 
 // Shared page chrome — reflects the active session, not whatever frame just arrived.
@@ -368,7 +368,9 @@ export const handlers = {
   },
 
   "hub:branch-switched"() {
-    this.resetForBranchSwitch?.();
+    // During replay, this is the first synthetic frame and NOT a real
+    // branch switch.  Only reset when this fires in a live session.
+    if (!this.state.replaying) this.resetForBranchSwitch?.();
     if (this === activeSession.peek()) refreshTreeIfOpen();
   },
 
@@ -467,9 +469,10 @@ export const handlers = {
 export const onReplayDone = (session) => {
   if (!session?.streamEl) return;
   sweepOrphanThinking(session);
-  compactReasoning(session.streamEl);
-  highlightWithin(session.streamEl);
-  renderMathIn(session.streamEl);
+  // compactReasoning is already done on the fragment before appending
+  // (see SessionView.exitReplayMode).  Schedule the heavy async work.
+  highlightWithin(session.streamEl, { async: true });
+  renderMathIn(session.streamEl, { async: true });
   forceScrollBottom(session);
   refreshGitBranch(session);
   refreshModelChip(session);

@@ -1,5 +1,6 @@
 import { t } from "./i18n.js";
 import { extractMath, renderMathIn } from "./math.js";
+import { scheduleIdleWork } from "./stream/idle-work.js";
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -88,41 +89,61 @@ export const mdToHtml = (raw) =>
 
 export { renderMathIn };
 
-export const highlightWithin = (root) => {
-  if (!window.hljs || !root) return;
-  root.querySelectorAll("pre code").forEach((el) => {
-    if (el.dataset.highlighted) return;
-    try { window.hljs.highlightElement(el); el.dataset.highlighted = "1"; } catch {}
-    // Set data-language for CSS badge
-    if (!el.dataset.language) {
-      for (const c of el.classList) {
-        if (c.startsWith("language-")) {
-          el.dataset.language = c.slice(9);
-          break;
-        }
+/** Highlight a single code element. Extracted so both sync and async paths share it. */
+const highlightCodeEl = (el) => {
+  try { window.hljs.highlightElement(el); el.dataset.highlighted = "1"; } catch {}
+  // Set data-language for CSS badge
+  if (!el.dataset.language) {
+    for (const c of el.classList) {
+      if (c.startsWith("language-")) {
+        el.dataset.language = c.slice(9);
+        break;
       }
     }
-    // Add copy button to code blocks
-    const pre = el.parentElement;
-    if (pre && pre.tagName === "PRE" && !pre.querySelector(".code-copy-btn")) {
-      const btn = document.createElement("button");
-      btn.className = "code-copy-btn";
-      btn.title = t("copy");
-      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1"/><path d="M8 4V2.5A1.5 1.5 0 0 0 6.5 1h-3A1.5 1.5 0 0 0 2 2.5v3A1.5 1.5 0 0 0 3.5 7H4"/></svg>`;
-      btn.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(el.textContent || "");
-          btn.classList.add("copied");
-          btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 6 5 9 10 2"/></svg>`;
-          setTimeout(() => {
-            btn.classList.remove("copied");
-            btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1"/><path d="M8 4V2.5A1.5 1.5 0 0 0 6.5 1h-3A1.5 1.5 0 0 0 2 2.5v3A1.5 1.5 0 0 0 3.5 7H4"/></svg>`;
-          }, 1200);
-        } catch (e) { console.error("clipboard", e); }
-      });
-      pre.appendChild(btn);
-    }
-  });
+  }
+  // Add copy button to code blocks
+  const pre = el.parentElement;
+  if (pre && pre.tagName === "PRE" && !pre.querySelector(".code-copy-btn")) {
+    const btn = document.createElement("button");
+    btn.className = "code-copy-btn";
+    btn.title = t("copy");
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1"/><path d="M8 4V2.5A1.5 1.5 0 0 0 6.5 1h-3A1.5 1.5 0 0 0 2 2.5v3A1.5 1.5 0 0 0 3.5 7H4"/></svg>`;
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(el.textContent || "");
+        btn.classList.add("copied");
+        btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 6 5 9 10 2"/></svg>`;
+        setTimeout(() => {
+          btn.classList.remove("copied");
+          btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1"/><path d="M8 4V2.5A1.5 1.5 0 0 0 6.5 1h-3A1.5 1.5 0 0 0 2 2.5v3A1.5 1.5 0 0 0 3.5 7H4"/></svg>`;
+        }, 1200);
+      } catch (e) { console.error("clipboard", e); }
+    });
+    pre.appendChild(btn);
+  }
+};
+
+/**
+ * Highlight all code blocks within `root`.
+ *
+ * When `async` is true and there are many blocks (>6), processing is split
+ * into small batches via requestIdleCallback so the main thread stays
+ * responsive.  Use `async: true` after replay flushes (many blocks at once);
+ * use `async: false` (default) for live streaming (one block at a time).
+ */
+export const highlightWithin = (root, { async: asyncMode = false } = {}) => {
+  if (!window.hljs || !root) return;
+  const codeBlocks = Array.from(
+    root.querySelectorAll("pre code"),
+  ).filter((el) => !el.dataset.highlighted);
+
+  if (codeBlocks.length === 0) return;
+
+  if (asyncMode && codeBlocks.length > 6) {
+    scheduleIdleWork(codeBlocks, highlightCodeEl, { batchSize: 4 });
+  } else {
+    codeBlocks.forEach(highlightCodeEl);
+  }
 };
 
 export const fmtNum = (n) => n >= 10000 ? `${(n / 1000).toFixed(1)}k` : String(n);

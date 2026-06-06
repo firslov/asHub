@@ -1,3 +1,5 @@
+import { scheduleIdleWork } from "./stream/idle-work.js";
+
 // Math extraction & rendering.
 //
 // Delimiter pairs supported:
@@ -223,40 +225,57 @@ export const extractMath = (src) => {
   return out;
 };
 
-export const renderMathIn = (root) => {
+/** Render a single math placeholder. Extracted for shared sync/async paths. */
+const renderMathNode = (node) => {
+  if (node.dataset.rendered === "1") return;
+  const tex = node.dataset.tex || "";
+  const display = node.dataset.display === "1";
+  const cached = renderCache.get(cacheKey(tex, display));
+  if (typeof cached === "string") {
+    node.innerHTML = cached;
+    node.dataset.rendered = "1";
+    return;
+  }
+  if (cached === null) {
+    node.classList.add("math-error");
+    node.textContent = display ? `$$${tex}$$` : `$${tex}$`;
+    return;
+  }
+  try {
+    const html = window.katex.renderToString(tex, {
+      displayMode: display,
+      throwOnError: false,
+      strict: "ignore",
+      trust: false,
+      output: "htmlAndMathml",
+    });
+    renderCache.set(cacheKey(tex, display), html);
+    node.innerHTML = html;
+    node.dataset.rendered = "1";
+  } catch {
+    node.classList.add("math-error");
+    node.textContent = display ? `$$${tex}$$` : `$${tex}$`;
+  }
+};
+
+/**
+ * Render all KaTeX math placeholders within `root`.
+ *
+ * When `async` is true and there are many uncached formulas (>8), processing
+ * is split into small batches via requestIdleCallback.  Use `async: true`
+ * after replay flushes; use `async: false` (default) for live streaming.
+ */
+export const renderMathIn = (root, { async: asyncMode = false } = {}) => {
   if (!root || typeof window === "undefined" || !window.katex) return;
-  const nodes = root.querySelectorAll(".math-tex[data-tex]");
-  for (const node of nodes) {
-    if (node.dataset.rendered === "1") continue;
-    const tex = node.dataset.tex || "";
-    const display = node.dataset.display === "1";
-    const cached = renderCache.get(cacheKey(tex, display));
-    if (typeof cached === "string") {
-      node.innerHTML = cached;
-      node.dataset.rendered = "1";
-      continue;
-    }
-    if (cached === null) {
-      // Validator rejected — extractMath shouldn't have emitted a
-      // placeholder.  Bail to literal as a defensive fallback.
-      node.classList.add("math-error");
-      node.textContent = display ? `$$${tex}$$` : `$${tex}$`;
-      continue;
-    }
-    try {
-      const html = window.katex.renderToString(tex, {
-        displayMode: display,
-        throwOnError: false,
-        strict: "ignore",
-        trust: false,
-        output: "htmlAndMathml",
-      });
-      renderCache.set(cacheKey(tex, display), html);
-      node.innerHTML = html;
-      node.dataset.rendered = "1";
-    } catch {
-      node.classList.add("math-error");
-      node.textContent = display ? `$$${tex}$$` : `$${tex}$`;
-    }
+  const nodes = Array.from(
+    root.querySelectorAll(".math-tex[data-tex]"),
+  ).filter((n) => n.dataset.rendered !== "1");
+
+  if (nodes.length === 0) return;
+
+  if (asyncMode && nodes.length > 8) {
+    scheduleIdleWork(nodes, renderMathNode, { batchSize: 8 });
+  } else {
+    nodes.forEach(renderMathNode);
   }
 };

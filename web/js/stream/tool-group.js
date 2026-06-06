@@ -20,10 +20,22 @@ const groupState = new WeakMap();
 export const insertStreamNode = (session, node) => {
   // During replay, batch all nodes into a DocumentFragment for
   // single-pass DOM insertion — eliminates 1000+ reflows.
-  const target = (session?.state.replaying && session._replayFrag)
+  // Also skip querySelector entirely: no pending/thinking elements exist
+  // during replay since they're live-streaming concepts.
+  const replaying = session?.state.replaying;
+  const target = (replaying && session._replayFrag)
     ? session._replayFrag
     : session?.streamEl;
   if (!target) return;
+
+  if (replaying) {
+    // Replay path: sequential frames in order — no pending boxes or
+    // thinking dots to work around. Just append in chronological order.
+    target.appendChild(node);
+    return;
+  }
+
+  // ── Live-streaming path ──────────────────────────────────────
   if (node.classList?.contains("thinking")) {
     target.appendChild(node);
     return;

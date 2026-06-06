@@ -202,7 +202,11 @@ class SessionView extends HTMLElement {
       try { fn.call(this, frame.payload, frame.meta); }
       catch (e) { console.error(frame.meta.name, e); }
     }
-    this.scheduleReplayFlush();
+    // Keepalive frame resets safety timer manually; skip the 12ms debounce
+    // since _ensureBridge may take 200ms+ before real frames arrive.
+    if (frame?.meta?.name !== "hub:replay-starting") {
+      this.scheduleReplayFlush();
+    }
   }
 
   enterReplayMode() {

@@ -465,8 +465,13 @@ export const handlers = {
 
   // Keepalive sent by server before _ensureBridge to prevent the 500ms
   // safety timer from firing during lazy session restore.
+  // Resets the safety timer directly; receiveFrame skips scheduleReplayFlush
+  // for this event to avoid the 12ms debounce (since _ensureBridge may take
+  // 200ms+ before real replay frames arrive).
   "hub:replay-starting"() {
-    // receiveFrame → scheduleReplayFlush already clears the safety timer.
+    if (!this.state.replaying) return;
+    if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
+    this.replayFlushTimer = setTimeout(() => this.exitReplayMode(), 500);
   },
 };
 

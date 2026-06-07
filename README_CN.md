@@ -29,79 +29,81 @@
 
 ## 安装
 
-**macOS (Apple Silicon)** —— 一行命令安装，无需处理 Gatekeeper 拦截：
+### macOS (Apple Silicon)
+
+一行命令安装，无需处理 Gatekeeper 拦截：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/firslov/ashub/main/install.sh | bash
 ```
 
-脚本会下载最新版本、安装到 `/Applications` 并清除隔离标记。asHub 使用 ad-hoc
-签名但未经过公证（没有付费的 Apple Developer 账号），因此直接从浏览器下载会被
-Gatekeeper 拦截。
+安装到 `/Applications` 并清除隔离标记。
 
 <details>
 <summary>想用 .dmg 安装？</summary>
 
-从 [Releases](https://github.com/firslov/ashub/releases) 下载，把 asHub 拖入
-Applications，然后任选其一：
+从 [Releases](https://github.com/firslov/ashub/releases) 下载，拖入 Applications，然后：
 
 - 执行 `/usr/bin/xattr -dr com.apple.quarantine "/Applications/asHub.app"`，**或**
-- 先打开一次，再进入 **系统设置 → 隐私与安全性**，拉到底部点击 **仍要打开**。
-  （macOS Sequoia 及更高版本已移除右键 → 打开的旧方式。）
+- 先打开一次，进入 **系统设置 → 隐私与安全性**，拉到底部点击 **仍要打开**。
 
 </details>
 
-**Windows** —— 从 [Releases](https://github.com/firslov/ashub/releases) 下载
-安装包。需要 PowerShell 5.1 或更高版本（Windows 10/11 自带）。
+### Windows
 
-**Linux** —— 从 [Releases](https://github.com/firslov/ashub/releases) 下载
-AppImage。
+从 [Releases](https://github.com/firslov/ashub/releases) 下载安装包。需要 PowerShell 5.1+（Windows 10/11 自带）。
 
-## 开发
+### Linux
+
+从 [Releases](https://github.com/firslov/ashub/releases) 下载 AppImage。
+
+### 源码运行
+
+需要 **Node.js ≥ 18**。
 
 ```sh
+git clone https://github.com/firslov/ashub.git
+cd ashub
 npm install
-npm run electron:dev        # Electron 开发模式
-npm start -- --port 8080    # CLI 开发模式（无需 Electron）
-npm run electron:dist:mac   # 构建 macOS .dmg
-npm run electron:dist:win   # 构建 Windows .exe
 ```
 
-> 开发模式下 `ashub` 命令未全局注册，请使用 `npm start -- <参数>` 或 `npm link`。
-
-## 命令行
-
-> `ashub` 命令仅源码安装时可用：在项目目录执行 `npm install -g` 或 `npm link`。
+**Electron**（桌面应用）：
 
 ```sh
-ashub                        # 默认端口 7878
-ashub --port 8080
-ashub --model gpt-4o
+npm run electron:dev
 ```
 
-| 参数              | 默认值           | 说明              |
-|-------------------|------------------|-------------------|
-| `--port N`        | `7878`           | HTTP 端口         |
-| `--host HOST`     | `127.0.0.1`      | 绑定地址          |
-| `--model NAME`    | 配置默认值       | 覆盖模型          |
-| `--provider NAME` | 配置默认值       | 覆盖 Provider     |
-
-## 浏览器
-
-Hub 内置完整的 Web UI，无需 Electron 即可在浏览器中使用。
+**命令行**（无窗口服务器）：
 
 ```sh
-# 启动服务（源码安装）
-ashub --host 0.0.0.0 --port 7878
+npm start -- --port 8080
+```
 
-# 开发模式
+**浏览器**（用任意浏览器作为界面）：
+
+```sh
 npm start -- --host 0.0.0.0 --port 7878
+# 在浏览器中打开 http://localhost:7878
 ```
-
-在浏览器中打开 `http://localhost:7878`。
 
 > 绑定 `0.0.0.0` 允许局域网内其他设备访问。
-> 使用 `127.0.0.1`（默认）仅限本机访问。
+> `127.0.0.1`（默认）仅限本机访问。
+
+**构建**可分发的安装包：
+
+```sh
+npm run electron:dist:mac   # macOS .dmg
+npm run electron:dist:win   # Windows .exe
+```
+
+#### 命令行参数
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--port N` | `7878` | HTTP 端口 |
+| `--host HOST` | `127.0.0.1` | 绑定地址 |
+| `--model NAME` | 配置默认值 | 覆盖模型 |
+| `--provider NAME` | 配置默认值 | 覆盖 Provider |
 
 ## 许可证
 

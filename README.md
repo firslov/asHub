@@ -29,85 +29,81 @@ Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent
 
 ## Install
 
-**macOS (Apple Silicon)** — one-line install, no Gatekeeper prompt:
+### macOS (Apple Silicon)
+
+One-line install, no Gatekeeper prompt:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/firslov/ashub/main/install.sh | bash
 ```
 
-This grabs the latest release, installs to `/Applications`, and clears the
-quarantine flag. asHub is signed ad-hoc but not notarized (no paid Apple
-Developer account), so a plain download from the browser would otherwise be
-blocked by Gatekeeper.
+Installs to `/Applications` and clears the quarantine flag.
 
 <details>
 <summary>Prefer the .dmg?</summary>
 
-Download it from [Releases](https://github.com/firslov/ashub/releases), drag
-asHub to Applications, then either:
+Download from [Releases](https://github.com/firslov/ashub/releases), drag to Applications, then:
 
 - run `/usr/bin/xattr -dr com.apple.quarantine "/Applications/asHub.app"`, **or**
-- launch it once, then open **System Settings → Privacy & Security**, scroll to
-  the bottom and click **Open Anyway**. (On macOS Sequoia and later the old
-  right-click → Open shortcut no longer works.)
+- launch once, then open **System Settings → Privacy & Security**, scroll to the bottom and click **Open Anyway**.
 
 </details>
 
-**Windows** — download the installer from
-[Releases](https://github.com/firslov/ashub/releases). Requires PowerShell 5.1
-or later (built into Windows 10/11).
+### Windows
 
-**Linux** — download the AppImage from
-[Releases](https://github.com/firslov/ashub/releases).
+Download the installer from [Releases](https://github.com/firslov/ashub/releases). Requires PowerShell 5.1+ (built into Windows 10/11).
 
-## Dev
+### Linux
+
+Download the AppImage from [Releases](https://github.com/firslov/ashub/releases).
+
+### Run from source
+
+Requires **Node.js ≥ 18**.
 
 ```sh
+git clone https://github.com/firslov/ashub.git
+cd ashub
 npm install
-npm run electron:dev        # Electron dev mode
-npm start -- --port 8080    # CLI dev mode (no Electron)
-npm run electron:dist:mac   # build macOS .dmg
-npm run electron:dist:win   # build Windows .exe
 ```
 
-> In dev mode the `ashub` command is not registered globally.
-> Use `npm start -- <args>` to pass flags, or `npm link` to register it.
-
-## CLI
-
-> The `ashub` command is only available when installing from source:
-> `npm install -g` in the repo directory, or `npm link`.
+**Electron** (desktop app):
 
 ```sh
-ashub                        # default: port 7878
-ashub --port 8080
-ashub --model gpt-4o
+npm run electron:dev
 ```
 
-| Flag            | Default          | Description             |
-|-----------------|------------------|-------------------------|
-| `--port N`      | `7878`           | HTTP port               |
-| `--host HOST`   | `127.0.0.1`      | Bind host               |
-| `--model NAME`  | settings default | Model override          |
-| `--provider NAME` | settings default | Provider override     |
-
-## Browser
-
-The hub serves a full web UI — you can use asHub entirely in a browser
-without Electron.
+**Headless** (CLI server, no window):
 
 ```sh
-# Start the server (source install)
-ashub --host 0.0.0.0 --port 7878
+npm start -- --port 8080
+```
 
-# Or in dev mode
+**Browser** (use any modern browser as the UI):
+
+```sh
 npm start -- --host 0.0.0.0 --port 7878
+# then open http://localhost:7878
 ```
 
-Open `http://localhost:7878` in any modern browser.
-
-> Binding to `0.0.0.0` allows access from other devices on the network.
+> Bind `0.0.0.0` to allow access from other devices on your network.
 > Use `127.0.0.1` (default) for local-only access.
+
+**Build** a distributable package:
+
+```sh
+npm run electron:dist:mac   # macOS .dmg
+npm run electron:dist:win   # Windows .exe
+```
+
+#### CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--port N` | `7878` | HTTP port |
+| `--host HOST` | `127.0.0.1` | Bind address |
+| `--model NAME` | settings default | Model override |
+| `--provider NAME` | settings default | Provider override |
 
 ## License
 

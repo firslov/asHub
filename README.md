@@ -64,10 +64,14 @@ or later (built into Windows 10/11).
 
 ```sh
 npm install
-npm run electron:dev        # dev mode
+npm run electron:dev        # Electron dev mode
+npm start -- --port 8080    # CLI dev mode (no Electron)
 npm run electron:dist:mac   # build macOS .dmg
 npm run electron:dist:win   # build Windows .exe
 ```
+
+> In dev mode the `ashub` command is not registered globally.
+> Use `npm start -- <args>` to pass flags, or `npm link` to register it.
 
 ## CLI
 

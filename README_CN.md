@@ -61,10 +61,13 @@ AppImage。
 
 ```sh
 npm install
-npm run electron:dev        # 开发模式
+npm run electron:dev        # Electron 开发模式
+npm start -- --port 8080    # CLI 开发模式（无需 Electron）
 npm run electron:dist:mac   # 构建 macOS .dmg
 npm run electron:dist:win   # 构建 Windows .exe
 ```
+
+> 开发模式下 `ashub` 命令未全局注册，请使用 `npm start -- <参数>` 或 `npm link`。
 
 ## 命令行
 

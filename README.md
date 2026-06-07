@@ -91,6 +91,24 @@ ashub --model gpt-4o
 | `--model NAME`  | settings default | Model override          |
 | `--provider NAME` | settings default | Provider override     |
 
+## Browser
+
+The hub serves a full web UI — you can use asHub entirely in a browser
+without Electron.
+
+```sh
+# Start the server (source install)
+ashub --host 0.0.0.0 --port 7878
+
+# Or in dev mode
+npm start -- --host 0.0.0.0 --port 7878
+```
+
+Open `http://localhost:7878` in any modern browser.
+
+> Binding to `0.0.0.0` allows access from other devices on the network.
+> Use `127.0.0.1` (default) for local-only access.
+
 ## License
 
 MIT

@@ -86,6 +86,23 @@ ashub --model gpt-4o
 | `--model NAME`    | 配置默认值       | 覆盖模型          |
 | `--provider NAME` | 配置默认值       | 覆盖 Provider     |
 
+## 浏览器
+
+Hub 内置完整的 Web UI，无需 Electron 即可在浏览器中使用。
+
+```sh
+# 启动服务（源码安装）
+ashub --host 0.0.0.0 --port 7878
+
+# 开发模式
+npm start -- --host 0.0.0.0 --port 7878
+```
+
+在浏览器中打开 `http://localhost:7878`。
+
+> 绑定 `0.0.0.0` 允许局域网内其他设备访问。
+> 使用 `127.0.0.1`（默认）仅限本机访问。
+
 ## 许可证
 
 MIT

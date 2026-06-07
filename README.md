@@ -75,6 +75,9 @@ npm run electron:dist:win   # build Windows .exe
 
 ## CLI
 
+> The `ashub` command is only available when installing from source:
+> `npm install -g` in the repo directory, or `npm link`.
+
 ```sh
 ashub                        # default: port 7878
 ashub --port 8080

@@ -71,6 +71,8 @@ npm run electron:dist:win   # 构建 Windows .exe
 
 ## 命令行
 
+> `ashub` 命令仅源码安装时可用：在项目目录执行 `npm install -g` 或 `npm link`。
+
 ```sh
 ashub                        # 默认端口 7878
 ashub --port 8080

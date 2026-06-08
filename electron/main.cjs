@@ -296,10 +296,10 @@ function setupAutoUpdater() {
       mainWindow.webContents.send("update-available", info.version);
       dialog.showMessageBox(mainWindow, {
         type: "info",
-        title: "发现新版本",
-        message: `asHub ${info.version} 已发布`,
-        detail: "是否立即下载更新？",
-        buttons: ["下载更新", "稍后提醒"],
+        title: "Update Available",
+        message: `asHub ${info.version} is available.`,
+        detail: "Download and install now?",
+        buttons: ["Download", "Later"],
         defaultId: 0,
       }).then(({ response }) => {
         if (response === 0) {
@@ -320,10 +320,10 @@ function setupAutoUpdater() {
       mainWindow.setProgressBar(-1);
       dialog.showMessageBox(mainWindow, {
         type: "info",
-        title: "更新已就绪",
-        message: "新版本已下载完成，重启应用即可安装。",
-        detail: "是否立即重启？",
-        buttons: ["立即重启", "稍后"],
+        title: "Update Ready",
+        message: "The update has been downloaded. Restart to install.",
+        detail: "Restart now?",
+        buttons: ["Restart", "Later"],
         defaultId: 0,
       }).then(({ response }) => {
         if (response === 0) {
@@ -334,7 +334,7 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("update-not-available", () => {
-    console.log("[updater] 当前已是最新版本");
+    console.log("[updater] already up to date");
   });
 
 	autoUpdater.on("error", (err) => {
@@ -345,8 +345,8 @@ function setupAutoUpdater() {
 	      return;
 	    }
 	    dialog.showErrorBox(
-	      "更新检测失败",
-	      `无法检查更新：\n\n${err.message}`
+	      "Update Check Failed",
+	      `Unable to check for updates:\n\n${err.message}`
 	    );
 	  });
 }

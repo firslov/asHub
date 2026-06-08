@@ -3,7 +3,7 @@
 [English](README.md) | [简体中文](#ashub-中文)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](package.json)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 
 [agent-sh](https://github.com/guanyilun/agent-sh) 的桌面应用 —— 运行 agent-sh 会话并通过浏览器界面进行交互。
 
@@ -59,7 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/firslov/ashub/main/install.sh | bas
 
 ### 源码运行
 
-需要 **Node.js ≥ 18**。
+需要 **Node.js ≥ 20**。
 
 ```sh
 git clone https://github.com/firslov/ashub.git

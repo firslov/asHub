@@ -3,7 +3,7 @@
 [English](#ashub) | [简体中文](README_CN.md)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](package.json)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 
 Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent-sh sessions and exposes them through a browser UI.
 
@@ -59,7 +59,7 @@ Download the AppImage from [Releases](https://github.com/firslov/ashub/releases)
 
 ### Run from source
 
-Requires **Node.js ≥ 18**.
+Requires **Node.js ≥ 20**.
 
 ```sh
 git clone https://github.com/firslov/ashub.git

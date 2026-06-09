@@ -192,8 +192,63 @@ jobs:
             release/latest-linux.yml
           if-no-files-found: error
 
+  # Opt-in beta: Tauri build (macOS arm64). Runs in parallel and never blocks
+  # the Electron release — continue-on-error keeps a Tauri failure from failing
+  # the workflow or the release job.
+  build-tauri-mac:
+    runs-on: macos-latest
+    continue-on-error: true
+    strategy:
+      matrix:
+        node-version: [22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Rust toolchain (preinstalled on runner)
+        run: rustc --version && cargo --version
+
+      # --ignore-scripts: skip electron-builder's install-app-deps so node-pty
+      # keeps its plain-Node N-API prebuild (the sidecar runs under bundled Node).
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Sync version from git tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          node -e "
+            const fs = require('fs');
+            const version = '${{ github.ref_name }}'.replace(/^v/, '');
+            for (const f of ['package.json', 'src-tauri/tauri.conf.json']) {
+              const j = JSON.parse(fs.readFileSync(f, 'utf-8'));
+              j.version = version;
+              fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
+            }
+          "
+
+      - name: Fetch Node sidecar
+        run: bash scripts/fetch-node-sidecar.sh
+
+      - name: Build Tauri app (macOS arm64)
+        run: npx tauri build
+        env:
+          CI: true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: asHub-tauri-mac-arm64-${{ github.sha }}
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
   release:
-    needs: [build-mac, build-win, build-linux]
+    needs: [build-mac, build-win, build-linux, build-tauri-mac]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -215,6 +270,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: asHub-linux-x64-${{ github.sha }}
+          path: release/
+
+      # Opt-in beta; tolerate absence if the Tauri build failed (continue-on-error).
+      - name: Download Tauri (beta) artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: asHub-tauri-mac-arm64-${{ github.sha }}
           path: release/
 
       - name: List release assets

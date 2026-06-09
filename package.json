@@ -17,6 +17,9 @@
     "electron:pack": "npm run build && electron-builder --dir",
     "electron:dist:mac": "npm run build && electron-builder --mac",
     "electron:dist:win": "bash scripts/pre-dist-win.sh && npm run build && electron-builder --win",
+    "tauri": "tauri",
+    "tauri:dev": "bash scripts/fetch-node-sidecar.sh && npm run build && tauri dev",
+    "tauri:build": "bash scripts/fetch-node-sidecar.sh && tauri build",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
@@ -26,6 +29,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
+    "@tauri-apps/cli": "^2.11.2",
     "@types/node": "^25.9.1",
     "electron": "^40.0.0",
     "electron-builder": "^26.8.1",

@@ -6,3 +6,9 @@ mirror
 .DS_Store
 web/download.html
 web/nginx.conf
+
+# Tauri
+src-tauri/target
+src-tauri/gen
+src-tauri/binaries
+dist-bundle

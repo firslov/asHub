@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "asHub",
+  "version": "0.16.3",
+  "identifier": "com.ashub.app",
+  "build": {
+    "frontendDist": "../web",
+    "beforeBuildCommand": "bash scripts/stage-tauri-resources.sh"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["../electron/icon.png", "../electron/icon.icns"],
+    "externalBin": ["binaries/node"],
+    "resources": {
+      "../dist-bundle/dist": "dist",
+      "../dist-bundle/web": "web",
+      "../dist-bundle/node_modules": "node_modules",
+      "../dist-bundle/package.json": "package.json"
+    },
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": false
+    }
+  }
+}

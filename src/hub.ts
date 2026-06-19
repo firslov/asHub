@@ -156,6 +156,21 @@ async function ensureSessionsDir(): Promise<void> {
   await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
 }
 
+const ARCHIVED_PATH = path.join(SESSIONS_DIR, "archived.json");
+
+async function loadArchivedSessions(): Promise<Map<string, number>> {
+  try {
+    const raw = await fs.promises.readFile(ARCHIVED_PATH, "utf-8");
+    return new Map(Object.entries(JSON.parse(raw)));
+  } catch { return new Map(); }
+}
+
+async function saveArchivedSession(id: string, at?: number): Promise<void> {
+  const map = await loadArchivedSessions();
+  if (at) map.set(id, at); else map.delete(id);
+  await fs.promises.writeFile(ARCHIVED_PATH, JSON.stringify(Object.fromEntries(map)));
+}
+
 function sessionMetaPath(id: string): string {
   return path.join(SESSIONS_DIR, `${id}.meta.json`);
 }
@@ -402,6 +417,9 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "POST" && url === "/api/skills/uninstall") return uninstallSkill(req, res);
     if (req.method === "GET" && url.startsWith("/api/skills")) return searchSkills(req, res);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
+    if (req.method === "GET" && url === "/api/sessions/archived") return listArchivedSessions(res);
+    if (req.method === "POST" && url === "/api/sessions/archive") return archiveSession(req, res, sessions);
+    if (req.method === "POST" && url === "/api/sessions/unarchive") return unarchiveSession(req, res, sessions, opts);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
       return openSseMulti(req, res, sessions, params.get("subs") ?? "", params.get("since") ?? "");
@@ -1037,6 +1055,9 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
   const persisted = await loadPersistedSessions();
   if (persisted.length === 0) return;
 
+  // Skip archived sessions — they stay on disk but don't consume memory.
+  const archived = await loadArchivedSessions();
+
   // Sort by lastModified descending so most recent sessions appear first.
   persisted.sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
 
@@ -1053,6 +1074,7 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
       await deleteSessionFiles(p.id);
       continue;
     }
+    if (archived.has(p.id)) continue; // archived — skip bridge creation
     try {
       await createSession(sessions, opts, p.cwd, {
         id: p.id, title: p.title, kind: p.kind, replay: p.replay,
@@ -1279,6 +1301,99 @@ function listSessions(res: http.ServerResponse, sessions: Map<string, Session>):
     }));
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify(list));
+}
+
+// ── Archived sessions ───────────────────────────────────────────────────
+
+async function listArchivedSessions(res: http.ServerResponse): Promise<void> {
+  const archived = await loadArchivedSessions();
+  const items: Array<{ id: string; title: string; cwd: string; startedAt: number; archivedAt: number }> = [];
+  for (const [id, archivedAt] of archived) {
+    try {
+      const metaRaw = await fs.promises.readFile(sessionMetaPath(id), "utf-8");
+      const meta = JSON.parse(metaRaw);
+      items.push({
+        id,
+        title: meta.title || meta.firstQuery?.slice(0, 80) || "",
+        cwd: meta.cwd || "",
+        startedAt: meta.startedAt || 0,
+        archivedAt,
+      });
+    } catch { /* meta missing — skip */ }
+  }
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(items));
+}
+
+async function archiveSession(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  sessions: Map<string, Session>,
+): Promise<void> {
+  const body = await readBody(req);
+  let id = "";
+  try { id = (JSON.parse(body) as { id?: string }).id ?? ""; } catch {}
+  if (!id || !/^[0-9a-f]{4,32}$/i.test(id)) { res.statusCode = 400; res.end("invalid id"); return; }
+
+  const session = sessions.get(id);
+  if (session) {
+    try { session.bridge?.cancel(); } catch {}
+    try { session.bridge?.close(); } catch {}
+    sessions.delete(id);
+    const buf = _writeBufs.get(id);
+    if (buf?.timer) { clearTimeout(buf.timer); buf.timer = null; }
+    _writeBufs.delete(id);
+  }
+  await saveArchivedSession(id, Date.now());
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function unarchiveSession(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  sessions: Map<string, Session>,
+  opts: HubOpts,
+): Promise<void> {
+  const body = await readBody(req);
+  let id = "";
+  try { id = (JSON.parse(body) as { id?: string }).id ?? ""; } catch {}
+  if (!id || !/^[0-9a-f]{4,32}$/i.test(id)) { res.statusCode = 400; res.end("invalid id"); return; }
+
+  const archived = await loadArchivedSessions();
+  if (!archived.has(id)) { res.statusCode = 404; res.end("not archived"); return; }
+
+  // Read meta to get cwd, title, and timing
+  let cwd = os.homedir();
+  let startedAt = Date.now();
+  let title: string | undefined;
+  let firstQuery: string | undefined;
+  try {
+    const metaRaw = await fs.promises.readFile(sessionMetaPath(id), "utf-8");
+    const meta = JSON.parse(metaRaw);
+    cwd = meta.cwd || cwd;
+    startedAt = meta.startedAt || startedAt;
+    title = meta.title || meta.userTitle || undefined;
+    firstQuery = meta.firstQuery || undefined;
+  } catch {}
+
+  await saveArchivedSession(id); // removes from archived.json
+  try {
+    await createSession(sessions, opts, cwd, {
+      id,
+      startedAt,
+      title,
+      firstQuery,
+      replay: [],
+    });
+  } catch (err) {
+    console.error(`[hub] unarchive createSession failed for ${id}:`, err);
+    res.statusCode = 500;
+    res.end("failed to restore session");
+    return;
+  }
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
 }
 
 async function spawnSession(

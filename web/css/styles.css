@@ -1163,3 +1163,74 @@ footer {
   }
   .ghost { padding: 3rem 1.5rem 5rem; }
 }
+
+/* ── Archive list ────────────────────────────────────────────────── */
+
+.archive-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.archive-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.archive-item:hover {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.08));
+}
+
+.archive-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.archive-item-title {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.archive-item .session-time {
+  font-size: 0.75em;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.archive-restore-btn {
+  opacity: 0;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.archive-item:hover .archive-restore-btn {
+  opacity: 0.7;
+}
+.archive-restore-btn:hover {
+  opacity: 1 !important;
+  background: var(--hover-bg, rgba(128, 128, 128, 0.15));
+}
+
+.archive-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  opacity: 0.6;
+}

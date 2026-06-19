@@ -8,7 +8,7 @@ const sessionList = document.getElementById("sessions");
 const workspaceList = document.getElementById("workspaces");
 const terminalList = document.getElementById("terminals");
 const viewButtons = document.querySelectorAll(".sidebar-view-btn");
-const VIEWS = new Set(["sessions", "workspaces", "terminals"]);
+const VIEWS = new Set(["sessions", "workspaces", "terminals", "archive"]);
 const sessionTopic = document.getElementById("session-topic");
 const sessionCwdMeta = document.getElementById("session-cwd-meta");
 const newBtn = document.getElementById("new-session");
@@ -267,6 +267,28 @@ const renderSessionItem = (s) => {
   });
   li.appendChild(close);
 
+  // Archive button — moves a session to the archive list.
+  const archiveBtn = document.createElement("button");
+  archiveBtn.className = "session-archive-btn";
+  archiveBtn.title = t("archive");
+  archiveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>`;
+  archiveBtn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (!confirm(t("archive.confirm", { title: escape(s.title || t("untitled")) }))) return;
+    try {
+      await fetch("/api/sessions/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: s.instanceId }),
+      });
+    } catch {}
+    if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
+    sessions.get(s.instanceId)?.remove();
+    renderSessions();
+  });
+  li.appendChild(archiveBtn);
+
   sessionList.appendChild(li);
   return li;
 };
@@ -507,11 +529,71 @@ for (const btn of viewButtons) {
   });
 }
 
+// ── Archive view ──────────────────────────────────────────────────────
+
+const archiveList = document.getElementById("archive");
+
+const renderArchive = async () => {
+  if (!archiveList) return;
+  try {
+    const res = await fetch("/api/sessions/archived");
+    if (!res.ok) return;
+    const items = await res.json();
+    archiveList.hidden = false;
+    archiveList.innerHTML = "";
+    if (!Array.isArray(items) || items.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "archive-empty";
+      empty.textContent = t("archive.empty");
+      archiveList.appendChild(empty);
+      return;
+    }
+    for (const item of items) {
+      const li = document.createElement("li");
+      li.dataset.sessionId = item.id;
+      li.className = "archive-item";
+
+      const info = document.createElement("div");
+      info.className = "archive-item-info";
+      const title = escape(item.title || t("untitled"));
+      const timeText = item.startedAt
+        ? `<span class="session-time">${escape(relativeTime(item.startedAt))}</span>`
+        : "";
+      info.innerHTML = `<span class="archive-item-title">${title}</span>${timeText}`;
+      li.appendChild(info);
+
+      const restoreBtn = document.createElement("button");
+      restoreBtn.className = "archive-restore-btn";
+      restoreBtn.title = t("restore");
+      restoreBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`;
+      restoreBtn.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        try {
+          const r = await fetch("/api/sessions/unarchive", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: item.id }),
+          });
+          if (r.ok) {
+            renderArchive();
+            renderSessions();
+          }
+        } catch {}
+      });
+      li.appendChild(restoreBtn);
+
+      archiveList.appendChild(li);
+    }
+  } catch {}
+};
+
 effect(() => {
   const view = sidebarView.value;
   if (sessionList) sessionList.hidden = view !== "sessions";
   if (workspaceList) workspaceList.hidden = view !== "workspaces";
   if (terminalList) terminalList.hidden = view !== "terminals";
+  if (archiveList) archiveList.hidden = view !== "archive";
   for (const btn of viewButtons) {
     btn.classList.toggle("current", btn.dataset.view === view);
   }
@@ -522,6 +604,7 @@ effect(() => {
   const v = sidebarView.value;
   if (v === "workspaces") renderWorkspaces();
   else if (v === "terminals") renderTerminals();
+  else if (v === "archive") renderArchive();
 });
 
 effect(() => {

@@ -77,6 +77,10 @@ const FORWARDED = [
   "shell:queued",
 ];
 
+// Guard to ensure the Electron tsx-worker/Chromium init race is
+// yielded only once — on the first bridge — not on every session.
+let _firstBridge = true;
+
 export class AshBridge extends EventEmitter implements Bridge {
   private core: AgentShellCore | null = null;
   private initPromise: Promise<void>;
@@ -132,9 +136,11 @@ export class AshBridge extends EventEmitter implements Bridge {
     const builtinNames = await loadBuiltinExtensions(extCtx, headlessDisabled);
 
     // In Electron (ASHUB_UNDER), tsx's module.register() spawns a
-    // worker thread that can race with Chromium init.  Yield once so the
-    // event loop drains before the first .ts extension import triggers tsx.
-    if (process.env.ASHUB_UNDER) {
+    // worker thread that can race with Chromium init.  Yield once on
+    // the first bridge so the event loop drains before any .ts
+    // extension import triggers tsx.
+    if (process.env.ASHUB_UNDER && _firstBridge) {
+      _firstBridge = false;
       await new Promise<void>((r) => setTimeout(r, 200));
     }
 

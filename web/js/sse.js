@@ -463,6 +463,37 @@ export const handlers = {
     if (this.state.replaying) this.exitReplayMode();
   },
 
+  "subagent:started"(p) {
+    if (!this.streamEl) return;
+    // Style the most recently appended tool-row as a subagent badge
+    // instead of a regular tool card — unifies the visual.
+    const rows = this.streamEl.querySelectorAll(".tool-row");
+    const row = rows[rows.length - 1];
+    if (!row) return;
+    // Style the parent tool-group as well so the outer gray box matches.
+    const group = row.closest(".tool-group");
+    if (group) group.classList.add("subagent-tool-group");
+    row.classList.add("subagent-tool-row");
+    row.innerHTML =
+      `<span class="subagent-icon">⚡</span>` +
+      `<span class="subagent-label">${escape((p?.task ?? "").slice(0, 80))}</span>` +
+      `<span class="subagent-spinner"></span>`;
+    this._subagentRow = row;
+  },
+
+  "subagent:done"() {
+    if (this._subagentRow) {
+      const spinner = this._subagentRow.querySelector(".subagent-spinner");
+      if (spinner) spinner.remove();
+      const icon = this._subagentRow.querySelector(".subagent-icon");
+      if (icon) icon.textContent = "✓";
+      this._subagentRow.classList.add("subagent-done");
+      const group = this._subagentRow.closest(".tool-group");
+      if (group) group.classList.add("subagent-done");
+      this._subagentRow = null;
+    }
+  },
+
   // Keepalive sent by server before _ensureBridge to prevent the 500ms
   // safety timer from firing during lazy session restore.
   // Resets the safety timer directly; receiveFrame skips scheduleReplayFlush

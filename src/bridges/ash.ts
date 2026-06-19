@@ -14,7 +14,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import path from "node:path";
 import * as os from "node:os";
-import { createCore, type AgentShellCore } from "agent-sh";
+import { createCore, type AgentShellCore, runSubagent, type ToolDefinition } from "agent-sh";
 import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
@@ -75,6 +75,8 @@ const FORWARDED = [
   "shell:command-done",
   "shell:cwd-change",
   "shell:queued",
+  "subagent:started",
+  "subagent:done",
 ];
 
 // Guard to ensure the Electron tsx-worker/Chromium init race is
@@ -164,6 +166,83 @@ export class AshBridge extends EventEmitter implements Bridge {
     // before core:extensions-loaded, so wire() sees empty history.
     core.handlers.define("history:read-recent", () => []);
     core.handlers.define("conversation:format-prior-history", () => null);
+
+    // ── Subagent support ────────────────────────────────────────────
+    // Expose agent-sh's subagent runner so tools can delegate focused
+    // tasks to a child agent loop.  Tool calls inside the subagent are
+    // rendered in the UI via core.bus, and token usage is forwarded.
+    core.handlers.define("subagent:run", async (opts: {
+      task: string;
+      systemPrompt: string;
+      model?: string;
+      budgetTokens?: number;
+      maxIterations?: number;
+      signal?: AbortSignal;
+      tools?: ToolDefinition[];
+    }) => {
+      const llmClient = core.handlers.call("llm:get-client");
+      const tools: ToolDefinition[] = opts.tools ?? (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
+
+      (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt: opts.systemPrompt });
+
+      try {
+        const result = await runSubagent({
+          llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
+          tools,
+          systemPrompt: opts.systemPrompt,
+          task: opts.task,
+          model: opts.model,
+          bus: core.bus,
+          signal: opts.signal,
+          maxIterations: opts.maxIterations,
+          budgetTokens: opts.budgetTokens,
+          onUsage: (u) => core.bus.emit("agent:usage", u),
+        });
+        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task });
+        return result;
+      } catch (err) {
+        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, error: String(err) });
+        throw err;
+      }
+    });
+
+    // ── Plan-mode subagent tool ─────────────────────────────────────
+    // Register a `plan` tool that delegates to the subagent runner with
+    // a planning-focused system prompt.  The subagent creates a detailed
+    // step-by-step plan and returns it as text — no tools needed inside
+    // the plan subagent.
+    (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool({
+      name: "plan",
+      description: "Create a detailed step-by-step plan for a complex task. Use this to think through the approach before executing. The plan subagent has NO tools — it only thinks and writes.",
+      input_schema: {
+        type: "object",
+        properties: {
+          task: { type: "string", description: "The task to plan for. Be specific about what needs to be accomplished." },
+        },
+        required: ["task"],
+      },
+      async execute(args) {
+        const plan = await core.handlers.call("subagent:run", {
+          task: `Create a detailed, actionable plan for the following task. Break it down into clear phases with specific steps:\n\n${(args as { task: string }).task}`,
+          systemPrompt: `You are a planning specialist. Your only job is to create clear, structured plans.
+
+- Break the task into numbered phases
+- Each phase should have concrete, ordered steps
+- Consider dependencies between steps
+- Note any assumptions or prerequisites
+- Keep the plan actionable and focused
+- Return ONLY the plan text, no meta-commentary`,
+          maxIterations: 1,
+          budgetTokens: 4000,
+          tools: [], // plan subagent has no tools
+        }) as string;
+        return { exitCode: 0, content: plan, isError: false };
+      },
+      formatResult(_args, result) {
+        const text = String((result as { content?: unknown })?.content ?? "");
+        return { summary: text.slice(0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
+      },
+    });
 
     core.bus.emit("core:extensions-loaded", { names: [...builtinNames, ...userNames] });
 

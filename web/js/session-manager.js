@@ -24,7 +24,10 @@ export const openTab = (id) => {
 
 export const closeTab = (id) => {
   if (!id) return;
-  const list = openTabs.value;
+  // Dedup openTabs in case duplicates crept in (signals batching edge case).
+  const seen = new Set();
+  const list = openTabs.value.filter((x) => (seen.has(x) ? false : seen.add(x)));
+  if (list.length !== openTabs.peek().length) openTabs.value = list;
   const idx = list.indexOf(id);
   if (idx < 0) return;
   const next = list.filter((x) => x !== id);
@@ -45,7 +48,11 @@ export const closeTab = (id) => {
 
 export const registerSession = (view) => {
   sessions.set(view.id, view);
-  if (!activeSessionId.value) activeSessionId.value = view.id;
+  // Only auto-activate when no session has ever been active (fresh page load).
+  // Don't override an explicit clear from closeTab.
+  if (!activeSessionId.value && openTabs.peek().length === 0) {
+    activeSessionId.value = view.id;
+  }
 };
 
 export const unregisterSession = (view) => {

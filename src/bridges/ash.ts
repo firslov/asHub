@@ -79,6 +79,57 @@ const FORWARDED = [
   "subagent:done",
 ];
 
+// ── Subagent type definitions ─────────────────────────────────────
+
+interface SubagentType {
+  /** System prompt for this subagent type. */
+  systemPrompt: string;
+  /** Tool names allowed. Empty = no tools. `["*"]` = all tools. */
+  tools: string[];
+  /** Max LLM iterations (tool call loops). */
+  maxIterations: number;
+  /** Completion-token budget. */
+  budgetTokens?: number;
+  /** Model override. `undefined` = inherit from parent. */
+  model?: string;
+  /** Short description shown in tool schema. */
+  description: string;
+  /** Run fire-and-forget? false = agent waits for result before continuing. */
+  async?: boolean;
+}
+
+const SUBAGENT_TYPES: Record<string, SubagentType> = {
+  plan: {
+    description: "Create a detailed step-by-step plan for a complex task. The plan subagent has NO tools — it only thinks and writes.",
+    systemPrompt: `You are a planning specialist. Your only job is to create clear, structured plans.
+
+- Break the task into numbered phases
+- Each phase should have concrete, ordered steps
+- Consider dependencies between steps
+- Note any assumptions or prerequisites
+- Keep the plan actionable and focused
+- Do NOT execute anything — only plan
+- Return ONLY the plan text, no meta-commentary`,
+    tools: [],
+    maxIterations: 1,
+    budgetTokens: 4000,
+  },
+  explore: {
+    description: "Explore and search the codebase to answer a question or gather information. Read-only — no file modifications.",
+    systemPrompt: `You are a codebase explorer. Your job is to search, read, and understand code to answer questions.
+
+- Use glob, grep, and read_file to investigate
+- Never modify or create files
+- Summarize findings clearly
+- Cite file paths and line numbers
+- Be thorough but concise`,
+    tools: ["glob", "grep", "read_file", "ls"],
+    maxIterations: 15,
+    budgetTokens: 8000,
+    async: true,
+  },
+};
+
 // Guard to ensure the Electron tsx-worker/Chromium init race is
 // yielded only once — on the first bridge — not on every session.
 let _firstBridge = true;
@@ -93,6 +144,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private shellQueue: string[] = [];
   private closed = false;
   private backendRegistered = false;
+  private _contextProducerUnsubscribe: (() => void) | null = null;
   private shell: Shell | null = null;
   private bridgedTerminal: BridgedTerminal | null = null;
   private agentInfoSnapshot: { name?: string; model?: string } | null = null;
@@ -171,31 +223,152 @@ export class AshBridge extends EventEmitter implements Bridge {
     // Expose agent-sh's subagent runner so tools can delegate focused
     // tasks to a child agent loop.  Tool calls inside the subagent are
     // rendered in the UI via core.bus, and token usage is forwarded.
+    //
+    // Accepts either raw opts OR a `type` string that selects a preset
+    // from SUBAGENT_TYPES (raw opts override type defaults).
+    //
+    // In async mode (fire-and-forget), the subagent runs in the background
+    // and results are injected into the main conversation via a dynamic
+    // context producer on the next LLM iteration.
+    interface SubagentEntry {
+      id: string;
+      type: string;
+      task: string;
+      startedAt: number;
+      promise: Promise<string>;
+      result?: string;
+      error?: string;
+    }
+    const _subagents = new Map<string, SubagentEntry>();
+    let _subagentSeq = 0;
+
+    const launchSubagent = (
+      task: string,
+      type: string,
+      systemPrompt: string,
+      tools: ToolDefinition[],
+      model: string | undefined,
+      maxIterations: number,
+      budgetTokens: number | undefined,
+    ) => {
+      const id = `sa${++_subagentSeq}`;
+      const llmClient = core.handlers.call("llm:get-client");
+
+      (core.bus.emit as (name: string, payload: unknown) => void)(
+        "subagent:started", { task, subagentId: id });
+
+      const promise = runSubagent({
+        llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
+        tools,
+        systemPrompt,
+        task,
+        model,
+        bus: core.bus,
+        maxIterations,
+        budgetTokens,
+        onUsage: (u) => core.bus.emit("agent:usage", u),
+      });
+
+      const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise };
+      _subagents.set(id, entry);
+
+      promise.then((result) => {
+        entry.result = result;
+      }).catch((err) => {
+        entry.error = String(err);
+      }).finally(() => {
+        (core.bus.emit as (name: string, payload: unknown) => void)(
+          "subagent:done", { task, subagentId: id });
+      });
+
+      // Register context producer once (idempotent) to surface completed
+      // subagent results in the next LLM iteration.
+      if (!this._contextProducerUnsubscribe) {
+        this._contextProducerUnsubscribe = (extCtx as unknown as {
+          agent: { registerContextProducer(name: string, producer: () => string | null, opts?: { mode?: string }): () => void }
+        }).agent.registerContextProducer(
+          "subagent-results",
+          () => {
+            const completed: string[] = [];
+            for (const [eid, e] of _subagents) {
+              if (e.result || e.error) {
+                completed.push(
+                  `<subagent_result id="${eid}" type="${e.type}">\n` +
+                  `Completed: "${e.task.slice(0, 80)}"\n` +
+                  (e.result ?? `Error: ${e.error}`).slice(0, 2000) +
+                  `\n</subagent_result>`
+                );
+                _subagents.delete(eid);
+              }
+            }
+            if (completed.length === 0) return null;
+            return `\nSubagent results available:\n${completed.join("\n")}`;
+          },
+          { mode: "per-request" }
+        );
+      }
+
+      return id;
+    };
+
     core.handlers.define("subagent:run", async (opts: {
       task: string;
-      systemPrompt: string;
+      type?: string;
+      async?: boolean;
+      systemPrompt?: string;
       model?: string;
       budgetTokens?: number;
       maxIterations?: number;
       signal?: AbortSignal;
       tools?: ToolDefinition[];
     }) => {
-      const llmClient = core.handlers.call("llm:get-client");
-      const tools: ToolDefinition[] = opts.tools ?? (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
+      // Resolve type preset
+      const preset = opts.type ? SUBAGENT_TYPES[opts.type] : null;
+      const systemPrompt = opts.systemPrompt ?? preset?.systemPrompt ?? "";
+      const maxIterations = opts.maxIterations ?? preset?.maxIterations ?? 20;
+      const budgetTokens = opts.budgetTokens ?? preset?.budgetTokens;
+      const model = opts.model ?? preset?.model;
 
-      (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt: opts.systemPrompt });
+      // Tool filtering
+      let tools: ToolDefinition[];
+      if (opts.tools) {
+        tools = opts.tools;
+      } else if (preset) {
+        if (preset.tools.length === 0) {
+          tools = [];
+        } else if (preset.tools[0] !== "*") {
+          const allTools: ToolDefinition[] = (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
+          tools = allTools.filter(t => preset.tools.includes(t.name));
+        } else {
+          tools = (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
+        }
+      } else {
+        tools = (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
+      }
+
+      // Async fire-and-forget: launch subagent in background, return immediately.
+      if (opts.async) {
+        const type = opts.type ?? "generic";
+        const id = launchSubagent(opts.task, type, systemPrompt, tools, model, maxIterations, budgetTokens);
+        return `subagent:${id}`;
+      }
+
+      // Synchronous: block until subagent completes.
+      const llmClient = core.handlers.call("llm:get-client");
+
+      (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt });
 
       try {
         const result = await runSubagent({
           llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
           tools,
-          systemPrompt: opts.systemPrompt,
+          systemPrompt,
           task: opts.task,
-          model: opts.model,
+          model,
           bus: core.bus,
           signal: opts.signal,
-          maxIterations: opts.maxIterations,
-          budgetTokens: opts.budgetTokens,
+          maxIterations,
+          budgetTokens,
           onUsage: (u) => core.bus.emit("agent:usage", u),
         });
         (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task });
@@ -206,43 +379,43 @@ export class AshBridge extends EventEmitter implements Bridge {
       }
     });
 
-    // ── Plan-mode subagent tool ─────────────────────────────────────
-    // Register a `plan` tool that delegates to the subagent runner with
-    // a planning-focused system prompt.  The subagent creates a detailed
-    // step-by-step plan and returns it as text — no tools needed inside
-    // the plan subagent.
-    (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool({
-      name: "plan",
-      description: "Create a detailed step-by-step plan for a complex task. Use this to think through the approach before executing. The plan subagent has NO tools — it only thinks and writes.",
-      input_schema: {
-        type: "object",
-        properties: {
-          task: { type: "string", description: "The task to plan for. Be specific about what needs to be accomplished." },
+    // ── Subagent tools ──────────────────────────────────────────────
+    // Each subagent type gets its own tool for optimal LLM discovery.
+    const registerSubagentTool = (type: string, cfg: SubagentType) => {
+      (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool({
+        name: type,
+        description: cfg.description,
+        input_schema: {
+          type: "object",
+          properties: {
+            task: { type: "string", description: "The task for this subagent." },
+          },
+          required: ["task"],
         },
-        required: ["task"],
-      },
-      async execute(args) {
-        const plan = await core.handlers.call("subagent:run", {
-          task: `Create a detailed, actionable plan for the following task. Break it down into clear phases with specific steps:\n\n${(args as { task: string }).task}`,
-          systemPrompt: `You are a planning specialist. Your only job is to create clear, structured plans.
-
-- Break the task into numbered phases
-- Each phase should have concrete, ordered steps
-- Consider dependencies between steps
-- Note any assumptions or prerequisites
-- Keep the plan actionable and focused
-- Return ONLY the plan text, no meta-commentary`,
-          maxIterations: 1,
-          budgetTokens: 4000,
-          tools: [], // plan subagent has no tools
-        }) as string;
-        return { exitCode: 0, content: plan, isError: false };
-      },
-      formatResult(_args, result) {
-        const text = String((result as { content?: unknown })?.content ?? "");
-        return { summary: text.slice(0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
-      },
-    });
+        async execute(args) {
+          const isAsync = cfg.async === true;
+          const result = await core.handlers.call("subagent:run", {
+            task: (args as { task: string }).task,
+            type,
+            async: isAsync,
+          }) as string;
+          return {
+            exitCode: 0,
+            content: isAsync
+              ? `Subagent '${type}' launched. Results will appear in the next turn.`
+              : result,
+            isError: false,
+          };
+        },
+        formatResult(_args, result) {
+          const text = String((result as { content?: unknown })?.content ?? "");
+          return { summary: text.slice(0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
+        },
+      });
+    };
+    for (const [name, cfg] of Object.entries(SUBAGENT_TYPES)) {
+      registerSubagentTool(name, cfg);
+    }
 
     core.bus.emit("core:extensions-loaded", { names: [...builtinNames, ...userNames] });
 
@@ -917,6 +1090,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    try { this._contextProducerUnsubscribe?.(); } catch {}
     try { this.core?.kill(); } catch {}
     if (this.shell) {
       try { this.shell.kill(); } catch {}

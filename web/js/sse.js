@@ -26,6 +26,9 @@ import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
 import { refreshFilesIfOpen } from "./files-panel.js";
 import { refreshTreeIfOpen } from "./tree-panel.js";
 import { startShellBlock, finishShellBlock, queueShellBlock } from "./stream/shell-block.js";
+
+// Subagent tool-name → type mapping (must match ash.ts SUBAGENT_TYPES keys)
+const SUBAGENT_TOOL_NAMES = { plan: "plan", explore: "explore", review: "review", research: "research", implement: "implement" };
 import { compactReasoning } from "./stream/compact.js";
 import { activeSession, globalConnState, sessions } from "./session-manager.js";
 
@@ -386,12 +389,40 @@ export const handlers = {
   },
 
   "agent:tool-started"(p) {
+    // Subagent tool — intercept BEFORE creating a tool-row.
+    const isSa = !!(p?.name && p.name in SUBAGENT_TOOL_NAMES);    if (isSa) {
+      closeReply(this);
+      closeToolGroup(this);
+      const type = SUBAGENT_TOOL_NAMES[p.name];
+      const icon = { plan: "✦", explore: "◈", review: "◆", research: "⚗", implement: "⚒" }[type] || "⟡";
+      const taskText = (typeof p?.rawInput === "object" ? p.rawInput?.task : null) ?? p.name;
+      const block = document.createElement("div");
+      block.className = "subagent-block";
+      block.innerHTML =
+        `<div class="subagent-head">` +
+          `<span class="subagent-type-badge">${escape(type)}</span>` +
+          `<span class="subagent-icon">${icon}</span>` +
+          `<span class="subagent-label">${escape(String(taskText).slice(0, 80))}</span>` +
+          `<span class="subagent-spinner"></span>` +
+        `</div>` +
+        `<div class="subagent-body" hidden></div>` +
+        `<div class="subagent-result" hidden></div>`;
+      block.querySelector(".subagent-head")?.addEventListener("click", () => {
+        const body = block.querySelector(".subagent-body");
+        const result = block.querySelector(".subagent-result");
+        if (body && body.children.length > 0) body.hidden = !body.hidden;
+        if (result && body && !body.hidden) result.hidden = false;
+      });
+      insertStreamNode(this, block);
+      this._subagent = block;
+      this._subagentBlock = block;      return; // Don't create a tool-row.
+    }
+
     closeReply(this);
     finalizeThinking(this);
     finalizeLiveOutput(this);
     startNewSegment(this);
     const row = buildToolRow(p);
-    // Route into subagent body if a subagent is active.
     if (this._subagent) {
       const body = this._subagent.querySelector(".subagent-body");
       if (body) { body.appendChild(row); body.hidden = false; }
@@ -410,8 +441,7 @@ export const handlers = {
     if (!row) {
       // If a subagent is active and we can't find the tool row, this is
       // the subagent tool's own completion — append result to subagent block.
-      if (this._subagent) {
-        const result = this._subagent.querySelector(".subagent-result");
+      if (this._subagent) {        const result = this._subagent.querySelector(".subagent-result");
         if (result && p?.resultDisplay?.body) {
           result.hidden = false;
           const body = p.resultDisplay.body;
@@ -420,7 +450,6 @@ export const handlers = {
             if (block) result.appendChild(block);
           }
         }
-        this._subagent = null;
       }
       return;
     }
@@ -486,64 +515,12 @@ export const handlers = {
   },
 
   "subagent:started"(p) {
-    if (!this.streamEl) return;
-    // Close any open tool-group so the subagent block appears at stream level,
-    // next to thinking blocks and tool groups — not nested inside one.
-    closeToolGroup(this);
-    // Remove the tool-row that agent:tool-started just created for the subagent
-    // tool — we replace it with the subagent block.
-    // During replay, nodes are in _replayFrag, not streamEl.
-    const scope = (this.state.replaying && this._replayFrag) || this.streamEl;
-    const lastRow = scope.querySelector(".tool-row:last-of-type");
-    if (lastRow) {
-      const parentGroup = lastRow.closest(".tool-group");
-      const hadOneRow = parentGroup && parentGroup.querySelectorAll(".tool-row").length === 1;
-      lastRow.remove();
-      if (hadOneRow && parentGroup) {
-        parentGroup.remove();
-      }
-    }
-    // Safety net: remove any truly empty groups (in both stream and fragment).
-    const sweepScope = [scope];
-    if (this.streamEl !== scope) sweepScope.push(this.streamEl);
-    for (const s of sweepScope) {
-      for (const g of (s || {}).querySelectorAll?.(".tool-group") || []) {
-        if (g.querySelectorAll(".tool-row").length === 0) g.remove();
-      }
-    }
-
-    const type = typeof p?.type === "string" ? p.type : "subagent";
-
-    const icon = { plan: "✦", explore: "◈", review: "◆", research: "⚗", implement: "⚒" }[type] || "⟡";
-
-    const block = document.createElement("div");
-    block.className = "subagent-block";
-    block.innerHTML =
-      `<div class="subagent-head">` +
-        `<span class="subagent-type-badge">${escape(type)}</span>` +
-        `<span class="subagent-icon">${icon}</span>` +
-        `<span class="subagent-label">${escape((p?.task ?? "").slice(0, 80))}</span>` +
-        `<span class="subagent-spinner"></span>` +
-      `</div>` +
-      `<div class="subagent-body" hidden></div>` +
-      `<div class="subagent-result" hidden></div>`;
-
-    // Toggle body visibility on head click.
-    block.querySelector(".subagent-head")?.addEventListener("click", () => {
-      const body = block.querySelector(".subagent-body");
-      const result = block.querySelector(".subagent-result");
-      if (body && body.children.length > 0) body.hidden = !body.hidden;
-      if (result && body && !body.hidden) result.hidden = false;
-    });
-
-    insertStreamNode(this, block);
-    this._subagent = block;
-    this._subagentBlock = block; // persists across tool-completed nulling for async path
+    // Block already created by agent:tool-started interception.
+    // This handler is a no-op — subagent events reach here for SSE routing.
   },
 
   "subagent:done"() {
-    const block = this._subagent || this._subagentBlock;
-    if (!block) return;
+    const block = this._subagent || this._subagentBlock;    if (!block) return;
     const head = block.querySelector(".subagent-head");
     const spinner = head?.querySelector(".subagent-spinner");
     if (spinner) spinner.remove();
@@ -553,9 +530,9 @@ export const handlers = {
     const body = block.querySelector(".subagent-body");
     if (body && body.children.length > 0) body.hidden = false;
     const result = block.querySelector(".subagent-result");
-    if (result) result.hidden = false;
-    this._subagent = null;
-    this._subagentBlock = null;
+    if (result && result.children.length > 0) result.hidden = false;
+    // Keep _subagent alive: agent:tool-completed needs it to append the result.
+    // _subagentBlock survives for the async path where _subagent gets nulled.
   },
 
   // Keepalive sent by server before _ensureBridge to prevent the 500ms

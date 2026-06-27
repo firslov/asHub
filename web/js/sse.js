@@ -3,7 +3,7 @@ import { setBusy } from "./state.js";
 import { effect } from "../vendor/signals-core.js";
 import { t } from "./i18n.js";
 import { maybeScroll, forceScrollBottom } from "./stream/scroll.js";
-import { append, appendAfterPending, appendToGroup, bumpToolCount } from "./stream/tool-group.js";
+import { append, appendAfterPending, appendToGroup, bumpToolCount, insertStreamNode, closeToolGroup } from "./stream/tool-group.js";
 import {
   renderUsage, hideUsage, renderTurnSep, renderErrorCard,
   renderDiffBlock, renderToolBody, buildToolRow,
@@ -393,15 +393,39 @@ export const handlers = {
     finalizeLiveOutput(this);
     startNewSegment(this);
     const row = buildToolRow(p);
-    appendToGroup(this, row);
+    // Route into subagent body if a subagent is active.
+    if (this._subagent) {
+      const body = this._subagent.querySelector(".subagent-body");
+      if (body) { body.appendChild(row); body.hidden = false; }
+    } else {
+      appendToGroup(this, row);
+      bumpToolCount(this);
+    }
     trackToolRow(this, row);
-    bumpToolCount(this);
   },
 
   "agent:tool-completed"(p) {
     const id = p?.toolCallId ?? "";
-    const row = id ? this.streamEl?.querySelector(`.tool-row[data-call-id="${CSS.escape(id)}"]`) : null;
-    if (!row) return;
+    // Search subagent block first if active.
+    const scope = this._subagent || this.streamEl;
+    const row = id ? scope?.querySelector(`.tool-row[data-call-id="${CSS.escape(id)}"]`) : null;
+    if (!row) {
+      // If a subagent is active and we can't find the tool row, this is
+      // the subagent tool's own completion — append result to subagent block.
+      if (this._subagent) {
+        const result = this._subagent.querySelector(".subagent-result");
+        if (result && p?.resultDisplay?.body) {
+          result.hidden = false;
+          const body = p.resultDisplay.body;
+          if (body.kind === "lines" && Array.isArray(body.lines) && body.lines.length) {
+            const block = renderToolBody(body.lines);
+            if (block) result.appendChild(block);
+          }
+        }
+        this._subagent = null;
+      }
+      return;
+    }
     const ok = p?.exitCode === 0 || p?.exitCode == null;
     row.classList.add(ok ? "ok" : "err");
     const summary = p?.resultDisplay?.summary ?? "";
@@ -465,33 +489,63 @@ export const handlers = {
 
   "subagent:started"(p) {
     if (!this.streamEl) return;
-    // Style the most recently appended tool-row as a subagent badge
-    // instead of a regular tool card — unifies the visual.
-    const rows = this.streamEl.querySelectorAll(".tool-row");
-    const row = rows[rows.length - 1];
-    if (!row) return;
-    // Style the parent tool-group as well so the outer gray box matches.
-    const group = row.closest(".tool-group");
-    if (group) group.classList.add("subagent-tool-group");
-    row.classList.add("subagent-tool-row");
-    row.innerHTML =
-      `<span class="subagent-icon">⚡</span>` +
-      `<span class="subagent-label">${escape((p?.task ?? "").slice(0, 80))}</span>` +
-      `<span class="subagent-spinner"></span>`;
-    this._subagentRow = row;
+    // Close any open tool-group so the subagent block appears at stream level,
+    // next to thinking blocks and tool groups — not nested inside one.
+    closeToolGroup(this);
+    // Remove the tool-row that agent:tool-started just created for the subagent
+    // tool — we replace it with the subagent block.
+    const lastRow = this.streamEl.querySelector(".tool-row:last-of-type");
+    const orphanGroup = lastRow?.closest(".tool-group");
+    lastRow?.remove();
+    if (orphanGroup && orphanGroup.querySelectorAll(".tool-row").length === 0) {
+      orphanGroup.remove();
+    }
+
+    const type = typeof p?.type === "string" ? p.type : "subagent";
+    const icon = { plan: "✦", explore: "◈", review: "◆", research: "⚗", implement: "⚒" }[type] || "⟡";
+
+    const block = document.createElement("div");
+    block.className = "subagent-block";
+    block.innerHTML =
+      `<div class="subagent-head">` +
+        `<span class="subagent-type-badge">${escape(type)}</span>` +
+        `<span class="subagent-icon">${icon}</span>` +
+        `<span class="subagent-label">${escape((p?.task ?? "").slice(0, 80))}</span>` +
+        `<span class="subagent-spinner"></span>` +
+      `</div>` +
+      `<div class="subagent-body" hidden></div>` +
+      `<div class="subagent-result" hidden></div>`;
+
+    // Toggle body visibility on head click.
+    block.querySelector(".subagent-head")?.addEventListener("click", () => {
+      const body = block.querySelector(".subagent-body");
+      const result = block.querySelector(".subagent-result");
+      if (body) body.hidden = !body.hidden;
+      if (result && body && !body.hidden) result.hidden = false;
+    });
+
+    insertStreamNode(this, block);
+    this._subagent = block;
   },
 
   "subagent:done"() {
-    if (this._subagentRow) {
-      const spinner = this._subagentRow.querySelector(".subagent-spinner");
-      if (spinner) spinner.remove();
-      const icon = this._subagentRow.querySelector(".subagent-icon");
-      if (icon) icon.textContent = "✓";
-      this._subagentRow.classList.add("subagent-done");
-      const group = this._subagentRow.closest(".tool-group");
-      if (group) group.classList.add("subagent-done");
-      this._subagentRow = null;
-    }
+    if (!this._subagent) return;
+    const head = this._subagent.querySelector(".subagent-head");
+    const spinner = head?.querySelector(".subagent-spinner");
+    if (spinner) spinner.remove();
+    const icon = head?.querySelector(".subagent-icon");
+    if (icon) icon.textContent = "✓";
+    head?.classList.add("subagent-done");
+    // Show body (collapsed by default) so user can expand to see tool calls.
+    const body = this._subagent.querySelector(".subagent-body");
+    if (body && body.children.length > 0) body.hidden = false;
+    // Show result section.
+    const result = this._subagent.querySelector(".subagent-result");
+    if (result) result.hidden = false;
+  },
+
+  "agent:tool-started-off"(p) {
+    // captured by the main handler below
   },
 
   // Keepalive sent by server before _ensureBridge to prevent the 500ms

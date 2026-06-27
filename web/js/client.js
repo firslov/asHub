@@ -12,6 +12,7 @@ import "./no-session.js";
 import "./context-panel.js";
 import "./files-panel.js";
 import "./tree-panel.js";
+import "./subagent-panel.js";
 import "./sse.js";
 import "./session-view.js";
 import "./terminal-view.js";

@@ -46,6 +46,7 @@ export const setSkillsOpen = (on) => {
     import("./context-panel.js").then((m) => m.setCtxOpen?.(false));
     import("./tree-panel.js").then((m) => m.setTreeOpen?.(false));
     import("./config-panel.js").then((m) => m.setConfigOpen(false));
+    import("./subagent-panel.js").then((m) => m.setSgOpen?.(false));
     const promptOverlay = document.getElementById("prompt-overlay");
     if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
       promptOverlay.setAttribute("hidden", "");

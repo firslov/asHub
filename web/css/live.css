@@ -1021,7 +1021,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   user-select: none;
 }
 
-
 .sidebar-btn {
   background: transparent;
   border: 1px solid transparent;
@@ -1276,6 +1275,174 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-color: color-mix(in srgb, var(--fg) 12%, transparent);
 }
 .session-archive-btn svg { width: 14px; height: 14px; }
+
+/* ── Subagent badge ─────────────────────────────────────────────── */
+
+.subagent-block {
+  margin: 0.35rem 0;
+  border: 1px solid rgba(139, 92, 246, 0.18);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.subagent-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.07), rgba(99, 102, 241, 0.04));
+  cursor: pointer;
+  user-select: none;
+}
+.subagent-head:hover {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(99, 102, 241, 0.06));
+}
+.subagent-head.subagent-done {
+  opacity: 0.55;
+  background: transparent;
+  transition: all 0.4s var(--ease-out-expo);
+}
+
+.subagent-body {
+  border-top: 1px solid rgba(139, 92, 246, 0.08);
+  padding: 0.2rem 0;
+}
+.subagent-body .tool-row {
+  padding-left: 3rem;
+  border-left: 2px solid rgba(139, 92, 246, 0.12);
+  margin-left: 1.5rem;
+  margin-bottom: 0;
+  border-bottom: 1px solid rgba(139, 92, 246, 0.05);
+}
+.subagent-body .tool-row:last-child {
+  border-bottom: none;
+}
+
+.subagent-result {
+  border-top: 1px solid rgba(139, 92, 246, 0.1);
+  padding: 0.5rem 0.85rem;
+}
+
+.subagent-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.65rem;
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  color: rgba(139, 92, 246, 0.9);
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.18);
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+.subagent-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  color: rgba(139, 92, 246, 0.7);
+  width: 1em;
+  text-align: center;
+}
+
+.subagent-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-weight: 420;
+}
+
+.subagent-spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(139, 92, 246, 0.15);
+  border-top-color: rgba(139, 92, 246, 0.7);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: subagent-spin 0.7s linear infinite;
+}
+@keyframes subagent-spin {
+  to { transform: rotate(360deg); }
+}
+
+.subagent-head.subagent-done .subagent-type-badge { opacity: 0.5; }
+.subagent-head.subagent-done .subagent-icon { color: rgba(139, 92, 246, 0.5); }
+
+/* ── Subagent panel ─────────────────────────────────────────────── */
+
+.subagent-panel {
+  position: fixed;
+  top: var(--ui-title-bar-height, 40px);
+  bottom: 0;
+  right: 42px;
+  width: 300px;
+  z-index: 14;
+  border-left: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg2) 88%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateX(calc(100% + 42px));
+  transition: transform 0.45s var(--ease-panel), right 0.45s var(--ease-panel);
+  box-shadow: var(--shadow-panel-md);
+}
+
+.subagent-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -1px;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.6) 0%, var(--accent) 60%, transparent 90%);
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.subagent-panel[hidden] {
+  display: flex !important;
+  pointer-events: none;
+}
+
+.app.sa-open .subagent-panel {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.sa-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.7rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 0.14em;
+  flex-shrink: 0;
+}
+
+.sa-meta {
+  flex: 1;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
+}
+
+.sa-type-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
 
 /* ── Subagent badge ─────────────────────────────────────────────── */
 
@@ -1612,16 +1779,29 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
     padding-right: 0;
     transition: padding-right 0.35s var(--ease-in-out);
   }
-  /* single panel: 300px */
-  .app.ctx-open .live-wrap .terminal,
-  .app.files-open .live-wrap .terminal,
-  .app.tree-open .live-wrap .terminal {
-    padding-right: 300px;
-  }
-  /* both ctx+files open: 600px */
-  .app.ctx-open.files-open .live-wrap .terminal {
-    padding-right: 600px;
-  }
+	  /* single panel: 300px */
+	  .app.ctx-open .live-wrap .terminal,
+	  .app.files-open .live-wrap .terminal,
+	  .app.tree-open .live-wrap .terminal,
+	  .app.sa-open .live-wrap .terminal {
+	    padding-right: 300px;
+	  }
+	  /* both ctx+files open: 600px */
+	  .app.ctx-open.files-open .live-wrap .terminal {
+	    padding-right: 600px;
+	  }
+	  /* ctx + subagent open */
+	  .app.ctx-open.sa-open:not(.files-open) .live-wrap .terminal {
+	    padding-right: 600px;
+	  }
+	  /* files + subagent open */
+	  .app.files-open.sa-open:not(.ctx-open) .live-wrap .terminal {
+	    padding-right: 600px;
+	  }
+	  /* all three open: ctx + files + subagent */
+	  .app.ctx-open.files-open.sa-open .live-wrap .terminal {
+	    padding-right: 900px;
+	  }
   /* config / prompt overlays (no app-level class — use :has) */
   .app:has(.config-overlay.open) .live-wrap .terminal,
   .app:has(.prompt-overlay.open) .live-wrap .terminal {
@@ -4178,6 +4358,24 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow-y: auto;
 }
 
+
+#sa-types {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sa-type-icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(139, 92, 246, 0.1);
+}
 .config-section {
   padding: 0.45rem 0;
   display: flex;
@@ -5252,7 +5450,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .skills-empty,.skills-loading,.skills-error{text-align:center;padding:28px 16px;color:var(--text-mid);font-size:.82rem}
 .skills-error{color:#c0392b}
 @media(max-width:700px){.skill-card{flex-direction:column;align-items:stretch}.skill-install-btn{align-self:flex-end}}
-
 
 .skills-tabs{display:flex;gap:0;margin-bottom:14px;border-bottom:1px solid var(--border)}
 .skills-tab{padding:7px 16px;font-size:.78rem;font-weight:500;color:var(--text-mid);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:color .15s,border-color .15s;font-family:inherit}

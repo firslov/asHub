@@ -100,7 +100,7 @@ interface SubagentType {
 
 const SUBAGENT_TYPES: Record<string, SubagentType> = {
   plan: {
-    description: "Create a detailed step-by-step plan for a complex task. The plan subagent has NO tools — it only thinks and writes.",
+    description: "Create a detailed step-by-step plan for a complex task. Use when user asks to 'plan', 'design', or 'outline' something. No tools.",
     systemPrompt: `You are a planning specialist. Your only job is to create clear, structured plans.
 
 - Break the task into numbered phases
@@ -115,7 +115,7 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
     budgetTokens: 4000,
   },
   explore: {
-    description: "Explore and search the codebase to answer a question or gather information. Read-only — no file modifications.",
+    description: "Explore and search the codebase to answer a question. Use when asked to 'explore', 'search', 'find', 'locate', or 'look up' code. Read-only.",
     systemPrompt: `You are a codebase explorer. Your job is to search, read, and understand code to answer questions.
 
 - Use glob, grep, and read_file to investigate
@@ -126,7 +126,49 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
     tools: ["glob", "grep", "read_file", "ls"],
     maxIterations: 15,
     budgetTokens: 8000,
-    async: true,
+  },
+  review: {
+    description: "Review code for bugs, style issues, and improvement opportunities. Use when user asks to 'review', 'check', 'audit', or 'inspect' code. Read-only.",
+    systemPrompt: `You are a code reviewer. Your job is to examine code and provide actionable feedback.
+
+- Read the relevant files thoroughly before commenting
+- Identify bugs, logic errors, edge cases, and performance issues
+- Check for adherence to conventions and best practices
+- Suggest concrete improvements with code examples
+- Organize findings by severity: critical, important, nice-to-have
+- Cite exact file paths and line numbers for each finding
+- Be constructive — suggest fixes, not just problems`,
+    tools: ["glob", "grep", "read_file", "ls"],
+    maxIterations: 10,
+    budgetTokens: 6000,
+  },
+  research: {
+    description: "Deep investigation of code structure and dependencies. Use when asked to 'research', 'investigate', 'trace', 'analyze' or 'understand how' code works. Read-only.",
+    systemPrompt: `You are a code archaeologist. Your job is to deeply understand how code works.
+
+- Trace function calls across files — follow the chain
+- Map dependencies between modules
+- Identify patterns, anti-patterns, and architectural decisions
+- Explain WHY the code works the way it does, not just HOW
+- Provide a structured report: overview → details → implications
+- Cite every file path and line number`,
+    tools: ["glob", "grep", "read_file", "ls"],
+    maxIterations: 20,
+    budgetTokens: 10000,
+  },
+  implement: {
+    description: "Implement a feature or change end-to-end. Use when asked to 'implement', 'build', 'create', 'add', 'write code for', or 'develop' something. Can read, write, and edit files.",
+    systemPrompt: `You are an implementation specialist. Your job is to write working code.
+
+- Plan before you type — understand what needs to change
+- Read existing code to understand patterns and conventions
+- Make focused, minimal changes — avoid unnecessary refactoring
+- Write clear, idiomatic code that follows the project's style
+- Test your changes if appropriate
+- Report what you changed and why`,
+    tools: ["*"],
+    maxIterations: 25,
+    budgetTokens: 12000,
   },
 };
 
@@ -255,7 +297,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       const llmClient = core.handlers.call("llm:get-client");
 
       (core.bus.emit as (name: string, payload: unknown) => void)(
-        "subagent:started", { task, subagentId: id });
+        "subagent:started", { task, subagentId: id, type });
 
       const promise = runSubagent({
         llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
@@ -356,7 +398,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       // Synchronous: block until subagent completes.
       const llmClient = core.handlers.call("llm:get-client");
 
-      (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt });
+      (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt, type: opts.type });
 
       try {
         const result = await runSubagent({

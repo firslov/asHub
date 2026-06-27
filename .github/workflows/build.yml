@@ -67,10 +67,26 @@ jobs:
         env:
           CI: true
 
-      - name: Upload artifacts
+      - name: Upload macOS ARM64 artifacts
         uses: actions/upload-artifact@v4
         with:
           name: asHub-mac-arm64-${{ github.sha }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
+          if-no-files-found: error
+
+      - name: Build Electron app (macOS x64)
+        run: npx electron-builder --mac --x64 --publish never
+        env:
+          CI: true
+
+      - name: Upload macOS x64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: asHub-mac-x64-${{ github.sha }}
           path: |
             release/*.dmg
             release/*.zip
@@ -199,10 +215,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download macOS artifacts
+      - name: Download macOS ARM64 artifacts
         uses: actions/download-artifact@v4
         with:
           name: asHub-mac-arm64-${{ github.sha }}
+          path: release/
+
+      - name: Download macOS x64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: asHub-mac-x64-${{ github.sha }}
           path: release/
 
       - name: Download Windows artifacts

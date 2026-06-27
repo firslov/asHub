@@ -176,6 +176,19 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
 // yielded only once — on the first bridge — not on every session.
 let _firstBridge = true;
 
+
+    interface SubagentEntry {
+      id: string;
+      type: string;
+      task: string;
+      startedAt: number;
+      promise: Promise<string>;
+      signal?: AbortSignal;
+      result?: string;
+      error?: string;
+    }
+
+
 export class AshBridge extends EventEmitter implements Bridge {
   private core: AgentShellCore | null = null;
   private initPromise: Promise<void>;
@@ -187,6 +200,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private closed = false;
   private backendRegistered = false;
   private _contextProducerUnsubscribe: (() => void) | null = null;
+  private _subagents: Map<string, SubagentEntry> = new Map();
   private shell: Shell | null = null;
   private bridgedTerminal: BridgedTerminal | null = null;
   private agentInfoSnapshot: { name?: string; model?: string } | null = null;
@@ -282,18 +296,6 @@ export class AshBridge extends EventEmitter implements Bridge {
     // In async mode (fire-and-forget), the subagent runs in the background
     // and results are injected into the main conversation via a dynamic
     // context producer on the next LLM iteration.
-    interface SubagentEntry {
-      id: string;
-      type: string;
-      task: string;
-      startedAt: number;
-      promise: Promise<string>;
-      result?: string;
-      error?: string;
-    }
-    const _subagents = new Map<string, SubagentEntry>();
-    let _subagentSeq = 0;
-
     const launchSubagent = (
       task: string,
       type: string,
@@ -305,6 +307,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     ) => {
       const id = `sa${++_subagentSeq}`;
       const llmClient = core.handlers.call("llm:get-client");
+      const abortController = new AbortController();
 
       (core.bus.emit as (name: string, payload: unknown) => void)(
         "subagent:started", { task, subagentId: id, type });
@@ -319,9 +322,10 @@ export class AshBridge extends EventEmitter implements Bridge {
         maxIterations,
         budgetTokens,
         onUsage: (u) => core.bus.emit("agent:usage", u),
+        signal: abortController.signal,
       });
 
-      const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise };
+      const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise, signal: abortController.signal };
       _subagents.set(id, entry);
 
       promise.then((result) => {
@@ -380,6 +384,8 @@ export class AshBridge extends EventEmitter implements Bridge {
       updateSettings({ subagentModels: current } as any);
     });
 
+    const _subagents = this._subagents;
+    let _subagentSeq = 0;
     core.handlers.define("subagent:run", async (opts: {
       task: string;
       type?: string;
@@ -825,6 +831,11 @@ export class AshBridge extends EventEmitter implements Bridge {
     onAny("agent:cancelled", () => {
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "cancelled" }); }
+      // Abort all running async subagents — their tool calls are still
+      // pumping events into the bus even after main cancel.
+      for (const [eid, entry] of (this as any)._subagents as Map<string, SubagentEntry>) {
+        (entry.signal as any)?.abort?.();
+      }
       setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
 

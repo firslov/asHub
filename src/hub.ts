@@ -67,6 +67,7 @@ interface Session {
   lastAgentInfo: Record<string, unknown> | null;
   store?: SessionStore;
   capture?: Capture;
+  _cancelled?: boolean;
   contextLock: Promise<void>;
   /** Highest frameSeq ever emitted for this session — persisted in meta. */
   lastFrameSeq: number;
@@ -1146,6 +1147,7 @@ function routeEvent(session: Session, e: BusEvent): void {
     session.lastModified = Date.now();
     session.isProcessing = true;
     session.hasUnread = false;
+    session._cancelled = false;
     const query = (e.payload as { query?: string })?.query ?? "";
     // Generate fresh meta for each frame so they don't share the same
     // id / ts — mirroring submit()'s non-queued path.
@@ -1203,6 +1205,12 @@ function routeEvent(session: Session, e: BusEvent): void {
 
   if (e.name === "agent:cancelled") {
     session.isProcessing = false;
+    session._cancelled = true;
+  }
+
+  // After cancel, drop tool events from still-running subagents.
+  if (session._cancelled && (e.name === "agent:tool-started" || e.name === "agent:tool-completed" || e.name === "agent:tool-output-chunk")) {
+    return;
   }
 
   if (e.name === "ui:error" || e.name === "ui:info") {

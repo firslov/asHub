@@ -127,7 +127,7 @@ export const bumpToolCount = (session) => {
 };
 
 // Collapse here, not in bumpToolCount, so rows stay visible while running.
-const closeToolGroup = (session) => {
+export const closeToolGroup = (session) => {
   const g = session?.toolGroup.current;
   if (!g) return;
   session.toolGroup.current = null;

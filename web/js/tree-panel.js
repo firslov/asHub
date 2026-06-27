@@ -19,6 +19,7 @@ export const setTreeOpen = (open) => {
     setFilesOpen(false);
     setCtxOpen(false);
     setConfigOpen(false);
+    try { import("./subagent-panel.js").then(m => m.setSgOpen(false)); } catch {}
     const skillsOverlay = document.getElementById("skills-overlay");
     if (skillsOverlay && !skillsOverlay.hidden) {
       import("./skills-panel.js").then((m) => m.setSkillsOpen(false));

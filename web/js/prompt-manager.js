@@ -166,6 +166,7 @@ export const setPromptOpen = (on) => {
     // Close other panels via DOM — avoids circular import issues
     const ctxPanel = document.getElementById("ctx-panel");
     const filesPanel = document.getElementById("files-panel");
+    const saPanel = document.getElementById("subagent-panel");
     const configOverlay = document.getElementById("config-overlay");
 
     if (ctxPanel && !ctxPanel.hasAttribute("hidden")) {
@@ -177,6 +178,11 @@ export const setPromptOpen = (on) => {
       filesPanel.setAttribute("hidden", "");
       document.getElementById("files-toggle")?.classList.remove("active");
       document.querySelector(".app")?.classList.remove("files-open");
+    }
+    if (saPanel && !saPanel.hasAttribute("hidden")) {
+      saPanel.setAttribute("hidden", "");
+      document.getElementById("sa-toggle")?.classList.remove("active");
+      document.querySelector(".app")?.classList.remove("sa-open");
     }
     if (configOverlay && !configOverlay.hasAttribute("hidden")) {
       configOverlay.setAttribute("hidden", "");

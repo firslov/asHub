@@ -50,15 +50,13 @@ export const renderUsage = (session) => {
     : "";
 
   usageEl.innerHTML =
-    `<span class="usage-chip" title="${t("usage.input")}">↑ ${fmtNum(inTok)}</span>` +
-    `<span class="usage-chip" title="${t("usage.output")}">↓ ${fmtNum(outTok)}</span>` +
-    `<span class="usage-chip usage-total" title="${t("usage.total")}">Σ ${fmtNum(totalTok)}</span>` +
+    `<span class="usage-chip usage-total" title="${t("usage.total")}">${fmtNum(totalTok)}</span>` +
     cacheHtml +
     `<span class="usage-chip usage-ctx" title="${t("usage.context")}">` +
       (st.contextWindow > 0
         ? `<span class="usage-bar"><span style="width:${pct}%"></span></span>`
         : "") +
-      `${ctxText}${st.contextWindow > 0 ? ` (${pct}%)` : ""}` +
+      `${ctxText}` +
     `</span>`;
   usageEl.classList.toggle("warm", pct >= 30 && pct < 70);
   usageEl.classList.toggle("hot", pct >= 70);

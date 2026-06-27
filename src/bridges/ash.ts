@@ -140,7 +140,7 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
 - Be constructive — suggest fixes, not just problems`,
     tools: ["glob", "grep", "read_file", "ls"],
     maxIterations: 10,
-    budgetTokens: 6000,
+    budgetTokens: 12000,
   },
   research: {
     description: "Deep investigation of code structure and dependencies. Use when asked to 'research', 'investigate', 'trace', 'analyze' or 'understand how' code works. Read-only.",
@@ -210,6 +210,16 @@ export class AshBridge extends EventEmitter implements Bridge {
     // Signal to extensions (e.g. ember) that this session uses ephemeral
     // history so they should not hijack history handlers to a file backend.
     core.handlers.define("config:get-history-mode", () => "none");
+
+    // Tell the LLM it's running inside asHub — the web-hosted agent runtime.
+    core.handlers.define("system-prompt:frontend", () =>
+      `# asHub Runtime\n\n` +
+      `You are running inside **asHub**, a web-based agent host that provides a chat ` +
+      `interface, session management, and subagent delegation. Your responses are ` +
+      `rendered as rich Markdown in a browser-based UI. You have full access to ` +
+      `the filesystem via standard tools. The user interacts with you through the ` +
+      `asHub web interface — do not instruct them to use a terminal or CLI.`
+    );
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
     this.extCtx = extCtx;

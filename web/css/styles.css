@@ -17,9 +17,10 @@
   --bg-elevated:  #efeeea;
 
   /* Sophisticated accent: warm amber/gold */
-  --accent:       #b8860b;
+  --accent:       #c2851a;
   --accent-dim:   #9a6f08;
   --accent-light: #c99a3a;
+  --accent-hover: #a6730e;
   --accent-glow:  rgba(184, 134, 11, 0.1);
   --accent-soft:  rgba(184, 134, 11, 0.16);
   --accent-border: rgba(184, 134, 11, 0.32);
@@ -34,13 +35,14 @@
   /* Status colors */
   --green:        #4a8a5e;
   --green-dim:    #3d7550;
-  --red:          #c0392b;
-  --red-dim:      #a93226;
+  --red:          #b33a3a;
+  --red-dim:      #932e2e;
   --amber:        #b8860b;
   --purple:       #6c5fa7;
 
   /* Status color light variants for highlight states */
   --green-light:  #6ab87e;
+  --red-rgb:     199, 106, 100;
   --red-light:    #e06c6c;
 
   /* Shadow system — layered for depth */
@@ -54,6 +56,8 @@
   --text-dim:     #6b6b75;
   --text-mid:     #8e8e98;
   --text-faint:   #b8b8c2;
+  --text-muted:  #a0a0aa;
+  --fg:          #1d1d22;
 
   /* Borders and surfaces */
   --border:       rgba(0, 0, 0, 0.07);
@@ -107,9 +111,10 @@
   --bg4:          #33333c;
   --bg-elevated:  #2a2a32;
 
-  --accent:       #e0c060;
+  --accent:       #e8c850;
   --accent-dim:   #c9a84e;
   --accent-light: #f0d070;
+  --accent-hover: #c9a84e;
   --accent-glow:  rgba(224, 192, 96, 0.15);
   --accent-soft:  rgba(224, 192, 96, 0.22);
   --accent-border: rgba(224, 192, 96, 0.35);
@@ -168,6 +173,7 @@
   --accent:       #5b2d4a;
   --accent-dim:   #4a223c;
   --accent-light: #6e3d5a;
+  --accent-hover: #4a223c;
   --accent-glow:  rgba(91, 45, 74, 0.08);
   --accent-soft:  rgba(91, 45, 74, 0.14);
   --accent-border: rgba(91, 45, 74, 0.28);
@@ -183,6 +189,7 @@
   --green-light:  #528a5f;
   --red:          #9b3a3a;
   --red-dim:      #802e2e;
+  --red-rgb:     155, 58, 58;
   --red-light:    #b04a4a;
   --amber:        #8b5a3a;
   --purple:       #5a4a7a;
@@ -191,6 +198,8 @@
   --text-dim:     #5a5a62;
   --text-mid:     #7a7a84;
   --text-faint:   #a0a0aa;
+  --text-muted:  #b0b0b8;
+  --fg:          #111111;
 
   --border:       rgba(0, 0, 0, 0.09);
   --border-light: rgba(0, 0, 0, 0.06);

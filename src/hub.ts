@@ -112,6 +112,9 @@ const REPLAY_NAMES = new Set([
   "shell:command-done",
   "shell:cwd-change",
   "shell:queued",
+  "agent:thinking-chunk",
+  "subagent:started",
+  "subagent:done",
 ]);
 
 /** Agent events that indicate forward progress (reset idle timeout). */
@@ -483,6 +486,8 @@ export function startHub(opts: HubOpts): http.Server {
       if (req.method === "GET" && rest === "/tree") return treeEndpoint(res, session);
       if (req.method === "POST" && rest === "/fork") return forkEndpoint(req, res, session);
       if (req.method === "PUT" && rest === "/model") return setModelEndpoint(req, res, session);
+      if (req.method === "PUT" && rest === "/sa-model") return setSubagentModel(req, res, session);
+      if (req.method === "GET" && rest === "/sa-model") return getSubagentModelOverrides(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
 
       const file = rest === "/" || rest === "/index.html" ? "/index.html" : rest;
@@ -1025,8 +1030,9 @@ async function createSession(
       const name = parseFrameName(existing.replay[i]!);
       if (!name) continue;
       if (name === "agent:processing-done" || name === "agent:cancelled" || name === "agent:error") break;
+      if (name === "agent:processing-start") { hasDangling = true; break; }
     }
-    if (hasDangling) {
+    if (hasDangling) {  // from createSession restore
       pushFrame(session, "agent:cancelled", sseFrame(
         { source: id, ts: Date.now(), id: `hub:${id}:recovery`, name: "agent:cancelled" },
         {},
@@ -1224,8 +1230,7 @@ function sseFrame(meta: object, payload: unknown): string {
   return `id: ${++frameSeq}\ndata: ${JSON.stringify({ meta, payload })}\n\n`;
 }
 
-function pushFrame(session: Session, name: string, frame: string, opts?: { transient?: boolean }): void {
-  if (opts?.transient) {
+function pushFrame(session: Session, name: string, frame: string, opts?: { transient?: boolean }): void {  if (opts?.transient) {
     session.replay.push(frame);
     if (session.replay.length > REPLAY_LIMIT) session.replay.shift();
   } else if (REPLAY_NAMES.has(name)) {
@@ -2675,4 +2680,29 @@ function serveStatic(res: http.ServerResponse, root: string, urlPath: string): v
     res.writeHead(200, { "Content-Type": MIME[ext] ?? "application/octet-stream" });
     res.end(data);
   });
+}
+
+async function setSubagentModel(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  const body = await readBody(req);
+  let parsed: { type?: string; model?: string };
+  try { parsed = JSON.parse(body); } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "invalid JSON" }));
+    return;
+  }
+  if (!parsed.type || typeof parsed.model !== "string") {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "missing type or model" }));
+    return;
+  }
+  session.bridge.execCommand?.("/sa-model", JSON.stringify({ type: parsed.type, model: parsed.model }));
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function getSubagentModelOverrides(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  const bridge = session.bridge as any;
+  const models = bridge?.getSubagentModels?.() ?? {};
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ models }));
 }

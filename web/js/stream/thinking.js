@@ -114,7 +114,11 @@ export const appendThinkingChunk = (session, text) => {
   if (!text || !session) return;
   const prev = _thinkingBuf.get(session) || "";
   _thinkingBuf.set(session, prev + text);
-  if (!session._thinkingRaf) {
+  if (session.state?.replaying) {
+    // During replay, all events fire synchronously — RAF never executes.
+    // Flush immediately so the thinking block is created before tool-started.
+    flushThinkingBuf(session);
+  } else if (!session._thinkingRaf) {
     session._thinkingRaf = requestAnimationFrame(() => {
       session._thinkingRaf = null;
       flushThinkingBuf(session);

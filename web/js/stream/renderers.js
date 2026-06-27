@@ -66,9 +66,20 @@ export const renderTurnSep = (session, ts) => {
   const sep = document.createElement("div");
   sep.className = "turn-sep";
   const date = ts ? new Date(ts) : new Date();
+  const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const dateStr = date.toLocaleDateString([], { month: "short", day: "numeric" });
+
+  // Show date for first turn of a new day
+  const today = dateStr;
+  let dateLabel = "";
+  if (session._lastSepDate !== today) {
+    session._lastSepDate = today;
+    dateLabel = `${today} · `;
+  }
+
   sep.innerHTML =
     `<span class="turn-line"></span>` +
-    `<span class="turn-time">${date.toLocaleTimeString()}</span>` +
+    `<span class="turn-time">${dateLabel}${timeStr}</span>` +
     `<span class="turn-line"></span>`;
   append(session, sep);
   return sep;
@@ -175,6 +186,7 @@ export const buildToolRow = (p) => {
   const row = document.createElement("div");
   row.className = "tool-row";
   if (p?.toolCallId) row.dataset.callId = p.toolCallId;
+  if (p?.kind) row.dataset.kind = p.kind;
 
   const iconSvg = renderToolIcon(p?.kind);
   const fallbackIcon = typeof p?.icon === "string" && p.icon.length > 0 ? p.icon : "";

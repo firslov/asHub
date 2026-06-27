@@ -270,6 +270,8 @@ export const handlers = {
     finalizeLiveOutput(this);
     resetCompletedTools(this);
     startNewSegment(this);
+    this._subagent = null;
+    this._subagentBlock = null;
     showThinking(this);
   },
 
@@ -314,6 +316,8 @@ export const handlers = {
     if (this.usageStripEl) this.usageStripEl.hidden = false;
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
+    this._subagent = null;
+    this._subagentBlock = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
     if (!this.state.replaying && this === activeSession.peek()) {
@@ -331,6 +335,8 @@ export const handlers = {
     finalizeLiveOutput(this);
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
+    this._subagent = null;
+    this._subagentBlock = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
   },
@@ -343,6 +349,8 @@ export const handlers = {
     append(this, renderErrorCard(p?.message ?? "", p?.detail ?? p?.stack));
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
+    this._subagent = null;
+    this._subagentBlock = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
   },
@@ -484,14 +492,28 @@ export const handlers = {
     closeToolGroup(this);
     // Remove the tool-row that agent:tool-started just created for the subagent
     // tool — we replace it with the subagent block.
-    const lastRow = this.streamEl.querySelector(".tool-row:last-of-type");
-    const orphanGroup = lastRow?.closest(".tool-group");
-    lastRow?.remove();
-    if (orphanGroup && orphanGroup.querySelectorAll(".tool-row").length === 0) {
-      orphanGroup.remove();
+    // During replay, nodes are in _replayFrag, not streamEl.
+    const scope = (this.state.replaying && this._replayFrag) || this.streamEl;
+    const lastRow = scope.querySelector(".tool-row:last-of-type");
+    if (lastRow) {
+      const parentGroup = lastRow.closest(".tool-group");
+      const hadOneRow = parentGroup && parentGroup.querySelectorAll(".tool-row").length === 1;
+      lastRow.remove();
+      if (hadOneRow && parentGroup) {
+        parentGroup.remove();
+      }
+    }
+    // Safety net: remove any truly empty groups (in both stream and fragment).
+    const sweepScope = [scope];
+    if (this.streamEl !== scope) sweepScope.push(this.streamEl);
+    for (const s of sweepScope) {
+      for (const g of (s || {}).querySelectorAll?.(".tool-group") || []) {
+        if (g.querySelectorAll(".tool-row").length === 0) g.remove();
+      }
     }
 
     const type = typeof p?.type === "string" ? p.type : "subagent";
+
     const icon = { plan: "✦", explore: "◈", review: "◆", research: "⚗", implement: "⚒" }[type] || "⟡";
 
     const block = document.createElement("div");
@@ -510,32 +532,30 @@ export const handlers = {
     block.querySelector(".subagent-head")?.addEventListener("click", () => {
       const body = block.querySelector(".subagent-body");
       const result = block.querySelector(".subagent-result");
-      if (body) body.hidden = !body.hidden;
+      if (body && body.children.length > 0) body.hidden = !body.hidden;
       if (result && body && !body.hidden) result.hidden = false;
     });
 
     insertStreamNode(this, block);
     this._subagent = block;
+    this._subagentBlock = block; // persists across tool-completed nulling for async path
   },
 
   "subagent:done"() {
-    if (!this._subagent) return;
-    const head = this._subagent.querySelector(".subagent-head");
+    const block = this._subagent || this._subagentBlock;
+    if (!block) return;
+    const head = block.querySelector(".subagent-head");
     const spinner = head?.querySelector(".subagent-spinner");
     if (spinner) spinner.remove();
     const icon = head?.querySelector(".subagent-icon");
     if (icon) icon.textContent = "✓";
     head?.classList.add("subagent-done");
-    // Show body (collapsed by default) so user can expand to see tool calls.
-    const body = this._subagent.querySelector(".subagent-body");
+    const body = block.querySelector(".subagent-body");
     if (body && body.children.length > 0) body.hidden = false;
-    // Show result section.
-    const result = this._subagent.querySelector(".subagent-result");
+    const result = block.querySelector(".subagent-result");
     if (result) result.hidden = false;
-  },
-
-  "agent:tool-started-off"(p) {
-    // captured by the main handler below
+    this._subagent = null;
+    this._subagentBlock = null;
   },
 
   // Keepalive sent by server before _ensureBridge to prevent the 500ms
@@ -679,7 +699,10 @@ const toggleModelDropdown = async (session) => {
   // Build dropdown HTML with search and provider groups
   dropdown.innerHTML =
     `<div class="model-dropdown-search">` +
-      `<input type="text" class="model-search-input" placeholder="${t("search.models") || "Search models…"}" autocomplete="off">` +
+      `<div class="model-search-wrap">` +
+        `<svg class="model-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6" cy="6" r="4.5"/><line x1="9.5" y1="9.5" x2="13" y2="13"/></svg>` +
+        `<input type="text" class="model-search-input" placeholder="${t("search.models") || "Search models…"}" autocomplete="off">` +
+      `</div>` +
     `</div>` +
     `<div class="model-dropdown-list">` +
       providers.map((p) => {

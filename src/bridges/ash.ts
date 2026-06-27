@@ -18,7 +18,7 @@ import { createCore, type AgentShellCore, runSubagent, type ToolDefinition } fro
 import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
-import { getSettings, resolveProvider, getProviderNames } from "agent-sh/settings";
+import { getSettings, updateSettings, resolveProvider, getProviderNames } from "agent-sh/settings";
 import { resolveApiKey } from "agent-sh/auth";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
 import { Shell } from "agent-sh/shell";
@@ -363,6 +363,23 @@ export class AshBridge extends EventEmitter implements Bridge {
       return id;
     };
 
+    // ── Subagent model overrides ────────────────────────────────
+    // Persisted globally via agent-sh settings so all sessions share them.
+
+    core.handlers.define("subagent:get-models", () => {
+      return ((getSettings() as any).subagentModels ?? {}) as Record<string, string>;
+    });
+
+    core.handlers.define("subagent:set-model", (opts: { type: string; model: string }) => {
+      const current = (getSettings() as any).subagentModels ?? {};
+      if (opts.model === "inherit" || !opts.model) {
+        delete current[opts.type];
+      } else {
+        current[opts.type] = opts.model;
+      }
+      updateSettings({ subagentModels: current } as any);
+    });
+
     core.handlers.define("subagent:run", async (opts: {
       task: string;
       type?: string;
@@ -379,7 +396,9 @@ export class AshBridge extends EventEmitter implements Bridge {
       const systemPrompt = opts.systemPrompt ?? preset?.systemPrompt ?? "";
       const maxIterations = opts.maxIterations ?? preset?.maxIterations ?? 20;
       const budgetTokens = opts.budgetTokens ?? preset?.budgetTokens;
-      const model = opts.model ?? preset?.model;
+      const rawModel = opts.model ?? (opts.type ? (getSettings() as any).subagentModels?.[opts.type] : undefined) ?? preset?.model;
+      // Strip @provider suffix — subagent reuses the main session's provider.
+      const model = typeof rawModel === "string" ? rawModel.replace(/@.+$/, "") : rawModel;
 
       // Tool filtering
       let tools: ToolDefinition[];
@@ -407,8 +426,9 @@ export class AshBridge extends EventEmitter implements Bridge {
 
       // Synchronous: block until subagent completes.
       const llmClient = core.handlers.call("llm:get-client");
+      const syncId = `sync-${_subagentSeq++}`;
 
-      (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt, type: opts.type });
+      (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt, type: opts.type, subagentId: syncId });
 
       try {
         const result = await runSubagent({
@@ -423,10 +443,10 @@ export class AshBridge extends EventEmitter implements Bridge {
           budgetTokens,
           onUsage: (u) => core.bus.emit("agent:usage", u),
         });
-        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task });
+        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId });
         return result;
       } catch (err) {
-        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, error: String(err) });
+        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, error: String(err), subagentId: syncId });
         throw err;
       }
     });
@@ -768,8 +788,7 @@ export class AshBridge extends EventEmitter implements Bridge {
           lastCacheHit = 0;
           lastCacheMiss = 0;
           return;
-        }
-        this.emit("event", { name, payload } satisfies BusEvent);
+        }        this.emit("event", { name, payload } satisfies BusEvent);
       });
     }
 
@@ -905,6 +924,13 @@ export class AshBridge extends EventEmitter implements Bridge {
       this.core?.bus.emit("config:switch-model", found
         ? { id: found.id, provider: found.provider }
         : { id, provider: providerHint ?? "" });
+      return;
+    }
+    if (name === "/sa-model" && args) {
+      try {
+        const parsed = JSON.parse(args) as { type: string; model: string };
+        this.core?.handlers.call("subagent:set-model", parsed);
+      } catch { /* ignore parse error */ }
       return;
     }
     this.core?.bus.emit("command:execute", { name, args });
@@ -1137,6 +1163,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (this.closed || !this.shell) return;
     if (this.bridgedTerminal) this.bridgedTerminal.pushResize(cols, rows);
     try { this.shell.resize(cols, rows); } catch {}
+  }
+
+  getSubagentModels(): Record<string, string> {
+    return (this.core?.handlers.call("subagent:get-models") ?? {}) as Record<string, string>;
   }
 
   close(): void {

@@ -128,9 +128,11 @@
             </div>
             <div class="stream-empty-title" data-i18n="no.session.title">no session yet</div>
             <div class="stream-empty-sub" data-i18n="no.session.sub">create a session to start a conversation with the agent.</div>
-            <button type="button" class="stream-empty-prompt" id="no-session-cta">
-              <span data-i18n="no.session.cta">new session</span>
-            </button>
+            <div class="stream-empty-actions">
+              <button type="button" class="stream-empty-prompt" id="no-session-cta">
+                <span data-i18n="no.session.cta">new session</span>
+              </button>
+            </div>
           </div>
           <form class="live-input" id="form" data-ui-input-gradient="true">
             <div class="image-previews" id="image-previews" hidden></div>
@@ -229,7 +231,6 @@
           <div class="model-dropdown" hidden></div>
         </span>
         <span class="usage-chip usage-location" hidden></span>
-        <span class="usage-chip usage-cache-context" hidden></span>
         <span class="terminal-usage"></span>
       </div>
     </template>

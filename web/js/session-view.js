@@ -74,12 +74,12 @@ class SessionView extends HTMLElement {
     this.pillEl = this.querySelector(".scroll-pill");
     this.usageStripEl = this.querySelector(".usage-strip");
     this.usageEl = this.querySelector(".terminal-usage");
-    this.branchEl = this.querySelector(".usage-branch");
-    this.modelEl = this.querySelector(".usage-model");
-    this.balanceEl = this.querySelector(".usage-balance");
+    this.branchEl = this.querySelector(".usage-location");
+    this.modelEl = this.querySelector(".usage-model-balance");
+    this.balanceEl = this.querySelector(".usage-model-balance");
     this.modelPickerEl = this.querySelector(".model-picker");
     this.modelDropdownEl = this.querySelector(".model-dropdown");
-    this.cwdEl = this.querySelector(".usage-cwd");
+    this.cwdEl = this.querySelector(".usage-location");
 
     this.state = { ...STATE_DEFAULTS };
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };

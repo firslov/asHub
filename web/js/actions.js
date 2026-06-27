@@ -30,7 +30,7 @@ const rewindFromBox = async (box) => {
   activeSession.peek()?.resync({ force: true });
 };
 
-export const createUserBox = (queryText, images) => {
+export const createUserBox = (queryText, images, ts) => {
   const box = document.createElement("div");
   box.className = "agent-box";
   let imagesHtml = "";
@@ -39,12 +39,19 @@ export const createUserBox = (queryText, images) => {
       `<img class="agent-box-img" src="data:${img.mimeType};base64,${img.data}" alt="attached image">`
     ).join("");
   }
+  const timestamp = typeof ts === "number" ? ts : Date.now();
+  box._ts = timestamp;
+  const dateStr = new Date(timestamp).toLocaleString([], {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
   box.innerHTML = `
     <div class="agent-box-head">
       <span class="abh-l">&gt;</span>
       <span class="abh-r">${t("you")}</span>
     </div>
     ${imagesHtml}
+    <span class="msg-time">${dateStr}</span>
     <div class="q-text">${escape(queryText)}</div>`;
   const actions = document.createElement("div");
   actions.className = "msg-actions";
@@ -67,3 +74,16 @@ export const createUserBox = (queryText, images) => {
   });
   return box;
 };
+
+// Refresh timestamps when language changes
+document.addEventListener("langchange", () => {
+  document.querySelectorAll(".msg-time").forEach((el) => {
+    const box = el.closest(".agent-box");
+    if (box?._ts) {
+      el.textContent = new Date(box._ts).toLocaleString([], {
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit",
+      });
+    }
+  });
+});

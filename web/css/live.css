@@ -435,6 +435,17 @@
   box-shadow: inset 0 1px 4px rgba(0,0,0,0.06);
   position: relative;
 }
+.agent-reply pre::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-dim), transparent 70%);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  opacity: 0.5;
+}
 
 /* Dark theme: code blocks get a dedicated deeper background with a subtle cool tint */
 [data-theme="dark"] .agent-reply pre {
@@ -2035,13 +2046,18 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: none;
   border-left: 2px solid transparent;
   padding: 0.45rem 0 0.45rem 1.2rem;
-  line-height: 1.8;
+  line-height: 1.75;
   margin-left: 0;
   position: relative;
   border-image: linear-gradient(180deg, var(--accent) 0%, var(--accent-dim) 60%, transparent 100%) 1;
   border-radius: var(--radius-sm);
   transition: transform var(--dur-normal) var(--ease-out-expo),
               box-shadow var(--dur-normal) var(--ease-out-expo);
+  animation: reply-fade-in 0.3s var(--ease-out-expo) both;
+}
+@keyframes reply-fade-in {
+  from { opacity: 0.65; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .live-wrap .agent-reply:hover {
@@ -2079,13 +2095,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   50%      { border-image-source: linear-gradient(180deg, var(--accent) 0%, var(--cyan) 50%, var(--accent-dim) 100%, transparent 100%); }
 }
 
-.agent-reply p { margin: 0; line-height: 1.8; }
-.agent-reply p + p { margin-top: 1.05rem; }
+.agent-reply p { margin: 0; line-height: 1.75; }
+.agent-reply p + p { margin-top: 1.1rem; }
 .agent-reply > *:first-child { margin-top: 0; }
 .agent-reply > *:last-child:not(.reply-copy-btn),
 .agent-reply > *:has(+ .reply-copy-btn) { margin-bottom: 0; }
-.agent-reply ul, .agent-reply ol { margin: 0.65rem 0 0.65rem 1.6rem; padding: 0; }
-.agent-reply li { margin: 0.22rem 0; line-height: 1.65; }
+.agent-reply ul, .agent-reply ol { margin: 0.7rem 0 0.7rem 1.6rem; padding: 0; }
+.agent-reply li { margin: 0.28rem 0; line-height: 1.7; }
 .agent-reply h1, .agent-reply h2, .agent-reply h3 {
   font-size: 1em;
   font-weight: 550;
@@ -2232,6 +2248,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transition: opacity 0.2s ease;
   z-index: 5;
   pointer-events: none;
+}
+.msg-time {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0.15rem;
+  user-select: none;
 }
 .agent-box:hover .msg-actions {
   opacity: 1;
@@ -2902,12 +2926,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.3rem 0;
+  padding: 0.25rem 0;
   color: var(--text-dim);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   letter-spacing: 0.04em;
   font-weight: 400;
+  opacity: 0.65;
 }
 
 .thinking-dot {

@@ -60,13 +60,6 @@ export const hidePageLoader = () => {
 const BALANCE_PROVIDERS = new Set(["deepseek", "openrouter"]);
 const _balanceCache = new Map();  // provider -> { data, ts }
 
-const setBalanceLabel = (el, text, title) => {
-  if (!el) return;
-  el.textContent = text;
-  el.title = title;
-  el.hidden = false;
-};
-
 async function fetchProviderBalance(provider) {
   try {
     const r = await fetch(`/api/balance?provider=${provider}`);
@@ -82,18 +75,13 @@ async function fetchProviderBalance(provider) {
 function renderBalance(el, data) {
   if (!el) return;
   if (!data?.is_available || !Array.isArray(data?.balance_infos) || !data.balance_infos.length) {
-    setBalanceLabel(el, "💰 —", "Balance unavailable");
+    el._balanceLabel = "";
     return;
   }
   const curSym = (cur) => cur === "CNY" ? "¥" : cur === "USD" ? "$" : (cur ?? "");
   const info = data.balance_infos[0];
   const total = info.total_balance ?? "—";
-  const label = `💰 ${curSym(info.currency)}${total}`;
-  const tooltip = data.balance_infos.map((bi) => {
-    const c = curSym(bi.currency);
-    return `Total: ${c}${bi.total_balance ?? "—"}  |  Top-up: ${c}${bi.topped_up_balance ?? "—"}  |  Grant: ${c}${bi.granted_balance ?? "—"}`;
-  }).join("\n");
-  setBalanceLabel(el, label, tooltip);
+  el._balanceLabel = `💰 ${curSym(info.currency)}${total}`;
 }
 
 // Sync every session's balance chip: show cached data for supported
@@ -110,8 +98,9 @@ function syncAllBalanceChips() {
     const cached = _balanceCache.get(provider);
     if (cached?.data) {
       renderBalance(el, cached.data);
+      refreshModelChip(s);
     } else {
-      setBalanceLabel(el, "💰 —", "Balance unavailable");
+      el._balanceLabel = "";
     }
   }
 }
@@ -123,6 +112,7 @@ async function refreshProviderBalance(provider) {
   for (const [_, s] of sessions) {
     if ((s.agentInfo?.provider ?? "") === provider && s.balanceEl) {
       renderBalance(s.balanceEl, data);
+      refreshModelChip(s);
     }
   }
 }
@@ -232,7 +222,7 @@ export const handlers = {
       `<span class="turn-time">${date.toLocaleTimeString()}</span>` +
       `<span class="turn-line"></span>`;
     appendAfterPending(this, sep);
-    const box = createUserBox(queryText);
+    const box = createUserBox(queryText, null, meta?.ts);
     box.classList.add("pending");
     box.dataset.queued = queryText;
     box._queryText = queryText;
@@ -264,7 +254,7 @@ export const handlers = {
     }
     this.state.currentTurn++;
     renderTurnSep(this, meta?.ts);
-    const box = createUserBox(queryText, images);
+    const box = createUserBox(queryText, images, meta?.ts);
     box.dataset.turn = String(this.state.currentTurn);
     append(this, box);
   },
@@ -597,11 +587,14 @@ const refreshModelChip = (session) => {
   const ai = session.agentInfo;
   const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off";
   const modelLabel = ai?.provider ? `${ai.model}@${ai.provider}` : ai?.model;
-  const text = [modelLabel, showThink ? `[${ai.thinkingLevel}]` : ""].filter(Boolean).join(" ");
+  const modelText = [modelLabel, showThink ? `[${ai.thinkingLevel}]` : ""].filter(Boolean).join(" ");
+
+  // Combined model + balance
+  const balanceText = session.modelEl?._balanceLabel ?? "";
+  const text = [modelText, balanceText].filter(Boolean).join(" · ");
   if (text) { session.modelEl.textContent = text; session.modelEl.hidden = false; }
   else { session.modelEl.hidden = true; }
 
-  // Attach model-picker click handler (once per session)
   if (session.modelPickerEl && !session._modelPickerAttached) {
     session._modelPickerAttached = true;
     session.modelEl.addEventListener("click", (ev) => {
@@ -784,31 +777,39 @@ const escapeAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").repla
 const refreshCwdChip = (session) => {
   if (!session?.cwdEl) return;
   const wrap = session.cwdEl.closest(".terminal-wrap");
-  if (wrap?.dataset.uiUsageCwdShow !== "true") { session.cwdEl.hidden = true; return; }
+  if (wrap?.dataset.uiUsageCwdShow !== "true") { session._cwdText = ""; refreshLocationChip(session); return; }
   const cwd = session.state?.cwd ?? "";
-  if (!cwd) { session.cwdEl.hidden = true; return; }
-  if (session.cwdEl.title === cwd) return;
+  if (!cwd) { session._cwdText = ""; refreshLocationChip(session); return; }
+  if (session._cwdPath === cwd) return;
   const base = cwd.split("/").filter(Boolean).pop() ?? cwd;
-  session.cwdEl.textContent = base;
-  session.cwdEl.title = cwd;
-  session.cwdEl.hidden = false;
+  session._cwdText = base;
+  session._cwdPath = cwd;
+  refreshLocationChip(session);
 };
 
 const refreshGitBranch = async (session) => {
   if (!session?.branchEl || !session.id) return;
   const wrap = session.branchEl.closest(".terminal-wrap");
-  if (wrap?.dataset.uiUsageGitBranch === "false") { session.branchEl.hidden = true; return; }
+  if (wrap?.dataset.uiUsageGitBranch === "false") { session._branchText = ""; refreshLocationChip(session); return; }
   try {
     const r = await fetch(`/${session.id}/git-branch`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const { branch } = await r.json();
-    if (branch) {
-      session.branchEl.textContent = branch;
-      session.branchEl.hidden = false;
-    } else {
-      session.branchEl.hidden = true;
-    }
-  } catch { session.branchEl.hidden = true; }
+    session._branchText = branch || "";
+  } catch { session._branchText = ""; }
+  refreshLocationChip(session);
+};
+
+const refreshLocationChip = (session) => {
+  if (!session?.cwdEl) return;
+  const text = [session._cwdText, session._branchText].filter(Boolean).join(" · ");
+  if (text) {
+    session.cwdEl.textContent = text;
+    session.cwdEl.title = session._cwdPath ?? "";
+    session.cwdEl.hidden = false;
+  } else {
+    session.cwdEl.hidden = true;
+  }
 };
 
 // Fetch balance for all supported providers on startup.

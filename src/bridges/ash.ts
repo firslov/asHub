@@ -183,7 +183,7 @@ let _firstBridge = true;
       task: string;
       startedAt: number;
       promise: Promise<string>;
-      signal?: AbortSignal;
+      controller?: AbortController;
       result?: string;
       error?: string;
     }
@@ -325,7 +325,7 @@ export class AshBridge extends EventEmitter implements Bridge {
         signal: abortController.signal,
       });
 
-      const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise, signal: abortController.signal };
+      const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise, controller: abortController };
       _subagents.set(id, entry);
 
       promise.then((result) => {
@@ -834,7 +834,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       // Abort all running async subagents — their tool calls are still
       // pumping events into the bus even after main cancel.
       for (const [eid, entry] of (this as any)._subagents as Map<string, SubagentEntry>) {
-        (entry.signal as any)?.abort?.();
+        entry.controller?.abort();
       }
       setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
@@ -1183,6 +1183,11 @@ export class AshBridge extends EventEmitter implements Bridge {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    // Abort and clean up any async subagents still running.
+    for (const [, entry] of (this as any)._subagents as Map<any, any>) {
+      try { entry.controller?.abort(); } catch {}
+    }
+    (this as any)._subagents.clear();
     try { this._contextProducerUnsubscribe?.(); } catch {}
     try { this.core?.kill(); } catch {}
     if (this.shell) {

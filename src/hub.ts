@@ -161,6 +161,19 @@ async function ensureSessionsDir(): Promise<void> {
 }
 
 const ARCHIVED_PATH = path.join(SESSIONS_DIR, "archived.json");
+const PINNED_PATH = path.join(SESSIONS_DIR, "pinned.json");
+
+async function loadPinnedSessions(): Promise<Set<string>> {
+  try {
+    const raw = await fs.promises.readFile(PINNED_PATH, "utf-8");
+    return new Set(JSON.parse(raw) as string[]);
+  } catch { return new Set(); }
+}
+
+async function savePinnedSessions(pinned: Set<string>): Promise<void> {
+  await ensureSessionsDir();
+  await fs.promises.writeFile(PINNED_PATH, JSON.stringify([...pinned], null, 2), "utf-8");
+}
 
 async function loadArchivedSessions(): Promise<Map<string, number>> {
   try {
@@ -424,6 +437,8 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "GET" && url === "/api/sessions/archived") return listArchivedSessions(res);
     if (req.method === "POST" && url === "/api/sessions/archive") return archiveSession(req, res, sessions);
     if (req.method === "POST" && url === "/api/sessions/unarchive") return unarchiveSession(req, res, sessions, opts);
+    if (req.method === "POST" && url === "/api/sessions/unpin") return unpinSession(req, res);
+    if (req.method === "GET" && url === "/api/sessions/pinned") return listPinnedSessions(res);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
       return openSseMulti(req, res, sessions, params.get("subs") ?? "", params.get("since") ?? "");
@@ -489,6 +504,7 @@ export function startHub(opts: HubOpts): http.Server {
       if (req.method === "PUT" && rest === "/model") return setModelEndpoint(req, res, session);
       if (req.method === "PUT" && rest === "/sa-model") return setSubagentModel(req, res, session);
       if (req.method === "GET" && rest === "/sa-model") return getSubagentModelOverrides(req, res, session);
+      if (req.method === "GET" && rest === "/pin") return togglePin(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
 
       const file = rest === "/" || rest === "/index.html" ? "/index.html" : rest;
@@ -2713,4 +2729,52 @@ async function getSubagentModelOverrides(req: http.IncomingMessage, res: http.Se
   const models = bridge?.getSubagentModels?.() ?? {};
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ models }));
+}
+
+async function pinSession(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const body = await readBody(req);
+  let id = "";
+  try { id = JSON.parse(body).id; } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "invalid JSON" }));
+    return;
+  }
+  const pinned = await loadPinnedSessions();
+  pinned.add(id);
+  await savePinnedSessions(pinned);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function unpinSession(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const body = await readBody(req);
+  let id = "";
+  try { id = JSON.parse(body).id; } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "invalid JSON" }));
+    return;
+  }
+  const pinned = await loadPinnedSessions();
+  pinned.delete(id);
+  await savePinnedSessions(pinned);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function listPinnedSessions(res: http.ServerResponse): Promise<void> {
+  const pinned = await loadPinnedSessions();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ pinned: [...pinned] }));
+}
+
+async function togglePin(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  const pinned = await loadPinnedSessions();
+  if (pinned.has(session.id)) {
+    pinned.delete(session.id);
+  } else {
+    pinned.add(session.id);
+  }
+  await savePinnedSessions(pinned);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ pinned: pinned.has(session.id) }));
 }

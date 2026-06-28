@@ -12,8 +12,7 @@ export const showThinking = (session) => {
   el.innerHTML =
     `<span class="thinking-dot"></span>` +
     `<span class="thinking-dot"></span>` +
-    `<span class="thinking-dot"></span>` +
-    `<span class="thinking-label">${t("thinking")}</span>`;
+    `<span class="thinking-dot"></span>`;
   hideEmptyState(session);
   insertStreamNode(session, el);
   session.thinking.el = el;
@@ -84,7 +83,7 @@ const flushThinkingBuf = (session) => {
     session.thinking.block = block;
     const head = document.createElement("div");
     head.className = "thinking-block-head";
-    head.textContent = `💭 ${t("thinking")}`;
+    head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t("thinking")}</span>`;
     head.addEventListener("click", () => {
       setThinkingCollapsed(block, !block.classList.contains("collapsed"));
     });
@@ -136,7 +135,7 @@ export const finalizeThinking = (session) => {
     block.remove();
   } else {
     const head = block.querySelector(".thinking-block-head");
-    if (head) head.textContent = `💭 ${t("thought")}`;
+    if (head) head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t("thought")}</span>`;
     setThinkingCollapsed(block, true);
   }
   session.thinking.block = null;
@@ -147,9 +146,6 @@ document.addEventListener("langchange", () => {
   document.querySelectorAll(".thinking-block-head").forEach((head) => {
     const block = head.closest(".thinking-block");
     const isCollapsed = block?.classList?.contains("collapsed") ?? false;
-    head.textContent = `💭 ${t(isCollapsed ? "thought" : "thinking")}`;
-  });
-  document.querySelectorAll(".thinking-label").forEach((label) => {
-    label.textContent = t("thinking");
+    head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t(isCollapsed ? "thought" : "thinking")}</span>`;
   });
 });

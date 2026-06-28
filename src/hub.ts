@@ -1223,6 +1223,7 @@ function routeEvent(session: Session, e: BusEvent): void {
   if (e.name === "agent:cancelled") {
     session.isProcessing = false;
     session._cancelled = true;
+    session.toolsRunning = 0;
   }
 
   // After cancel, drop tool events from still-running subagents.

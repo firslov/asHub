@@ -12,7 +12,7 @@ export function compactReasoning(stream) {
   const children = Array.from(stream.children);
 
   // ── Find consecutive thinking-block + tool-group runs ────────────
-  const runs = []; // { elems: [...], start: idx }
+  const runs = []; // { elems: [...], start: idx, end: idx }
   let i = 0;
   while (i < children.length) {
     const think = children[i];
@@ -40,19 +40,30 @@ export function compactReasoning(stream) {
     }
   }
 
+  // ── Absorb orphaned thinking-blocks at end of runs ──────────────
+  for (const run of runs) {
+    const after = children[run.end + 1];
+    if (after?.classList?.contains("thinking-block")) {
+      run.elems.push(after);
+      run.end++;
+    }
+  }
+
   // ── Build reasoning-phase containers ─────────────────────────────
   for (const run of runs) {
     if (run.elems.length <= 2) continue; // single pair → leave as-is
 
-    const pairs = run.elems.length / 2;
+    const rounds = Math.ceil(run.elems.length / 2);
     let totalTools = 0;
-    for (let j = 1; j < run.elems.length; j += 2) {
-      totalTools += run.elems[j].querySelectorAll(".tool-row").length;
+    for (const el of run.elems) {
+      if (el.classList?.contains("tool-group")) {
+        totalTools += el.querySelectorAll(".tool-row").length;
+      }
     }
 
     const phase = document.createElement("div");
     phase.className = "reasoning-phase";
-    phase.dataset.pairs = pairs;
+    phase.dataset.pairs = rounds;
     phase.dataset.totalTools = totalTools;
 
     const head = document.createElement("button");
@@ -60,9 +71,7 @@ export function compactReasoning(stream) {
     head.className = "reasoning-phase-head";
     head.innerHTML =
       `<span class="rp-arrow">▸</span>` +
-      `<span class="rp-icon">💭</span>` +
-      `<span class="rp-label">${t("n.reasoning.rounds", { n: pairs })}</span>` +
-      `<span class="rp-stat">${t("n.tools.compact", { n: totalTools })}</span>`;
+      `<span class="rp-text">💭 ${t("n.reasoning.rounds", { n: rounds })} · ${t("n.tools.compact", { n: totalTools })}</span>`;
     phase.appendChild(head);
 
     const body = document.createElement("div");
@@ -90,11 +99,9 @@ document.addEventListener("langchange", () => {
   document.querySelectorAll(".reasoning-phase").forEach((phase) => {
     const head = phase.querySelector(".reasoning-phase-head");
     if (!head) return;
-    const label = head.querySelector(".rp-label");
-    const stat = head.querySelector(".rp-stat");
+    const text = head.querySelector(".rp-text");
     const pairs = parseInt(phase.dataset.pairs) || 0;
     const totalTools = parseInt(phase.dataset.totalTools) || 0;
-    if (label) label.textContent = t("n.reasoning.rounds", { n: pairs });
-    if (stat) stat.textContent = t("n.tools.compact", { n: totalTools });
+    if (text) text.textContent = `💭 ${t("n.reasoning.rounds", { n: pairs })} · ${t("n.tools.compact", { n: totalTools })}`;
   });
 });

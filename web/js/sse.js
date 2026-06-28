@@ -274,7 +274,7 @@ export const handlers = {
     resetCompletedTools(this);
     startNewSegment(this);
     this._subagent = null;
-    this._subagentBlock = null;
+    // _subagentBlock survives — async subagents need it to find their block on completion.
     showThinking(this);
   },
 
@@ -320,7 +320,6 @@ export const handlers = {
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
     this._subagent = null;
-    this._subagentBlock = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
     if (!this.state.replaying && this === activeSession.peek()) {
@@ -339,7 +338,6 @@ export const handlers = {
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
     this._subagent = null;
-    this._subagentBlock = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
   },
@@ -353,7 +351,6 @@ export const handlers = {
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
     this._subagent = null;
-    this._subagentBlock = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
   },

@@ -1164,6 +1164,7 @@ function routeEvent(session: Session, e: BusEvent): void {
     session.isProcessing = true;
     session.hasUnread = false;
     session._cancelled = false;
+    session.toolsRunning = 0;
     const query = (e.payload as { query?: string })?.query ?? "";
     // Generate fresh meta for each frame so they don't share the same
     // id / ts — mirroring submit()'s non-queued path.
@@ -1749,6 +1750,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   if (!queued) {
     session.isProcessing = true;
     session.hasUnread = false;
+    session._cancelled = false;
     pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query }));
     pushFrame(session, "agent:processing-start", sseFrame(meta("agent:processing-start"), {}));
   }
@@ -2731,20 +2733,6 @@ async function getSubagentModelOverrides(req: http.IncomingMessage, res: http.Se
   res.end(JSON.stringify({ models }));
 }
 
-async function pinSession(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  const body = await readBody(req);
-  let id = "";
-  try { id = JSON.parse(body).id; } catch {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "invalid JSON" }));
-    return;
-  }
-  const pinned = await loadPinnedSessions();
-  pinned.add(id);
-  await savePinnedSessions(pinned);
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ ok: true }));
-}
 
 async function unpinSession(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const body = await readBody(req);

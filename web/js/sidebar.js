@@ -181,7 +181,7 @@ const startTitleEdit = (li, instanceId, currentTitle) => {
   });
 };
 
-const renderSessionItem = (s) => {
+const renderSessionItem = (s, isPinned = false) => {
   const li = document.createElement("li");
   li.dataset.sessionId = s.instanceId;
   const isCurrent = s.instanceId === activeSessionId.peek();
@@ -289,18 +289,39 @@ const renderSessionItem = (s) => {
   });
   li.appendChild(archiveBtn);
 
+  // Pin button — keeps session at top of list.
+  const pinBtn = document.createElement("button");
+  pinBtn.className = "session-pin-btn";
+  pinBtn.title = t("pin");
+  pinBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>`;
+  pinBtn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    try {
+      const res = await fetch(`/${s.instanceId}/pin`);
+      if (res.ok) renderSessions(true);
+    } catch {}
+  });
+  
+  // Set initial pinned state
+  if (isPinned) {
+    pinBtn.classList.add("pinned");
+    pinBtn.title = t("unpin");
+  }
+  li.appendChild(pinBtn);
+
   sessionList.appendChild(li);
   return li;
 };
 
-const renderSessions = async () => {
+const renderSessions = async (force = false) => {
   try {
     const res = await fetch("/sessions");
     const list = await res.json();
     const fullHash = JSON.stringify(list.map((s) => [
       s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread, s.kind ?? "agent",
     ]));
-    if (fullHash === fullSessionsHash) return;
+    if (!force && fullHash === fullSessionsHash) return;
     fullSessionsHash = fullHash;
     sessionInfo.clear();
     for (const s of list) {
@@ -309,8 +330,20 @@ const renderSessions = async () => {
     }
     sessionsTick.value = sessionsTick.peek() + 1;
     const agents = list.filter((s) => (s.kind ?? "agent") === "agent");
+
+    // Fetch pinned IDs for sorting and hash calculation
+    let pinnedIds = new Set();
+    try {
+      const pinnedRes = await fetch("/api/sessions/pinned");
+      if (pinnedRes.ok) {
+        const data = await pinnedRes.json();
+        if (Array.isArray(data.pinned)) pinnedIds = new Set(data.pinned);
+      }
+    } catch {}
+
     const hash = JSON.stringify(agents.map((s) => [
       s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread,
+      pinnedIds.has(s.instanceId),
     ]));
     if (hash === sessionsHash) return;
     const isFirstRender = sessionsHash === "";
@@ -320,14 +353,32 @@ const renderSessions = async () => {
       if (m) homeDir.value = m[1];
     }
     sessionList.innerHTML = "";
-    const buckets = new Map();
+
+    // Build session items grouped by pin-first then by time bucket
+    const pinnedItems = [];
+    const restByBucket = new Map();
     for (const s of agents) {
-      const k = bucketKey(s.startedAt);
-      if (!buckets.has(k)) buckets.set(k, []);
-      buckets.get(k).push(s);
+      if (pinnedIds.has(s.instanceId)) {
+        pinnedItems.push(s);
+      } else {
+        const k = bucketKey(s.startedAt);
+        if (!restByBucket.has(k)) restByBucket.set(k, []);
+        restByBucket.get(k).push(s);
+      }
+    }
+
+    // Render pinned section
+    if (pinnedItems.length > 0) {
+      const pinHead = document.createElement("li");
+      pinHead.className = "session-group-head";
+      pinHead.textContent = t("pinned");
+      sessionList.appendChild(pinHead);
+      for (const s of pinnedItems) {
+        renderSessionItem(s, true);
+      }
     }
     for (const k of BUCKET_ORDER) {
-      const items = buckets.get(k);
+      const items = restByBucket.get(k);
       if (!items?.length) continue;
       const head = document.createElement("li");
       head.className = "session-group-head";
@@ -551,19 +602,21 @@ const renderArchive = async () => {
     for (const item of items) {
       const li = document.createElement("li");
       li.dataset.sessionId = item.id;
-      li.className = "archive-item";
+      li.style.cssText = "position:relative;display:flex;align-items:center;padding:0.42rem 0.7rem 0.42rem 1.5rem;cursor:pointer;border-radius:var(--radius-xs);transition:background 0.1s;min-height:36px;";
 
-      const info = document.createElement("div");
-      info.className = "archive-item-info";
+      const info = document.createElement("a");
+      info.className = "session-item-link";
+      info.href = `/${item.id}`;
+      info.style.cssText = "flex:1;min-width:0;display:flex;align-items:center;gap:0.5rem;text-decoration:none;color:var(--text-dim);font-size:0.82rem;";
       const title = escape(item.title || t("untitled"));
       const timeText = item.startedAt
         ? `<span class="session-time">${escape(relativeTime(item.startedAt))}</span>`
         : "";
-      info.innerHTML = `<span class="archive-item-title">${title}</span>${timeText}`;
+      info.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-mid);font-weight:440;font-size:0.82rem;line-height:1.3;">${title}</span>${timeText}`;
       li.appendChild(info);
 
       const restoreBtn = document.createElement("button");
-      restoreBtn.className = "archive-restore-btn";
+      restoreBtn.className = "session-btn";
       restoreBtn.title = t("restore");
       restoreBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`;
       restoreBtn.addEventListener("click", async (ev) => {

@@ -865,10 +865,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .workspace-children li.current a { border-left-color: var(--accent); }
 .workspace-child-kind {
   flex-shrink: 0;
-  color: var(--text-dim);
-  font-size: 0.72rem;
-  width: 0.9rem;
+  color: var(--accent);
+  font-size: 0.55rem;
+  width: 0.75rem;
   text-align: center;
+  line-height: 1;
+  opacity: 0.6;
 }
 .workspace-child-title {
   flex: 1;
@@ -5530,3 +5532,60 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .sa-model-select:focus {
   border-color: var(--accent);
 }
+
+/* ── Archive list (inherits session-list structure) ───────────────── */
+
+#archive li:hover { background: var(--bg2); }
+#archive .session-btn {
+  opacity: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: opacity 0.12s, color 0.12s;
+}
+#archive li:hover .session-btn { opacity: 1; }
+#archive .session-btn:hover { color: var(--accent); }
+#archive[hidden] { display: none; }
+#archive { padding: 0; list-style: none; }
+.archive-empty {
+  padding: 1rem 0.7rem;
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+
+.session-pin-btn {
+  position: absolute;
+  top: 50%;
+  right: 5.9rem;
+  transform: translateY(-50%);
+  opacity: 0;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.12s, color 0.12s;
+  padding: 0;
+}
+.session-list li:hover .session-pin-btn { opacity: 1; pointer-events: auto; }
+.session-pin-btn:hover {
+  color: var(--text-muted);
+  background: var(--hover-bg, color-mix(in srgb, var(--fg) 8%, transparent));
+}
+.session-pin-btn svg { width: 14px; height: 14px; }

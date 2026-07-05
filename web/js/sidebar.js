@@ -257,10 +257,12 @@ const renderSessionItem = (s, isPinned = false) => {
         sessions.get(s.instanceId)?.remove();
         switchTo(nextId);
         renderSessions();
-        // Windows: session removal briefly sets input.disabled=true
-        // via the hasSession effect. Force re-enable after switch.
-        const input2 = document.getElementById("query");
-        if (input2) input2.disabled = false;
+        // Windows: session removal may leave input/form in stale state.
+        // Force-reset disabled and opacity.
+        const q = document.getElementById("query");
+        const f = document.getElementById("form");
+        if (q) q.disabled = false;
+        if (f) f.style.opacity = "";
       } else {
         window.location.href = "/";
       }

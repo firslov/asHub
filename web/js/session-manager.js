@@ -75,8 +75,10 @@ effect(() => {
   // the textarea can lose its editable state during DOM toggling).
   if (active) {
     const input = document.getElementById("query");
+    const form = document.getElementById("form");
+    if (input) input.disabled = false;
+    if (form) form.style.opacity = "";
     if (input) {
-      input.disabled = false;
       requestAnimationFrame(() => {
         if (document.activeElement !== input) input.focus();
       });

@@ -1343,8 +1343,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: rgba(212, 168, 83, 0.1);
   opacity: 1 !important;
   pointer-events: auto;
+  font-weight: 600;
+  font-size: 0.85rem;
   animation: pulse-archive 0.6s ease-in-out infinite alternate;
 }
+.session-archive-btn.confirming svg { display: none; }
 
 @keyframes pulse-archive {
   from { opacity: 0.7; }

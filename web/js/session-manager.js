@@ -79,6 +79,10 @@ effect(() => {
     if (input) input.disabled = false;
     if (form) form.style.opacity = "";
     if (input) {
+      // Ensure Electron window has OS focus on Windows
+      if (!document.hasFocus() && window.electronAPI?.focusWindow) {
+        window.electronAPI.focusWindow();
+      }
       requestAnimationFrame(() => {
         if (document.activeElement !== input) input.focus();
       });

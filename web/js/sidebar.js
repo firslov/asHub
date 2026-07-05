@@ -257,13 +257,16 @@ const renderSessionItem = (s, isPinned = false) => {
         sessions.get(s.instanceId)?.remove();
         switchTo(nextId);
         renderSessions();
-        // Windows: after session delete, Electron window may lose
-        // OS-level input focus. Force window focus + click to restore.
-        window.focus?.();
+        // Windows: session delete → Electron window loses OS focus.
+        // window.focus() doesn't work in renderer; use main-process IPC.
         setTimeout(() => {
-          const q = document.getElementById("query");
-          if (q) { q.focus(); q.click(); }
-        }, 100);
+          document.getElementById("query")?.focus();
+          if (window.electronAPI?.focusWindow) {
+            window.electronAPI.focusWindow();
+          } else {
+            window.focus?.();
+          }
+        }, 80);
       } else {
         window.location.href = "/";
       }

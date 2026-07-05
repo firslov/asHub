@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   pickDirectory: () => ipcRenderer.invoke("pick-directory"),
   checkForUpdate: () => ipcRenderer.invoke("check-for-update"),
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
+  focusWindow: () => ipcRenderer.invoke("focus-window"),
   onUpdateAvailable: (cb) => onChannel("update-available", cb),
   /** Send theme change to main process to update native title bar */
   onThemeChange: (theme) => ipcRenderer.send("theme-changed", theme),

@@ -459,6 +459,14 @@ function setupIPC() {
     }
   });
 
+  ipcMain.handle("focus-window", () => {
+    const win = BrowserWindow.getFocusedWindow() || mainWindow;
+    if (win) {
+      win.focus();
+      win.webContents.focus();
+    }
+  });
+
   // Sync native title bar with web UI theme changes
   ipcMain.on("theme-changed", (_event, theme) => {
     if (mainWindow) {

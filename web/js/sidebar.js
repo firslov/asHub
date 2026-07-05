@@ -257,12 +257,13 @@ const renderSessionItem = (s, isPinned = false) => {
         sessions.get(s.instanceId)?.remove();
         switchTo(nextId);
         renderSessions();
-        // Windows: session removal may leave input/form in stale state.
-        // Force-reset disabled and opacity.
-        const q = document.getElementById("query");
-        const f = document.getElementById("form");
-        if (q) q.disabled = false;
-        if (f) f.style.opacity = "";
+        // Windows: after session delete, Electron window may lose
+        // OS-level input focus. Force window focus + click to restore.
+        window.focus?.();
+        setTimeout(() => {
+          const q = document.getElementById("query");
+          if (q) { q.focus(); q.click(); }
+        }, 100);
       } else {
         window.location.href = "/";
       }

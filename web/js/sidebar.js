@@ -257,17 +257,10 @@ const renderSessionItem = (s, isPinned = false) => {
         sessions.get(s.instanceId)?.remove();
         switchTo(nextId);
         renderSessions();
-        // Windows: force window focus + input focus after delete
-        window.focus?.();
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const input = document.getElementById("query");
-            if (input && document.activeElement !== input) {
-              input.focus();
-              if (document.activeElement !== input) input.click();
-            }
-          });
-        });
+        // Windows: session removal briefly sets input.disabled=true
+        // via the hasSession effect. Force re-enable after switch.
+        const input2 = document.getElementById("query");
+        if (input2) input2.disabled = false;
       } else {
         window.location.href = "/";
       }

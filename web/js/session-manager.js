@@ -76,18 +76,9 @@ effect(() => {
   if (active) {
     const input = document.getElementById("query");
     if (input) {
-      // Windows: sidebar click can defocus the Electron window,
-      // making input.focus() silently fail. Force window focus
-      // first, then focus input after a double-frame delay.
-      window.focus?.();
+      input.disabled = false;
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          input.focus();
-          if (document.activeElement !== input) {
-            // Fallback: click-to-focus as last resort
-            input.click();
-          }
-        });
+        if (document.activeElement !== input) input.focus();
       });
     }
   }

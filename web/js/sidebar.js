@@ -231,9 +231,20 @@ const renderSessionItem = (s, isPinned = false) => {
   close.addEventListener("click", async (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
-    if (!confirm(t("close.session.confirm", { title: escape(s.title || t("untitled")) }))) return;
-    // Windows: confirm() dialog steals OS focus; restore immediately.
-    if (window.electronAPI?.focusWindow) window.electronAPI.focusWindow();
+    // Two-click confirmation — avoids native confirm() which steals
+    // OS focus on Windows and never returns it to the renderer.
+    if (!close.classList.contains("confirming")) {
+      close.classList.add("confirming");
+      close.textContent = "?";
+      close.title = t("close.session.confirm", { title: escape(s.title || t("untitled")) });
+      setTimeout(() => {
+        close.classList.remove("confirming");
+        close.textContent = "×";
+        close.title = t("close.session");
+      }, 2500);
+      return;
+    }
+    close.classList.remove("confirming");
     try {
       await fetch(`/${s.instanceId}/`, { method: "DELETE" });
     } catch {}
@@ -259,12 +270,7 @@ const renderSessionItem = (s, isPinned = false) => {
         sessions.get(s.instanceId)?.remove();
         switchTo(nextId);
         renderSessions().then(() => {
-          const q = document.getElementById("query");
-          if (q) q.focus();
-          // Ensure OS focus sticks after DOM rebuild
-          if (window.electronAPI?.focusWindow) {
-            setTimeout(() => window.electronAPI.focusWindow(), 100);
-          }
+          document.getElementById("query")?.focus();
         });
       } else {
         window.location.href = "/";
@@ -286,7 +292,16 @@ const renderSessionItem = (s, isPinned = false) => {
   archiveBtn.addEventListener("click", async (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
-    if (!confirm(t("archive.confirm", { title: escape(s.title || t("untitled")) }))) return;
+    if (!archiveBtn.classList.contains("confirming")) {
+      archiveBtn.classList.add("confirming");
+      archiveBtn.title = t("archive.confirm", { title: escape(s.title || t("untitled")) });
+      setTimeout(() => {
+        archiveBtn.classList.remove("confirming");
+        archiveBtn.title = t("archive");
+      }, 2500);
+      return;
+    }
+    archiveBtn.classList.remove("confirming");
     try {
       await fetch("/api/sessions/archive", {
         method: "POST",

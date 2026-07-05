@@ -460,10 +460,11 @@ function setupIPC() {
   });
 
   ipcMain.handle("focus-window", () => {
-    const win = BrowserWindow.getFocusedWindow() || mainWindow;
-    if (win) {
-      win.focus();
-      win.webContents.focus();
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.focus();
     }
   });
 

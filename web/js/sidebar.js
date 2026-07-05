@@ -232,6 +232,8 @@ const renderSessionItem = (s, isPinned = false) => {
     ev.preventDefault();
     ev.stopPropagation();
     if (!confirm(t("close.session.confirm", { title: escape(s.title || t("untitled")) }))) return;
+    // Windows: confirm() dialog steals OS focus; restore immediately.
+    if (window.electronAPI?.focusWindow) window.electronAPI.focusWindow();
     try {
       await fetch(`/${s.instanceId}/`, { method: "DELETE" });
     } catch {}
@@ -256,17 +258,14 @@ const renderSessionItem = (s, isPinned = false) => {
         // deleted session matches.
         sessions.get(s.instanceId)?.remove();
         switchTo(nextId);
-        renderSessions();
-        // Windows: session delete → Electron window loses OS focus.
-        // window.focus() doesn't work in renderer; use main-process IPC.
-        setTimeout(() => {
-          document.getElementById("query")?.focus();
+        renderSessions().then(() => {
+          const q = document.getElementById("query");
+          if (q) q.focus();
+          // Ensure OS focus sticks after DOM rebuild
           if (window.electronAPI?.focusWindow) {
-            window.electronAPI.focusWindow();
-          } else {
-            window.focus?.();
+            setTimeout(() => window.electronAPI.focusWindow(), 100);
           }
-        }, 80);
+        });
       } else {
         window.location.href = "/";
       }

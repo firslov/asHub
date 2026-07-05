@@ -90,7 +90,6 @@ effect(() => {
   const s = activeSession.peek();
   if (s && !s.state.isProcessing) {
     const spinner = document.getElementById("spinner");
-    if (spinner) spinner.hidden = true;
     const cancelBtn = document.getElementById("cancel-turn");
     if (spinner) spinner.hidden = true;
     if (cancelBtn) cancelBtn.hidden = true;

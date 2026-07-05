@@ -1723,6 +1723,40 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.4rem 1.15rem 0.25rem;
 }
 
+
+/* ── Windows title bar refinements ───────────────────────────────── */
+/* Native title bar already provides window controls; make the custom
+   bar compact so it looks like a toolbar rather than a second header. */
+/* Windows font smoothing */
+.os-other {
+  -webkit-font-smoothing: antialiased;
+}
+
+:root.os-other { --ui-title-bar-height: 34px; }
+
+.os-other .title-bar {
+  height: 34px;
+  padding: 0.35rem 1rem;
+  gap: 0.4rem;
+  background: var(--bg2);
+}
+
+.os-other .title-bar .sidebar-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.os-other .title-bar .sidebar-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.os-other .title-bar .sidebar-view-btn {
+  width: 28px;
+  height: 26px;
+  font-size: 0.65rem;
+}
+
 /* ── Right-panel awareness ──────────────────────────────────────── */
 /* When context / files / config / prompt panels slide in from the
    right (300px), shift the terminal content left so content remains

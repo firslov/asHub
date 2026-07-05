@@ -24,8 +24,6 @@ export const setTreeOpen = (open) => {
   }
 };
 
-let _treeHash = "";
-
 const refresh = async () => {
   const sid = currentSessionId();
   if (!sid || !body) return;
@@ -33,58 +31,12 @@ const refresh = async () => {
     const res = await fetch(`/${sid}/tree`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    // Skip full render if tree structure hasn't changed — only
-    // update active/leaf badges in-place.
-    const hash = `${data.leafId}|${data.entries.length}|${data.rootId}`;
-    if (hash === _treeHash && body.firstChild) {
-      updateBadgesInPlace(data.leafId, data.entries);
-      return;
-    }
-    _treeHash = hash;
     render(data);
   } catch (err) {
     body.innerHTML = `<div class="tree-empty">failed: ${escape(String(err))}</div>`;
   }
 };
 
-const updateBadgesInPlace = (leafId, entries) => {
-  if (!body) return;
-  // Determine leaf entries from the full entry list.
-  const childIds = new Set();
-  for (const e of entries) { if (e.parentId) childIds.add(e.parentId); }
-  const leafIds = new Set();
-  for (const e of entries) { if (!childIds.has(e.id)) leafIds.add(e.id); }
-
-  for (const row of body.querySelectorAll(".tree-row[data-entry-id]")) {
-    const eid = row.dataset.entryId;
-    const isActive = eid === leafId;
-    const isLeaf = leafIds.has(eid) && !isActive;
-
-    // Update active badge
-    let badge = row.querySelector(".tree-active-badge");
-    if (isActive && !badge) {
-      badge = document.createElement("span");
-      badge.className = "tree-active-badge";
-      badge.textContent = "current";
-      row.appendChild(badge);
-    } else if (!isActive && badge) {
-      badge.remove();
-    }
-
-    // Update leaf badge
-    let leafBadge = row.querySelector(".tree-leaf-badge");
-    if (isLeaf && !leafBadge) {
-      leafBadge = document.createElement("span");
-      leafBadge.className = "tree-leaf-badge";
-      leafBadge.textContent = "leaf";
-      row.appendChild(leafBadge);
-    } else if (!isLeaf && leafBadge) {
-      leafBadge.remove();
-    }
-
-    row.dataset.switchable = (isLeaf && !isActive) ? "1" : "0";
-  }
-};
 
 const isVisible = (entry) => {
   if (!entry) return false;

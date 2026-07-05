@@ -1,6 +1,6 @@
 import { effect } from "../vendor/signals-core.js";
 import { activeSessionId, openTabs, openTab, closeTab } from "./session-manager.js";
-import { sessionInfo, sessionsTick } from "./sidebar.js";
+import { getSession, setSessions, allSessions } from "./store.js";
 import { t } from "./i18n.js";
 import { escape } from "./utils.js";
 
@@ -8,7 +8,7 @@ const strip = document.getElementById("session-tabs");
 const app = document.querySelector(".app");
 
 const labelFor = (id) => {
-  const meta = sessionInfo.get(id);
+  const meta = getSession(id);
   if (meta?.title && meta.title !== id) return meta.title;
   return t("untitled");
 };
@@ -57,7 +57,7 @@ const startRename = (btn, id) => {
     const val = input.value.trim();
     const shouldSave = commit && val && val !== current;
     if (shouldSave) {
-      const meta = sessionInfo.get(id);
+      const meta = getSession(id);
       if (meta) meta.title = val;
     }
     render();
@@ -101,7 +101,7 @@ const render = () => {
   if (!strip) return;
   const tabs = openTabs.value;
   const active = activeSessionId.value;
-  sessionsTick.value;  // signal subscription — re-render on title/cwd updates
+  allSessions.value; // signal subscription — re-render on title/cwd updates
   if (editingId) return;  // don't clobber an in-progress rename
 
   strip.hidden = (tabs.length === 0 && !externalDragLabel) || app?.dataset.uiTabsEnabled !== "true";

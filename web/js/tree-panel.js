@@ -1,7 +1,4 @@
 import { currentSessionId, state } from "./state.js";
-import { setFilesOpen } from "./files-panel.js";
-import { setCtxOpen } from "./context-panel.js";
-import { setConfigOpen } from "./config-panel.js";
 import { activeSession } from "./session-manager.js";
 import { effect } from "../vendor/signals-core.js";
 import { escape } from "./utils.js";
@@ -16,20 +13,6 @@ const refreshBtn = document.getElementById("tree-refresh");
 export const setTreeOpen = (open) => {
   if (!panel) return;
   if (open) {
-    setFilesOpen(false);
-    setCtxOpen(false);
-    setConfigOpen(false);
-    try { import("./subagent-panel.js").then(m => m.setSgOpen(false)); } catch {}
-    const skillsOverlay = document.getElementById("skills-overlay");
-    if (skillsOverlay && !skillsOverlay.hidden) {
-      import("./skills-panel.js").then((m) => m.setSkillsOpen(false));
-    }
-    const promptOverlay = document.getElementById("prompt-overlay");
-    if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
-      promptOverlay.setAttribute("hidden", "");
-      promptOverlay.classList.remove("open");
-      document.getElementById("prompt-toggle")?.classList.remove("active");
-    }
     panel.removeAttribute("hidden");
     app?.classList.add("tree-open");
     toggle?.classList.add("active");
@@ -41,17 +24,65 @@ export const setTreeOpen = (open) => {
   }
 };
 
+let _treeHash = "";
+
 const refresh = async () => {
   const sid = currentSessionId();
   if (!sid || !body) return;
-  body.innerHTML = `<div class="tree-empty">loading…</div>`;
   try {
     const res = await fetch(`/${sid}/tree`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    // Skip full render if tree structure hasn't changed — only
+    // update active/leaf badges in-place.
+    const hash = `${data.leafId}|${data.entries.length}|${data.rootId}`;
+    if (hash === _treeHash && body.firstChild) {
+      updateBadgesInPlace(data.leafId, data.entries);
+      return;
+    }
+    _treeHash = hash;
     render(data);
   } catch (err) {
     body.innerHTML = `<div class="tree-empty">failed: ${escape(String(err))}</div>`;
+  }
+};
+
+const updateBadgesInPlace = (leafId, entries) => {
+  if (!body) return;
+  // Determine leaf entries from the full entry list.
+  const childIds = new Set();
+  for (const e of entries) { if (e.parentId) childIds.add(e.parentId); }
+  const leafIds = new Set();
+  for (const e of entries) { if (!childIds.has(e.id)) leafIds.add(e.id); }
+
+  for (const row of body.querySelectorAll(".tree-row[data-entry-id]")) {
+    const eid = row.dataset.entryId;
+    const isActive = eid === leafId;
+    const isLeaf = leafIds.has(eid) && !isActive;
+
+    // Update active badge
+    let badge = row.querySelector(".tree-active-badge");
+    if (isActive && !badge) {
+      badge = document.createElement("span");
+      badge.className = "tree-active-badge";
+      badge.textContent = "current";
+      row.appendChild(badge);
+    } else if (!isActive && badge) {
+      badge.remove();
+    }
+
+    // Update leaf badge
+    let leafBadge = row.querySelector(".tree-leaf-badge");
+    if (isLeaf && !leafBadge) {
+      leafBadge = document.createElement("span");
+      leafBadge.className = "tree-leaf-badge";
+      leafBadge.textContent = "leaf";
+      row.appendChild(leafBadge);
+    } else if (!isLeaf && leafBadge) {
+      leafBadge.remove();
+    }
+
+    row.dataset.switchable = (isLeaf && !isActive) ? "1" : "0";
   }
 };
 
@@ -187,7 +218,6 @@ const fork = async (entryId) => {
   }
 };
 
-toggle?.addEventListener("click", () => setTreeOpen(panel?.hasAttribute("hidden") ?? true));
 closeBtn?.addEventListener("click", () => setTreeOpen(false));
 refreshBtn?.addEventListener("click", () => refresh());
 
@@ -197,16 +227,18 @@ effect(() => {
 });
 
 // Refresh tree when active session changes (if panel is open).
-// Deferred via setTimeout so the effect registers after session-view
-// has been upgraded and registerSession has fired — avoiding an init-
-// time race with ES module evaluation order.
-setTimeout(() => {
+// Wait for session-view to be registered so registerSession has fired
+// before the first refresh — avoids an init-time race.
+customElements.whenDefined("session-view").then(() => {
   effect(() => {
     activeSession.value;
     refreshTreeIfOpen();
   });
-}, 0);
+});
 
 export const refreshTreeIfOpen = () => {
   if (panel && !panel.hasAttribute("hidden")) refresh();
 };
+
+import { registerPanel } from './panel-manager.js';
+registerPanel('tree', { toggleBtnId: 'tree-toggle', panelId: 'tree-panel', open: () => setTreeOpen(true), close: () => setTreeOpen(false) });

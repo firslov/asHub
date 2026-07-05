@@ -1,32 +1,35 @@
 import "./i18n.js";
+
+// Set platform class for OS-specific UI (shortcuts etc)
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+document.documentElement.classList.add(isMac ? "os-mac" : "os-other");
+
 import { cancelTurn } from "./composer.js";
 import { setConfigOpen } from "./config-panel.js";
 import { switchTo, openTabs, activeSessionId, closeTab } from "./session-manager.js";
 import "./prefs.js";
-import "./skills-panel.js";
+import { registerPanel } from "./panel-manager.js";
 import "./links.js";
 import "./version.js";
 import "./sidebar.js";
 import "./tabs.js";
 import "./no-session.js";
-import "./context-panel.js";
-import "./files-panel.js";
-import "./tree-panel.js";
-import "./subagent-panel.js";
 import "./sse.js";
+
+// Lazy-loaded panels — loaded on first click
+registerPanel("skills",    { toggleBtnId: "skills-toggle",    panelId: "skills-overlay",    load: () => import("./skills-panel.js") });
+registerPanel("ctx",       { toggleBtnId: "ctx-toggle",       panelId: "ctx-panel",        load: () => import("./context-panel.js") });
+registerPanel("files",     { toggleBtnId: "files-toggle",     panelId: "files-panel",      load: () => import("./files-panel.js") });
+registerPanel("tree",      { toggleBtnId: "tree-toggle",      panelId: "tree-panel",       load: () => import("./tree-panel.js") });
+registerPanel("subagent",  { toggleBtnId: "sa-toggle",        panelId: "subagent-panel",   load: () => import("./subagent-panel.js") });
 import "./session-view.js";
 import "./terminal-view.js";
 import "./lifecycle.js";
+import "./shortcuts.js";
 
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
-    const configOverlay = document.getElementById("config-overlay");
-    if (configOverlay && !configOverlay.hidden) { setConfigOpen(false); return; }
-    const skillsOverlay = document.getElementById("skills-overlay");
-    if (skillsOverlay && !skillsOverlay.hidden) {
-      import("./skills-panel.js").then((m) => m.setSkillsOpen(false));
-      return;
-    }
+    // Panel ESC is handled by panel-manager.js
     cancelTurn();
     return;
   }
@@ -67,3 +70,6 @@ document.addEventListener("keydown", (ev) => {
     }
   }
 });
+
+
+

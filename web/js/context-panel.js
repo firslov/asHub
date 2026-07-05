@@ -1,10 +1,7 @@
 import { escape } from "./utils.js";
 import { currentSessionId } from "./state.js";
-import { setFilesOpen } from "./files-panel.js";
 import { activeSession } from "./session-manager.js";
 import { effect } from "../vendor/signals-core.js";
-import { setConfigOpen } from "./config-panel.js";
-import { setTreeOpen } from "./tree-panel.js";
 import { t } from "./i18n.js";
 
 const app = document.querySelector(".app");
@@ -275,21 +272,6 @@ ctxFilters?.addEventListener("click", (ev) => {
 
 const setCtxOpen = (on) => {
   if (on) {
-    // 互斥：关闭其他面板
-    setFilesOpen(false);
-    setConfigOpen(false);
-    setTreeOpen(false);
-    try { import("./subagent-panel.js").then(m => m.setSgOpen(false)); } catch {}
-    const skillsOverlay = document.getElementById("skills-overlay");
-    if (skillsOverlay && !skillsOverlay.hidden) {
-      import("./skills-panel.js").then((m) => m.setSkillsOpen(false));
-    }
-    const promptOverlay = document.getElementById("prompt-overlay");
-    if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
-      promptOverlay.setAttribute("hidden", "");
-      promptOverlay.classList.remove("open");
-      document.getElementById("prompt-toggle")?.classList.remove("active");
-    }
     ctxPanel.removeAttribute("hidden"); app.classList.add("ctx-open"); renderContext(); ctxToggle?.classList.add("active");
   }
   else { ctxPanel.setAttribute("hidden", ""); app.classList.remove("ctx-open"); ctxToggle?.classList.remove("active"); }
@@ -303,7 +285,6 @@ setTimeout(() => {
   } catch {}
 }, 0);
 
-ctxToggle?.addEventListener("click", () => setCtxOpen(ctxPanel.hasAttribute("hidden")));
 ctxClose?.addEventListener("click", () => setCtxOpen(false));
 
 // Refresh context panel content when language changes while panel is open
@@ -326,3 +307,6 @@ document.addEventListener("keydown", (ev) => {
     setCtxOpen(ctxPanel.hasAttribute("hidden"));
   }
 });
+
+import { registerPanel } from './panel-manager.js';
+registerPanel('ctx', { toggleBtnId: 'ctx-toggle', panelId: 'ctx-panel', open: () => setCtxOpen(true), close: () => setCtxOpen(false) });

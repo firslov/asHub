@@ -32,9 +32,9 @@
   opacity: 0;
   animation: empty-fade-in 0.8s ease 0.3s forwards;
   background:
-    radial-gradient(ellipse 70% 40% at 50% 25%, rgba(184, 134, 11, 0.05) 0%, transparent 55%),
-    radial-gradient(ellipse 50% 30% at 30% 65%, rgba(45, 138, 148, 0.04) 0%, transparent 50%),
-    radial-gradient(ellipse at 50% 95%, var(--bg) 0%, transparent 60%);
+    radial-gradient(ellipse 80% 50% at 50% 20%, var(--accent-soft) 0%, transparent 55%),
+    radial-gradient(ellipse 60% 40% at 30% 60%, var(--cyan-soft) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 90%, var(--bg) 0%, transparent 60%);
 }
 
 @keyframes empty-fade-in {
@@ -56,6 +56,9 @@
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   gap: 0;
   padding: 1.25rem 1.5rem;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 20%, var(--accent-soft) 0%, transparent 55%),
+    radial-gradient(ellipse at 50% 90%, var(--bg) 0%, transparent 60%);
 }
 .no-session-empty[hidden] { display: none; }
 
@@ -961,9 +964,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg2) 90%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: var(--bg2);
 }
 
 .sidebar::after {
@@ -1000,9 +1001,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.4rem;
   padding: 0.7rem 0.85rem;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg3) 92%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: var(--bg2);
   flex-shrink: 0;
   height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
@@ -1089,6 +1088,19 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  contain: layout style paint;
+}
+
+/* Unified sidebar typography — matches right-side panel-content */
+.session-list,
+.workspace-list,
+.terminal-list,
+.archive-list {
+  font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--text);
 }
 
 .session-list li {
@@ -1102,6 +1114,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex: 1;
   min-width: 0;
   display: block;
+  overflow: hidden;
+  position: relative;
   padding: 0.6rem 0.7rem 0.6rem 1.5rem;
   color: var(--text-dim);
   text-decoration: none;
@@ -1118,20 +1132,43 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-left-color: var(--accent-border);
 }
 
+/* Solid backdrop to obscure title text under action buttons on hover */
+.session-list li::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: calc(100% - 10rem);
+  background: linear-gradient(to right, transparent 0%, var(--bg3) 12%, var(--bg3) 100%);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+.session-list li:hover::before { opacity: 1; }
+
+/* Ensure action buttons sit above the backdrop */
+.session-list li .session-close,
+.session-list li .session-edit,
+.session-list li .session-archive-btn,
+.session-list li .session-pin-btn,
+.session-list li .session-cwd-btn {
+  z-index: 2;
+}
+
 .session-close {
   position: absolute;
-  top: 50%;
-  right: 0.35rem;
-  transform: translateY(-50%);
+  top: 0;
+  right: 0.2rem;
+  bottom: 0;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
-  font-size: 1rem;
+  font-size: 1.05rem;
   line-height: 1;
   width: 1.7rem;
-  height: 1.7rem;
-  min-width: 1.7rem;
-  min-height: 1.7rem;
   padding: 0;
   cursor: pointer;
   opacity: 0;
@@ -1207,10 +1244,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   gap: 0.6rem;
   padding: 0.75rem 1.25rem 0.3rem;
-  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.62rem;
+  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
+  font-size: 0.68rem;
   font-weight: 500;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-mid);
   letter-spacing: 0.14em;
   color: var(--text-mid);
   pointer-events: none;
@@ -1228,18 +1267,15 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Session title edit ───────────────────────────────────────────── */
 .session-edit {
   position: absolute;
-  top: 50%;
-  right: 2.2rem;
-  transform: translateY(-50%);
+  top: 0;
+  right: 2.05rem;
+  bottom: 0;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   line-height: 1;
   width: 1.7rem;
-  height: 1.7rem;
-  min-width: 1.7rem;
-  min-height: 1.7rem;
   padding: 0;
   cursor: pointer;
   opacity: 0;
@@ -1260,17 +1296,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-archive-btn {
   position: absolute;
-  top: 50%;
-  right: 4.05rem;
-  transform: translateY(-50%);
+  top: 0;
+  right: 3.9rem;
+  bottom: 0;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
   line-height: 1;
   width: 1.7rem;
-  height: 1.7rem;
-  min-width: 1.7rem;
-  min-height: 1.7rem;
   padding: 0;
   cursor: pointer;
   opacity: 0;
@@ -1650,6 +1683,46 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   50%      { opacity: 0.28; }
 }
 
+/* ── Right-panel unified typography ───────────────────────────────── */
+/* Base styles shared by all right-side panel content areas
+   (tree, files, context, config, prompts, shortcuts, skills, subagent).
+   Individual panels can override as needed. */
+
+.panel-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.5rem 0;
+  font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.panel-content-mono {
+  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
+  font-size: 0.72rem;
+}
+
+.panel-empty {
+  color: var(--text-dim);
+  padding: 2rem 1.25rem;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.65;
+}
+
+.panel-section-title {
+  font-size: 0.7rem;
+  font-weight: 550;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-mid);
+  padding: 0.4rem 1.15rem 0.25rem;
+}
+
 /* ── Right-panel awareness ──────────────────────────────────────── */
 /* When context / files / config / prompt panels slide in from the
    right (300px), shift the terminal content left so content remains
@@ -1694,9 +1767,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
     .app.files-open.tree-open:not(.ctx-open):not(.sa-open) .live-wrap .terminal {
       padding-right: 600px;
     }
-  /* config / prompt overlays (no app-level class — use :has) */
+  /* config / prompt / shortcuts overlays */
   .app:has(.config-overlay.open) .live-wrap .terminal,
-  .app:has(.prompt-overlay.open) .live-wrap .terminal {
+  .app:has(.prompt-overlay.open) .live-wrap .terminal,
+  .app.shortcuts-open .live-wrap .terminal {
     padding-right: 300px;
   }
 }
@@ -2073,8 +2147,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* Icon-only copy buttons (code blocks, reply) */
 .code-copy-btn,
 .reply-copy-btn {
-  width: 26px;
-  height: 26px;
+  width: 2rem;
+  height: 2rem;
   padding: 0;
 }
 
@@ -2738,8 +2812,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 .tree-title { color: var(--text-dim); font-weight: 500; letter-spacing: 0.14em; flex: 1; }
 
-.tree-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0.45rem 0; }
-.tree-empty { color: var(--text-dim); padding: 2rem 1.5rem; text-align: center; font-size: 0.8rem; }
+.tree-body { padding: 0.35rem 0; }
+.tree-empty { font-size: 0.78rem; }
 
 .tree-rows { font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace; font-size: 0.72rem; line-height: 1.5; }
 .tree-row {
@@ -3745,12 +3819,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-shrink: 0;
 }
 
-.ctx-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0;
-}
+.ctx-body { padding: 0; }
 
 /* ── Context messages ────────────────────────────────────────────── */
 .ctx-msg {
@@ -4031,22 +4100,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
 }
 
-.files-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0.45rem 0;
-}
+.files-body { padding: 0.35rem 0; }
 
-.files-empty {
-  color: var(--text-dim);
-  padding: 2.5rem 1.5rem;
-  text-align: center;
-  font-size: 0.8rem;
-  font-family: 'Geist', 'Inter', sans-serif;
-  line-height: 1.65;
-  font-weight: 400;
-}
+.files-empty { font-size: 0.78rem; }
 
 .files-empty-sub {
   display: block;
@@ -4217,6 +4273,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .session-list li {
   animation: session-item-in 0.3s var(--ease-out-expo) both;
 }
+.session-list.no-anim li {
+  animation: none;
+}
 
 @keyframes session-item-in {
   from { opacity: 0; transform: translateX(-10px); }
@@ -4334,13 +4393,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .config-head-actions { display: flex; gap: 0.4rem; }
 
 .config-body {
-  flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 1rem;
-  gap: 0;
-  overflow-y: auto;
+  gap: 0.65rem;
 }
 
 
@@ -4826,11 +4882,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .reasoning-phase-body {
   border-top: 1px solid var(--border);
   padding: 0.35rem 0.55rem;
-  overflow: hidden;
-  max-height: 2000px;
   transition: max-height 0.45s var(--ease-out-expo), opacity 0.3s var(--ease-out-expo), padding 0.45s ease, border-top-color 0.3s ease;
 }
-.reasoning-phase.collapsed .reasoning-phase-body {
+.reasoning-phase.collapsed .reasoning-phase-body,
+.reasoning-phase-body[hidden] {
+  overflow: hidden;
   max-height: 0;
   padding-top: 0;
   padding-bottom: 0;
@@ -5078,8 +5134,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 2rem;
+  height: 2rem;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -5564,17 +5620,16 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-pin-btn {
   position: absolute;
-  top: 50%;
-  right: 5.9rem;
-  transform: translateY(-50%);
+  top: 0;
+  right: 5.75rem;
+  bottom: 0;
   opacity: 0;
-  width: 26px;
-  height: 26px;
-  border: none;
+  width: 1.7rem;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5584,10 +5639,333 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 .session-list li:hover .session-pin-btn { opacity: 1; pointer-events: auto; }
 .session-pin-btn:hover {
-  color: var(--text-muted);
-  background: var(--hover-bg, color-mix(in srgb, var(--fg) 8%, transparent));
+  color: var(--accent);
+  background: var(--accent-glow);
+  border-color: var(--accent-border);
 }
 .session-pin-btn svg { width: 14px; height: 14px; }
 
 .thinking-icon { flex-shrink: 0; }
 .thinking-label { flex-shrink: 0; }
+
+/* ── Quick-create overlay ─────────────────────────────────────────── */
+
+.quick-create-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.3);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.quick-create-overlay[hidden] { display: none; }
+.quick-create-modal {
+  position: relative;
+  width: min(360px, 92vw);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  padding: clamp(28px, 4vw, 36px) 24px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  animation: fadeUp 0.2s var(--ease-out-expo);
+}
+.quick-create-close {
+  position: absolute;
+  top: 12px; right: 12px;
+  width: 30px; height: 30px;
+  border: none; background: transparent;
+  color: var(--text-faint);
+  cursor: pointer; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.quick-create-close:hover { background: var(--bg2); color: var(--text); }
+.quick-create-icon {
+  width: 52px; height: 52px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.quick-create-msg {
+  font-size: 0.92rem;
+  font-weight: 550;
+  color: var(--text);
+  text-align: center;
+}
+.quick-create-cwd-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.quick-create-cwd-row:focus-within { border-color: var(--accent); }
+.quick-create-cwd-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.6rem 0 0.75rem;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.quick-create-cwd {
+  flex: 1; min-width: 0;
+  padding: 0.6rem 0;
+  border: none; background: transparent;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  outline: none;
+}
+.quick-create-pick {
+  flex-shrink: 0;
+  padding: 0.5rem 0.85rem;
+  border: none; border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.73rem; font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.quick-create-pick:hover { background: var(--bg3); }
+.quick-create-go {
+  width: 100%;
+  padding: 0.7rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.85rem; font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-top: 6px;
+}
+.quick-create-go:hover { background: var(--accent-hover); }
+
+/* ── Shortcuts panel ────────────────────────────────────────────── */
+
+.shortcuts-modal {
+  max-width: 300px;
+}
+
+.shortcuts-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.shortcuts-section + .shortcuts-section {
+  border-top: 1px solid var(--border);
+  padding-top: 0.65rem;
+  margin-top: 0.35rem;
+}
+
+.shortcuts-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.95rem 0.15rem;
+}
+
+.shortcuts-section-icon {
+  font-size: 0.85rem;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.shortcuts-section-title {
+  font-size: 0.68rem;
+  font-weight: 550;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-mid);
+}
+
+.shortcuts-subtitle {
+  font-size: 0.62rem;
+  font-weight: 550;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+  padding: 0.25rem 0.95rem 0.1rem;
+}
+
+.shortcuts-sep {
+  height: 4px;
+}
+
+.shortcuts-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.25rem 0.95rem;
+}
+
+.shortcuts-row kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  padding: 0.12rem 0.4rem;
+  background: linear-gradient(180deg, var(--bg3) 0%, var(--bg2) 100%);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 0.68rem;
+  font-weight: 550;
+  color: var(--text);
+  white-space: nowrap;
+  line-height: 1.45;
+  box-shadow: 0 1px 0 var(--border-dim, rgba(128,128,128,0.15));
+}
+
+.shortcuts-row .shortcuts-range {
+  font-size: 0.62rem;
+  color: var(--text-faint);
+  margin: 0 -0.4rem;
+}
+
+.shortcuts-row span:last-child {
+  color: var(--text-dim);
+  font-size: 0.76rem;
+}
+
+/* Platform-specific shortcuts */
+.os-mac .shortcuts-row.os-other { display: none; }
+.os-other .shortcuts-row.os-mac { display: none; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.session-cwd-btn {
+  position: absolute;
+  top: 0;
+  right: 7.6rem;
+  bottom: 0;
+  opacity: 0;
+  width: 1.7rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.12s, color 0.12s;
+  padding: 0;
+}
+.session-list li:hover .session-cwd-btn { opacity: 1; pointer-events: auto; }
+.session-cwd-btn:hover {
+  color: var(--text-muted);
+  background: var(--hover-bg, color-mix(in srgb, var(--fg) 8%, transparent));
+}
+.session-cwd-btn svg { width: 14px; height: 14px; }
+
+/* ── Stream empty: minimalist ─────────────────────────────────────── */
+
+.stream-empty-mini {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 0.8rem;
+  position: relative;
+}
+.stream-empty-mini .stream-empty-logo {
+  opacity: 0.55;
+}
+.stream-empty-mini .stream-empty-logo svg {
+  width: 40px; height: 40px;
+}
+.stream-empty-mini .stream-empty-line {
+  width: 32px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.3;
+  margin-top: 0.7rem;
+}
+
+
+/* ── Empty state hint chips ──────────────────────────────────────── */
+
+.stream-empty-hints {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 20px;
+  animation: fadeUp .5s var(--ease) .8s both;
+}
+.hint-label {
+  width: 100%;
+  text-align: center;
+  font-size: .68rem;
+  color: var(--text-faint);
+  margin-bottom: 2px;
+}
+.hint-chip {
+  padding: 7px 16px;
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  background: var(--surface);
+  color: var(--text2);
+  font-size: .78rem;
+  cursor: pointer;
+  transition: all .2s var(--ease);
+  white-space: nowrap;
+  font-family: var(--sans);
+}
+.hint-chip:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  background: var(--accent-glow);
+  transform: translateY(-1px);
+}
+
+/* ── Tool row color coding ────────────────────────────────────────── */
+.tool-row[data-kind="read"],
+.tool-row[data-kind="search"] {
+  border-left: 2px solid var(--cyan);
+  padding-left: 0.5rem;
+  background: rgba(56,189,248,.04);
+}
+.tool-row[data-kind="write"],
+.tool-row[data-kind="edit"] {
+  border-left: 2px solid var(--amber);
+  padding-left: 0.5rem;
+  background: rgba(245,158,11,.06);
+}
+.tool-row[data-kind="shell"],
+.tool-row[data-kind="execute"] {
+  border-left: 2px solid var(--border);
+  padding-left: 0.5rem;
+}
+
+.bucket-count {
+  margin-left: auto;
+  font-size: 0.52rem;
+  opacity: 0.45;
+  font-weight: 400;
+  letter-spacing: 0;
+}

@@ -1,11 +1,12 @@
 // @ts-check
 import { signal } from "../vendor/signals-core.js";
+import { activeSessionId } from "./store.js";
 import { activeSession } from "./session-manager.js";
 
 export const sessionId = (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1] ?? "";
 
 /** Active session id at call time; falls back to URL session before SessionView upgrades. */
-export const currentSessionId = () => activeSession.peek()?.id ?? sessionId;
+export const currentSessionId = () => activeSessionId.peek() || sessionId;
 
 export const homeDir = signal("");
 

@@ -1,8 +1,10 @@
 import { signal, computed, effect } from "../vendor/signals-core.js";
+import { activeSessionId, openTabs } from "./store.js";
+
+export { activeSessionId, openTabs } from "./store.js";
 
 export const sessions = new Map();
 export const sessionKinds = new Map();
-export const activeSessionId = signal("");
 
 export const setSessionKind = (id, kind) => {
   if (!id || !kind) return;
@@ -13,8 +15,6 @@ export const activeSession = computed(() => {
   const id = activeSessionId.value;
   return id ? sessions.get(id) ?? null : null;
 });
-
-export const openTabs = signal(/** @type {string[]} */ ([]));
 
 export const openTab = (id) => {
   if (!id) return;
@@ -82,13 +82,15 @@ effect(() => {
 });
 
 export const globalConnState = signal(
-  /** @type {"connecting"|"connected"|"reconnecting"|"nosession"} */ ("nosession"),
+  /** @type {"connecting"|"connected"|"reconnecting"|"failed"|"nosession"} */ ("nosession"),
 );
 
 const subState = new Map();
 let es = null;
 let reopenScheduled = false;
 let lastSeenId = 0;
+let retryCount = 0;
+const MAX_RETRIES = 10;
 
 const TAIL = { fresh: "all", ready: "0", resync: "100" };
 const buildSubsParam = () => {
@@ -112,9 +114,19 @@ const reopen = () => {
   es = next;
   next.onopen = () => {
     globalConnState.value = "connected";
+    retryCount = 0;
     for (const id of subState.keys()) subState.set(id, "ready");
   };
-  next.onerror = () => { globalConnState.value = "reconnecting"; };
+  next.onerror = () => {
+    retryCount++;
+    if (retryCount >= MAX_RETRIES) {
+      globalConnState.value = "failed";
+      es?.close();
+      es = null;
+    } else {
+      globalConnState.value = "reconnecting";
+    }
+  };
   next.onmessage = (ev) => {
     const id = Number(ev.lastEventId);
     if (id > lastSeenId) lastSeenId = id;
@@ -130,6 +142,13 @@ const scheduleReopen = () => {
   if (reopenScheduled) return;
   reopenScheduled = true;
   queueMicrotask(reopen);
+};
+
+export const forceReconnect = () => {
+  retryCount = 0;
+  es?.close();
+  es = null;
+  reopen();
 };
 
 export const subscribeSession = (id) => {

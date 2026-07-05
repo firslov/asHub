@@ -114,32 +114,25 @@ class SessionView extends HTMLElement {
       document.getElementById("query")?.focus();
     }, { signal: ac });
 
-    // Quick-start suggestion cards: click to fill the input
-    const populateSuggestions = () => {
-      this.querySelectorAll(".sugg-card").forEach((card) => {
-        const key = card.dataset.suggestKey;
-        if (!key) return;
-        const label = card.querySelector(".sugg-label");
-        if (label) label.textContent = t(key);
+    // Hint chips: click to fill input and submit
+    const hintsEl = this.querySelector(".stream-empty-hints");
+    if (hintsEl) {
+      setTimeout(() => { if (hintsEl ) hintsEl.hidden = false; }, 800);
+      hintsEl.querySelectorAll(".hint-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const query = chip.dataset.query;
+          if (!query) return;
+          const q = document.getElementById("query");
+          if (q) {
+            q.value = query;
+            q.focus();
+            q.dispatchEvent(new Event("input", { bubbles: true }));
+            // Trigger submit via Enter key event
+            q.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+          }
+        }, { signal: ac });
       });
-    };
-    populateSuggestions();
-
-    this.querySelectorAll(".sugg-card").forEach((card) => {
-      card.addEventListener("click", () => {
-        const key = card.dataset.suggestKey;
-        if (!key) return;
-        const text = t(key);
-        if (!text) return;
-        const queryEl = document.getElementById("query");
-        if (queryEl) {
-          document.getElementById("new-session")?.click();
-          queryEl.value = text;
-          queryEl.focus();
-          queryEl.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-      }, { signal: ac });
-    });
+    }
 
     // Re-populate on language change
     const onLangChange = () => populateSuggestions();

@@ -11,9 +11,14 @@ import { t } from "../i18n.js";
 export function compactReasoning(stream) {
   const children = Array.from(stream.children);
 
+  // Skip children already scanned in previous calls.
+  // Streaming only appends, so we can safely resume from the last index.
+  const startIdx = Math.min(stream._compactedUntil || 0, children.length);
+  if (startIdx >= children.length) return;
+
   // ── Find consecutive thinking-block + tool-group runs ────────────
-  const runs = []; // { elems: [...], start: idx, end: idx }
-  let i = 0;
+  const runs = [];
+  let i = startIdx;
   while (i < children.length) {
     const think = children[i];
     const tools = children[i + 1];
@@ -86,12 +91,22 @@ export function compactReasoning(stream) {
     for (const el of run.elems) body.appendChild(el);
 
     head.addEventListener("click", () => {
+      const expanding = body.hidden;
       body.hidden = !body.hidden;
-      phase.classList.toggle("open", !body.hidden);
+      phase.classList.toggle("open", expanding);
+      if (expanding) {
+        // Temporarily show to measure, then animate
+        body.style.maxHeight = "none";
+        body.offsetHeight; // force reflow
+      } else {
+        body.style.maxHeight = "";
+      }
       const arrow = head.querySelector(".rp-arrow");
       if (arrow) arrow.textContent = body.hidden ? "▸" : "▾";
     });
   }
+
+  stream._compactedUntil = children.length;
 }
 
 // Refresh translated labels on language change

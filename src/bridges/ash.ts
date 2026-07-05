@@ -246,6 +246,28 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (exposeTerminal) registerShellHandlers(extCtx);
     activateAgent(extCtx);
     this.registerUserProviders(extCtx);
+
+    // ── File modification safety ─────────────────────────────────────
+    // Prevent the model from silently modifying files without consent.
+    (extCtx as unknown as { agent: { registerInstruction(name: string, text: string): void } }).agent.registerInstruction(
+      "file-modification-safety",
+      `CRITICAL — FILE MODIFICATION POLICY:
+
+1. EXPLICIT USER REQUEST: When the user directly asks you to modify, create,
+   or edit a file (e.g. "edit X", "write Y", "fix the bug in Z"), you may
+   immediately use edit_file, write_file, or bash to make those changes.
+
+2. NO EXPLICIT REQUEST: When the user does NOT ask for file changes (e.g.
+   they ask a question, request analysis, code review, or explanation), you
+   MUST NOT modify any files. Instead:
+   — Describe what you propose to change and why
+   — Present it as a suggestion: "I could modify X to achieve Y. Shall I proceed?"
+   — Wait for the user to confirm before making any changes
+
+This applies to ALL file-modifying tools: write_file, edit_file, and bash
+(invoked with rm, mv, sed, git, or any destructive operation).`
+    );
+
     this.gateImageToolResults(extCtx);
     const settings = getSettings();
     const headlessDisabled = [

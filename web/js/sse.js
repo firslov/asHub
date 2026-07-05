@@ -23,14 +23,32 @@ import {
 } from "./stream/live-output.js";
 import { createUserBox } from "./actions.js";
 import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
-import { refreshFilesIfOpen } from "./files-panel.js";
-import { refreshTreeIfOpen } from "./tree-panel.js";
 import { startShellBlock, finishShellBlock, queueShellBlock } from "./stream/shell-block.js";
+
+// Lazy file panel — only loaded when shell cwd changes
+const refreshFilesIfOpen = async () => {
+  const panel = document.getElementById("files-panel");
+  if (!panel || panel.hasAttribute("hidden")) return;
+  try {
+    const m = await import("./files-panel.js");
+    m.refreshFilesIfOpen();
+  } catch {}
+};
+
+// Lazy tree panel — only loaded when needed by processing-done
+const refreshTreeIfOpen = async () => {
+  const panel = document.getElementById("tree-panel");
+  if (!panel || panel.hasAttribute("hidden")) return;
+  try {
+    const m = await import("./tree-panel.js");
+    m.refreshTreeIfOpen();
+  } catch {}
+};
 
 // Subagent tool-name → type mapping (must match ash.ts SUBAGENT_TYPES keys)
 const SUBAGENT_TOOL_NAMES = { plan: "plan", explore: "explore", review: "review", research: "research", implement: "implement" };
 import { compactReasoning } from "./stream/compact.js";
-import { activeSession, globalConnState, sessions } from "./session-manager.js";
+import { activeSession, globalConnState, sessions, forceReconnect } from "./session-manager.js";
 
 // Shared page chrome — reflects the active session, not whatever frame just arrived.
 const conn = document.getElementById("conn");
@@ -138,9 +156,16 @@ effect(() => {
     case "connected":     conn.textContent = ""; break;
     case "connecting":    conn.textContent = t("connecting"); break;
     case "reconnecting":  conn.textContent = t("reconnecting"); break;
+    case "failed":        conn.textContent = t("conn.failed"); break;
     case "nosession":     conn.textContent = t("no.session"); break;
   }
   if (dot) dot.classList.toggle("stale", cs !== "connected");
+  if (conn) conn.style.cursor = cs === "failed" ? "pointer" : "";
+});
+
+// Click "failed" indicator to force reconnect
+if (dot) dot.parentElement?.addEventListener("click", () => {
+  if (globalConnState.peek() === "failed") forceReconnect();
 });
 
 export const renderInstanceLabel = () => {

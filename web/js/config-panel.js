@@ -1,6 +1,3 @@
-import { setFilesOpen } from "./files-panel.js";
-import { setCtxOpen } from "./context-panel.js";
-import { setTreeOpen } from "./tree-panel.js";
 import { t } from "./i18n.js";
 import { invalidateModelCache, setModelCache } from "./sse.js";
 
@@ -289,20 +286,6 @@ configProvider?.addEventListener("change", () => {
 
 export const setConfigOpen = async (on) => {
   if (on) {
-    setFilesOpen(false);
-    setCtxOpen(false);
-    setTreeOpen(false);
-    try { import("./subagent-panel.js").then(m => m.setSgOpen?.(false)); } catch {}
-    const skillsOverlay = document.getElementById("skills-overlay");
-    if (skillsOverlay && !skillsOverlay.hidden) {
-      import("./skills-panel.js").then((m) => m.setSkillsOpen(false));
-    }
-    const promptOverlay = document.getElementById("prompt-overlay");
-    if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
-      promptOverlay.setAttribute("hidden", "");
-      promptOverlay.classList.remove("open");
-      document.getElementById("prompt-toggle")?.classList.remove("active");
-    }
     configOverlay.removeAttribute("hidden");
     configOverlay.classList.add("open");
     configToggle?.classList.add("active");
@@ -432,7 +415,6 @@ configReset?.addEventListener("click", () => {
   }
 });
 
-configToggle?.addEventListener("click", () => setConfigOpen(configOverlay.hasAttribute("hidden")));
 configClose?.addEventListener("click", () => setConfigOpen(false));
 
 configModelRefresh?.addEventListener("click", async () => {
@@ -449,3 +431,6 @@ document.addEventListener("langchange", () => {
     }
   }
 });
+
+import { registerPanel } from './panel-manager.js';
+registerPanel('config', { toggleBtnId: 'config-toggle', panelId: 'config-overlay', open: () => setConfigOpen(true), close: () => setConfigOpen(false) });

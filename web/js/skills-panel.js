@@ -41,18 +41,6 @@ skillsTabs?.addEventListener("click", (e) => {
 export const setSkillsOpen = (on) => {
   if (!skillsOverlay) return;
   if (on) {
-    // Close other panels for mutual exclusion
-    import("./files-panel.js").then((m) => m.setFilesOpen?.(false));
-    import("./context-panel.js").then((m) => m.setCtxOpen?.(false));
-    import("./tree-panel.js").then((m) => m.setTreeOpen?.(false));
-    import("./config-panel.js").then((m) => m.setConfigOpen(false));
-    import("./subagent-panel.js").then((m) => m.setSgOpen?.(false));
-    const promptOverlay = document.getElementById("prompt-overlay");
-    if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
-      promptOverlay.setAttribute("hidden", "");
-      promptOverlay.classList.remove("open");
-      document.getElementById("prompt-toggle")?.classList.remove("active");
-    }
     skillsOverlay.removeAttribute("hidden");
     skillsOverlay.classList.add("open");
     skillsToggle?.classList.add("active");
@@ -65,7 +53,6 @@ export const setSkillsOpen = (on) => {
 };
 
 if (skillsToggle) {
-  skillsToggle.addEventListener("click", () => setSkillsOpen(skillsOverlay.hasAttribute("hidden")));
 } else {
   console.error("[skills] toggle button not found");
 }
@@ -219,3 +206,6 @@ const refreshInstalled = async () => {
 };
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+import { registerPanel } from './panel-manager.js';
+registerPanel('skills', { toggleBtnId: 'skills-toggle', panelId: 'skills-overlay', open: () => setSkillsOpen(true), close: () => setSkillsOpen(false) });

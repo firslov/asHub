@@ -826,7 +826,7 @@ window.addEventListener("pageshow", (ev) => {
 
 // Force re-render on language switch so bucket headers / tooltips update.
 document.addEventListener("langchange", () => {
-  fullSessionsHash = "";
+  fullHashCache = "";
   sessionsHash = "";
   workspacesHash = "";
   terminalsHash = "";

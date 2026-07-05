@@ -75,8 +75,13 @@ effect(() => {
   // the textarea can lose its editable state during DOM toggling).
   if (active) {
     const input = document.getElementById("query");
-    if (input && document.activeElement !== input) {
-      setTimeout(() => input.focus(), 0);
+    if (input) {
+      // Double-frame delay ensures DOM has fully settled on Windows
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          if (document.activeElement !== input) input.focus();
+        }, 0);
+      });
     }
   }
 });

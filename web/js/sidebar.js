@@ -251,10 +251,12 @@ const renderSessionItem = (s, isPinned = false) => {
         }
       }
       if (nextId) {
-        switchTo(nextId);
+        // Remove old session BEFORE switching — unregisterSession
+        // clears activeSessionId in disconnectedCallback if the
+        // deleted session matches.
         sessions.get(s.instanceId)?.remove();
+        switchTo(nextId);
         renderSessions();
-        // Windows: re-focus input after DOM changes from session removal
         setTimeout(() => document.getElementById("query")?.focus(), 50);
       } else {
         window.location.href = "/";

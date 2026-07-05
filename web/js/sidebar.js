@@ -388,6 +388,13 @@ const renderSessionItem = (s, isPinned = false) => {
     else if (s.hasUnread) li.classList.add("session-unread");
     if (s.instanceId === activeSessionId.peek()) li.classList.add("current");
     li.dataset.isPinned = isPinned ? "1" : "0";
+
+    // Sync pin button state (only updated in renderSessionItem for new DOM)
+    const pinBtn = li.querySelector(".session-pin-btn");
+    if (pinBtn) {
+      if (isPinned) { pinBtn.classList.add("pinned"); pinBtn.title = t("unpin"); }
+      else { pinBtn.classList.remove("pinned"); pinBtn.title = t("pin"); }
+    }
   };
 
 const renderSessions = async (force = false) => {
@@ -496,8 +503,12 @@ const renderSessions = async (force = false) => {
       }
     }
 
-    // Remove stale session items.
-    for (const [, stale] of existingItems) stale.remove();
+    // Pin toggle needs full rebuild — items change position.
+    if (force) {
+      sessionList.replaceChildren(...newChildren);
+    } else {
+      // Remove stale session items.
+      for (const [, stale] of existingItems) stale.remove();
 
     // Reconcile group headers: reuse existing DOM nodes, only
     // insert/remove/update text when buckets actually change.
@@ -547,6 +558,7 @@ const renderSessions = async (force = false) => {
     }
 
     for (const [, { el }] of oldHeaders) el.remove();
+    } // end incremental reconcile
   } catch {
 
   } finally {

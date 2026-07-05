@@ -257,7 +257,17 @@ const renderSessionItem = (s, isPinned = false) => {
         sessions.get(s.instanceId)?.remove();
         switchTo(nextId);
         renderSessions();
-        setTimeout(() => document.getElementById("query")?.focus(), 50);
+        // Windows: force window focus + input focus after delete
+        window.focus?.();
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const input = document.getElementById("query");
+            if (input && document.activeElement !== input) {
+              input.focus();
+              if (document.activeElement !== input) input.click();
+            }
+          });
+        });
       } else {
         window.location.href = "/";
       }

@@ -2,6 +2,7 @@ import { escape } from "./utils.js";
 import { state, homeDir, headerTopic, headerCwd } from "./state.js";
 import { signal, effect } from "../vendor/signals-core.js";
 import { activeSessionId, switchTo, spaEnabled, sessions, openTabs, closeTab, setSessionKind } from "./session-manager.js";
+import { agents, getSession, setSessions, updateSession, pinnedIds, allSessions } from "./store.js";
 import { t } from "./i18n.js";
 
 const sessionList = document.getElementById("sessions");
@@ -42,18 +43,16 @@ if (sessionCwdMeta) {
 const LS_SIDEBAR_VIEW = "ash.sidebar-view";
 const LS_WORKSPACE_COLLAPSED = "ash.workspace-collapsed";
 
-let fullSessionsHash = "";
 let sessionsHash = "";
 let workspacesHash = "";
 let terminalsHash = "";
+let fullHashCache = "";
 
-export const sessionInfo = new Map();
-export const sessionsTick = signal(0);
+export { setSessions } from "./store.js";
 
 effect(() => {
   const id = activeSessionId.value;
-  sessionsTick.value;
-  const s = id ? sessionInfo.get(id) : null;
+  const s = id ? getSession(id) : null;
   if (!s) return;
   const hasTitle = s.title && s.title !== s.instanceId;
   setSessionTopic(hasTitle ? s.title : "");
@@ -310,55 +309,111 @@ const renderSessionItem = (s, isPinned = false) => {
   }
   li.appendChild(pinBtn);
 
+  // Change directory button
+  const cwdBtn = document.createElement("button");
+  cwdBtn.className = "session-cwd-btn";
+  cwdBtn.title = t("change.dir");
+  cwdBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+  cwdBtn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    let cwd = null;
+    if (window.electronAPI?.pickDirectory) {
+      const data = await window.electronAPI.pickDirectory();
+      if (data.cancelled || !data.cwd) return;
+      cwd = data.cwd;
+    } else {
+      const r = await fetch("/pick-dir");
+      if (!r.ok) return;
+      const data = await r.json();
+      if (!data.cwd || data.cancelled) return;
+      cwd = data.cwd;
+    }
+    if (cwd) {
+      try {
+        await fetch(`/${s.instanceId}/cwd`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd }),
+        });
+        renderSessions();
+      } catch {}
+    }
+  });
+  li.appendChild(cwdBtn);
+
   sessionList.appendChild(li);
   return li;
 };
 
+  const updateSessionItemInPlace = (li, s, isPinned) => {
+    const a = li.querySelector("a");
+    if (a) {
+      const hasTitle = s.title && s.title !== s.instanceId;
+      const title = escape(hasTitle ? s.title : t("untitled"));
+      const cwdText = s.cwd ? '<span class="session-cwd" title="' + escape(s.cwd) + '">' + escape(shortenCwd(s.cwd)) + '</span>' : "";
+      const timeText = s.startedAt ? '<span class="session-time" title="' + escape(new Date(s.startedAt).toLocaleString()) + '">' + escape(relativeTime(s.startedAt)) + '</span>' : "";
+      a.innerHTML = '<span class="session-title" title="' + title + '">' + title + '</span><span class="session-meta">' + cwdText + timeText + '</span>';
+    }
+    li.className = "";
+    if (isPinned) li.classList.add("session-pinned");
+    if (s.isProcessing) li.classList.add("session-streaming");
+    else if (s.hasUnread) li.classList.add("session-unread");
+    if (s.instanceId === activeSessionId.peek()) li.classList.add("current");
+    li.dataset.isPinned = isPinned ? "1" : "0";
+  };
+
 const renderSessions = async (force = false) => {
   try {
-    const res = await fetch("/sessions");
-    const list = await res.json();
+    const list = await (await fetch("/sessions")).json();
     const fullHash = JSON.stringify(list.map((s) => [
       s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread, s.kind ?? "agent",
     ]));
-    if (!force && fullHash === fullSessionsHash) return;
-    fullSessionsHash = fullHash;
-    sessionInfo.clear();
-    for (const s of list) {
-      sessionInfo.set(s.instanceId, s);
-      setSessionKind(s.instanceId, s.kind ?? "agent");
-    }
-    sessionsTick.value = sessionsTick.peek() + 1;
-    const agents = list.filter((s) => (s.kind ?? "agent") === "agent");
+    if (!force && fullHash === fullHashCache) return;
+    fullHashCache = fullHash;
 
-    // Fetch pinned IDs for sorting and hash calculation
-    let pinnedIds = new Set();
+    // Update store with fresh data
+    for (const s of list) setSessionKind(s.instanceId, s.kind ?? "agent");
+    setSessions(list);
+    // Refresh pinned after sessions update
     try {
       const pinnedRes = await fetch("/api/sessions/pinned");
       if (pinnedRes.ok) {
         const data = await pinnedRes.json();
-        if (Array.isArray(data.pinned)) pinnedIds = new Set(data.pinned);
+        if (Array.isArray(data.pinned)) pinnedIds.value = new Set(data.pinned);
       }
     } catch {}
 
-    const hash = JSON.stringify(agents.map((s) => [
+    const agentList = list.filter((s) => (s.kind ?? "agent") === "agent");
+    const pinIds = pinnedIds.peek();
+
+    const hash = JSON.stringify(agentList.map((s) => [
       s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread,
-      pinnedIds.has(s.instanceId),
+      pinIds.has(s.instanceId),
     ]));
     if (hash === sessionsHash) return;
     const isFirstRender = sessionsHash === "";
     sessionsHash = hash;
-    if (!homeDir.value && agents[0]?.cwd) {
-      const m = agents[0].cwd.match(/^(\/Users\/[^/]+|\/home\/[^/]+)/);
+    if (!homeDir.value && agentList[0]?.cwd) {
+      const m = agentList[0].cwd.match(/^(\/Users\/[^/]+|\/home\/[^/]+)/);
       if (m) homeDir.value = m[1];
     }
-    sessionList.innerHTML = "";
+    // Suppress entrance animation for non-first renders
+    if (!isFirstRender) sessionList.classList.add("no-anim");
 
-    // Build session items grouped by pin-first then by time bucket
+    // Build list in-place: update existing items, insert new ones, remove stale.
+    // Avoids replaceChildren which causes a visible flash.
+    const newIds = new Set();
+    const existingItems = new Map();
+    for (const li of sessionList.querySelectorAll("li[data-session-id]")) {
+      existingItems.set(li.dataset.sessionId, li);
+    }
+
+    // Group items by pin-first then by time bucket
     const pinnedItems = [];
     const restByBucket = new Map();
-    for (const s of agents) {
-      if (pinnedIds.has(s.instanceId)) {
+    for (const s of agentList) {
+      if (pinIds.has(s.instanceId)) {
         pinnedItems.push(s);
       } else {
         const k = bucketKey(s.startedAt);
@@ -367,42 +422,117 @@ const renderSessions = async (force = false) => {
       }
     }
 
-    // Render pinned section
+    const buildOrder = [];
     if (pinnedItems.length > 0) {
-      const pinHead = document.createElement("li");
-      pinHead.className = "session-group-head";
-      pinHead.textContent = t("pinned");
-      sessionList.appendChild(pinHead);
-      for (const s of pinnedItems) {
-        renderSessionItem(s, true);
-      }
+      buildOrder.push({ kind: "head", text: t("pinned") });
+      for (const s of pinnedItems) buildOrder.push({ kind: "item", session: s, pinned: true });
     }
     for (const k of BUCKET_ORDER) {
       const items = restByBucket.get(k);
       if (!items?.length) continue;
-      const head = document.createElement("li");
-      head.className = "session-group-head";
-      head.textContent = t(`bucket.${k}`);
-      sessionList.appendChild(head);
-      let staggerIdx = 0;
-      for (const s of items) {
-        const li = renderSessionItem(s);
-        if (isFirstRender) {
-          li.style.animationDelay = `${staggerIdx * 0.04}s`;
-        } else {
-          li.style.animation = "none";
+      buildOrder.push({ kind: "head", text: t("bucket." + k), count: items.length });
+      for (const s of items) buildOrder.push({ kind: "item", session: s });
+    }
+
+    const newChildren = [];
+    // Walk in order, updating or creating DOM nodes.
+    // Only update display content — do NOT reorder DOM nodes
+    // when only metadata (isProcessing, title) changed.
+    // This prevents the visual flash of items jumping position.
+    for (const entry of buildOrder) {
+      if (entry.kind === "head") {
+        // Group headers are always recreated (cheap, few of them)
+        const head = document.createElement("li");
+        head.className = "session-group-head";
+        head.dataset.headerKey = entry.text;
+        head.textContent = entry.text;
+        if (entry.count != null) {
+          const count = document.createElement("span");
+          count.className = "bucket-count";
+          count.textContent = String(entry.count);
+          head.appendChild(count);
         }
-        staggerIdx++;
+        newChildren.push(head);
+      } else {
+        const s = entry.session;
+        newIds.add(s.instanceId);
+        const existing = existingItems.get(s.instanceId);
+        if (existing) {
+          updateSessionItemInPlace(existing, s, !!entry.pinned);
+          newChildren.push(existing);
+          existingItems.delete(s.instanceId);
+        } else {
+          const li = renderSessionItem(s, !!entry.pinned);
+          if (isFirstRender) li.style.animationDelay = (newChildren.length * 0.02) + "s";
+          newChildren.push(li);
+        }
       }
     }
-  } catch {}
+
+    // Remove stale session items.
+    for (const [, stale] of existingItems) stale.remove();
+
+    // Reconcile group headers: reuse existing DOM nodes, only
+    // insert/remove/update text when buckets actually change.
+    const oldHeaders = new Map();
+    for (const h of sessionList.querySelectorAll(".session-group-head")) {
+      oldHeaders.set(h.dataset.headerKey || h.textContent?.trim() || "", {
+        el: h,
+        countEl: h.querySelector(".bucket-count"),
+      });
+    }
+
+    let prevChild = null;
+    for (const child of newChildren) {
+      if (child.classList.contains("session-group-head")) {
+        const key = child.dataset.headerKey || child.textContent?.trim() || "";
+        const old = oldHeaders.get(key);
+        if (old) {
+          if (old.countEl) {
+            const newCount = child.querySelector(".bucket-count");
+            if (newCount) old.countEl.textContent = newCount.textContent;
+          }
+          if (prevChild) {
+            sessionList.insertBefore(old.el, prevChild.nextSibling || null);
+          } else {
+            sessionList.insertBefore(old.el, sessionList.firstChild);
+          }
+          prevChild = old.el;
+          oldHeaders.delete(key);
+        } else {
+          if (prevChild) {
+            sessionList.insertBefore(child, prevChild.nextSibling || null);
+          } else {
+            sessionList.insertBefore(child, sessionList.firstChild);
+          }
+          prevChild = child;
+        }
+      } else {
+        if (!sessionList.contains(child)) {
+          if (prevChild) {
+            sessionList.insertBefore(child, prevChild.nextSibling || null);
+          } else {
+            sessionList.insertBefore(child, sessionList.firstChild);
+          }
+        }
+        prevChild = child;
+      }
+    }
+
+    for (const [, { el }] of oldHeaders) el.remove();
+  } catch {
+
+  } finally {
+    if (sessionList) sessionList.classList.remove("no-anim");
+  }
 };
 
 const renderWorkspaces = () => {
   if (!workspaceList) return;
-  const agents = [...sessionInfo.values()].filter((s) => (s.kind ?? "agent") === "agent");
+  const agentList = agents.value;
+  if (!agentList.length) return;
   const buckets = new Map();
-  for (const s of agents) {
+  for (const s of agentList) {
     const key = s.cwd || "(no cwd)";
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(s);
@@ -513,7 +643,7 @@ const renderWorkspaces = () => {
 
 const renderTerminals = () => {
   if (!terminalList) return;
-  const items = [...sessionInfo.values()]
+  const items = allSessions.value
     .filter((s) => (s.kind ?? "agent") === "terminal")
     .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
 
@@ -653,7 +783,6 @@ effect(() => {
 });
 
 effect(() => {
-  sessionsTick.value;
   const v = sidebarView.value;
   if (v === "workspaces") renderWorkspaces();
   else if (v === "terminals") renderTerminals();
@@ -671,7 +800,7 @@ effect(() => {
 });
 
 renderSessions();
-setInterval(renderSessions, 5000);
+setInterval(() => renderSessions(), 30000);
 
 // Toggle the .current class and sync header info on active-session change.
 effect(() => {
@@ -722,48 +851,43 @@ export const updateSessionTitle = (sid, title) => {
   }
 };
 
-newBtn?.addEventListener("click", async () => {
-  newBtn.disabled = true;
+// ── Quick-create: one-click session with default directory ─────────
+
+const getDefaultCwd = () => {
+  // Always use the user's home directory for new sessions.
+  // "~" is resolved to os.homedir() by the server's expandHome().
+  return "~";
+};
+
+const doCreateSession = async (cwd) => {
+  if (!cwd) return;
   try {
-    let cwd = null;
-    if (window.electronAPI?.pickDirectory) {
-      const data = await window.electronAPI.pickDirectory();
-      if (data.cancelled || !data.cwd) { newBtn.disabled = false; return; }
-      cwd = data.cwd;
-    } else {
-      const r = await fetch("/pick-dir");
-      if (!r.ok) { newBtn.disabled = false; return; }
-      const data = await r.json();
-      if (!data.cwd || data.cancelled) { newBtn.disabled = false; return; }
-      cwd = data.cwd;
+    const res = await fetch("/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      alert(text || `New session failed (${res.status})`);
+      return;
     }
-    try {
-      const res = await fetch("/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        alert(text || `New session failed (${res.status})`);
-        return;
-      }
-      const sess = await res.json();
-      if (sess.instanceId) window.location.href = `/${sess.instanceId}/`;
-    } catch (e) {
-      alert(`New session failed: ${e?.message ?? e}`);
-    }
-  } catch {
-  } finally {
-    newBtn.disabled = false;
+    const sess = await res.json();
+    if (sess.instanceId) window.location.href = `/${sess.instanceId}/`;
+  } catch (e) {
+    alert(`New session failed: ${e?.message ?? e}`);
   }
+};
+
+newBtn?.addEventListener("click", () => {
+  doCreateSession(getDefaultCwd());
 });
 
 newTerminalBtn?.addEventListener("click", async (ev) => {
   newTerminalBtn.disabled = true;
   try {
     const kind = (ev.metaKey || ev.ctrlKey) ? "ash-terminal" : "terminal";
-    const cwd = sessionInfo.get(activeSessionId.peek())?.cwd ?? null;
+    const cwd = getSession(activeSessionId.peek())?.cwd ?? null;
     const body = cwd ? { cwd, kind } : { kind };
     const res = await fetch("/sessions", {
       method: "POST",

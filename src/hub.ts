@@ -505,6 +505,7 @@ export function startHub(opts: HubOpts): http.Server {
       if (req.method === "PUT" && rest === "/sa-model") return setSubagentModel(req, res, session);
       if (req.method === "GET" && rest === "/sa-model") return getSubagentModelOverrides(req, res, session);
       if (req.method === "GET" && rest === "/pin") return togglePin(req, res, session);
+      if (req.method === "PUT" && rest === "/cwd") return setCwdEndpoint(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
 
       const file = rest === "/" || rest === "/index.html" ? "/index.html" : rest;
@@ -2034,6 +2035,28 @@ async function forkEndpoint(req: http.IncomingMessage, res: http.ServerResponse,
     res.end(`fork failed: ${err instanceof Error ? err.message : err}`);
   }
 }
+async function setCwdEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  const body = await readBody(req);
+  let cwd: string;
+  try { cwd = JSON.parse(body).cwd; } catch { res.statusCode = 400; res.end("invalid body"); return; }
+  if (!cwd || typeof cwd !== "string") { res.statusCode = 400; res.end("missing cwd"); return; }
+  session.cwd = cwd;
+  const metaPath = path.join(SESSIONS_DIR, `${session.id}.meta.json`);
+  try {
+    const meta = JSON.parse(await fs.promises.readFile(metaPath, "utf-8"));
+    meta.cwd = cwd;
+    await fs.promises.writeFile(metaPath, JSON.stringify(meta), "utf-8");
+  } catch {}
+  // Notify the bridge so liveCwd and system prompt stay in sync
+  pushFrame(session, "shell:cwd-change", sseFrame({
+    source: session.id,
+    ts: Date.now(),
+    id: `hub:${session.id}:cwd`,
+  }, { cwd }));
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
 
 async function dropContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   const body = await readBody(req);

@@ -114,11 +114,9 @@
       <div class="terminal-wrap live-wrap" data-ui-conversation-center="true" data-ui-reply-border-show="true" data-ui-reply-border-gradient="true" data-ui-reply-hover="true" data-ui-reply-code-border="true" data-ui-message-gradient="true" data-ui-usage-align="right" data-ui-usage-sticky="false" data-ui-usage-git-branch="true" data-ui-usage-model-show="false" data-ui-usage-cache-show="true" data-ui-usage-total-show="true">
         <div class="terminal">
           <div class="no-session-empty terminal-body" id="no-session-empty" hidden>
-            <div class="stream-empty-brand">
+            <div class="stream-empty-mini">
               <div class="stream-empty-logo">
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <rect x="1" y="1" width="46" height="46" rx="14" fill="var(--bg2)" stroke="var(--logo-border)" stroke-width="1.5"/>
-                  <rect x="4" y="4" width="40" height="40" rx="11" stroke="var(--accent-soft)" stroke-width="0.5" opacity="0.5"/>
+                <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
                   <path d="M14 16 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/>
                   <path d="M14 16 L28 24 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                   <rect x="30" y="19" width="3" height="10" rx="1.5" fill="var(--cyan)"/>
@@ -126,13 +124,9 @@
               </div>
               <div class="stream-empty-line"></div>
             </div>
-            <div class="stream-empty-title" data-i18n="no.session.title">no session yet</div>
-            <div class="stream-empty-sub" data-i18n="no.session.sub">create a session to start a conversation with the agent.</div>
-            <div class="stream-empty-actions">
-              <button type="button" class="stream-empty-prompt" id="no-session-cta">
-                <span data-i18n="no.session.cta">new session</span>
-              </button>
-            </div>
+            <button type="button" class="stream-empty-prompt" id="no-session-cta">
+              <span data-i18n="no.session.cta">+  New session</span>
+            </button>
           </div>
           <form class="live-input" id="form" data-ui-input-gradient="true">
             <div class="image-previews" id="image-previews" hidden></div>
@@ -164,52 +158,25 @@
     <template id="session-view-tpl">
       <div class="terminal-body session-stream">
         <div class="stream-empty">
-          <div class="stream-empty-brand">
+          <div class="stream-empty-mini">
             <div class="stream-empty-logo">
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                  <linearGradient id="lg" x1="0" y1="0" x2="0.5" y2="1">
-                    <stop offset="0%" stop-color="#1a1a1f"/>
-                    <stop offset="100%" stop-color="#252528"/>
-                  </linearGradient>
-                  <filter id="empty-logo-glow" x="-4" y="-4" width="56" height="56" filterUnits="userSpaceOnUse">
-                    <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/>
-                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-                  </filter>
-                </defs>
-                <rect x="1" y="1" width="46" height="46" rx="14" fill="url(#lg)" stroke="var(--logo-border)" stroke-width="1.5"/>
-                <rect x="4" y="4" width="40" height="40" rx="11" stroke="var(--accent-soft)" stroke-width="0.5" opacity="0.5"/>
-                <g filter="url(#empty-logo-glow)">
-                  <path d="M14 16 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/>
-                  <path d="M14 16 L28 24 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-                  <rect x="30" y="19" width="3" height="10" rx="1.5" fill="var(--cyan)"/>
-                </g>
+              <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
+                <path d="M14 16 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"/>
+                <path d="M14 16 L28 24 L14 32" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <rect x="30" y="19" width="3" height="10" rx="1.5" fill="var(--cyan)"/>
               </svg>
             </div>
             <div class="stream-empty-line"></div>
           </div>
-          <div class="stream-empty-title" data-i18n="ready">ready when you are.</div>
-          <div class="stream-empty-sub" data-i18n-html="ready.sub">ask anything — the agent can explore files, run commands, <em>reason</em>, and edit code.</div>
           <button class="stream-empty-prompt">
             <span class="c-arrow">⟩</span>
-            <span data-i18n="start.typing">start typing below…</span>
+            <span data-i18n="ask.anything">ask anything...</span>
           </button>
-          <div class="stream-suggestions" id="stream-suggestions">
-            <button class="sugg-card" data-suggest-key="sugg.analyze">
-              <span class="sugg-icon">🔍</span>
-              <span class="sugg-label"></span>
-            </button>
-            <button class="sugg-card" data-suggest-key="sugg.explain">
-              <span class="sugg-icon">📋</span>
-              <span class="sugg-label"></span>
-            </button>
-            <button class="sugg-card" data-suggest-key="sugg.issues">
-              <span class="sugg-icon">⚡</span>
-              <span class="sugg-label"></span>
-            </button>
-          </div>
-          <div class="stream-empty-hint">
-            <span class="kbd-hint" data-i18n-html="shortcuts"><kbd>⌘K</kbd> focus · <kbd>↑</kbd> recall · <kbd>Esc</kbd> cancel · <kbd>⌘\</kbd> context</span>
+          <div class="stream-empty-hints" hidden>
+            <span class="hint-label" data-i18n="try.saying">Try saying</span>
+            <button class="hint-chip" data-query="Use the review subagent to check the codebase for bugs" data-i18n="hint.review">🔍 Review codebase</button>
+            <button class="hint-chip" data-query="Create a detailed plan for building a blog system" data-i18n="hint.plan">📋 Plan a project</button>
+            <button class="hint-chip" data-query="Help me design a weekend trip itinerary" data-i18n="hint.trip">✈️ Plan a trip</button>
           </div>
         </div>
         <div class="stream-loading" hidden>
@@ -262,7 +229,7 @@
       <div class="ctx-actions">
         <button class="bar-btn" id="ctx-drop" title="Drop selected messages" disabled>drop</button>
       </div>
-      <div class="ctx-body" id="ctx-body"></div>
+      <div class="ctx-body panel-content" id="ctx-body"></div>
     </aside>
 
     <aside class="tree-panel" id="tree-panel" hidden>
@@ -281,8 +248,8 @@
           </svg>
         </button>
       </div>
-      <div class="tree-body" id="tree-body">
-        <div class="tree-empty">loading…</div>
+      <div class="tree-body panel-content panel-content-mono" id="tree-body">
+        <div class="tree-empty panel-empty">loading…</div>
       </div>
     </aside>
 
@@ -303,8 +270,8 @@
           </svg>
         </button>
       </div>
-      <div class="files-body" id="files-body">
-        <div class="files-empty" id="files-empty">loading…</div>
+      <div class="files-body panel-content" id="files-body">
+        <div class="files-empty panel-empty" id="files-empty">loading…</div>
       </div>
     </aside>
 
@@ -321,7 +288,7 @@
           </button>
         </div>
       </div>
-      <div class="config-body" id="sa-body">
+      <div class="config-body panel-content" id="sa-body">
         <div id="sa-types"></div>
       </div>
     </aside>
@@ -356,6 +323,13 @@
           <line x1="4" y1="8.5" x2="8" y2="8.5"/>
         </svg>
       </button>
+      <button class="toolbar-btn" id="shortcuts-toggle" data-i18n-title="shortcuts" title="Keyboard shortcuts">
+        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="1.5" y="2.5" width="11" height="9" rx="1.5"/>
+          <line x1="4.5" y1="5.5" x2="4.5" y2="8.5"/><line x1="7" y1="5.5" x2="7" y2="8.5"/><line x1="9.5" y1="5.5" x2="9.5" y2="8.5"/>
+          <line x1="3" y1="9.5" x2="11" y2="9.5" stroke-width="1.6"/>
+        </svg>
+      </button>
       <button class="toolbar-btn" id="skills-toggle" data-i18n-title="skills" title="Skills">
         <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
           <rect x="1.5" y="1.5" width="4" height="4" rx="0.8"/>
@@ -365,12 +339,16 @@
         </svg>
       </button>
       <button class="toolbar-btn" id="sa-toggle" data-i18n-title="subagents" title="Subagents">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="6" r="2.5"/>
-          <circle cx="6" cy="18" r="2.5"/>
-          <circle cx="18" cy="18" r="2.5"/>
-          <line x1="10.2" y1="7.8" x2="7.8" y2="16.2"/>
-          <line x1="13.8" y1="7.8" x2="16.2" y2="16.2"/>
+        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="7" cy="7" r="2"/>
+          <circle cx="2" cy="3" r="1.2"/>
+          <circle cx="12" cy="3" r="1.2"/>
+          <circle cx="2" cy="11" r="1.2"/>
+          <circle cx="12" cy="11" r="1.2"/>
+          <line x1="5" y1="6" x2="3.2" y2="4.2"/>
+          <line x1="9" y1="6" x2="10.8" y2="4.2"/>
+          <line x1="5" y1="8" x2="3.2" y2="9.8"/>
+          <line x1="9" y1="8" x2="10.8" y2="9.8"/>
         </svg>
       </button>
       <button class="toolbar-btn" id="config-toggle" data-i18n-title="settings" title="Settings">
@@ -408,7 +386,7 @@
             </button>
           </div>
         </div>
-        <div class="config-body">
+        <div class="config-body panel-content">
           <div class="skills-tabs" id="skills-tabs">
             <button class="skills-tab active" data-tab="market" data-i18n="skills.market">Marketplace</button>
             <button class="skills-tab" data-tab="installed" data-i18n="skills.installed">Installed</button>
@@ -465,7 +443,7 @@
           </div>
         </div>
         <!-- Simple config mode -->
-        <div class="config-body" id="config-body-simple">
+        <div class="config-body panel-content" id="config-body-simple">
           <div class="config-section">
             <div class="config-section-title" data-i18n="config.section.provider">Provider</div>
             <div class="config-field">
@@ -512,7 +490,7 @@
           </div>
         </div>
         <!-- Advanced config mode (JSON editor) -->
-        <div class="config-body" id="config-body-advanced" hidden>
+        <div class="config-body panel-content" id="config-body-advanced" hidden>
           <div class="config-editor">
             <textarea id="config-editor" class="config-textarea" spellcheck="false"></textarea>
             <div class="config-editor-status">
@@ -566,6 +544,95 @@
           </button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcuts overlay -->
+  <div class="prompt-overlay" id="shortcuts-overlay" hidden>
+    <div class="prompt-modal shortcuts-modal">
+      <div class="prompt-head">
+        <span class="prompt-title" data-i18n="shortcuts.title">Keyboard Shortcuts</span>
+        <div class="prompt-head-actions">
+          <button class="bar-btn icon" id="shortcuts-close" data-i18n-title="close" title="Close">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="shortcuts-body">
+        <div class="shortcuts-section">
+          <div class="shortcuts-section-head">
+            <span class="shortcuts-section-icon">⌘</span>
+            <span class="shortcuts-section-title" data-i18n="shortcuts.global">Global</span>
+          </div>
+          <div class="shortcuts-group">
+            <div class="shortcuts-row os-mac"><kbd>⌘N</kbd><span data-i18n="shortcuts.new_session">New session</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+N</kbd><span data-i18n="shortcuts.new_session">New session</span></div>
+            <div class="shortcuts-row os-mac"><kbd>⌘T</kbd><span data-i18n="shortcuts.new_terminal">New terminal</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+T</kbd><span data-i18n="shortcuts.new_terminal">New terminal</span></div>
+            <div class="shortcuts-row os-mac"><kbd>⌘W</kbd><span data-i18n="shortcuts.close_tab">Close tab</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+W</kbd><span data-i18n="shortcuts.close_tab">Close tab</span></div>
+          </div>
+          <div class="shortcuts-sep"></div>
+          <div class="shortcuts-subtitle">Navigation</div>
+          <div class="shortcuts-group">
+            <div class="shortcuts-row os-mac"><kbd>⌘⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
+            <div class="shortcuts-row os-mac"><kbd>⌘Tab</kbd><span data-i18n="shortcuts.next_tab">Next tab</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+Tab</kbd><span data-i18n="shortcuts.next_tab">Next tab</span></div>
+            <div class="shortcuts-row os-mac"><kbd>⌘1</kbd><span class="shortcuts-range">–</span><kbd>9</kbd><span data-i18n="shortcuts.switch_tab">Switch to tab N</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+1</kbd><span class="shortcuts-range">–</span><kbd>9</kbd><span data-i18n="shortcuts.switch_tab">Switch to tab N</span></div>
+          </div>
+          <div class="shortcuts-sep"></div>
+          <div class="shortcuts-subtitle">Panels</div>
+          <div class="shortcuts-group">
+            <div class="shortcuts-row os-mac"><kbd>⌘`</kbd><span data-i18n="shortcuts.toggle_sidebar">Toggle sidebar</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+`</kbd><span data-i18n="shortcuts.toggle_sidebar">Toggle sidebar</span></div>
+            <div class="shortcuts-row os-mac"><kbd>⌘K</kbd><span data-i18n="shortcuts.focus_input">Focus input</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+K</kbd><span data-i18n="shortcuts.focus_input">Focus input</span></div>
+            <div class="shortcuts-row os-mac"><kbd>⌘\</kbd><span data-i18n="shortcuts.context_panel">Context panel</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+\</kbd><span data-i18n="shortcuts.context_panel">Context panel</span></div>
+            <div class="shortcuts-row"><kbd>Esc</kbd><span data-i18n="shortcuts.cancel">Cancel / Close panel</span></div>
+          </div>
+        </div>
+        <div class="shortcuts-section">
+          <div class="shortcuts-section-head">
+            <span class="shortcuts-section-icon">↵</span>
+            <span class="shortcuts-section-title" data-i18n="shortcuts.input">Input</span>
+          </div>
+          <div class="shortcuts-group">
+            <div class="shortcuts-row"><kbd>Enter</kbd><span data-i18n="shortcuts.submit">Submit</span></div>
+            <div class="shortcuts-row"><kbd>⇧Enter</kbd><span data-i18n="shortcuts.new_line">New line</span></div>
+            <div class="shortcuts-row"><kbd>↑</kbd><span data-i18n="shortcuts.recall_up">Recall previous query</span></div>
+            <div class="shortcuts-row"><kbd>↓</kbd><span data-i18n="shortcuts.recall_down">Next query</span></div>
+            <div class="shortcuts-row"><kbd>⇧Tab</kbd><span data-i18n="shortcuts.cycle_thinking">Cycle thinking level</span></div>
+            <div class="shortcuts-row os-mac"><kbd>⌥B</kbd><span class="shortcuts-range"> / </span><kbd>⌥F</kbd><span data-i18n="shortcuts.move_word">Move cursor by word</span></div>
+            <div class="shortcuts-row os-other"><kbd>Ctrl+B</kbd><span class="shortcuts-range"> / </span><kbd>Ctrl+F</kbd><span data-i18n="shortcuts.move_word">Move cursor by word</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick-create overlay -->
+  <div class="quick-create-overlay" id="quick-create-overlay" hidden>
+    <div class="quick-create-modal">
+      <button class="quick-create-close" id="quick-create-close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+      <div class="quick-create-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round">
+          <path d="M12 3v14"/><polyline points="8 13 12 17 16 13"/><path d="M4 17v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+        </svg>
+      </div>
+      <div class="quick-create-msg" data-i18n="quick.create.msg">Start a new conversation</div>
+      <div class="quick-create-cwd-row">
+        <span class="quick-create-cwd-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </span>
+        <input type="text" class="quick-create-cwd" id="quick-create-cwd" spellcheck="false"/>
+        <button class="quick-create-pick" id="quick-create-pick" data-i18n="pick.folder">Browse</button>
+      </div>
+      <button class="quick-create-go" id="quick-create-go" data-i18n="quick.create.go">Start Conversation</button>
     </div>
   </div>
 

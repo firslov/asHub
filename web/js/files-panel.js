@@ -1,7 +1,4 @@
 import { currentSessionId } from "./state.js";
-import { setCtxOpen } from "./context-panel.js";
-import { setConfigOpen } from "./config-panel.js";
-import { setTreeOpen } from "./tree-panel.js";
 import { t } from "./i18n.js";
 import { activeSession } from "./session-manager.js";
 import { effect } from "../vendor/signals-core.js";
@@ -217,28 +214,12 @@ const fetchFiles = async () => {
 
 const setFilesOpen = (on) => {
   if (on) {
-    // 互斥：关闭其他面板
-    setCtxOpen(false);
-    setConfigOpen(false);
-    setTreeOpen(false);
-    try { import("./subagent-panel.js").then(m => m.setSgOpen(false)); } catch {}
-    const skillsOverlay = document.getElementById("skills-overlay");
-    if (skillsOverlay && !skillsOverlay.hidden) {
-      import("./skills-panel.js").then((m) => m.setSkillsOpen(false));
-    }
-    const promptOverlay = document.getElementById("prompt-overlay");
-    if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
-      promptOverlay.setAttribute("hidden", "");
-      promptOverlay.classList.remove("open");
-      document.getElementById("prompt-toggle")?.classList.remove("active");
-    }
     filesPanel.removeAttribute("hidden"); app.classList.add("files-open"); fetchFiles(); filesToggle?.classList.add("active");
   }
   else { filesPanel.setAttribute("hidden", ""); app.classList.remove("files-open"); filesToggle?.classList.remove("active"); }
   try { localStorage.setItem(LS_FILES, on ? "1" : "0"); } catch {}
 };
 
-filesToggle?.addEventListener("click", () => setFilesOpen(filesPanel.hasAttribute("hidden")));
 filesClose?.addEventListener("click", () => setFilesOpen(false));
 filesRefresh?.addEventListener("click", () => fetchFiles());
 
@@ -265,3 +246,6 @@ effect(() => {
   activeSession.value;
   refreshFilesIfOpen();
 });
+
+import { registerPanel } from './panel-manager.js';
+registerPanel('files', { toggleBtnId: 'files-toggle', panelId: 'files-panel', open: () => setFilesOpen(true), close: () => setFilesOpen(false) });

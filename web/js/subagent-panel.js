@@ -1,7 +1,5 @@
 import { t } from "./i18n.js";
 import { escape } from "./utils.js";
-import { setFilesOpen } from "./files-panel.js";
-import { setCtxOpen } from "./context-panel.js";
 import { currentSessionId } from "./state.js";
 
 const saPanel = document.getElementById("subagent-panel");
@@ -136,41 +134,18 @@ export const renderSubagentPanel = () => {
 export const setSgOpen = (on) => {
   if (!saPanel) return;
   if (on) {
-    // Mutually exclusive: close other panels
-    try { setFilesOpen(false); } catch {}
-    try { setCtxOpen(false); } catch {}
-    // Also close skills overlay, config, etc.
-    const skillsOverlay = document.getElementById("skills-overlay");
-    if (skillsOverlay && !skillsOverlay.hidden) {
-      import("./skills-panel.js").then((m) => m.setSkillsOpen?.(false));
-    }
-    const configOverlay = document.getElementById("config-overlay");
-    if (configOverlay && !configOverlay.hidden) {
-      configOverlay.setAttribute("hidden", "");
-    }
-    const promptOverlay = document.getElementById("prompt-overlay");
-    if (promptOverlay && !promptOverlay.hidden) {
-      promptOverlay.setAttribute("hidden", "");
-      promptOverlay.classList.remove("open");
-      document.getElementById("prompt-toggle")?.classList.remove("active");
-    }
-    const treePanel = document.getElementById("tree-panel");
-    if (treePanel && !treePanel.hasAttribute("hidden")) {
-      treePanel.setAttribute("hidden", "");
-      document.getElementById("tree-toggle")?.classList.remove("active");
-    }
-
     saPanel.removeAttribute("hidden");
-    saToggle?.classList.add("active");
     document.querySelector(".app")?.classList.add("sa-open");
+    saToggle?.classList.add("active");
     renderSubagentPanel();
   } else {
     saPanel.setAttribute("hidden", "");
-    saToggle?.classList.remove("active");
     document.querySelector(".app")?.classList.remove("sa-open");
+    saToggle?.classList.remove("active");
   }
-  try { localStorage.setItem(LS_SA, on ? "1" : "0"); } catch {}
-};
+};;
 
-saToggle?.addEventListener("click", () => setSgOpen(saPanel.hasAttribute("hidden")));
 saClose?.addEventListener("click", () => setSgOpen(false));
+
+import { registerPanel } from './panel-manager.js';
+registerPanel('subagent', { toggleBtnId: 'sa-toggle', panelId: 'subagent-panel', open: () => setSgOpen(true), close: () => setSgOpen(false) });

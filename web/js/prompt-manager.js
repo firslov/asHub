@@ -162,48 +162,8 @@ const deletePrompt = (id) => {
 
 // ── Panel open / close ────────────────────────────────────────────
 export const setPromptOpen = (on) => {
-  if (on) {
-    // Close other panels via DOM — avoids circular import issues
-    const ctxPanel = document.getElementById("ctx-panel");
-    const filesPanel = document.getElementById("files-panel");
-    const saPanel = document.getElementById("subagent-panel");
-    const configOverlay = document.getElementById("config-overlay");
-
-    if (ctxPanel && !ctxPanel.hasAttribute("hidden")) {
-      ctxPanel.setAttribute("hidden", "");
-      document.getElementById("ctx-toggle")?.classList.remove("active");
-      document.querySelector(".app")?.classList.remove("ctx-open");
-    }
-    if (filesPanel && !filesPanel.hasAttribute("hidden")) {
-      filesPanel.setAttribute("hidden", "");
-      document.getElementById("files-toggle")?.classList.remove("active");
-      document.querySelector(".app")?.classList.remove("files-open");
-    }
-    if (saPanel && !saPanel.hasAttribute("hidden")) {
-      saPanel.setAttribute("hidden", "");
-      document.getElementById("sa-toggle")?.classList.remove("active");
-      document.querySelector(".app")?.classList.remove("sa-open");
-    }
-    if (configOverlay && !configOverlay.hasAttribute("hidden")) {
-      configOverlay.setAttribute("hidden", "");
-      configOverlay.classList.remove("open");
-      document.getElementById("config-toggle")?.classList.remove("active");
-    }
-    const skillsOverlay = document.getElementById("skills-overlay");
-    if (skillsOverlay && !skillsOverlay.hasAttribute("hidden")) {
-      skillsOverlay.setAttribute("hidden", "");
-      skillsOverlay.classList.remove("open");
-      document.getElementById("skills-toggle")?.classList.remove("active");
-    }
-    const treePanel = document.getElementById("tree-panel");
-    if (treePanel && !treePanel.hasAttribute("hidden")) {
-      treePanel.setAttribute("hidden", "");
-      document.getElementById("tree-toggle")?.classList.remove("active");
-      document.querySelector(".app")?.classList.remove("tree-open");
-    }
-
-    promptOverlay.removeAttribute("hidden");
-    promptOverlay.classList.add("open");
+    if (on) {
+    promptOverlay.removeAttribute("hidden"); promptOverlay.classList.add("open");
     promptToggle?.classList.add("active");
     renderList();
   } else {
@@ -215,7 +175,6 @@ export const setPromptOpen = (on) => {
 };
 
 // ── Event listeners ───────────────────────────────────────────────
-promptToggle?.addEventListener("click", () => setPromptOpen(promptOverlay.hasAttribute("hidden")));
 promptClose?.addEventListener("click", () => setPromptOpen(false));
 promptAddBtn?.addEventListener("click", startAdd);
 promptEditorSave?.addEventListener("click", doSave);
@@ -287,3 +246,6 @@ document.addEventListener("langchange", () => {
     }
   }
 });
+
+import { registerPanel } from './panel-manager.js';
+registerPanel('prompts', { toggleBtnId: 'prompt-toggle', panelId: 'prompt-overlay', open: () => setPromptOpen(true), close: () => setPromptOpen(false) });

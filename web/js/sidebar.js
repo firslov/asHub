@@ -254,6 +254,8 @@ const renderSessionItem = (s, isPinned = false) => {
         switchTo(nextId);
         sessions.get(s.instanceId)?.remove();
         renderSessions();
+        // Windows: re-focus input after DOM changes from session removal
+        setTimeout(() => document.getElementById("query")?.focus(), 50);
       } else {
         window.location.href = "/";
       }

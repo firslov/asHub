@@ -76,13 +76,24 @@ effect(() => {
   if (active) {
     const input = document.getElementById("query");
     if (input) {
-      // Double-frame delay ensures DOM has fully settled on Windows
       requestAnimationFrame(() => {
         setTimeout(() => {
           if (document.activeElement !== input) input.focus();
         }, 0);
       });
     }
+  }
+
+  // Reset chrome (spinner, cancel) when switching to a non-busy session.
+  // Prevents stale busy state from a deleted/background session from
+  // blocking input clicks on Windows.
+  const s = activeSession.peek();
+  if (s && !s.state.isProcessing) {
+    const spinner = document.getElementById("spinner");
+    if (spinner) spinner.hidden = true;
+    const cancelBtn = document.getElementById("cancel-turn");
+    if (spinner) spinner.hidden = true;
+    if (cancelBtn) cancelBtn.hidden = true;
   }
 });
 

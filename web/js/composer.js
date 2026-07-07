@@ -278,7 +278,26 @@ const doSubmit = async (query) => {
     if (query.startsWith("/")) {
       await submitSlash(query);
     } else if (attachedImages.length > 0) {
-      const body = JSON.stringify({ query, images: attachedImages });
+      // Upload images first, then submit with server IDs.
+      let imageRefs = attachedImages;
+      try {
+        const uploaded = await Promise.all(
+          attachedImages.map(async (img) => {
+            const r = await fetch("/api/upload", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(img),
+            });
+            if (!r.ok) throw new Error("upload failed");
+            const { id } = await r.json();
+            return { id, mimeType: img.mimeType };
+          }),
+        );
+        imageRefs = uploaded;
+      } catch {
+        // Fallback: use base64 directly if upload fails
+      }
+      const body = JSON.stringify({ query, images: imageRefs });
       await fetch(`/${sid}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

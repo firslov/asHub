@@ -6131,3 +6131,106 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-weight: 400;
   letter-spacing: 0;
 }
+
+
+/* ═════════════════════════════════════════════════════════════════════
+   Academic Theme — paper-like reading mode
+   ═════════════════════════════════════════════════════════════════════ */
+
+/* ── 3.4 Refined base tones + paper texture ──────────────────────── */
+[data-theme="academic"] {
+  --bg:           #f7f5f0;
+  --bg2:          #f0ece4;
+  --bg3:          #e8e3da;
+  --bg4:          #ded8ce;
+  --bg-elevated:  #f2efe8;
+
+  --shadow-sm:   0 1px 2px rgba(30, 35, 45, 0.04);
+  --shadow-md:   0 3px 10px rgba(30, 35, 45, 0.06);
+  --shadow-lg:   0 6px 24px rgba(30, 35, 45, 0.08);
+  --shadow-panel-sm:  0 1px 4px rgba(30, 35, 45, 0.05);
+  --shadow-panel-md:  0 3px 12px rgba(30, 35, 45, 0.06);
+  --shadow-elevated:  0 1px 2px rgba(30, 35, 45, 0.04), 0 3px 8px rgba(30, 35, 45, 0.05);
+
+  --scrollbar-thumb: #c4bdb0;
+}
+
+/* Paper texture overlay */
+[data-theme="academic"] .main::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.35;
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(30, 59, 92, 0.03) 0%, transparent 40%),
+    radial-gradient(circle at 80% 70%, rgba(122, 90, 48, 0.02) 0%, transparent 40%);
+}
+
+/* Ensure .main has position context for the overlay */
+[data-theme="academic"] .main { position: relative; }
+
+/* ── 3.1 Serif font for reading area ─────────────────────────────── */
+[data-theme="academic"] .agent-reply,
+[data-theme="academic"] .stream-empty,
+[data-theme="academic"] .subagent-block {
+  font-family: "Source Serif 4", "Noto Serif SC", Georgia, "Times New Roman", serif;
+}
+
+[data-theme="academic"] .agent-reply h1,
+[data-theme="academic"] .agent-reply h2,
+[data-theme="academic"] .agent-reply h3,
+[data-theme="academic"] .agent-reply h4,
+[data-theme="academic"] .agent-reply h5,
+[data-theme="academic"] .agent-reply h6 {
+  font-family: "Source Serif 4", "Noto Serif SC", Georgia, serif;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* UI chrome stays sans-serif */
+[data-theme="academic"] .title-bar,
+[data-theme="academic"] .sidebar,
+[data-theme="academic"] .toolbar,
+[data-theme="academic"] .tool-row,
+[data-theme="academic"] .thinking-block,
+[data-theme="academic"] .live-input,
+[data-theme="academic"] .config-overlay,
+[data-theme="academic"] .prompt-overlay {
+  font-family: "Geist", "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+/* ── 3.5 Selection, focus, scrollbar ─────────────────────────────── */
+[data-theme="academic"] ::selection {
+  background: rgba(30, 59, 92, 0.18);
+  color: #1a1a1f;
+}
+
+[data-theme="academic"] :focus-visible {
+  outline-color: #3d5a7a;
+  box-shadow: 0 0 0 4px rgba(30, 59, 92, 0.10);
+}
+
+[data-theme="academic"] *::-webkit-scrollbar-thumb:hover {
+  background: #a69e90;
+}
+
+/* ── 3.7 Windows title bar ───────────────────────────────────────── */
+[data-theme="academic"] .win-title-bar {
+  background: var(--bg);
+  border-bottom-color: rgba(30, 59, 92, 0.10);
+}
+
+[data-theme="academic"] .win-title-bar-drag {
+  color: #5a5a65;
+}
+
+[data-theme="academic"] .win-title-bar-controls button:hover {
+  background: #e8e3da;
+}
+
+[data-theme="academic"] .win-title-bar-controls button.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}

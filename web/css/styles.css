@@ -164,11 +164,11 @@
 /* Cool cream tones with scholarly burgundy accents.
    Designed for focused, distraction-free reading with gravitas. */
 [data-theme="academic"] {
-  --bg:           #f5f2ec;
-  --bg2:          #ede9e1;
-  --bg3:          #e4dfd5;
-  --bg4:          #dad5c9;
-  --bg-elevated:  #efebe4;
+  --bg:           #f7f5f0;
+  --bg2:          #f0ece4;
+  --bg3:          #e8e3da;
+  --bg4:          #ded8ce;
+  --bg-elevated:  #f2efe8;
 
   --accent:       #1e3b5c;
   --accent-dim:   #162d47;
@@ -216,7 +216,7 @@
   --shadow-panel-lg:  0 12px 44px rgba(30, 35, 45, 0.12);
   --shadow-elevated:  0 1px 2px rgba(30, 35, 45, 0.06), 0 4px 10px rgba(30, 35, 45, 0.08);
 
-  --scrollbar-thumb: #c4beb0;
+  --scrollbar-thumb: #c4bdb0;
   --logo-bg:      linear-gradient(135deg, #1e3b5c 0%, #162d47 100%);
   --logo-border:  rgba(30, 59, 92, 0.20);
 }

@@ -215,6 +215,28 @@
 }
 
 .stream-empty-prompt:hover::before { opacity: 1; }
+/* Quick-start templates */
+.stream-empty-templates {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+.stream-empty-prompt.template {
+  font-size: 0.72rem;
+  padding: 0.4em 0.75em;
+  opacity: 0.7;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg2);
+}
+.stream-empty-prompt.template:hover {
+  opacity: 1;
+  border-color: var(--accent-dim);
+  background: var(--accent-glow);
+}
+
 .stream-empty-prompt .c-arrow {
   color: var(--accent);
   font-size: 1.2rem;

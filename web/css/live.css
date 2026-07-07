@@ -6234,3 +6234,120 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: #c42b1c;
   color: #fff;
 }
+
+
+/* ── 3.2 Academic code highlighting ───────────────────────────────── */
+[data-theme="academic"] .agent-reply pre {
+  background: #f0ece3;
+  border-color: rgba(30, 59, 92, 0.12);
+  box-shadow: inset 0 1px 4px rgba(30, 35, 45, 0.04);
+}
+
+[data-theme="academic"] .hljs-keyword,
+[data-theme="academic"] .hljs-selector-tag,
+[data-theme="academic"] .hljs-literal {
+  color: #6b4c3d;
+}
+
+[data-theme="academic"] .hljs-string,
+[data-theme="academic"] .hljs-regexp,
+[data-theme="academic"] .hljs-addition {
+  color: #4a6b4a;
+}
+
+[data-theme="academic"] .hljs-number,
+[data-theme="academic"] .hljs-built_in {
+  color: #7a5a30;
+}
+
+[data-theme="academic"] .hljs-comment,
+[data-theme="academic"] .hljs-quote {
+  color: #8a8275;
+  font-style: italic;
+}
+
+[data-theme="academic"] .hljs-function,
+[data-theme="academic"] .hljs-title,
+[data-theme="academic"] .hljs-attr {
+  color: #2e4a66;
+}
+
+[data-theme="academic"] .hljs-variable,
+[data-theme="academic"] .hljs-template-variable {
+  color: #8b5a4a;
+}
+
+[data-theme="academic"] .hljs-type {
+  color: #4a5a6a;
+}
+
+[data-theme="academic"] .hljs-meta {
+  color: #6b6040;
+}
+
+[data-theme="academic"] .hljs-emphasis { font-style: italic; }
+[data-theme="academic"] .hljs-strong { font-weight: 600; }
+
+/* ── 3.3 Academic diff colors ────────────────────────────────────── */
+[data-theme="academic"] .diff-added {
+  background: rgba(92, 124, 92, 0.10);
+  border-left-color: #5c7c5c;
+}
+
+[data-theme="academic"] .diff-added .diff-sign {
+  color: #4a6b4a;
+}
+
+[data-theme="academic"] .diff-removed {
+  background: rgba(155, 100, 90, 0.09);
+  border-left-color: #9b645a;
+}
+
+[data-theme="academic"] .diff-removed .diff-sign {
+  color: #8b3a3a;
+}
+
+[data-theme="academic"] .diff-head {
+  background: #ebe6db;
+  color: #5a5a65;
+}
+
+[data-theme="academic"] .diff-sep {
+  background: #f0ece3;
+  color: #8a8275;
+}
+
+/* ── 3.6 Academic thinking & tool rows ───────────────────────────── */
+[data-theme="academic"] .thinking-block {
+  background: rgba(30, 59, 92, 0.04);
+  border-left-color: rgba(30, 59, 92, 0.20);
+}
+
+[data-theme="academic"] .thinking-toggle {
+  color: #4a5a6a;
+}
+
+[data-theme="academic"] .tool-row {
+  background: #f2efe8;
+  border-color: rgba(30, 59, 92, 0.10);
+}
+
+[data-theme="academic"] .tool-row:hover {
+  background: #ebe7de;
+}
+
+[data-theme="academic"] .tool-row.ok .tool-mark {
+  color: #4a6b4a;
+}
+
+[data-theme="academic"] .reasoning-phase {
+  color: #5a6b7a;
+}
+
+[data-theme="academic"] .reasoning-phase-body {
+  background: rgba(30, 59, 92, 0.02);
+}
+
+[data-theme="academic"] .thinking-block-body {
+  color: #4a5a6a;
+}

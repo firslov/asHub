@@ -141,11 +141,11 @@ export const fillFinalReply = (session, text) => {
 export const closeReply = (session) => {
   const r = session?.reply;
   if (!r?.current) return;
-  // Flush pending renders — including throttled deferred flush
-  if (r.pendingChunkRender || r._throttleFlushScheduled) {
-    r._throttleFlushScheduled = false;
-    flushReply(session);
-  }
+  // Guaranteed final parse — bypass throttle to render complete text
+  r._throttleFlushScheduled = false;
+  r._lastParseTime = 0;
+  r._lastParsedText = "";
+  flushReply(session);
   r.current.classList.remove("streaming");
   if (r.text === "") {
     r.current.remove();

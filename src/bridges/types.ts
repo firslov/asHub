@@ -85,6 +85,9 @@ export interface Bridge {
   /** Called by hub when user responds to a permission prompt. */
   decidePermission?(requestId: string, outcome: string, sessionWide?: boolean): void;
 
+  /** Called by hub when auto-approve setting changes. */
+  setAutoApprove?(enabled: boolean): void;
+
   /** Tear down. */
   close(): void;
 

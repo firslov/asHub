@@ -78,6 +78,7 @@ interface Session {
 }
 
 const REPLAY_LIMIT = 3000;
+const AUTO_APPROVE_KEY = "ashub.permissions.autoApprove";
 
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;
@@ -439,6 +440,8 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "GET" && url === "/api/config") return getConfig(res);
     if (req.method === "PUT" && url === "/api/config") return updateConfig(req, res, sessions);
     if (req.method === "POST" && url === "/api/config/reload") return reloadConfig(res);
+    if (req.method === "GET" && url === "/api/settings/auto-approve") return getAutoApprove(res);
+    if (req.method === "PUT" && url === "/api/settings/auto-approve") return setAutoApprove(req, res, sessions);
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
     if (req.method === "GET" && url.startsWith("/api/balance")) return getBalance(req, res);
     if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res, sessions);
@@ -820,6 +823,13 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
   const fp = settingsPath();
   try {
     await fs.promises.mkdir(path.dirname(fp), { recursive: true });
+    // Preserve app-level settings not managed by the config editor
+    try {
+      const old = JSON.parse(await fs.promises.readFile(fp, "utf-8"));
+      if (old[AUTO_APPROVE_KEY] !== undefined) {
+        parsed[AUTO_APPROVE_KEY] = old[AUTO_APPROVE_KEY];
+      }
+    } catch {}
     await fs.promises.writeFile(fp, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
     try {
       const { reloadSettings } = await import("agent-sh/settings");
@@ -830,6 +840,51 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
     } catch {}
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
+  } catch (err) {
+    res.statusCode = 500;
+    res.end(`write failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+// Auto-approve setting (stored as a key in settings.json)
+
+function getAutoApprove(res: http.ServerResponse): void {
+  const fp = settingsPath();
+  fs.readFile(fp, "utf-8", (err, raw) => {
+    if (err) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ autoApprove: false }));
+      return;
+    }
+    try {
+      const data = JSON.parse(raw);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ autoApprove: !!data[AUTO_APPROVE_KEY] }));
+    } catch {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ autoApprove: false }));
+    }
+  });
+}
+
+async function setAutoApprove(req: http.IncomingMessage, res: http.ServerResponse, sessions: Map<string, Session>): Promise<void> {
+  const body = await readBody(req);
+  let parsed: { autoApprove?: boolean };
+  try { parsed = JSON.parse(body); } catch {
+    res.statusCode = 400; res.end("invalid JSON"); return;
+  }
+  const fp = settingsPath();
+  try {
+    await fs.promises.mkdir(path.dirname(fp), { recursive: true });
+    let data: Record<string, unknown> = {};
+    try { data = JSON.parse(await fs.promises.readFile(fp, "utf-8")); } catch {}
+    data[AUTO_APPROVE_KEY] = !!parsed.autoApprove;
+    await fs.promises.writeFile(fp, JSON.stringify(data, null, 2) + "\n", "utf-8");
+    for (const s of sessions.values()) {
+      s.bridge?.setAutoApprove?.(!!parsed.autoApprove);
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, autoApprove: !!parsed.autoApprove }));
   } catch (err) {
     res.statusCode = 500;
     res.end(`write failed: ${err instanceof Error ? err.message : err}`);

@@ -41,6 +41,8 @@ const translations = {
     "shortcuts.recall_down": "Next query",
     "shortcuts.cycle_thinking": "Cycle thinking level",
     "shortcuts.move_word": "Move cursor by word",
+    "shortcuts.navigation": "Navigation",
+    "shortcuts.panels": "Panels",
     "new.output": "new output",
     "ask.agent": "ask the agent…",
     "context": "Context",
@@ -149,6 +151,8 @@ const translations = {
     "permission.deny": "Deny",
     "permission.approve": "Approve",
     "permission.approve_all": "Approve All",
+    "permission.auto_approve": "Auto-Approve File Operations",
+    "permission.auto_approve_desc": "Skip all permission prompts (not recommended)",
 
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "reconnecting…",
@@ -270,6 +274,8 @@ const translations = {
     "shortcuts.recall_down": "下一条",
     "shortcuts.cycle_thinking": "切换思考深度",
     "shortcuts.move_word": "按词移动光标",
+    "shortcuts.navigation": "导航",
+    "shortcuts.panels": "面板",
     "new.output": "新输出",
     "ask.agent": "向 agent 提问…",
     "context": "上下文",
@@ -374,6 +380,8 @@ const translations = {
     "permission.deny": "拒绝",
     "permission.approve": "批准",
     "permission.approve_all": "全部批准",
+    "permission.auto_approve": "自动批准文件操作",
+    "permission.auto_approve_desc": "跳过所有权限提示（不推荐）",
 
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "重连中…",

@@ -1790,6 +1790,16 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 /* Windows custom title bar */
 .win-title-bar { display: none; }
+/* Ensure right-side panels clear the title bar on Windows */
+.os-other .config-overlay,
+.os-other .prompt-overlay,
+.os-other .tree-panel,
+.os-other .ctx-panel,
+.os-other .files-panel,
+.os-other .toolbar {
+  top: 68px;
+}
+
 .os-other .win-title-bar {
   display: flex;
   align-items: center;

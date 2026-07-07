@@ -565,8 +565,12 @@ async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): 
   }
 
   const ok = (body: unknown) => {
-    if (!_balanceCache) _balanceCache = new Map();
-    _balanceCache.set(provider, { data: body, ts: Date.now() });
+    // Only cache non-error responses (skip is_available:false + error)
+    const bodyObj = body as Record<string, unknown>;
+    if (bodyObj?.is_available !== false || !bodyObj?.error) {
+      if (!_balanceCache) _balanceCache = new Map();
+      _balanceCache.set(provider, { data: body, ts: Date.now() });
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(body));
   };

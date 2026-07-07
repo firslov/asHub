@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   checkForUpdate: () => ipcRenderer.invoke("check-for-update"),
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
   focusWindow: () => ipcRenderer.invoke("focus-window"),
+  windowMinimize: () => ipcRenderer.invoke("window-minimize"),
+  windowMaximize: () => ipcRenderer.invoke("window-maximize"),
+  windowClose: () => ipcRenderer.invoke("window-close"),
   onUpdateAvailable: (cb) => onChannel("update-available", cb),
   /** Send theme change to main process to update native title bar */
   onThemeChange: (theme) => ipcRenderer.send("theme-changed", theme),

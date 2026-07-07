@@ -1,8 +1,20 @@
 import "./i18n.js";
 
-// Set platform class for OS-specific UI (shortcuts etc)
+// Platform detection
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
 document.documentElement.classList.add(isMac ? "os-mac" : "os-other");
+
+// Windows custom title bar controls
+if (!isMac) {
+  const winBar = document.getElementById("win-title-bar");
+  if (winBar) winBar.removeAttribute("hidden");
+  document.getElementById("win-title-bar")?.querySelector(".minimize")?.addEventListener(
+    "click", () => window.electronAPI?.windowMinimize?.());
+  document.getElementById("win-title-bar")?.querySelector(".maximize")?.addEventListener(
+    "click", () => window.electronAPI?.windowMaximize?.());
+  document.getElementById("win-title-bar")?.querySelector(".close")?.addEventListener(
+    "click", () => window.electronAPI?.windowClose?.());
+}
 
 // Respect system reduced-motion preference
 if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {

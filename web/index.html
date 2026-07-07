@@ -23,6 +23,15 @@
 <body>
   <div class="app" data-ui-tabs-enabled="false">
     <header class="title-bar">
+      <!-- Windows custom title bar (hidden on macOS) -->
+      <div id="win-title-bar" class="win-title-bar os-other" hidden>
+        <div class="win-title-bar-drag">asHub</div>
+        <div class="win-title-bar-controls">
+          <button class="win-btn minimize" aria-label="Minimize">‒</button>
+          <button class="win-btn maximize" aria-label="Maximize">□</button>
+          <button class="win-btn close" aria-label="Close">✕</button>
+        </div>
+      </div>
       <span class="title-bar-controls">
         <button id="sidebar-toggle" class="sidebar-btn sidebar-toggle" data-i18n-title="collapse.sidebar" title="Collapse sidebar">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">

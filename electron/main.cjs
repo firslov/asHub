@@ -468,6 +468,13 @@ function setupIPC() {
     }
   });
 
+  // Windows custom title bar controls
+  ipcMain.handle("window-minimize", () => { if (mainWindow) mainWindow.minimize(); });
+  ipcMain.handle("window-maximize", () => {
+    if (mainWindow) mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
+  });
+  ipcMain.handle("window-close", () => { if (mainWindow) mainWindow.close(); });
+
   // Sync native title bar with web UI theme changes
   ipcMain.on("theme-changed", (_event, theme) => {
     if (mainWindow) {

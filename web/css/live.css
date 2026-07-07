@@ -1786,7 +1786,51 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   -webkit-font-smoothing: subpixel-antialiased;
 }
 
-:root.os-other { --ui-title-bar-height: 34px; }
+:root.os-other { --ui-title-bar-height: 34px; padding-top: 32px; }
+
+/* Windows custom title bar */
+.win-title-bar { display: none; }
+.os-other .win-title-bar {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  background: var(--bg2);
+  -webkit-app-region: drag;
+  user-select: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  border-bottom: 1px solid var(--border);
+}
+.win-title-bar-drag {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 0.75rem;
+  padding-left: 12px;
+  color: var(--text-dim);
+}
+.win-title-bar-controls {
+  display: flex;
+  -webkit-app-region: no-drag;
+  height: 100%;
+}
+.win-title-bar-controls button {
+  width: 46px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.win-title-bar-controls button:hover { background: var(--bg3); }
+.win-title-bar-controls button.close:hover { background: #c42b1c; color: #fff; }
 
 .os-other .title-bar {
   height: 34px;

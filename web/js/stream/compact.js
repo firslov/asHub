@@ -95,9 +95,15 @@ export function compactReasoning(stream) {
       body.hidden = !body.hidden;
       phase.classList.toggle("open", expanding);
       if (expanding) {
-        // Temporarily show to measure, then animate
+        // Measure full content height, then animate in next frame.
+        // Avoids synchronous offsetHeight that forces layout thrashing.
+        const prev = body.style.maxHeight;
         body.style.maxHeight = "none";
-        body.offsetHeight; // force reflow
+        const fullHeight = body.scrollHeight;
+        body.style.maxHeight = prev;
+        requestAnimationFrame(() => {
+          body.style.maxHeight = `${fullHeight}px`;
+        });
       } else {
         body.style.maxHeight = "";
       }

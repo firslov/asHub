@@ -37,8 +37,8 @@ const flushReply = (session) => {
   // Full render is the source of truth — guarantees correct Markdown.
   // Skip if parsed recently — throttle full Markdown parse to at most
   // every 50ms during streaming to reduce main-thread pressure.
-  const now = performance.now();
-  if (r._lastParseTime && now - r._lastParseTime < 50) {
+  const perfNow = performance.now();
+  if (r._lastParseTime && perfNow - r._lastParseTime < 50) {
     if (!r._throttleFlushScheduled) {
       r._throttleFlushScheduled = true;
       requestAnimationFrame(() => {
@@ -50,7 +50,7 @@ const flushReply = (session) => {
     }
     return;
   }
-  r._lastParseTime = now;
+  r._lastParseTime = perfNow;
   // Skip if text hasn't changed since last parse (common during rapid chunks).
   if (r.text === r._lastParsedText) return;
   r._lastParsedText = r.text;

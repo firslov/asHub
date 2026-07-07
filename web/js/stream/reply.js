@@ -39,12 +39,12 @@ const flushReply = (session) => {
   // every 50ms during streaming to reduce main-thread pressure.
   const now = performance.now();
   if (r._lastParseTime && now - r._lastParseTime < 50) {
-    // Still schedule one more flush after throttle window
     if (!r._throttleFlushScheduled) {
       r._throttleFlushScheduled = true;
       requestAnimationFrame(() => {
         r._throttleFlushScheduled = false;
-        r._lastParseTime = 0; // force re-parse
+        r._lastParseTime = 0;
+        r._lastParsedText = ""; // force re-parse on scheduled flush
         flushReply(session);
       });
     }

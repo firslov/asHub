@@ -139,8 +139,8 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
 - Cite exact file paths and line numbers for each finding
 - Be constructive — suggest fixes, not just problems`,
     tools: ["glob", "grep", "read_file", "ls"],
-    maxIterations: 10,
-    budgetTokens: 12000,
+    maxIterations: 30,
+    budgetTokens: 16000,
   },
   research: {
     description: "Deep investigation of code structure and dependencies. Use when asked to 'research', 'investigate', 'trace', 'analyze' or 'understand how' code works. Read-only.",

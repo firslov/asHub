@@ -478,8 +478,8 @@ document.getElementById("config-cwd-pick")?.addEventListener("click", async () =
 
 // Display scale — apply on startup and on settings save
 const applyScale = (val) => {
-  const app = document.querySelector(".app");
-  if (app) app.style.zoom = val ? String(val) : "";
+  const scale = parseFloat(val) || 1;
+  document.documentElement.style.fontSize = `${scale * 100}%`;
 };
 // Apply saved scale on load
 try {

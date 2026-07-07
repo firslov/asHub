@@ -292,6 +292,7 @@ export const handlers = {
     hideUsage(this);
     setBusy(this, true);
     if (!this.state.replaying) setSessionStatus(this.id, "session-streaming");
+    document.dispatchEvent(new CustomEvent("sse:processing-change"));
     hideThinking(this);
     sweepOrphanThinking(this);
     finalizeThinking(this);
@@ -344,6 +345,7 @@ export const handlers = {
     if (this.usageStripEl) this.usageStripEl.hidden = false;
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
+    document.dispatchEvent(new CustomEvent("sse:processing-change"));
     this._subagent = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
@@ -362,6 +364,7 @@ export const handlers = {
     finalizeLiveOutput(this);
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
+    document.dispatchEvent(new CustomEvent("sse:processing-change"));
     this._subagent = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
@@ -375,6 +378,7 @@ export const handlers = {
     append(this, renderErrorCard(p?.message ?? "", p?.detail ?? p?.stack));
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
+    document.dispatchEvent(new CustomEvent("sse:processing-change"));
     this._subagent = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
@@ -388,6 +392,7 @@ export const handlers = {
 
   "session:title"(p) {
     updateSessionTitle(this.id, p?.title ?? "");
+    document.dispatchEvent(new CustomEvent("sse:title"));
   },
 
   "hub:branch-switched"() {

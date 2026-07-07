@@ -800,7 +800,23 @@ effect(() => {
 });
 
 renderSessions();
-setInterval(() => renderSessions(), 30000);
+// Event-driven refresh: poll on session state changes instead of blind timer.
+// SSE events (title, processing) come through session-view; we hook in via
+// the sidebar's own event listeners on the document.
+let _refreshQueued = false;
+const queueRefresh = () => {
+  if (_refreshQueued) return;
+  _refreshQueued = true;
+  queueMicrotask(async () => {
+    _refreshQueued = false;
+    renderSessions();
+  });
+};
+// Trigger on title changes, processing start/end via SSE events.
+document.addEventListener("sse:title", queueRefresh);
+document.addEventListener("sse:processing-change", queueRefresh);
+// Fallback: poll every 5 minutes in case SSE events were missed
+setInterval(() => renderSessions(), 5 * 60 * 1000);
 
 // Toggle the .current class and sync header info on active-session change.
 effect(() => {

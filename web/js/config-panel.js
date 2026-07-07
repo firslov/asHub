@@ -487,4 +487,27 @@ try {
 } catch {}
 
 import { registerPanel } from './panel-manager.js';
-registerPanel('config', { toggleBtnId: 'config-toggle', panelId: 'config-overlay', open: () => setConfigOpen(true), close: () => setConfigOpen(false) });
+// Auto-approve toggle — load when config panel opens
+const autoApproveToggle = document.getElementById("config-auto-approve");
+
+const loadAutoApprove = async () => {
+  try {
+    const r = await fetch("/api/settings/auto-approve");
+    if (r.ok) {
+      const { autoApprove } = await r.json();
+      if (autoApproveToggle) autoApproveToggle.checked = !!autoApprove;
+    }
+  } catch {}
+};
+
+autoApproveToggle?.addEventListener("change", async () => {
+  try {
+    await fetch("/api/settings/auto-approve", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autoApprove: autoApproveToggle.checked }),
+    });
+  } catch {}
+});
+
+registerPanel('config', { toggleBtnId: 'config-toggle', panelId: 'config-overlay', open: () => { setConfigOpen(true).then(loadAutoApprove); }, close: () => setConfigOpen(false) });

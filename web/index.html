@@ -337,7 +337,7 @@
           <line x1="4" y1="8.5" x2="8" y2="8.5"/>
         </svg>
       </button>
-      <button class="toolbar-btn" id="shortcuts-toggle" data-i18n-title="shortcuts" title="Keyboard shortcuts">
+      <button class="toolbar-btn" id="shortcuts-toggle" data-i18n-title="shortcuts.title" title="Keyboard shortcuts">
         <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
           <rect x="1.5" y="2.5" width="11" height="9" rx="1.5"/>
           <line x1="4.5" y1="5.5" x2="4.5" y2="8.5"/><line x1="7" y1="5.5" x2="7" y2="8.5"/><line x1="9.5" y1="5.5" x2="9.5" y2="8.5"/>
@@ -522,6 +522,16 @@
             </div>
           </div>
 
+          <div class="config-field">
+            <label class="config-label" for="config-auto-approve" data-i18n="permission.auto_approve">Auto-Approve File Operations</label>
+            <div class="config-toggle-wrap">
+              <label class="config-toggle">
+                <input type="checkbox" id="config-auto-approve" />
+                <span class="config-toggle-slider"></span>
+                <span class="config-toggle-label" data-i18n="permission.auto_approve_desc">Skip all permission prompts</span>
+              </label>
+            </div>
+          </div>
           <div class="config-actions">
             <button class="bar-btn config-btn-save" id="config-save-simple" data-i18n="save.reload">save & reload</button>
           </div>
@@ -610,7 +620,7 @@
             <div class="shortcuts-row os-other"><kbd>Ctrl+W</kbd><span data-i18n="shortcuts.close_tab">Close tab</span></div>
           </div>
           <div class="shortcuts-sep"></div>
-          <div class="shortcuts-subtitle">Navigation</div>
+          <div class="shortcuts-subtitle" data-i18n="shortcuts.navigation">Navigation</div>
           <div class="shortcuts-group">
             <div class="shortcuts-row os-mac"><kbd>⌘⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
             <div class="shortcuts-row os-other"><kbd>Ctrl+⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
@@ -620,7 +630,7 @@
             <div class="shortcuts-row os-other"><kbd>Ctrl+1</kbd><span class="shortcuts-range">–</span><kbd>9</kbd><span data-i18n="shortcuts.switch_tab">Switch to tab N</span></div>
           </div>
           <div class="shortcuts-sep"></div>
-          <div class="shortcuts-subtitle">Panels</div>
+          <div class="shortcuts-subtitle" data-i18n="shortcuts.panels">Panels</div>
           <div class="shortcuts-group">
             <div class="shortcuts-row os-mac"><kbd>⌘`</kbd><span data-i18n="shortcuts.toggle_sidebar">Toggle sidebar</span></div>
             <div class="shortcuts-row os-other"><kbd>Ctrl+`</kbd><span data-i18n="shortcuts.toggle_sidebar">Toggle sidebar</span></div>

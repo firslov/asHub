@@ -201,6 +201,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private backendRegistered = false;
   private pendingPermissions = new Map<string, { resolve: (d: { outcome: string; reason?: string }) => void; timer: ReturnType<typeof setTimeout>; kind: string }>();
   private permissionSessionApproved = new Set<string>();
+  private autoApprove = false;
   private _contextProducerUnsubscribe: (() => void) | null = null;
   private _subagents: Map<string, SubagentEntry> = new Map();
   private shell: Shell | null = null;
@@ -218,6 +219,13 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   private async init(): Promise<void> {
+    // Read auto-approve setting from disk
+    try {
+      const raw = await fs.promises.readFile(path.join(os.homedir(), ".agent-sh", "settings.json"), "utf-8");
+      const data = JSON.parse(raw);
+      this.autoApprove = !!data["ashub.permissions.autoApprove"];
+    } catch {}
+
     const core = createCore({ model: this.opts.model, provider: this.opts.provider });
     this.core = core;
 
@@ -527,6 +535,7 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       const tool = (ctx as { tool?: ToolDefinition }).tool;
       const name = (ctx as { name?: string }).name || "unknown";
       if (!tool?.modifiesFiles) return next(ctx);
+      if (this.autoApprove) return next(ctx);
 
       const metaPath = (args.path || args.command || "") as string;
       const permPayload = { kind: "file-write", title: `${name}: ${metaPath}`, description: (args.description || "") as string, metadata: { filePath: args.path || metaPath, diff: args.diff } };
@@ -658,9 +667,54 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
     core.handlers.advise("cwd", () => this.liveCwd);
 
     core.handlers.advise("system-prompt:build", (next: () => string) => {
-      const base = next();
+      let base = next();
       const cwd = core.handlers.call("cwd");
       if (typeof cwd !== "string" || !cwd) return base;
+
+      // ── Deduplicate "Available Skills" headings ───────────────────
+      // agent-sh's system-prompt:build emits two "# Available Skills"
+      // blocks (global skills then project skills). Merge them into one.
+      const skillsHeading = "# Available Skills";
+      const skillsSections: string[] = [];
+      let cleaned = base;
+      const headingRegex = /^# Available Skills\n\n/m;
+      let match = headingRegex.exec(cleaned);
+      while (match) {
+        const start = match.index;
+        // Find the next top-level heading or end of string
+        const rest = cleaned.slice(start + skillsHeading.length);
+        const nextHeading = rest.search(/^# /m);
+        const end = nextHeading === -1
+          ? cleaned.length
+          : start + skillsHeading.length + nextHeading;
+        skillsSections.push(cleaned.slice(start + skillsHeading.length, end).trim());
+        cleaned = cleaned.slice(0, start) + cleaned.slice(end);
+        match = headingRegex.exec(cleaned);
+      }
+      if (skillsSections.length > 1) {
+        // Rebuild: insert a single merged Available Skills block
+        const merged = skillsSections.join("\n\n");
+        const insertionPoint = cleaned.indexOf("# Extension Instructions");
+        if (insertionPoint !== -1) {
+          cleaned = cleaned.slice(0, insertionPoint)
+            + `${skillsHeading}\n\n${merged}\n\n`
+            + cleaned.slice(insertionPoint);
+        } else {
+          cleaned += `\n\n${skillsHeading}\n\n${merged}`;
+        }
+        base = cleaned;
+      }
+
+      // ── Condense agent-sh source paths ────────────────────────────
+      // The STATIC_GUIDE includes verbose paths to agent-sh's own
+      // source/docs/examples. Replace with a single compact line.
+      base = base.replace(
+        /^agent-sh source and documentation live at [^\n]+\n(?:- [^\n]+\n){3}\n/gm,
+        "agent-sh documentation is at the `docs/` directory inside the agent-sh package; "
+        + "source and examples live in `src/` and `examples/extensions/`. "
+        + "Read them when you need to understand how the runtime works.\n\n",
+      );
+
       return `${base}\n\n# Working Directory\n\nCurrent working directory: ${cwd}`;
     });
 
@@ -924,6 +978,17 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       this.permissionSessionApproved.add(entry.kind);
     }
     this.pendingPermissions.delete(requestId);
+  }
+
+  setAutoApprove(enabled: boolean): void {
+    this.autoApprove = enabled;
+    if (enabled) {
+      for (const [, entry] of this.pendingPermissions) {
+        clearTimeout(entry.timer);
+        entry.resolve({ outcome: "approved" });
+      }
+      this.pendingPermissions.clear();
+    }
   }
 
   ready(): Promise<void> {

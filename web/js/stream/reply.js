@@ -31,8 +31,7 @@ const HIGHLIGHT_DEBOUNCE_MS = 100; // re-highlight at most 10×/second during st
 const flushReply = (session) => {
   const r = session?.reply;
   if (!r) return;
-  r.pendingChunkRender = false;
-  if (!r.current) return;
+  if (!r.current) { r.pendingChunkRender = false; return; }
 
   // Full render is the source of truth — guarantees correct Markdown.
   // Skip if parsed recently — throttle full Markdown parse to at most
@@ -48,9 +47,9 @@ const flushReply = (session) => {
         flushReply(session);
       });
     }
-    return;
+    return; // pendingChunkRender stays true → closeReply will flush
   }
-  r._lastParseTime = perfNow;
+  r.pendingChunkRender = false;
   // Skip if text hasn't changed since last parse (common during rapid chunks).
   if (r.text === r._lastParsedText) return;
   r._lastParsedText = r.text;
@@ -142,7 +141,11 @@ export const fillFinalReply = (session, text) => {
 export const closeReply = (session) => {
   const r = session?.reply;
   if (!r?.current) return;
-  if (r.pendingChunkRender) flushReply(session);
+  // Flush pending renders — including throttled deferred flush
+  if (r.pendingChunkRender || r._throttleFlushScheduled) {
+    r._throttleFlushScheduled = false;
+    flushReply(session);
+  }
   r.current.classList.remove("streaming");
   if (r.text === "") {
     r.current.remove();

@@ -41,6 +41,11 @@ const setTheme = (theme) => {
     themeIcon.innerHTML = theme === "dark" ? MOON_PATHS : theme === "academic" ? BOOK_PATHS : SUN_PATHS;
   }
   try { localStorage.setItem(LS_THEME, theme); } catch {}
+  // Show current theme in button tooltip
+  if (themeToggle) {
+    const names = { light: "Light", dark: "Dark", academic: "Academic" };
+    themeToggle.title = `${t("toggle.theme")} (${names[theme] || theme})`;
+  }
   // Sync native window chrome with theme
   if (window.electronAPI?.onThemeChange) {
     window.electronAPI.onThemeChange(theme);

@@ -35,18 +35,18 @@ export const state = new Proxy(/** @type {any} */ ({}), {
   },
 });
 
-const HIST_KEY = `ashub_history_${sessionId}`;
-const MAX_HISTORY = 50;
+const HIST_KEY = "ashub_history";
+const MAX_HISTORY = 100;
 
 const loadHistory = () => {
   try {
-    return JSON.parse(sessionStorage.getItem(HIST_KEY)) || [];
+    return JSON.parse(localStorage.getItem(HIST_KEY)) || [];
   } catch { return []; }
 };
 
 const saveHistory = (arr) => {
   try {
-    sessionStorage.setItem(HIST_KEY, JSON.stringify(arr.slice(-MAX_HISTORY)));
+    localStorage.setItem(HIST_KEY, JSON.stringify(arr.slice(-MAX_HISTORY)));
   } catch {}
 };
 

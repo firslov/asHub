@@ -1,11 +1,16 @@
 import { maybeScroll } from "./scroll.js";
 import { t } from "../i18n.js";
 
+const LIVE_OUTPUT_MAX_LINES = 2000;
+
 const flushLiveOutput = (session) => {
   const lo = session?.liveOutput.output;
   if (!lo) return;
   lo.rafPending = false;
   const el = lo.blockEl;
+  if (lo.truncated && lo.lines.length > LIVE_OUTPUT_MAX_LINES) {
+    lo.lines = lo.lines.slice(-LIVE_OUTPUT_MAX_LINES);
+  }
   el.textContent = lo.lines.join("\n");
   el.scrollTop = el.scrollHeight;
   maybeScroll(session);
@@ -58,6 +63,13 @@ export const appendLiveOutputChunk = (session, chunk) => {
   }
   for (let i = 1; i < parts.length; i++) {
     lo.lines.push(parts[i]);
+  }
+  // Cap live output buffer — prevents freeze from huge tool output
+  if (!lo.truncated && lo.lines.length > LIVE_OUTPUT_MAX_LINES) {
+    lo.truncated = true;
+    lo.lines = [`... (output truncated to last ${LIVE_OUTPUT_MAX_LINES} lines)`].concat(
+      lo.lines.slice(-LIVE_OUTPUT_MAX_LINES));
+    lo.blockEl.style.opacity = "0.8";
   }
   scheduleLiveOutput(session);
 };

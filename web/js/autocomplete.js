@@ -69,9 +69,13 @@ export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpe
     if (!shouldOpen(buffer)) { close(); return; }
     const my = ++state.token;
     clearTimeout(state.timer);
+    // Cancel in-flight fetch to save bandwidth
+    state.abort?.();
+    state.abort = new AbortController();
+    const signal = state.abort.signal;
     state.timer = setTimeout(async () => {
       try {
-        const items = await fetcher(buffer);
+        const items = await fetcher(buffer, signal);
         if (my !== state.token) return;
         state.items = Array.isArray(items) ? items : [];
         state.index = 0;

@@ -311,6 +311,12 @@ export const setConfigOpen = async (on) => {
     }
 
     switchConfigMode("simple");
+
+    // Default working directory
+    const cwdInput = document.getElementById("config-default-cwd");
+    if (cwdInput) {
+      try { cwdInput.value = localStorage.getItem("ash.default-cwd") ?? ""; } catch {}
+    }
   } else {
     configOverlay.setAttribute("hidden", "");
     configOverlay.classList.remove("open");
@@ -387,6 +393,16 @@ configSaveSimple?.addEventListener("click", async () => {
   const config = buildConfig();
   if (!config) return;
 
+  // Save default working directory
+  const cwdInput = document.getElementById("config-default-cwd");
+  if (cwdInput) {
+    const val = cwdInput.value.trim();
+    try {
+      if (val) localStorage.setItem("ash.default-cwd", val);
+      else localStorage.removeItem("ash.default-cwd");
+    } catch {}
+  }
+
   if (!configApikey.value.trim() && originalApiKey) {
     const providerId = configProvider.value;
     config.providers[providerId].apiKey = originalApiKey;
@@ -430,6 +446,18 @@ document.addEventListener("langchange", () => {
       configModelHint.textContent = t("model.hint");
     }
   }
+});
+
+// Directory picker for default cwd
+document.getElementById("config-cwd-pick")?.addEventListener("click", async () => {
+  const input = document.getElementById("config-default-cwd");
+  if (!input) return;
+  try {
+    if (window.electronAPI?.pickDirectory) {
+      const dir = await window.electronAPI.pickDirectory();
+      if (dir) input.value = dir;
+    }
+  } catch {}
 });
 
 import { registerPanel } from './panel-manager.js';

@@ -4870,6 +4870,16 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding-right: 0.75rem;
 }
 
+.config-cwd-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.config-cwd-wrap .config-input {
+  flex: 1;
+}
+
 #config-model-refresh {
   flex-shrink: 0;
   height: 32px;

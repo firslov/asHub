@@ -911,8 +911,11 @@ export const updateSessionTitle = (sid, title) => {
 // ── Quick-create: one-click session with default directory ─────────
 
 const getDefaultCwd = () => {
-  // Always use the user's home directory for new sessions.
-  // "~" is resolved to os.homedir() by the server's expandHome().
+  // Check user's default directory preference (set in Settings)
+  try {
+    const stored = localStorage.getItem("ash.default-cwd");
+    if (stored) return stored;
+  } catch {}
   return "~";
 };
 

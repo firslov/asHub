@@ -2106,6 +2106,7 @@ async function setCwdEndpoint(req: http.IncomingMessage, res: http.ServerRespons
     source: session.id,
     ts: Date.now(),
     id: `hub:${session.id}:cwd`,
+    name: "shell:cwd-change",
   }, { cwd }));
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));

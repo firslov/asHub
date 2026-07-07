@@ -1759,9 +1759,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Windows title bar refinements ───────────────────────────────── */
 /* Native title bar already provides window controls; make the custom
    bar compact so it looks like a toolbar rather than a second header. */
-/* Windows font smoothing */
+/* Windows font smoothing — subpixel rendering avoids gray/blurry text */
 .os-other {
-  -webkit-font-smoothing: antialiased;
+  -webkit-font-smoothing: subpixel-antialiased;
 }
 
 :root.os-other { --ui-title-bar-height: 34px; }
@@ -4319,6 +4319,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 /* ── Scrollbar ───────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
+
+/* Windows: wider scrollbar for easier mouse dragging */
+.os-other ::-webkit-scrollbar { width: 10px; height: 10px; }
+.os-other ::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 5px;
+}
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb, var(--text-faint));

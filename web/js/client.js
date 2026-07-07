@@ -4,6 +4,11 @@ import "./i18n.js";
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
 document.documentElement.classList.add(isMac ? "os-mac" : "os-other");
 
+// Respect system reduced-motion preference
+if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+  document.querySelector(".app")?.setAttribute("data-animations", "reduced");
+}
+
 import { cancelTurn } from "./composer.js";
 import { setConfigOpen } from "./config-panel.js";
 import { switchTo, openTabs, activeSessionId, closeTab } from "./session-manager.js";

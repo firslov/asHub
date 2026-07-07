@@ -1,4 +1,4 @@
-import { lang, setLang } from "./i18n.js";
+import { lang, setLang, t } from "./i18n.js";
 
 const LS_THEME = "ash-theme";
 const LS_SIDEBAR = "ash.sidebar-collapsed";

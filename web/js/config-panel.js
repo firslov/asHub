@@ -454,8 +454,8 @@ document.getElementById("config-cwd-pick")?.addEventListener("click", async () =
   if (!input) return;
   try {
     if (window.electronAPI?.pickDirectory) {
-      const dir = await window.electronAPI.pickDirectory();
-      if (dir) input.value = dir;
+      const result = await window.electronAPI.pickDirectory();
+      if (result?.cwd) input.value = result.cwd;
     }
   } catch {}
 });

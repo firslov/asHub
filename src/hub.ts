@@ -192,6 +192,9 @@ function sessionMetaPath(id: string): string {
   return path.join(SESSIONS_DIR, `${id}.meta.json`);
 }
 
+const _metaTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const META_DEBOUNCE_MS = 500;
+
 async function saveSessionMeta(session: Session): Promise<void> {
   await ensureSessionsDir();
   const metaPath = sessionMetaPath(session.id);
@@ -199,6 +202,16 @@ async function saveSessionMeta(session: Session): Promise<void> {
   try { existing = JSON.parse(await fs.promises.readFile(metaPath, "utf-8")); } catch {}
   const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified, lastFrameSeq: session.lastFrameSeq };
   await fs.promises.writeFile(metaPath, JSON.stringify(merged));
+}
+
+/** Debounced version for non-critical fire-and-forget callers. */
+function saveSessionMetaDebounced(session: Session): void {
+  const pending = _metaTimers.get(session.id);
+  if (pending) clearTimeout(pending);
+  _metaTimers.set(session.id, setTimeout(async () => {
+    _metaTimers.delete(session.id);
+    await saveSessionMeta(session);
+  }, META_DEBOUNCE_MS));
 }
 
 const _writeBufs = new Map<string, { frames: string[]; timer: ReturnType<typeof setTimeout> | null }>();
@@ -1208,7 +1221,7 @@ function routeEvent(session: Session, e: BusEvent): void {
       name: "agent:processing-done",
     }, {}));
     _flushBuf(session.id);
-    saveSessionMeta(session).catch(() => {});
+    saveSessionMetaDebounced(session);
     session.capture?.flush().catch((err) =>
       console.error(`[hub] capture.flush failed for ${session.id}:`, err)
     );
@@ -1593,6 +1606,10 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
   const buf = _writeBufs.get(id);
   if (buf?.timer) { clearTimeout(buf.timer); buf.timer = null; }
   _writeBufs.delete(id);
+  // Flush any pending meta save before closing
+  const metaTimer = _metaTimers.get(id);
+  if (metaTimer) { clearTimeout(metaTimer); _metaTimers.delete(id); }
+  if (s) saveSessionMeta(s).catch(() => {});
   const lock = _writeLocks.get(id);
   _writeLocks.delete(id);
   void (async () => {
@@ -1857,7 +1874,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       session.hasUnread = session.sseClients.size === 0;
       pushFrame(session, "agent:processing-done", sseFrame(meta("agent:processing-done"), {}));
       _flushBuf(session.id);
-      saveSessionMeta(session).catch(() => {});
+      saveSessionMetaDebounced(session);
       session.capture?.flush().catch((err) =>
         console.error(`[hub] capture.flush failed for ${session.id}:`, err)
       );
@@ -1924,7 +1941,7 @@ async function execCommand(
   try { session.bridge.execCommand(name, args); } catch (err) {
     pushFrame(session, "ui:error", sseFrame(meta("ui:error"), { message: String(err) }), { transient: true });
   }
-  saveSessionMeta(session).catch(() => {});
+  saveSessionMetaDebounced(session);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }

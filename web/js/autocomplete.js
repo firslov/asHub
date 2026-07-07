@@ -70,7 +70,7 @@ export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpe
     const my = ++state.token;
     clearTimeout(state.timer);
     // Cancel in-flight fetch to save bandwidth
-    state.abort?.();
+    if (state.abort) { state.abort.abort(); state.abort = null; }
     state.abort = new AbortController();
     const signal = state.abort.signal;
     state.timer = setTimeout(async () => {

@@ -388,7 +388,7 @@
   right: 1.5rem;
   bottom: 7.8rem;
   background: var(--accent-gradient);
-  color: #1a1a1e;
+  color: #fff;
   border: none;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
   font-size: 0.7rem;
@@ -3255,7 +3255,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.05rem 0.4rem;
   border-radius: 999px;
   background: var(--accent, var(--cyan));
-  color: var(--bg1, #000);
+  color: #fff;
   font-weight: 500;
   letter-spacing: 0.08em;
 }

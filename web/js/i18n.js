@@ -146,6 +146,9 @@ const translations = {
     "rewind.failed": "rewind failed ({status})",
     "rewind.action.failed": "Rewind failed: {msg}",
     "cancel": "Cancel (Esc)",
+    "permission.deny": "Deny",
+    "permission.approve": "Approve",
+    "permission.approve_all": "Approve All",
 
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "reconnecting…",
@@ -368,6 +371,9 @@ const translations = {
     "rewind.failed": "回退失败 ({status})",
     "rewind.action.failed": "回退失败：{msg}",
     "cancel": "取消 (Esc)",
+    "permission.deny": "拒绝",
+    "permission.approve": "批准",
+    "permission.approve_all": "全部批准",
 
     // ── Composer / SSE connection ──────────────────────────────────
     "reconnecting": "重连中…",

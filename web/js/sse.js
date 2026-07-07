@@ -516,11 +516,113 @@ export const handlers = {
   },
 
   "permission:request"(p) {
-    if (p?.kind === "file-write" && p?.metadata?.diff) {
-      closeReply(this);
-      const block = renderDiffBlock(p.metadata.diff, p.title ?? p.metadata.filePath ?? "");
-      block.classList.add("diff-preview");
-      appendToGroup(this, block);
+    closeReply(this);
+    if (!this.streamEl) return;
+
+    const requestId = p?.requestId || "";
+    const title = p?.title || "File operation";
+    const kind = p?.kind || "unknown";
+    const filePath = p?.metadata?.filePath || "";
+    const description = p?.description || "";
+    const diff = p?.metadata?.diff || "";
+
+    const card = document.createElement("div");
+    card.className = "permission-card";
+    card.dataset.requestId = requestId;
+    card.dataset.sessionId = this.id ?? "";
+
+    // Shield icon SVG
+    const shieldIcon = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2s7 4 7 10v5.5a1 1 0 0 1-.6.9l-6.4 3-6.4-3a1 1 0 0 1-.6-.9V12c0-6 7-10 7-10z"/><line x1="12" y1="8" x2="12" y2="13"/><circle cx="12" cy="15.5" r="0.8" fill="currentColor" stroke="none"/></svg>`;
+
+    card.innerHTML =
+      `<div class="permission-left-bar"></div>` +
+      `<div class="permission-main">` +
+        `<div class="permission-head">` +
+          `<span class="permission-icon">${shieldIcon}</span>` +
+          `<span class="permission-label">${escape(title)}</span>` +
+          `<span class="permission-kind-badge">${escape(kind)}</span>` +
+        `</div>` +
+        (filePath || description ? `<div class="permission-body">` +
+          (filePath ? `<div class="permission-path">${escape(filePath)}</div>` : "") +
+          (description ? `<div class="permission-desc">${escape(description)}</div>` : "") +
+        `</div>` : "") +
+        `<div class="permission-actions">` +
+          `<div class="permission-actions-left">` +
+            `<button class="permission-btn deny">` +
+              `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="7" y1="7" x2="17" y2="17"/><line x1="17" y1="7" x2="7" y2="17"/></svg>` +
+              `<span>${escape(t("permission.deny"))}</span>` +
+            `</button>` +
+          `</div>` +
+          `<div class="permission-actions-right">` +
+            `<span class="permission-countdown"><svg width="18" height="18" viewBox="0 0 24 24" class="perm-ring"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.15"/><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="62.83" stroke-dashoffset="0" class="perm-ring-fill"/></svg><span class="perm-count-text">30</span></span>` +
+            `<button class="permission-btn approve-all">` +
+              `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 13 10 18 19 6"/><polyline points="5 13 10 18 19 6" opacity="0.4" transform="translate(-3,-2)"/></svg>` +
+              `<span>${escape(t("permission.approve_all"))}</span>` +
+            `</button>` +
+            `<button class="permission-btn approve">` +
+              `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 13 10 18 19 6"/></svg>` +
+              `<span>${escape(t("permission.approve"))}</span>` +
+            `</button>` +
+          `</div>` +
+        `</div>` +
+      `</div>`;
+
+    // Diff preview appended after main
+    if (diff) {
+      const preview = renderDiffBlock(diff, filePath || title);
+      preview.classList.add("permission-diff");
+      card.querySelector(".permission-main")?.appendChild(preview);
+    }
+
+    // Countdown
+    const ringCircle = card.querySelector(".perm-ring-fill");
+    const countText = card.querySelector(".perm-count-text");
+    let remaining = 30;
+    const tick = () => {
+      remaining--;
+      if (countText) countText.textContent = String(remaining);
+      if (ringCircle) {
+        const offset = 62.83 * (1 - remaining / 30);
+        ringCircle.setAttribute("stroke-dashoffset", String(offset));
+      }
+      if (remaining <= 5) {
+        card.classList.add("countdown-urgent");
+        if (ringCircle) ringCircle.setAttribute("stroke", "#ef4444");
+      }
+      if (remaining <= 0) {
+        clearInterval(timer);
+        card.remove();
+      }
+    };
+    const timer = setInterval(tick, 1000);
+    card._timer = timer;
+
+    const decide = (outcome, sessionWide) => {
+      clearInterval(timer);
+      card.classList.add("decided");
+      card.classList.add(outcome === "approved" ? "allowed" : "blocked");
+      card.querySelectorAll(".permission-btn").forEach(b => b.disabled = true);
+      fetch("/api/permission/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId, outcome, sessionId: this.id, sessionWide }),
+      }).catch(() => {});
+    };
+
+    card.querySelector(".deny")?.addEventListener("click", () => decide("denied", false));
+    card.querySelector(".approve")?.addEventListener("click", () => decide("approved", false));
+    card.querySelector(".approve-all")?.addEventListener("click", () => decide("approved", true));
+
+    insertStreamNode(this, card);
+  },
+
+  "permission:request-cleanup"() {
+    // Remove any stale permission cards (when tool finishes)
+    if (this.streamEl) {
+      for (const card of this.streamEl.querySelectorAll(".permission-card")) {
+        clearInterval(card._timer);
+        card.remove();
+      }
     }
   },
 

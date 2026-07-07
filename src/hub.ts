@@ -451,6 +451,7 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "POST" && url === "/api/sessions/archive") return archiveSession(req, res, sessions);
     if (req.method === "POST" && url === "/api/sessions/unarchive") return unarchiveSession(req, res, sessions, opts);
     if (req.method === "POST" && url === "/api/sessions/unpin") return unpinSession(req, res);
+    if (req.method === "POST" && url === "/api/permission/decide") return decidePermission(req, res, sessions);
     if (req.method === "POST" && url === "/api/upload") return uploadImage(req, res);
     if (req.method === "GET" && url === "/api/sessions/pinned") return listPinnedSessions(res);
     if (req.method === "GET" && url.startsWith("/events")) {
@@ -2826,6 +2827,31 @@ async function unpinSession(req: http.IncomingMessage, res: http.ServerResponse)
   await savePinnedSessions(pinned);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
+}
+
+// Permission decision forwarded from client to bridge.
+async function decidePermission(req: http.IncomingMessage, res: http.ServerResponse, sessions: Map<string, Session>): Promise<void> {
+  try {
+    const body = await readBody(req);
+    const { requestId, outcome, sessionId, sessionWide } = JSON.parse(body) as Record<string, unknown>;
+    if (!requestId || !outcome || !sessionId) {
+      res.writeHead(400);
+      res.end("missing parameters");
+      return;
+    }
+    const session = sessions.get(String(sessionId));
+    if (!session || !session.bridge.decidePermission) {
+      res.writeHead(404);
+      res.end("session not found");
+      return;
+    }
+    session.bridge.decidePermission(String(requestId), String(outcome), !!sessionWide);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+  } catch {
+    res.writeHead(400);
+    res.end("invalid request");
+  }
 }
 
 // Upload a base64-encoded image. Returns { id: "img_xxx" } that can be

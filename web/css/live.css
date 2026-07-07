@@ -1786,7 +1786,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   -webkit-font-smoothing: subpixel-antialiased;
 }
 
-:root.os-other { --ui-title-bar-height: 34px; padding-top: 32px; }
+:root.os-other { --ui-title-bar-height: 66px; }
 
 /* Windows custom title bar */
 .win-title-bar { display: none; }
@@ -1804,6 +1804,33 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   z-index: 100;
   border-bottom: 1px solid var(--border);
 }
+.os-other .title-bar {
+  height: 66px;
+  padding: 0.35rem 1rem;
+  padding-top: 32px;
+  gap: 0.4rem;
+  background: var(--bg2);
+}
+
+.os-other .title-bar .sidebar-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.os-other .title-bar .sidebar-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.os-other .title-bar .sidebar-view-btn {
+  width: 28px;
+  height: 26px;
+  font-size: 0.65rem;
+}
+
+
+/* Shift title-bar down to avoid overlap with custom title bar */
+
 .win-title-bar-drag {
   flex: 1;
   display: flex;
@@ -1832,12 +1859,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .win-title-bar-controls button:hover { background: var(--bg3); }
 .win-title-bar-controls button.close:hover { background: #c42b1c; color: #fff; }
 
-.os-other .title-bar {
-  height: 34px;
-  padding: 0.35rem 1rem;
-  gap: 0.4rem;
-  background: var(--bg2);
-}
+
 
 .os-other .title-bar .sidebar-btn {
   width: 26px;

@@ -2,8 +2,11 @@
 // Each panel registers: name, toggleBtnId, panelId, open(), close().
 // Optional `load` for lazy-loaded panels — called on first toggle click.
 
+import { trapFocus } from './focus-trap.js';
+
 const panels = {};
 const _hasListener = new Set();
+const _traps = new Map();
 
 const isPanelOpen = (panelId) => {
   const el = document.getElementById(panelId);

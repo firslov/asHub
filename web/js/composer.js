@@ -400,7 +400,7 @@ input?.addEventListener("keydown", (ev) => {
     ev.preventDefault();
     const query = input.value.trim();
     if (query) doSubmit(query);
-  } else if (ev.key === "ArrowUp" && !input.value && queryHistory.hasItems) {
+  } else if (ev.key === "ArrowUp" && (!input.value || queryHistory._index !== -1) && queryHistory.hasItems) {
     ev.preventDefault();
     const recalled = queryHistory.recallUp(input.value);
     if (recalled !== null) {

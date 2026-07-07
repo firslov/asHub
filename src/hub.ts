@@ -537,6 +537,10 @@ export function startHub(opts: HubOpts): http.Server {
 
 // ── Balance ──────────────────────────────────────────────────────────
 
+// Stale-while-revalidate cache for provider balances.
+let _balanceCache: Map<string, { data: unknown; ts: number }> | null = null;
+const BALANCE_CACHE_TTL = 60_000; // 60 seconds
+
 async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const params = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
   const provider = params.get("provider") ?? "";
@@ -547,9 +551,18 @@ async function getBalance(req: http.IncomingMessage, res: http.ServerResponse): 
   }
 
   const ok = (body: unknown) => {
+    if (!_balanceCache) _balanceCache = new Map();
+    _balanceCache.set(provider, { data: body, ts: Date.now() });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(body));
   };
+
+  // Serve cache immediately if available and fresh
+  const cached = _balanceCache?.get(provider);
+  if (cached && Date.now() - cached.ts < BALANCE_CACHE_TTL) {
+    ok(cached.data);
+    return;
+  }
 
   try {
     if (provider === "deepseek") {

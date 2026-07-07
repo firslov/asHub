@@ -317,6 +317,15 @@ export const setConfigOpen = async (on) => {
     if (cwdInput) {
       try { cwdInput.value = localStorage.getItem("ash.default-cwd") ?? ""; } catch {}
     }
+
+    // Display scale
+    const scaleSelect = document.getElementById("config-scale");
+    if (scaleSelect) {
+      try {
+        const saved = localStorage.getItem("ash.scale") ?? "1";
+        if (scaleSelect.querySelector(`option[value="${saved}"]`)) scaleSelect.value = saved;
+      } catch {}
+    }
   } else {
     configOverlay.setAttribute("hidden", "");
     configOverlay.classList.remove("open");
@@ -403,6 +412,13 @@ configSaveSimple?.addEventListener("click", async () => {
     } catch {}
   }
 
+  // Save display scale
+  const scaleSelect = document.getElementById("config-scale");
+  if (scaleSelect) {
+    try { localStorage.setItem("ash.scale", scaleSelect.value); } catch {}
+    applyScale(scaleSelect.value);
+  }
+
   if (!configApikey.value.trim() && originalApiKey) {
     const providerId = configProvider.value;
     config.providers[providerId].apiKey = originalApiKey;
@@ -459,6 +475,16 @@ document.getElementById("config-cwd-pick")?.addEventListener("click", async () =
     }
   } catch {}
 });
+
+// Display scale — apply on startup and on settings save
+const applyScale = (val) => {
+  const app = document.querySelector(".app");
+  if (app) app.style.zoom = val ? String(val) : "";
+};
+// Apply saved scale on load
+try {
+  applyScale(localStorage.getItem("ash.scale") ?? "1");
+} catch {}
 
 import { registerPanel } from './panel-manager.js';
 registerPanel('config', { toggleBtnId: 'config-toggle', panelId: 'config-overlay', open: () => setConfigOpen(true), close: () => setConfigOpen(false) });

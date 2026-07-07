@@ -71,6 +71,10 @@ export const appendLiveOutputChunk = (session, chunk) => {
       lo.lines.slice(-LIVE_OUTPUT_MAX_LINES));
     lo.blockEl.style.opacity = "0.8";
   }
+  // Keep buffer bounded after truncation
+  if (lo.truncated && lo.lines.length > LIVE_OUTPUT_MAX_LINES + 1) {
+    lo.lines = lo.lines.slice(-(LIVE_OUTPUT_MAX_LINES + 1));
+  }
   scheduleLiveOutput(session);
 };
 

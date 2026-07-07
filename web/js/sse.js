@@ -364,7 +364,7 @@ export const handlers = {
     finalizeLiveOutput(this);
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
-    document.dispatchEvent(new CustomEvent("sse:processing-change"));
+    if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change"));
     this._subagent = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
@@ -378,7 +378,7 @@ export const handlers = {
     append(this, renderErrorCard(p?.message ?? "", p?.detail ?? p?.stack));
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
-    document.dispatchEvent(new CustomEvent("sse:processing-change"));
+    if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change"));
     this._subagent = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();

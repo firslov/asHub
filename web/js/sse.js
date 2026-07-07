@@ -292,7 +292,7 @@ export const handlers = {
     hideUsage(this);
     setBusy(this, true);
     if (!this.state.replaying) setSessionStatus(this.id, "session-streaming");
-    document.dispatchEvent(new CustomEvent("sse:processing-change"));
+    if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change"));
     hideThinking(this);
     sweepOrphanThinking(this);
     finalizeThinking(this);

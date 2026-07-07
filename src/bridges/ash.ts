@@ -199,6 +199,8 @@ export class AshBridge extends EventEmitter implements Bridge {
   private shellQueue: string[] = [];
   private closed = false;
   private backendRegistered = false;
+  private pendingPermissions = new Map<string, { resolve: (d: { outcome: string; reason?: string }) => void; timer: ReturnType<typeof setTimeout>; kind: string }>();
+  private permissionSessionApproved = new Set<string>();
   private _contextProducerUnsubscribe: (() => void) | null = null;
   private _subagents: Map<string, SubagentEntry> = new Map();
   private shell: Shell | null = null;
@@ -518,6 +520,24 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
     }
 
     core.bus.emit("core:extensions-loaded", { names: [...builtinNames, ...userNames] });
+
+    // Permission gate for file-modifying tools
+    core.handlers.advise("tool:execute", async (next: (ctx: unknown) => Promise<unknown>, ctx) => {
+      const args = (ctx as { args?: Record<string, unknown> }).args || {};
+      const tool = (ctx as { tool?: ToolDefinition }).tool;
+      const name = (ctx as { name?: string }).name || "unknown";
+      if (!tool?.modifiesFiles) return next(ctx);
+
+      const metaPath = (args.path || args.command || "") as string;
+      const permPayload = { kind: "file-write", title: `${name}: ${metaPath}`, description: (args.description || "") as string, metadata: { filePath: args.path || metaPath, diff: args.diff } };
+      const result = await (core.bus.emitPipeAsync as (name: string, payload: unknown) => Promise<unknown>)("permission:request", permPayload) as Record<string, unknown>;
+      const decision = result?.decision as { outcome: string; reason?: string } | undefined;
+
+      if (decision?.outcome !== "approved") {
+        return { content: `Permission denied: ${decision?.reason || "denied by user"}`, exitCode: 1, isError: true };
+      }
+      return next(ctx);
+    });
 
     // Strip image_url from conversation when model lacks image support.
     // agent-sh 0.14.11 handles user-submitted images but tool results
@@ -869,10 +889,41 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       fn: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>,
     ) => void;
     onPipe("permission:request", async (payload) => {
-      this.emit("event", { name: "permission:request", payload });
-      payload.decision = { outcome: "approved" };
+      // Session-level auto-approve (user clicked "Approve All")
+      const kind = (payload.kind || "") as string;
+      if (this.permissionSessionApproved.has(kind)) {
+        payload.decision = { outcome: "approved" };
+        return payload;
+      }
+
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const p = payload as Record<string, unknown>;
+      p.requestId = requestId;
+
+      // Forward to client for user approval
+      this.emit("event", { name: "permission:request", payload: p });
+
+      // Wait for user decision (30s timeout → auto-deny)
+      const decision = await new Promise<{ outcome: string; reason?: string }>((resolve) => {
+        const timer = setTimeout(() => resolve({ outcome: "denied", reason: "timeout" }), 30_000);
+        this.pendingPermissions.set(requestId, { resolve, timer, kind });
+      });
+
+      payload.decision = decision;
       return payload;
     });
+  }
+
+  /** Called by hub when user clicks Approve/Deny/ApproveAll on permission prompt. */
+  decidePermission(requestId: string, outcome: string, sessionWide?: boolean): void {
+    const entry = this.pendingPermissions.get(requestId);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    entry.resolve({ outcome });
+    if (sessionWide && outcome === "approved") {
+      this.permissionSessionApproved.add(entry.kind);
+    }
+    this.pendingPermissions.delete(requestId);
   }
 
   ready(): Promise<void> {
@@ -1210,6 +1261,13 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       try { entry.controller?.abort(); } catch {}
     }
     (this as any)._subagents.clear();
+    // Deny any pending permission requests
+    for (const [, entry] of this.pendingPermissions) {
+      clearTimeout(entry.timer);
+      entry.resolve({ outcome: "denied", reason: "bridge closed" });
+    }
+    this.pendingPermissions.clear();
+    this.permissionSessionApproved.clear();
     try { this._contextProducerUnsubscribe?.(); } catch {}
     try { this.core?.kill(); } catch {}
     if (this.shell) {

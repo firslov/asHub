@@ -82,6 +82,9 @@ export interface Bridge {
   /** True while a turn is in flight (used to detect queueing before submit). */
   isProcessing?(): boolean;
 
+  /** Called by hub when user responds to a permission prompt. */
+  decidePermission?(requestId: string, outcome: string, sessionWide?: boolean): void;
+
   /** Tear down. */
   close(): void;
 

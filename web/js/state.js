@@ -1,5 +1,5 @@
 // @ts-check
-import { signal } from "../vendor/signals-core.js";
+import { signal, effect } from "../vendor/signals-core.js";
 import { activeSessionId } from "./store.js";
 import { activeSession } from "./session-manager.js";
 
@@ -38,27 +38,39 @@ export const state = new Proxy(/** @type {any} */ ({}), {
 const HIST_KEY = "ashub_history";
 const MAX_HISTORY = 100;
 
-const loadHistory = () => {
+const loadAll = () => {
   try {
-    return JSON.parse(localStorage.getItem(HIST_KEY)) || [];
-  } catch { return []; }
+    const raw = JSON.parse(localStorage.getItem(HIST_KEY) || "{}");
+    // Migrate from old flat array format
+    if (Array.isArray(raw)) return { _global: raw };
+    return raw || {};
+  } catch { return {}; }
 };
-
-const saveHistory = (arr) => {
+const saveAll = (all) => {
   try {
-    localStorage.setItem(HIST_KEY, JSON.stringify(arr.slice(-MAX_HISTORY)));
+    localStorage.setItem(HIST_KEY, JSON.stringify(all));
   } catch {}
 };
+const sidKey = () => activeSessionId.peek() || "_global";
 
 export const queryHistory = {
-  _items: loadHistory(),
+  _items: [],
   _index: -1,
   _savedInput: "",
+
+  /** Switch to current session's history (call on session switch). */
+  loadForSession() {
+    const all = loadAll();
+    this._items = (all[sidKey()] || []).slice(-MAX_HISTORY);
+    this.reset();
+  },
 
   push(query) {
     if (this._items.length && this._items[this._items.length - 1] === query) return;
     this._items.push(query);
-    saveHistory(this._items);
+    const all = loadAll();
+    all[sidKey()] = this._items.slice(-MAX_HISTORY);
+    saveAll(all);
     this.reset();
   },
 
@@ -90,6 +102,10 @@ export const queryHistory = {
 
   get hasItems() { return this._items.length > 0; },
 };
+
+// Load history for current session on switch
+queryHistory.loadForSession();
+effect(() => { activeSessionId.value; queryHistory.loadForSession(); });
 
 export const agentInfo = new Proxy(/** @type {any} */ ({}), {
   get(_, key) {

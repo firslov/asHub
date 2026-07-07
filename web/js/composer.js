@@ -215,8 +215,8 @@ const slashAc = attachAutocomplete({
     const t = b.trimStart();
     return t.startsWith("/") && !t.startsWith("//");
   },
-  fetcher: async (buffer) => {
-    const r = await fetch(`/${currentSessionId()}/autocomplete?buffer=${encodeURIComponent(buffer)}`);
+  fetcher: async (buffer, signal) => {
+    const r = await fetch(`/${currentSessionId()}/autocomplete?buffer=${encodeURIComponent(buffer)}`, { signal });
     if (!r.ok) return [];
     const data = await r.json();
     return data.items;

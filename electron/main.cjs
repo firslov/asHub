@@ -241,6 +241,8 @@ function createWindow() {
     backgroundColor: isDark ? "#18181c" : "#fafaf7",
     // hiddenInset: traffic-light buttons overlay content; titleBarOverlay
     // lets us style the native toolbar background through CSS.
+    // Windows: frameless + custom title bar for theme integration.
+    frame: process.platform !== "win32",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     titleBarOverlay: process.platform === "darwin" ? {
       color: isDark ? "#18181c" : "#fafaf7",

@@ -8,12 +8,16 @@ document.documentElement.classList.add(isMac ? "os-mac" : "os-other");
 if (!isMac) {
   const winBar = document.getElementById("win-title-bar");
   if (winBar) winBar.removeAttribute("hidden");
-  document.getElementById("win-title-bar")?.querySelector(".minimize")?.addEventListener(
-    "click", () => window.electronAPI?.windowMinimize?.());
-  document.getElementById("win-title-bar")?.querySelector(".maximize")?.addEventListener(
-    "click", () => window.electronAPI?.windowMaximize?.());
-  document.getElementById("win-title-bar")?.querySelector(".close")?.addEventListener(
-    "click", () => window.electronAPI?.windowClose?.());
+  const minBtn = winBar?.querySelector(".minimize");
+  const maxBtn = winBar?.querySelector(".maximize");
+  const closeBtn = winBar?.querySelector(".close");
+  minBtn?.addEventListener("click", () => window.electronAPI?.windowMinimize?.());
+  maxBtn?.addEventListener("click", () => window.electronAPI?.windowMaximize?.());
+  closeBtn?.addEventListener("click", () => window.electronAPI?.windowClose?.());
+  // Show restore icon when maximized
+  window.addEventListener("resize", () => {
+    if (maxBtn) maxBtn.textContent = window.outerWidth >= screen.availWidth ? "❐" : "□";
+  });
 }
 
 // Respect system reduced-motion preference

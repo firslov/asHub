@@ -1797,7 +1797,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .os-other .ctx-panel,
 .os-other .files-panel,
 .os-other .toolbar {
-  top: 68px;
+  top: 66px;
 }
 
 .os-other .win-title-bar {

@@ -438,6 +438,7 @@ export function startHub(opts: HubOpts): http.Server {
     if (req.method === "POST" && url === "/api/sessions/archive") return archiveSession(req, res, sessions);
     if (req.method === "POST" && url === "/api/sessions/unarchive") return unarchiveSession(req, res, sessions, opts);
     if (req.method === "POST" && url === "/api/sessions/unpin") return unpinSession(req, res);
+    if (req.method === "POST" && url === "/api/upload") return uploadImage(req, res);
     if (req.method === "GET" && url === "/api/sessions/pinned") return listPinnedSessions(res);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -1741,9 +1742,28 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   let query = "";
   let images: Array<{ data: string; mimeType: string }> | undefined;
   try {
-    const parsed = JSON.parse(body) as { query?: string; images?: Array<{ data: string; mimeType: string }> };
+    const parsed = JSON.parse(body) as {
+      query?: string;
+      images?: Array<{ data?: string; id?: string; mimeType: string }>;
+    };
     query = parsed.query ?? "";
-    if (Array.isArray(parsed.images) && parsed.images.length > 0) images = parsed.images;
+    if (Array.isArray(parsed.images) && parsed.images.length > 0) {
+      // Resolve image references (uploaded by ID) into base64 data
+      const resolved = await Promise.all(parsed.images.map(async (img) => {
+        if (img.data) return { data: img.data, mimeType: img.mimeType };
+        if (img.id) {
+          const uploadsDir = path.join(SESSIONS_DIR, "uploads");
+          const files = await fs.promises.readdir(uploadsDir);
+          const match = files.find((f) => f.startsWith(img.id!));
+          if (match) {
+            const buf = await fs.promises.readFile(path.join(uploadsDir, match));
+            return { data: buf.toString("base64"), mimeType: img.mimeType };
+          }
+        }
+        throw new Error("invalid image ref");
+      }));
+      images = resolved;
+    }
   } catch {}
   if (!query.trim()) { res.statusCode = 400; res.end("empty"); return; }
 
@@ -2784,6 +2804,32 @@ async function unpinSession(req: http.IncomingMessage, res: http.ServerResponse)
   await savePinnedSessions(pinned);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
+}
+
+// Upload a base64-encoded image. Returns { id: "img_xxx" } that can be
+// referenced in the submit body's images array as { id: "...", mimeType: "..." }.
+async function uploadImage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  try {
+    const body = await readBody(req);
+    const { data, mimeType } = JSON.parse(body) as { data?: string; mimeType?: string };
+    if (!data || !mimeType) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "missing data or mimeType" }));
+      return;
+    }
+    const uploadsDir = path.join(SESSIONS_DIR, "uploads");
+    await fs.promises.mkdir(uploadsDir, { recursive: true });
+    const id = `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const ext = mimeType.split("/")[1] || "png";
+    const filePath = path.join(uploadsDir, `${id}.${ext}`);
+    const buf = Buffer.from(data, "base64");
+    await fs.promises.writeFile(filePath, buf);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ id, path: filePath }));
+  } catch (err) {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+  }
 }
 
 async function listPinnedSessions(res: http.ServerResponse): Promise<void> {

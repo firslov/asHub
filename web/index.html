@@ -484,16 +484,6 @@
               </div>
               <span class="config-hint" id="config-model-hint" data-i18n="model.hint">Type to search the OpenRouter catalog</span>
             </div>
-            <div class="config-field" id="config-cwd-field">
-              <label class="config-label" for="config-default-cwd" data-i18n="default.cwd">Default Directory</label>
-              <div class="config-cwd-wrap">
-                <input id="config-default-cwd" class="config-input" type="text" spellcheck="false" data-i18n-placeholder="default.cwd.placeholder" placeholder="Home directory" autocomplete="off" />
-                <button class="bar-btn icon" id="config-cwd-pick" type="button" data-i18n-title="browse" title="Browse…">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                </button>
-              </div>
-              <span class="config-hint">~ = home directory</span>
-            </div>
             <div class="config-field">
               <label class="config-label" for="config-apikey" data-i18n="api.key">API Key</label>
               <div class="config-apikey-wrap">
@@ -506,6 +496,16 @@
                 </button>
               </div>
               <span class="config-hint" data-i18n="apikey.hint">Your API key is stored locally in ~/.agent-sh/settings.json</span>
+            </div>
+            <div class="config-field" id="config-cwd-field">
+              <label class="config-label" for="config-default-cwd" data-i18n="default.cwd">Default Directory</label>
+              <div class="config-cwd-wrap">
+                <input id="config-default-cwd" class="config-input" type="text" spellcheck="false" data-i18n-placeholder="default.cwd.placeholder" placeholder="Home directory" autocomplete="off" />
+                <button class="bar-btn icon" id="config-cwd-pick" type="button" data-i18n-title="browse" title="Browse…">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                </button>
+              </div>
+              <span class="config-hint">~ = home directory</span>
             </div>
           </div>
 

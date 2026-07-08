@@ -1669,7 +1669,6 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
   // Flush any pending meta save before closing
   const metaTimer = _metaTimers.get(id);
   if (metaTimer) { clearTimeout(metaTimer); _metaTimers.delete(id); }
-  if (s) saveSessionMeta(s).catch(() => {});
   const lock = _writeLocks.get(id);
   _writeLocks.delete(id);
   void (async () => {

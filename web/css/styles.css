@@ -1300,3 +1300,21 @@ footer {
   font-size: 0.9em;
   opacity: 0.6;
 }
+
+/* ── Windows frameless: reserve space for window controls ─────── */
+
+[data-platform="win32"] nav {
+  padding-top: 2.5rem;
+  -webkit-app-region: drag;
+}
+[data-platform="win32"] .sidebar {
+  padding-top: 2.5rem;
+}
+[data-platform="win32"] #session-tabs {
+  top: 0.5rem;
+}
+[data-platform="win32"] nav button,
+[data-platform="win32"] nav a,
+[data-platform="win32"] #session-tabs button {
+  -webkit-app-region: no-drag;
+}

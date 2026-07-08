@@ -1318,6 +1318,14 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
     return (this.core?.handlers.call("subagent:get-models") ?? {}) as Record<string, string>;
   }
 
+  /** Relay a hub-side event into the agent's internal bus so subsystems
+   *  that subscribe to lifecycle events (e.g. shell:cwd-change) stay in
+   *  sync when the user changes settings through the UI. */
+  relayEvent(name: string, payload: unknown): void {
+    if (!this.core) return;
+    (this.core.bus.emit as (n: string, p: unknown) => void)(name, payload);
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;

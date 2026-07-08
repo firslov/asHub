@@ -91,6 +91,11 @@ export interface Bridge {
   /** Tear down. */
   close(): void;
 
+  /** Relay an event into the bridge's internal agent bus, so agents
+   *  that subscribe to lifecycle events (e.g. shell:cwd-change) see
+   *  changes made by the hub UI. */
+  relayEvent?(name: string, payload: unknown): void;
+
   /** Snapshot the current message array. May throw if backend doesn't support it. */
   snapshot(): Promise<ContextSnapshot>;
 

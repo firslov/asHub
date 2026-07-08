@@ -2156,13 +2156,9 @@ async function setCwdEndpoint(req: http.IncomingMessage, res: http.ServerRespons
     meta.cwd = cwd;
     await fs.promises.writeFile(metaPath, JSON.stringify(meta), "utf-8");
   } catch {}
-  // Notify the bridge so liveCwd and system prompt stay in sync
-  pushFrame(session, "shell:cwd-change", sseFrame({
-    source: session.id,
-    ts: Date.now(),
-    id: `hub:${session.id}:cwd`,
-    name: "shell:cwd-change",
-  }, { cwd }));
+  // Relay into the agent's internal bus so subsystems (cwd handler,
+  // system prompt builder, SSE clients) see the change.
+  try { session.bridge?.relayEvent?.("shell:cwd-change", { cwd }); } catch {}
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }
@@ -2763,6 +2759,20 @@ async function installSkill(req: http.IncomingMessage, res: http.ServerResponse)
 
   try {
     await fs.promises.mkdir(skillDir, { recursive: true });
+
+    // Check git availability on first install
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile("git", ["--version"], { timeout: 5_000 }, (err) => {
+          err ? reject(err) : resolve();
+        });
+      });
+    } catch {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "Git is not available. Please install Git and add it to your PATH." }));
+      return;
+    }
+
     if (fs.existsSync(dest)) {
       await new Promise<void>((resolve, reject) => {
         execFile("git", ["-C", dest, "pull", "--ff-only"], { timeout: 30_000 }, (err) => {

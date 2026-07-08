@@ -155,11 +155,13 @@ const renderSkills = (query) => {
             refreshInstalled();
           } else {
             btn.textContent = "❌";
-            setTimeout(() => { btn.textContent = t("skills.install"); }, 2000);
+            btn.title = d?.error || "Install failed";
+            setTimeout(() => { btn.textContent = t("skills.install"); btn.title = ""; }, 4000);
           }
         } catch {
           btn.textContent = "❌";
-          setTimeout(() => { btn.textContent = t("skills.install"); }, 2000);
+          btn.title = "Network error";
+          setTimeout(() => { btn.textContent = t("skills.install"); btn.title = ""; }, 4000);
         }
       }
     });

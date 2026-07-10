@@ -310,11 +310,21 @@ function persistReplayFile(sessionId: string, frames: string[]): Promise<void> {
 }
 
 async function deleteSessionFiles(id: string): Promise<void> {
-  try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.meta.json`)); } catch {}
-  try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.replay.jsonl`)); } catch {}
-  try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.messages.json`)); } catch {}
-  try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.jsonl`)); } catch {}
-  try { await fs.promises.unlink(path.join(SESSIONS_DIR, `${id}.jsonl.leaf`)); } catch {}
+  const files = [".meta.json", ".replay.jsonl", ".messages.json", ".jsonl", ".jsonl.leaf"];
+  await Promise.all(files.map((ext) =>
+    fs.promises.unlink(path.join(SESSIONS_DIR, `${id}${ext}`)).catch(() => {})
+  ));
+
+  // Clean up uploaded images that are prefixed with this session id.
+  const uploadsDir = path.join(SESSIONS_DIR, "uploads");
+  try {
+    const uploads = await fs.promises.readdir(uploadsDir);
+    await Promise.all(uploads.map((name) => {
+      if (name.startsWith(id)) {
+        return fs.promises.unlink(path.join(uploadsDir, name)).catch(() => {});
+      }
+    }));
+  } catch {}
 }
 
 interface PersistedSession {
@@ -700,15 +710,17 @@ async function getModels(
   res: http.ServerResponse,
   sessions: Map<string, Session>,
 ): Promise<void> {
-  // Serve from server-side cache if fresh (avoids blocking the UI on every open).
-  if (_serverModelCache && Date.now() - _serverModelCache.ts < SERVER_MODEL_CACHE_TTL) {
+  const raw = req.url!.split("/api/models")[1] ?? "";
+  const single = raw.startsWith("/") ? raw.slice(1).split("?")[0] : "";
+
+  // Serve from server-side cache if fresh and this is the full list request.
+  // Single-provider requests have a different response shape and must not be
+  // served from the full-list cache.
+  if (!single && _serverModelCache && Date.now() - _serverModelCache.ts < SERVER_MODEL_CACHE_TTL) {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(_serverModelCache));
     return;
   }
-
-  const raw = req.url!.split("/api/models")[1] ?? "";
-  const single = raw.startsWith("/") ? raw.slice(1).split("?")[0] : "";
 
   try {
     // Bridge models are authoritative — collect them first, then
@@ -3000,19 +3012,38 @@ async function decidePermission(req: http.IncomingMessage, res: http.ServerRespo
 // Upload a base64-encoded image. Returns { id: "img_xxx" } that can be
 // referenced in the submit body's images array as { id: "...", mimeType: "..." }.
 async function uploadImage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  let body: string;
   try {
-    const body = await readBody(req);
-    const { data, mimeType } = JSON.parse(body) as { data?: string; mimeType?: string };
-    if (!data || !mimeType) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "missing data or mimeType" }));
-      return;
-    }
-    const uploadsDir = path.join(SESSIONS_DIR, "uploads");
-    await fs.promises.mkdir(uploadsDir, { recursive: true });
-    const id = `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    const ext = mimeType.split("/")[1] || "png";
-    const filePath = path.join(uploadsDir, `${id}.${ext}`);
+    body = await readBody(req);
+  } catch (err) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "failed to read body" }));
+    return;
+  }
+
+  let parsed: { data?: string; mimeType?: string; sessionId?: string };
+  try {
+    parsed = JSON.parse(body);
+  } catch (err) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: `invalid JSON: ${err instanceof Error ? err.message : err}` }));
+    return;
+  }
+
+  const { data, mimeType, sessionId } = parsed;
+  if (!data || !mimeType) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "missing data or mimeType" }));
+    return;
+  }
+
+  const uploadsDir = path.join(SESSIONS_DIR, "uploads");
+  await fs.promises.mkdir(uploadsDir, { recursive: true });
+  const baseId = `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = sessionId ? `${sessionId}_${baseId}` : baseId;
+  const ext = mimeType.split("/")[1] || "png";
+  const filePath = path.join(uploadsDir, `${id}.${ext}`);
+  try {
     const buf = Buffer.from(data, "base64");
     await fs.promises.writeFile(filePath, buf);
     res.writeHead(200, { "Content-Type": "application/json" });

@@ -286,7 +286,7 @@ const doSubmit = async (query) => {
             const r = await fetch("/api/upload", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(img),
+              body: JSON.stringify({ ...img, sessionId: sid }),
             });
             if (!r.ok) throw new Error("upload failed");
             const { id } = await r.json();

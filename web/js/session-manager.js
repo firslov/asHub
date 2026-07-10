@@ -166,7 +166,13 @@ const reopen = () => {
     if (id > lastSeenId) lastSeenId = id;
     let frame;
     try { frame = JSON.parse(ev.data); } catch { return; }
-    const target = sessions.get(frame?.meta?.source);
+    const source = frame?.meta?.source;
+    let target = sessions.get(source);
+    if (!target && source) {
+      // Preloaded view elements may exist in the DOM before registerSession runs.
+      // This lets error/replay-done frames reach a session that failed to restore.
+      target = document.querySelector(`session-view[session-id="${source}"], terminal-view[session-id="${source}"]`);
+    }
     if (!target) return;
     target.receiveFrame?.(frame);
   };

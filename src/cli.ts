@@ -84,6 +84,26 @@ Endpoints:
 `);
 }
 
+/** Split a command string respecting double quotes. */
+function splitCommand(input: string): { command: string; args: string[] } {
+  const args: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === ' ' && !inQuotes) {
+      if (current) { args.push(current); current = ""; }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) args.push(current);
+  const command = args.shift() ?? "";
+  return { command, args };
+}
+
 function makeFactory(args: Args): BridgeFactory {
   if (args.backend === "ash") {
     return (opts) => {
@@ -91,12 +111,12 @@ function makeFactory(args: Args): BridgeFactory {
       return new AshBridge({ ...opts, model: opts.model ?? args.model, provider: opts.provider ?? args.provider });
     };
   }
-  const [command, ...spawnArgs] = args.cmd.split(/\s+/);
+  const { command, args: spawnArgs } = splitCommand(args.cmd);
   return (opts) => {
     if (opts.kind === "terminal") return new TerminalBridge(opts);
     return new AcpBridge({
       ...opts,
-      extra: { command: command!, args: spawnArgs },
+      extra: { command, args: spawnArgs },
     });
   };
 }

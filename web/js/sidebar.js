@@ -205,7 +205,8 @@ const renderSessionItem = (s, isPinned = false) => {
   });
   const title = escape(hasTitle ? s.title : t("untitled"));
   const cwdText = s.cwd ? `<span class="session-cwd" title="${escape(s.cwd)}">${escape(shortenCwd(s.cwd))}</span>` : "";
-  const timeText = s.startedAt ? `<span class="session-time" title="${escape(new Date(s.startedAt).toLocaleString())}">${escape(relativeTime(s.startedAt))}</span>` : "";
+  const ts = s.lastModified ?? s.startedAt;
+  const timeText = ts ? `<span class="session-time" title="${escape(new Date(ts).toLocaleString())}">${escape(relativeTime(ts))}</span>` : "";
   a.innerHTML = `<span class="session-title" title="${title}">${title}</span><span class="session-meta">${cwdText}${timeText}</span>`;
   li.appendChild(a);
 
@@ -311,8 +312,32 @@ const renderSessionItem = (s, isPinned = false) => {
         body: JSON.stringify({ id: s.instanceId }),
       });
     } catch {}
-    if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
+
+    // Capture before remove() since unregisterSession clears activeSessionId.
+    const wasActive = s.instanceId === activeSessionId.peek();
+    const inTabs = openTabs.peek().includes(s.instanceId);
+    if (inTabs) closeTab(s.instanceId);
     sessions.get(s.instanceId)?.remove();
+
+    // closeTab already handles switching for open-tab sessions.
+    // Navigate here only when the archived session was active but not in tabs.
+    if (wasActive && !inTabs) {
+      let nextId = null;
+      for (const id of sessions.keys()) {
+        if (id && id !== s.instanceId) { nextId = id; break; }
+      }
+      if (!nextId) {
+        for (const li of sessionList.querySelectorAll("li[data-session-id]")) {
+          const id = li.dataset.sessionId;
+          if (id && id !== s.instanceId) { nextId = id; break; }
+        }
+      }
+      if (nextId) {
+        switchTo(nextId);
+      } else {
+        window.location.href = "/";
+      }
+    }
     renderSessions();
   });
   li.appendChild(archiveBtn);
@@ -381,7 +406,8 @@ const renderSessionItem = (s, isPinned = false) => {
       const hasTitle = s.title && s.title !== s.instanceId;
       const title = escape(hasTitle ? s.title : t("untitled"));
       const cwdText = s.cwd ? '<span class="session-cwd" title="' + escape(s.cwd) + '">' + escape(shortenCwd(s.cwd)) + '</span>' : "";
-      const timeText = s.startedAt ? '<span class="session-time" title="' + escape(new Date(s.startedAt).toLocaleString()) + '">' + escape(relativeTime(s.startedAt)) + '</span>' : "";
+      const ts = s.lastModified ?? s.startedAt;
+      const timeText = ts ? '<span class="session-time" title="' + escape(new Date(ts).toLocaleString()) + '">' + escape(relativeTime(ts)) + '</span>' : "";
       a.innerHTML = '<span class="session-title" title="' + title + '">' + title + '</span><span class="session-meta">' + cwdText + timeText + '</span>';
     }
     li.className = "";
@@ -403,7 +429,7 @@ const renderSessions = async (force = false) => {
   try {
     const list = await (await fetch("/sessions")).json();
     const fullHash = JSON.stringify(list.map((s) => [
-      s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread, s.kind ?? "agent",
+      s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt, s.kind ?? "agent",
     ]));
     if (!force && fullHash === fullHashCache) return;
     fullHashCache = fullHash;
@@ -424,7 +450,7 @@ const renderSessions = async (force = false) => {
     const pinIds = pinnedIds.peek();
 
     const hash = JSON.stringify(agentList.map((s) => [
-      s.instanceId, s.title, s.cwd, s.startedAt, s.isProcessing, s.hasUnread,
+      s.instanceId, s.title, s.cwd, s.hasUnread,
       pinIds.has(s.instanceId),
     ]));
     if (hash === sessionsHash) return;
@@ -452,7 +478,7 @@ const renderSessions = async (force = false) => {
       if (pinIds.has(s.instanceId)) {
         pinnedItems.push(s);
       } else {
-        const k = bucketKey(s.startedAt);
+        const k = bucketKey(s.lastModified ?? s.startedAt);
         if (!restByBucket.has(k)) restByBucket.set(k, []);
         restByBucket.get(k).push(s);
       }

@@ -250,7 +250,39 @@ function persistReplayFrame(sessionId: string, frame: string): void {
   }
 }
 
-export async function shutdownHub(): Promise<void> {
+export async function shutdownHub(server?: http.Server, sessions?: Map<string, Session>): Promise<void> {
+  // 1. Close all SSE long-lived connections so server.close() doesn't hang.
+  if (sessions) {
+    for (const s of sessions.values()) {
+      for (const res of s.sseClients) {
+        try { res.end(); } catch {}
+      }
+      s.sseClients.clear();
+    }
+  }
+
+  // 2. Stop accepting new connections with a hard timeout.
+  if (server) {
+    await Promise.race([
+      new Promise<void>((resolve) => server.close((err) => {
+        if (err) console.error("[hub] server close error:", err);
+        resolve();
+      })),
+      new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  }
+
+  // 3. Gracefully close all bridges.
+  if (sessions) {
+    await Promise.allSettled(
+      Array.from(sessions.values()).map(async (s) => {
+        try { s.bridge?.cancel?.(); } catch {}
+        try { await s.bridge?.close?.(); } catch {}
+      })
+    );
+  }
+
+  // 4. Flush all pending writes.
   for (const id of Array.from(_writeBufs.keys())) {
     _flushBuf(id);
   }
@@ -431,7 +463,7 @@ const MIME: Record<string, string> = {
   ".ttf": "font/ttf",
 };
 
-export function startHub(opts: HubOpts): http.Server {
+export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => Promise<void> } {
   const sessions = new Map<string, Session>();
 
   const server = http.createServer(async (req, res) => {
@@ -550,7 +582,10 @@ export function startHub(opts: HubOpts): http.Server {
     });
   });
 
-  return server;
+  return {
+    server,
+    shutdown: () => shutdownHub(server, sessions),
+  };
 }
 
 // ── Balance ──────────────────────────────────────────────────────────
@@ -833,7 +868,7 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
     await fs.promises.writeFile(fp, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
     try {
       const { reloadSettings } = await import("agent-sh/settings");
-      reloadSettings();
+      await reloadSettings();
       invalidateModelProviders();
       for (const s of sessions.values()) { s.bridge?.reloadProviders?.(); }
       invalidateServerModelCache();
@@ -893,7 +928,7 @@ async function setAutoApprove(req: http.IncomingMessage, res: http.ServerRespons
 
 function reloadConfig(res: http.ServerResponse): void {
   import("agent-sh/settings")
-    .then((m) => { m.reloadSettings(); invalidateModelProviders(); invalidateServerModelCache(); })
+    .then(async (m) => { await m.reloadSettings(); invalidateModelProviders(); invalidateServerModelCache(); })
     .catch(() => {});
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
@@ -1405,7 +1440,7 @@ async function generateTitleAsync(session: Session): Promise<void> {
 
 function listSessions(res: http.ServerResponse, sessions: Map<string, Session>): void {
   const list = Array.from(sessions.values())
-    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
+    .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0))
     .map((s) => ({
       instanceId: s.id,
       title: s.title,
@@ -1626,9 +1661,11 @@ async function listDirs(res: http.ServerResponse, prefix: string): Promise<void>
 async function listFiles(res: http.ServerResponse, session: Session, subdir?: string): Promise<void> {
   let targetDir = session.cwd;
   if (subdir) {
+    const root = path.resolve(session.cwd);
     const resolved = path.resolve(session.cwd, subdir);
-    // Prevent directory traversal
-    if (!resolved.startsWith(path.resolve(session.cwd) + path.sep) && resolved !== path.resolve(session.cwd)) {
+    // Prevent directory traversal — using relative() is cross-platform safe.
+    const rel = path.relative(root, resolved);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
       res.statusCode = 403;
       res.end("forbidden");
       return;
@@ -1742,18 +1779,36 @@ async function openSseMulti(
 
   for (const { id, tail } of subs) {
     const session = sessions.get(id);
-    if (!session) continue;
+    if (!session) {
+      const errFrame = `id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: "Session not found." } })}\n\n`;
+      try { res.write(errFrame); } catch {}
+      const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
+      try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch {}
+      continue;
+    }
     // Send keepalive before potentially-slow _ensureBridge so the
     // client's 500ms safety timer is reset and doesn't fire prematurely.
     if (tail > 0) {
       try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "hub:replay-starting" } })}\n\n`); } catch { return; }
     }
     // Lazily create bridge + restore session data if needed.
-    await session._ensureBridge?.();
+    let ensureFailed = false;
+    try {
+      await session._ensureBridge?.();
+    } catch (err) {
+      ensureFailed = true;
+      console.error(`[hub] _ensureBridge failed for ${id}:`, err);
+      const errFrame = `id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: "Failed to restore session data." } })}\n\n`;
+      try { res.write(errFrame); } catch {}
+      const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
+      try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
+      continue; // don't replay or subscribe — session is broken
+    }
     if (tail > 0) {
       session.hasUnread = false;
-      for (const line of session.replay.slice(-tail)) {
-        try { res.write(line); } catch { return; }
+      const start = tail === Infinity ? 0 : Math.max(0, session.replay.length - tail);
+      for (let i = start; i < session.replay.length; i++) {
+        try { res.write(session.replay[i]); } catch { return; }
       }
       if (session.lastAgentInfo) {
         const meta = { source: id, ts: Date.now(), id: `hub:${id}:reemit:agent:info`, name: "agent:info" };
@@ -1762,6 +1817,7 @@ async function openSseMulti(
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
       try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
     } else if (since > 0) {
+      session.hasUnread = false;
       for (const line of session.replay) {
         const m = line.match(frameIdRe);
         if (m && Number(m[1]) > since) {
@@ -1817,14 +1873,20 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   const body = await readBody(req);
   let query = "";
   let images: Array<{ data: string; mimeType: string }> | undefined;
+
+  // Parse JSON body
+  let parsed: { query?: string; images?: Array<{ data?: string; id?: string; mimeType: string }> };
   try {
-    const parsed = JSON.parse(body) as {
-      query?: string;
-      images?: Array<{ data?: string; id?: string; mimeType: string }>;
-    };
-    query = parsed.query ?? "";
-    if (Array.isArray(parsed.images) && parsed.images.length > 0) {
-      // Resolve image references (uploaded by ID) into base64 data
+    parsed = JSON.parse(body);
+  } catch (err) {
+    res.statusCode = 400;
+    res.end(`invalid JSON: ${err instanceof Error ? err.message : err}`);
+    return;
+  }
+
+  query = parsed.query ?? "";
+  if (Array.isArray(parsed.images) && parsed.images.length > 0) {
+    try {
       const resolved = await Promise.all(parsed.images.map(async (img) => {
         if (img.data) return { data: img.data, mimeType: img.mimeType };
         if (img.id) {
@@ -1839,9 +1901,14 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
         throw new Error("invalid image ref");
       }));
       images = resolved;
+    } catch (err) {
+      res.statusCode = 400;
+      res.end(`invalid images: ${err instanceof Error ? err.message : err}`);
+      return;
     }
-  } catch {}
-  if (!query.trim()) { res.statusCode = 400; res.end("empty"); return; }
+  }
+
+  if (!query.trim() && (!images || images.length === 0)) { res.statusCode = 400; res.end("empty"); return; }
 
   const meta = (name: string) => ({
     source: session.id,
@@ -2904,9 +2971,21 @@ async function decidePermission(req: http.IncomingMessage, res: http.ServerRespo
       return;
     }
     const session = sessions.get(String(sessionId));
-    if (!session || !session.bridge.decidePermission) {
+    if (!session) {
       res.writeHead(404);
       res.end("session not found");
+      return;
+    }
+    // Ensure bridge is created — restored sessions are lazy-loaded.
+    try { await session._ensureBridge?.(); } catch (err) {
+      console.error(`[hub] decidePermission _ensureBridge failed:`, err);
+      res.writeHead(500);
+      res.end("failed to restore session");
+      return;
+    }
+    if (!session.bridge?.decidePermission) {
+      res.writeHead(404);
+      res.end("permission not supported");
       return;
     }
     session.bridge.decidePermission(String(requestId), String(outcome), !!sessionWide);

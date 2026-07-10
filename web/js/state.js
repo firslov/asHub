@@ -24,12 +24,15 @@ export const STATE_DEFAULTS = Object.freeze({
   replaying: false,
 });
 
+// TypeScript doesn't know the vendored computed signal has .peek(); cast at call site.
+const activeSessionView = /** @type {any} */ (activeSession);
+
 export const state = new Proxy(/** @type {any} */ ({}), {
   get(_, key) {
-    return activeSession.peek()?.state?.[key];
+    return activeSessionView.peek()?.state?.[key];
   },
   set(_, key, value) {
-    const s = activeSession.peek();
+    const s = activeSessionView.peek();
     if (s) s.state[key] = value;
     return true;
   },
@@ -52,6 +55,7 @@ const saveAll = (all) => {
   } catch {}
 };
 const sidKey = () => activeSessionId.peek() || "_global";
+
 
 export const queryHistory = {
   _items: [],
@@ -109,10 +113,10 @@ effect(() => { activeSessionId.value; queryHistory.loadForSession(); });
 
 export const agentInfo = new Proxy(/** @type {any} */ ({}), {
   get(_, key) {
-    return activeSession.peek()?.agentInfo?.[key] ?? "";
+    return activeSessionView.peek()?.agentInfo?.[key] ?? "";
   },
   set(_, key, value) {
-    const s = activeSession.peek();
+    const s = activeSessionView.peek();
     if (s) s.agentInfo[key] = value;
     return true;
   },
@@ -124,7 +128,7 @@ const cancelBtn = document.getElementById("cancel-turn");
 // Background sessions update their own state; chrome reflects active only.
 export const setBusy = (session, b) => {
   if (session) session.state.isProcessing = b;
-  if (session === activeSession.peek()) {
+  if (session === activeSessionView.peek()) {
     if (spinner) spinner.hidden = !b;
     if (cancelBtn) cancelBtn.hidden = !b;
   }

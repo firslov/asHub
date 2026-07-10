@@ -44,7 +44,7 @@ const _structKey = (blocks) => {
   for (const b of blocks) {
     s += "|" + b.tagName;
     // Distinguish code-block languages so Python→JavaScript IS structural.
-    if (b.classList?.contains("language-")) s += ":" + b.className;
+    if (b.className && b.className.includes("language-")) s += ":" + b.className;
   }
   return s;
 };
@@ -92,13 +92,11 @@ const flushReply = (session) => {
       if (i < existing.length) {
         if (existing[i].innerHTML !== newBlocks[i].innerHTML) {
           existing[i].innerHTML = newBlocks[i].innerHTML;
-
-          // When a code block's language is finally resolved by highlight.js
-          // on the first full parse, propagate the class to the live block.
-          if (newBlocks[i].classList?.contains("language-") &&
-              !existing[i].classList.contains("language-")) {
-            existing[i].className = newBlocks[i].className;
-          }
+        }
+        // When a code block's language is finally resolved by the parser
+        // (e.g. ```python), propagate the class to the live block.
+        if (newBlocks[i].className && newBlocks[i].className !== existing[i].className) {
+          existing[i].className = newBlocks[i].className;
         }
       } else {
         r.current.appendChild(newBlocks[i]);
@@ -160,6 +158,7 @@ export const appendReplyChunk = (session, delta) => {
     r.current.dataset.turn = String(session.state.currentTurn);
     r._renderedLen = 0;
     r._renderedBlockCount = 0;
+    r._lastStructKey = "";
     append(session, r.current);
   }
   r.text += stripAnsi(delta);
@@ -174,6 +173,7 @@ export const fillFinalReply = (session, text) => {
   if (full === r.text) return;
   // Final payload wins over accumulated chunks — heals gaps from SSE reopens.
   r.text = full;
+  r._lastStructKey = "";
   r.current.replaceChildren();
   const tmp = document.createElement("div");
   tmp.innerHTML = mdToHtml(r.text);

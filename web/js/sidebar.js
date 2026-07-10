@@ -450,7 +450,7 @@ const renderSessions = async (force = false) => {
     const pinIds = pinnedIds.peek();
 
     const hash = JSON.stringify(agentList.map((s) => [
-      s.instanceId, s.title, s.cwd, s.hasUnread,
+      s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread,
       pinIds.has(s.instanceId),
     ]));
     if (hash === sessionsHash) return;

@@ -28,16 +28,35 @@ export const addReplyCopyBtn = (el, text) => {
 
 const HIGHLIGHT_DEBOUNCE_MS = 100; // re-highlight at most 10×/second during streaming
 
+/**
+ * Adaptive throttle: longer text benefits from longer intervals since
+ * each parse costs more.  50ms for short text keeps the rendering snappy;
+ * stepping up for longer text keeps the main thread responsive.
+ */
+const throttleFor = (textLen) => {
+  if (textLen < 5000) return 50;
+  if (textLen < 10000) return 100;
+  return 200;
+};
+
+const _structKey = (blocks) => {
+  let s = String(blocks.length);
+  for (const b of blocks) {
+    s += "|" + b.tagName;
+    // Distinguish code-block languages so Python→JavaScript IS structural.
+    if (b.classList?.contains("language-")) s += ":" + b.className;
+  }
+  return s;
+};
+
 const flushReply = (session) => {
   const r = session?.reply;
   if (!r) return;
   if (!r.current) { r.pendingChunkRender = false; return; }
 
-  // Full render is the source of truth — guarantees correct Markdown.
-  // Skip if parsed recently — throttle full Markdown parse to at most
-  // every 50ms during streaming to reduce main-thread pressure.
+  const throttleMs = throttleFor(r.text.length);
   const perfNow = performance.now();
-  if (r._lastParseTime && perfNow - r._lastParseTime < 50) {
+  if (r._lastParseTime && perfNow - r._lastParseTime < throttleMs) {
     if (!r._throttleFlushScheduled) {
       r._throttleFlushScheduled = true;
       requestAnimationFrame(() => {
@@ -52,6 +71,8 @@ const flushReply = (session) => {
   r.pendingChunkRender = false;
   // Skip if text hasn't changed since last parse (common during rapid chunks).
   if (r.text === r._lastParsedText) return;
+
+  r._lastParseTime = perfNow;
   r._lastParsedText = r.text;
 
   const tmp = document.createElement("div");
@@ -59,29 +80,54 @@ const flushReply = (session) => {
 
   const newBlocks = Array.from(tmp.children);
   const prevCount = r._renderedBlockCount ?? 0;
-  const fullLen = r.text.length;
+  const newStructKey = _structKey(newBlocks);
 
-  if (prevCount === 0 || newBlocks.length < prevCount) {
-    // First render, or block count decreased (e.g. unclosed code fence
-    // turned into a real <pre> — structural change). Full replace.
-    r.current.replaceChildren();
-    while (tmp.firstChild) r.current.appendChild(tmp.firstChild);
-  } else {
-    // Remove the last previously-rendered block and anything beyond it
-    // (the last block's type/content may have changed). Keep earlier
-    // blocks as-is — they are Markdown-immutable.
-    const keepCount = Math.max(0, prevCount - 1);
-    while (r.current.children.length > keepCount) {
-      r.current.lastChild?.remove();
+  if (newStructKey === r._lastStructKey && prevCount > 0) {
+    // ── Fast path: block structure unchanged ────────────────────────
+    // The same blocks exist as before — only their inner content grew.
+    // Update innerHTML of each block in-place, then append any new ones.
+    // This avoids DOM node removal / creation during streaming.
+    const existing = r.current.children;
+    for (let i = 0; i < newBlocks.length; i++) {
+      if (i < existing.length) {
+        if (existing[i].innerHTML !== newBlocks[i].innerHTML) {
+          existing[i].innerHTML = newBlocks[i].innerHTML;
+
+          // When a code block's language is finally resolved by highlight.js
+          // on the first full parse, propagate the class to the live block.
+          if (newBlocks[i].classList?.contains("language-") &&
+              !existing[i].classList.contains("language-")) {
+            existing[i].className = newBlocks[i].className;
+          }
+        }
+      } else {
+        r.current.appendChild(newBlocks[i]);
+      }
     }
-    // Append fresh blocks from keepCount to end.
-    for (let i = keepCount; i < newBlocks.length; i++) {
-      r.current.appendChild(newBlocks[i]);
+  } else {
+    // ── Slow path: structure changed / first render ────────────────
+    r._lastStructKey = newStructKey;
+
+    if (prevCount === 0 || newBlocks.length < prevCount) {
+      // First render, or block count decreased (e.g. unclosed code fence
+      // turned into a real <pre> — structural change). Full replace.
+      r.current.replaceChildren();
+      while (tmp.firstChild) r.current.appendChild(tmp.firstChild);
+    } else {
+      // Block-level incremental: keep earlier blocks (Markdown-immutable),
+      // replace only the trailing block(s) whose content may have changed.
+      const keepCount = Math.max(0, prevCount - 1);
+      while (r.current.children.length > keepCount) {
+        r.current.lastChild?.remove();
+      }
+      for (let i = keepCount; i < newBlocks.length; i++) {
+        r.current.appendChild(newBlocks[i]);
+      }
     }
   }
 
   r._renderedBlockCount = newBlocks.length;
-  r._renderedLen = fullLen;
+  r._renderedLen = r.text.length;
 
   // Debounce syntax highlighting & math rendering during live streaming.
   const now = Date.now();

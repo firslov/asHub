@@ -108,9 +108,9 @@ const flushReply = (session) => {
 
     if (prevCount === 0 || newBlocks.length < prevCount) {
       // First render, or block count decreased (e.g. unclosed code fence
-      // turned into a real <pre> — structural change). Full replace.
-      r.current.replaceChildren();
-      while (tmp.firstChild) r.current.appendChild(tmp.firstChild);
+      // turned into a real <pre> — structural change). Full replace
+      // in a single operation to avoid layout thrashing.
+      r.current.replaceChildren(...newBlocks);
     } else {
       // Block-level incremental: keep earlier blocks (Markdown-immutable),
       // replace only the trailing block(s) whose content may have changed.

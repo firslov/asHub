@@ -1,5 +1,8 @@
 const jumpToBottom = (streamEl) => {
-  streamEl.scrollTo({ top: streamEl.scrollHeight, behavior: "instant" });
+  // Use scrollTop property (CSSOM) instead of scrollTo() — the property
+  // assignment batches with DOM mutations in the same frame, avoiding a
+  // visible 1-frame flicker when content height changes during streaming.
+  streamEl.scrollTop = streamEl.scrollHeight;
 };
 
 /** Force-scroll to bottom immediately (used after replay flush). */

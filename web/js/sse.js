@@ -591,13 +591,15 @@ export const handlers = {
       }
       if (remaining <= 0) {
         clearInterval(timer);
-        card.remove();
+        card.querySelectorAll(".permission-btn").forEach((b) => b.disabled = true);
+        setTimeout(() => card.remove(), 300);
       }
     };
     const timer = setInterval(tick, 1000);
     card._timer = timer;
 
     const decide = (outcome, sessionWide) => {
+      if (!card.isConnected) return; // expired
       clearInterval(timer);
       card.classList.add("decided");
       card.classList.add(outcome === "approved" ? "allowed" : "blocked");

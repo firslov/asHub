@@ -1852,23 +1852,27 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Version label ─────────────────────────────────────────────────── */
 .version-label {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.66rem;
+  font-size: 0.68rem;
   font-weight: 420;
-  color: var(--text-faint);
-  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
   margin-left: auto;
   padding: 0.15rem 0.55rem;
   border-radius: var(--radius-pill);
-  transition: all 0.35s var(--ease-out-expo);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border: 1px solid var(--border-light);
+  transition: all 0.3s var(--ease-out-expo);
   cursor: default;
   user-select: none;
   white-space: nowrap;
-  opacity: 0;
+  opacity: 1;
   position: relative;
+  line-height: 1.4;
 }
 
-.version-label.visible {
-  opacity: 1;
+.version-label:hover {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  border-color: var(--border-mid);
 }
 
 .version-label[data-ui-version-show="false"] {
@@ -1878,9 +1882,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .version-label.has-update {
   color: var(--accent);
   background: var(--accent-glow);
-  border: 1px solid var(--accent-border);
+  border-color: var(--accent-border);
   cursor: pointer;
-  animation: version-pulse 3s ease-in-out infinite;
+  animation: version-pulse 2.5s ease-in-out infinite;
 }
 
 .version-label.has-update:hover {
@@ -1890,17 +1894,17 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 @keyframes version-pulse {
   0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
-  50%      { box-shadow: 0 0 8px 2px var(--accent-glow); }
+  50%      { box-shadow: 0 0 6px 2px var(--accent-glow); }
 }
 
 .version-label.up-to-date {
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 
 .version-label.checking {
   opacity: 1;
-  color: var(--text-faint);
-  background: var(--bg3);
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
   overflow: hidden;
 }
 .version-label.checking::after {

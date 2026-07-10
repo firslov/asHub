@@ -183,7 +183,7 @@ const DEFAULT_UI = {
   "title-bar.height": "40px",
   "title-bar.model.show": false,
   "title-bar.model.uppercase": false,
-  "title-bar.version.show": false,
+  "title-bar.version.show": true,
   "tabs.enabled": true,
 };
 

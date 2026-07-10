@@ -37,12 +37,16 @@ export const closeTab = (id) => {
     if (neighbor) switchTo(neighbor);
     else activeSessionId.value = "";
   }
-  // Agent sessions keep their backend (sidebar bookmark); terminals die with the tab.
-  sessions.get(id)?.remove();
+  // Terminals: DELETE the backend first so PTY resources are freed
+  // even if the DOM removal triggers a navigation away.
   const kind = sessionKinds.get(id);
   if (kind === "terminal" || kind === "ash-terminal") {
     sessionKinds.delete(id);
-    fetch(`/${id}/`, { method: "DELETE" }).catch(() => {});
+    fetch(`/${id}/`, { method: "DELETE" })
+      .catch(() => {})
+      .finally(() => sessions.get(id)?.remove());
+  } else {
+    sessions.get(id)?.remove();
   }
 };
 
@@ -66,9 +70,19 @@ export const spaEnabled = () => {
   catch { return true; }
 };
 
+let _prevActive = "";
+
 effect(() => {
   const active = activeSessionId.value;
-  for (const [id, el] of sessions) el.hidden = id !== active;
+  // Only toggle the previous and new active session — O(1) vs O(n).
+  if (_prevActive && _prevActive !== active) {
+    const prev = sessions.get(_prevActive);
+    if (prev) prev.hidden = true;
+  }
+  const next = sessions.get(active);
+  if (next) next.hidden = false;
+  _prevActive = active;
+
   const kind = active ? sessionKinds.get(active) : null;
   document.querySelector(".app")?.classList.toggle("terminal-active", kind === "terminal" || kind === "ash-terminal");
   // Restore input focus after session switch (needed on Windows where

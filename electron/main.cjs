@@ -161,8 +161,8 @@ function fallbackToGitHub() {
 }
 
 let mainWindow = null;
-let shutdownHub = null;
 let _shuttingDown = false;
+let shutdownHubRef = null;
 
 // MRU order so cross-window drag hit-tests pick the topmost window.
 const windowZOrder = [];
@@ -504,7 +504,6 @@ async function startServer() {
   try {
     const hubMod = await import(pathToFileURL(path.join(distRoot, "hub.js")).href);
     startHub = hubMod.startHub;
-    shutdownHub = hubMod.shutdownHub;
     ({ AshBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "ash.js")).href));
     ({ TerminalBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "terminal.js")).href));
   } catch (err) {
@@ -519,12 +518,14 @@ async function startServer() {
 
   let server;
   try {
-    server = startHub({
+    const hub = startHub({
       port: HUB_PORT,
       host: "127.0.0.1",
       webRoot,
       makeBridge: (opts) => opts.kind === "terminal" ? new TerminalBridge(opts) : new AshBridge(opts),
     });
+    server = hub.server;
+    shutdownHubRef = hub.shutdown;
   } catch (err) {
     console.error("[electron] failed to start hub:", err);
     dialog.showErrorBox(
@@ -640,12 +641,12 @@ if (!gotTheLock) {
 
   app.on("before-quit", (event) => {
     if (mainWindow) mainWindow.removeAllListeners("closed");
-    if (_shuttingDown || !shutdownHub) return;
+    if (_shuttingDown || !shutdownHubRef) return;
     _shuttingDown = true;
     event.preventDefault();
     Promise.resolve()
-      .then(() => shutdownHub())
-      .catch((err) => console.error("[electron] shutdownHub failed:", err))
+      .then(() => shutdownHubRef())
+      .catch((err) => console.error("[electron] shutdown failed:", err))
       .finally(() => app.exit(0));
   });
 }

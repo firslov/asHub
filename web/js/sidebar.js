@@ -548,6 +548,18 @@ const renderSessions = async (force = false) => {
       });
     }
 
+    /** Insert `node` after `ref` only when not already at that position. */
+    const insertAfter = (node, ref) => {
+      const target = ref?.nextSibling || null;
+      if (node === target) return; // already at correct position
+      sessionList.insertBefore(node, target);
+    };
+    /** Insert `node` at the beginning only when not already first child. */
+    const insertFirst = (node) => {
+      if (node === sessionList.firstChild) return;
+      sessionList.insertBefore(node, sessionList.firstChild);
+    };
+
     let prevChild = null;
     for (const child of newChildren) {
       if (child.classList.contains("session-group-head")) {
@@ -559,26 +571,26 @@ const renderSessions = async (force = false) => {
             if (newCount) old.countEl.textContent = newCount.textContent;
           }
           if (prevChild) {
-            sessionList.insertBefore(old.el, prevChild.nextSibling || null);
+            insertAfter(old.el, prevChild);
           } else {
-            sessionList.insertBefore(old.el, sessionList.firstChild);
+            insertFirst(old.el);
           }
           prevChild = old.el;
           oldHeaders.delete(key);
         } else {
           if (prevChild) {
-            sessionList.insertBefore(child, prevChild.nextSibling || null);
+            insertAfter(child, prevChild);
           } else {
-            sessionList.insertBefore(child, sessionList.firstChild);
+            insertFirst(child);
           }
           prevChild = child;
         }
       } else {
         if (!sessionList.contains(child)) {
           if (prevChild) {
-            sessionList.insertBefore(child, prevChild.nextSibling || null);
+            insertAfter(child, prevChild);
           } else {
-            sessionList.insertBefore(child, sessionList.firstChild);
+            insertFirst(child);
           }
         }
         prevChild = child;

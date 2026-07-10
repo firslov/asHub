@@ -88,10 +88,12 @@ const flushReply = (session) => {
     // Update innerHTML of each block in-place, then append any new ones.
     // This avoids DOM node removal / creation during streaming.
     const existing = r.current.children;
+    let codeChanged = false;
     for (let i = 0; i < newBlocks.length; i++) {
       if (i < existing.length) {
         if (existing[i].innerHTML !== newBlocks[i].innerHTML) {
           existing[i].innerHTML = newBlocks[i].innerHTML;
+          if (existing[i].tagName === "PRE") codeChanged = true;
         }
         // When a code block's language is finally resolved by the parser
         // (e.g. ```python), propagate the class to the live block.
@@ -100,6 +102,13 @@ const flushReply = (session) => {
         }
       } else {
         r.current.appendChild(newBlocks[i]);
+      }
+    }
+    // Setting innerHTML on a <pre> wipes hljs spans. Re-highlight
+    // immediately so the user never sees plain-text during streaming.
+    if (codeChanged && window.hljs) {
+      for (const pre of r.current.querySelectorAll("pre code:not([data-highlighted])")) {
+        try { window.hljs.highlightElement(pre); pre.dataset.highlighted = "1"; } catch {}
       }
     }
   } else {

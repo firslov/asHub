@@ -2004,7 +2004,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   -webkit-font-smoothing: subpixel-antialiased;
 }
 
-:root.os-other { --ui-title-bar-height: 66px; }
+:root.os-other { --ui-title-bar-height: 78px; }
 
 /* Windows custom title bar */
 .win-title-bar { display: none; }
@@ -2015,7 +2015,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .os-other .ctx-panel,
 .os-other .files-panel,
 .os-other .toolbar {
-  top: 66px;
+  top: 78px;
 }
 
 .os-other .win-title-bar {
@@ -2033,9 +2033,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-bottom: 1px solid var(--border);
 }
 .os-other .title-bar {
-  height: 66px;
+  height: 78px;
   padding: 0.35rem 1rem;
-  padding-top: 32px;
+  padding-top: 36px;
   gap: 0.4rem;
   background: var(--bg2);
 }

@@ -1956,6 +1956,11 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   // can be a long idle stretch.  When tools are running the idle window is
   // widened to 10 min so large writes don't false-trigger.
   //
+  // When the bridge reports isProcessing() but no activity events are seen,
+  // we extend the window rather than immediately declaring it stuck (the
+  // agent may be waiting on a slow API).  To prevent indefinite hangs, a
+  // hard cap of 30 minutes of total idle time forces cancellation regardless.
+  //
   // Reset toolsRunning at the start of a non-queued turn so stale counts from
   // a previous turn (e.g. crashed agent, missed tool-completed) don't keep
   // the window artificially wide.
@@ -1966,16 +1971,27 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => { rejectTimeout = reject; });
   session.lastActivity = Date.now();
+  let idleSince = 0; // timestamp when the idle window was first exceeded
 
   const checkIdle = () => {
     if (done) return; // prevent reschedule after cleanup
     const elapsed = Date.now() - session.lastActivity;
     const windowMs = (session.toolsRunning > 0 ? 10 : 3) * 60 * 1000;
     if (elapsed >= windowMs) {
+      if (!idleSince) idleSince = Date.now();
       // Double-check: if the bridge still reports it's processing, extend
       // the window instead of declaring it stuck.  This is a last-resort
       // safety net that doesn't depend on accurate toolsRunning tracking.
       if (session.bridge.isProcessing?.()) {
+        // Hard cap: force-cancel after 30 minutes of total idle time even
+        // when the bridge still claims to be processing.  This prevents
+        // indefinite hangs from stuck API calls.
+        if (Date.now() - idleSince >= 30 * 60 * 1000) {
+          done = true;
+          try { session.bridge.cancel(); } catch {}
+          rejectTimeout!(new Error("Request timed out after 30 minutes of inactivity — the agent may be stuck on an unresponsive API."));
+          return;
+        }
         timer = setTimeout(checkIdle, 2 * 60 * 1000);
         return;
       }
@@ -1983,6 +1999,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       try { session.bridge.cancel(); } catch {}
       rejectTimeout!(new Error("Request timed out — the agent may be stuck."));
     } else {
+      idleSince = 0; // activity resumed within the window, reset idle tracking
       timer = setTimeout(checkIdle, windowMs - elapsed + 500);
     }
   };
@@ -2554,14 +2571,21 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
           seen++;
         }
       }
-      let result: unknown = null;
-      // Snapshot may report fewer user msgs than the replay has agent:query
-      // frames (legacy sessions, prior compacts). Truncate the replay
-      // regardless so the UI matches the kernel state.
-      if (toIndex !== -1) {
-        result = await session.bridge.compact({ kind: "rewind", toIndex });
-        await syncTreeAfterRewind(session, toIndex);
+      if (toIndex === -1) {
+        // Bridge context is empty — the session was probably interrupted
+        // before the turn completed and the tree store wasn't flushed.
+        // Don't touch bridge or replay; returning null leaves the visible
+        // conversation intact.  A page refresh will re-initialize the
+        // bridge from the replay and the rewind will work normally.
+        if (seen === 0) return null;
+        // Snapshot has user messages but fewer than the requested turn
+        // (e.g. prior compaction elided some).  Truncate the replay to
+        // match the kernel's actual message count so the UI stays in sync.
+        truncateReplayToTurnCount(session, seen);
+        return null;
       }
+      const result = await session.bridge.compact({ kind: "rewind", toIndex });
+      await syncTreeAfterRewind(session, toIndex);
       truncateReplayToTurnCount(session, turn);
       return result;
     });

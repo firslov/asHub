@@ -1304,12 +1304,10 @@ footer {
 /* ── Windows frameless: reserve space for window controls ─────── */
 
 [data-platform="win32"] nav {
-  padding-top: 2.5rem;
   -webkit-app-region: drag;
 }
-[data-platform="win32"] .sidebar {
-  padding-top: 2.5rem;
-}
+/* Sidebar is positioned below the title bar by CSS grid (grid-row: 2);
+   no extra padding-top needed — it creates a visible gap on Windows. */
 [data-platform="win32"] #session-tabs {
   top: 0.5rem;
 }

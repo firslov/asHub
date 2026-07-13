@@ -1161,7 +1161,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   top: 0;
   right: 0;
   bottom: 0;
-  left: calc(100% - 10rem);
+  left: calc(100% - 7rem);
   background: linear-gradient(to right, transparent 0%, var(--bg3) 12%, var(--bg3) 100%);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   opacity: 0;
@@ -1182,13 +1182,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-close {
   position: absolute;
-  top: 0;
-  right: 0.2rem;
-  bottom: 0;
+  top: 50%;
+  right: 0.55rem;
+  bottom: 2px;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
-  font-size: 1.05rem;
+  font-size: 0.95rem;
   line-height: 1;
   width: 1.7rem;
   padding: 0;
@@ -1304,13 +1304,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Session title edit ───────────────────────────────────────────── */
 .session-edit {
   position: absolute;
-  top: 0;
-  right: 2.05rem;
-  bottom: 0;
+  top: 50%;
+  right: 2.4rem;
+  bottom: 2px;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   line-height: 1;
   width: 1.7rem;
   padding: 0;
@@ -1333,9 +1333,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-archive-btn {
   position: absolute;
-  top: 0;
-  right: 3.9rem;
-  bottom: 0;
+  top: 2px;
+  right: 2.4rem;
+  bottom: 50%;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
@@ -6071,9 +6071,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-pin-btn {
   position: absolute;
-  top: 0;
-  right: 5.75rem;
-  bottom: 0;
+  top: 2px;
+  right: 0.55rem;
+  bottom: 50%;
   opacity: 0;
   width: 1.7rem;
   border: 1px solid transparent;
@@ -6310,9 +6310,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-cwd-btn {
   position: absolute;
-  top: 0;
-  right: 7.6rem;
-  bottom: 0;
+  top: 2px;
+  right: 4.25rem;
+  bottom: 50%;
   opacity: 0;
   width: 1.7rem;
   border: 1px solid transparent;

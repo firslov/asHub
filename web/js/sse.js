@@ -232,10 +232,12 @@ export const handlers = {
     const queryText = p?.query ?? "";
     if (!queryText) return;
     // Don't create duplicate optimistic boxes — composer.js may have
-    // already done so for live viewers.
-    const existing = this.streamEl?.querySelector(
+    // already done so for live viewers.  During replay the boxes live in
+    // the replay fragment, so search the container they were appended to.
+    const pendRoot = (this.state.replaying && this._replayFrag) || this.streamEl;
+    const existing = pendRoot?.querySelector(
       `.agent-box.pending[data-queued="${CSS.escape(queryText)}"]`
-    ) ?? Array.from(this.streamEl?.querySelectorAll(".agent-box.pending") ?? [])
+    ) ?? Array.from(pendRoot?.querySelectorAll(".agent-box.pending") ?? [])
       .find((pb) => pb._queryText === queryText);
     if (existing) return;
     // Build turn-separator manually (same as renderTurnSep) but append
@@ -266,10 +268,12 @@ export const handlers = {
     const queryText = p?.query ?? "";
     const images = Array.isArray(p?.images) ? p.images : null;
     // Match optimistic boxes: first by data-queued (replay), then by
-    // _queryText (composer.js live path).
-    let matched = this.streamEl?.querySelector(`.agent-box.pending[data-queued="${CSS.escape(queryText)}"]`) ?? null;
+    // _queryText (composer.js live path).  During replay the boxes live
+    // in the replay fragment rather than streamEl.
+    const pendRoot = (this.state.replaying && this._replayFrag) || this.streamEl;
+    let matched = pendRoot?.querySelector(`.agent-box.pending[data-queued="${CSS.escape(queryText)}"]`) ?? null;
     if (!matched) {
-      for (const pb of this.streamEl?.querySelectorAll(".agent-box.pending") ?? []) {
+      for (const pb of pendRoot?.querySelectorAll(".agent-box.pending") ?? []) {
         if (pb._queryText === queryText) { matched = pb; break; }
       }
     }

@@ -49,6 +49,28 @@ const _structKey = (blocks) => {
   return s;
 };
 
+// Content comparison that ignores post-processing artifacts (hljs spans,
+// code copy buttons, rendered KaTeX) so already-processed blocks are not
+// rewritten — and re-highlighted — on every flush.
+const _blockContentEqual = (live, fresh) => {
+  if (live.tagName === "PRE") {
+    // Highlighting only wraps text in spans and the copy button sits outside
+    // <code>, so the raw code text is the stable thing to compare.
+    const liveCode = live.querySelector("code");
+    const freshCode = fresh.querySelector("code");
+    return (liveCode?.textContent ?? "") === (freshCode?.textContent ?? "");
+  }
+  // Normalize rendered math placeholders back to their pristine form so
+  // substituted KaTeX HTML doesn't count as a content change.
+  const clone = live.cloneNode(true);
+  for (const m of clone.querySelectorAll(".math-tex")) {
+    m.innerHTML = "";
+    m.classList.remove("math-error");
+    delete m.dataset.rendered;
+  }
+  return clone.innerHTML === fresh.innerHTML;
+};
+
 const flushReply = (session) => {
   const r = session?.reply;
   if (!r) return;
@@ -59,12 +81,13 @@ const flushReply = (session) => {
   if (r._lastParseTime && perfNow - r._lastParseTime < throttleMs) {
     if (!r._throttleFlushScheduled) {
       r._throttleFlushScheduled = true;
-      requestAnimationFrame(() => {
+      // Defer until the throttle window has actually elapsed rather than
+      // forcing a parse on the next frame — keeps the 100/200ms tiers real.
+      const waitMs = throttleMs - (perfNow - r._lastParseTime);
+      setTimeout(() => {
         r._throttleFlushScheduled = false;
-        r._lastParseTime = 0;
-        r._lastParsedText = ""; // force re-parse on scheduled flush
         flushReply(session);
-      });
+      }, waitMs);
     }
     return; // pendingChunkRender stays true → closeReply will flush
   }
@@ -91,7 +114,7 @@ const flushReply = (session) => {
     let codeChanged = false;
     for (let i = 0; i < newBlocks.length; i++) {
       if (i < existing.length) {
-        if (existing[i].innerHTML !== newBlocks[i].innerHTML) {
+        if (!_blockContentEqual(existing[i], newBlocks[i])) {
           existing[i].innerHTML = newBlocks[i].innerHTML;
           if (existing[i].tagName === "PRE") codeChanged = true;
         }
@@ -104,13 +127,10 @@ const flushReply = (session) => {
         r.current.appendChild(newBlocks[i]);
       }
     }
-    // Setting innerHTML on a <pre> wipes hljs spans. Re-highlight
-    // immediately so the user never sees plain-text during streaming.
-    if (codeChanged && window.hljs) {
-      for (const pre of r.current.querySelectorAll("pre code:not([data-highlighted])")) {
-        try { window.hljs.highlightElement(pre); pre.dataset.highlighted = "1"; } catch {}
-      }
-    }
+    // Setting innerHTML on a <pre> wipes hljs spans and the copy button.
+    // Re-highlight immediately (via highlightWithin, which re-injects the
+    // button) so the user never sees plain text during streaming.
+    if (codeChanged) highlightWithin(r.current);
   } else {
     // ── Slow path: structure changed / first render ────────────────
     r._lastStructKey = newStructKey;

@@ -68,6 +68,12 @@ interface Session {
   store?: SessionStore;
   capture?: Capture;
   _cancelled?: boolean;
+  /** Idle-watchdog timer handle — see startIdleWatchdog/stopIdleWatchdog. */
+  _idleTimer?: ReturnType<typeof setTimeout>;
+  /** Timestamp when the idle window was first exceeded (0 = not exceeded). */
+  _idleSince?: number;
+  /** Token identifying the current idle-watchdog owner (turn). */
+  _idleToken?: number;
   contextLock: Promise<void>;
   /** Highest frameSeq ever emitted for this session — persisted in meta. */
   lastFrameSeq: number;
@@ -226,14 +232,20 @@ function _flushBuf(sessionId: string): void {
   if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
   const frames = buf.frames.splice(0);
   const filePath = path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`);
-  const prev = _writeLocks.get(sessionId) ?? Promise.resolve();
+  // Swallow a previous write failure so one bad flush doesn't poison the chain.
+  const prev = (_writeLocks.get(sessionId) ?? Promise.resolve()).catch(() => {});
   const p = prev.then(async () => {
-    if (!_mkdirDone.has(SESSIONS_DIR)) {
-      await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
-      _mkdirDone.add(SESSIONS_DIR);
+    try {
+      if (!_mkdirDone.has(SESSIONS_DIR)) {
+        await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
+        _mkdirDone.add(SESSIONS_DIR);
+      }
+      await fs.promises.appendFile(filePath, frames.join(""));
+    } catch (err) {
+      console.error(`[hub] replay flush failed for ${sessionId}:`, err);
+    } finally {
+      if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
     }
-    await fs.promises.appendFile(filePath, frames.join(""));
-    if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
   });
   _writeLocks.set(sessionId, p);
 }
@@ -296,14 +308,20 @@ function persistReplayFile(sessionId: string, frames: string[]): Promise<void> {
     buf.frames.length = 0;
   }
   const filePath = path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`);
-  const prev = _writeLocks.get(sessionId) ?? Promise.resolve();
+  // Swallow a previous write failure so one bad write doesn't poison the chain.
+  const prev = (_writeLocks.get(sessionId) ?? Promise.resolve()).catch(() => {});
   const p = prev.then(async () => {
-    if (!_mkdirDone.has(SESSIONS_DIR)) {
-      await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
-      _mkdirDone.add(SESSIONS_DIR);
+    try {
+      if (!_mkdirDone.has(SESSIONS_DIR)) {
+        await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
+        _mkdirDone.add(SESSIONS_DIR);
+      }
+      await fs.promises.writeFile(filePath, frames.join(""));
+    } catch (err) {
+      console.error(`[hub] replay persist failed for ${sessionId}:`, err);
+    } finally {
+      if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
     }
-    await fs.promises.writeFile(filePath, frames.join(""));
-    if (_writeLocks.get(sessionId) === p) _writeLocks.delete(sessionId);
   });
   _writeLocks.set(sessionId, p);
   return p;
@@ -518,7 +536,14 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       const session = sessions.get(id);
       if (!session) { res.statusCode = 404; res.end("no session"); return; }
       // Lazy-init bridge for restored sessions that haven't been activated yet.
-      await session._ensureBridge?.();
+      try {
+        await session._ensureBridge?.();
+      } catch (err) {
+        console.error(`[hub] ensure bridge failed for ${id}:`, err);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "session bridge unavailable" }));
+        return;
+      }
 
       if (req.method === "POST" && rest === "/pty-input") return ptyInput(req, res, session);
       if (req.method === "POST" && rest === "/pty-resize") return ptyResize(req, res, session);
@@ -1124,7 +1149,7 @@ async function createSession(
         session.firstTurnDone = !!(msgs?.length);
         b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
         b.onClose(() => {
-          try { sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+          try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
         });
         b.onError((err) => {
           try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
@@ -1138,8 +1163,15 @@ async function createSession(
         session._restorePromise = undefined;
         session._ensureBridge = undefined;
       })();
-      session._restorePromise = restoreTask;
-      return restoreTask;
+      // On failure, clear _restorePromise so a later call can retry instead
+      // of returning a permanently-rejected promise; still propagate the
+      // error to this caller so the route can answer with a 500.
+      session._restorePromise = restoreTask.catch((err) => {
+        console.error(`[hub] bridge restore failed for ${id}:`, err);
+        session._restorePromise = undefined;
+        throw err;
+      });
+      return session._restorePromise;
     };
   }
 
@@ -1147,7 +1179,7 @@ async function createSession(
     if (!isRestored && isAgent) {
       bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       bridge.onClose(() => {
-        try { sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+        try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
       });
       bridge.onError((err) => {
         try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
@@ -1161,7 +1193,7 @@ async function createSession(
     if (!isRestored && isTerminalKind) {
       bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       bridge.onClose(() => {
-        try { sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+        try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
       });
     }
     await bridge.ready();
@@ -1248,6 +1280,70 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
   }
 }
 
+// ── Idle watchdog ─────────────────────────────────────────────────────
+// Force-cancels the agent when no activity (chunks, tool events) is seen for
+// the idle window: 3 min base, 10 min while tools are running, extended while
+// the bridge still reports processing, with a 30 min hard cap.  See submit()
+// for the full rationale.  Shared by submit()'s direct path and by queued
+// turns, which only start running on agent:queued-submit — long after
+// submit()'s own watchdog has been cleaned up.
+//
+// The token keeps timer management safe across overlapping turns: restarting
+// is idempotent (timers never stack), and a stale stop(token) from a finished
+// turn can't kill a newer turn's watchdog.
+let idleWatchdogSeq = 0;
+
+function startIdleWatchdog(session: Session, onStuck: (err: Error) => void): number {
+  stopIdleWatchdog(session);
+  const token = ++idleWatchdogSeq;
+  session._idleToken = token;
+  session.lastActivity = Date.now();
+  session._idleSince = 0;
+
+  const checkIdle = () => {
+    if (session._idleToken !== token) return; // stopped or superseded
+    const elapsed = Date.now() - session.lastActivity;
+    const windowMs = (session.toolsRunning > 0 ? 10 : 3) * 60 * 1000;
+    if (elapsed >= windowMs) {
+      const idleSince = session._idleSince || Date.now();
+      session._idleSince = idleSince;
+      // Double-check: if the bridge still reports it's processing, extend
+      // the window instead of declaring it stuck.  This is a last-resort
+      // safety net that doesn't depend on accurate toolsRunning tracking.
+      if (session.bridge.isProcessing?.()) {
+        // Hard cap: force-cancel after 30 minutes of total idle time even
+        // when the bridge still claims to be processing.  This prevents
+        // indefinite hangs from stuck API calls.
+        if (Date.now() - idleSince >= 30 * 60 * 1000) {
+          session._idleToken = undefined;
+          try { session.bridge.cancel(); } catch {}
+          onStuck(new Error("Request timed out after 30 minutes of inactivity — the agent may be stuck on an unresponsive API."));
+          return;
+        }
+        session._idleTimer = setTimeout(checkIdle, 2 * 60 * 1000);
+        return;
+      }
+      session._idleToken = undefined;
+      try { session.bridge.cancel(); } catch {}
+      onStuck(new Error("Request timed out — the agent may be stuck."));
+    } else {
+      session._idleSince = 0; // activity resumed within the window, reset idle tracking
+      session._idleTimer = setTimeout(checkIdle, windowMs - elapsed + 500);
+    }
+  };
+  // Base the initial check interval on whether tools are already running.
+  session._idleTimer = setTimeout(checkIdle, (session.toolsRunning > 0 ? 10 : 3) * 60 * 1000);
+  return token;
+}
+
+function stopIdleWatchdog(session: Session, token?: number): void {
+  // A token mismatch means a newer turn already replaced the watchdog —
+  // leave it running.
+  if (token !== undefined && session._idleToken !== token) return;
+  if (session._idleTimer !== undefined) { clearTimeout(session._idleTimer); session._idleTimer = undefined; }
+  session._idleToken = undefined;
+}
+
 /**
  * Inject a bridge-emitted event into the session: replay buffer, SSE
  * clients, and the segment accumulator that lets reconnects see properly
@@ -1300,6 +1396,19 @@ function routeEvent(session: Session, e: BusEvent): void {
     session.hasUnread = false;
     session._cancelled = false;
     session.toolsRunning = 0;
+    // submit() cleaned up its idle watchdog as soon as the bridge reported
+    // this turn as queued, so arm a fresh one now that the turn is actually
+    // starting — otherwise a stuck queued turn would leave isProcessing true
+    // forever.
+    startIdleWatchdog(session, (err) => {
+      session.isProcessing = false;
+      pushFrame(session, "agent:error", sseFrame({
+        source: session.id,
+        ts: Date.now(),
+        id: `hub:${session.id}:agent:error`,
+        name: "agent:error",
+      }, { message: String(err) }));
+    });
     const query = (e.payload as { query?: string })?.query ?? "";
     // Generate fresh meta for each frame so they don't share the same
     // id / ts — mirroring submit()'s non-queued path.
@@ -1315,6 +1424,7 @@ function routeEvent(session: Session, e: BusEvent): void {
   }
 
   if (e.name === "agent:queued-done") {
+    stopIdleWatchdog(session);
     flushSegment(session);
     session.isProcessing = false;
     // Only mark unread if no one is watching (no active SSE client).
@@ -1356,6 +1466,7 @@ function routeEvent(session: Session, e: BusEvent): void {
   }
 
   if (e.name === "agent:cancelled") {
+    stopIdleWatchdog(session);
     session.isProcessing = false;
     session._cancelled = true;
     session.toolsRunning = 0;
@@ -1503,6 +1614,7 @@ async function archiveSession(
 
   const session = sessions.get(id);
   if (session) {
+    stopIdleWatchdog(session);
     try { session.bridge?.cancel(); } catch {}
     try { session.bridge?.close(); } catch {}
     sessions.delete(id);
@@ -1709,6 +1821,7 @@ async function listFiles(res: http.ServerResponse, session: Session, subdir?: st
 function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, id: string): void {
   const s = sessions.get(id);
   if (s) {
+    stopIdleWatchdog(s);
     try { s.bridge?.close(); } catch {}
     sessions.delete(id);
   }
@@ -1966,50 +2079,13 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   // the window artificially wide.
   if (!queued) session.toolsRunning = 0;
 
-  let done = false;
   let rejectTimeout: ((err: Error) => void) | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => { rejectTimeout = reject; });
-  session.lastActivity = Date.now();
-  let idleSince = 0; // timestamp when the idle window was first exceeded
-
-  const checkIdle = () => {
-    if (done) return; // prevent reschedule after cleanup
-    const elapsed = Date.now() - session.lastActivity;
-    const windowMs = (session.toolsRunning > 0 ? 10 : 3) * 60 * 1000;
-    if (elapsed >= windowMs) {
-      if (!idleSince) idleSince = Date.now();
-      // Double-check: if the bridge still reports it's processing, extend
-      // the window instead of declaring it stuck.  This is a last-resort
-      // safety net that doesn't depend on accurate toolsRunning tracking.
-      if (session.bridge.isProcessing?.()) {
-        // Hard cap: force-cancel after 30 minutes of total idle time even
-        // when the bridge still claims to be processing.  This prevents
-        // indefinite hangs from stuck API calls.
-        if (Date.now() - idleSince >= 30 * 60 * 1000) {
-          done = true;
-          try { session.bridge.cancel(); } catch {}
-          rejectTimeout!(new Error("Request timed out after 30 minutes of inactivity — the agent may be stuck on an unresponsive API."));
-          return;
-        }
-        timer = setTimeout(checkIdle, 2 * 60 * 1000);
-        return;
-      }
-      done = true;
-      try { session.bridge.cancel(); } catch {}
-      rejectTimeout!(new Error("Request timed out — the agent may be stuck."));
-    } else {
-      idleSince = 0; // activity resumed within the window, reset idle tracking
-      timer = setTimeout(checkIdle, windowMs - elapsed + 500);
-    }
-  };
-  // Base the initial check interval on whether tools are already running.
-  timer = setTimeout(checkIdle, (session.toolsRunning > 0 ? 10 : 3) * 60 * 1000);
-
-  const cleanup = () => {
-    done = true;
-    if (timer !== undefined) clearTimeout(timer);
-  };
+  // Only arm the watchdog for the turn actually running now — a queued
+  // submit returns immediately, and its watchdog starts on agent:queued-submit
+  // (arming it here would clobber the currently-running turn's).
+  const wdToken = queued ? undefined : startIdleWatchdog(session, (err) => rejectTimeout!(err));
+  const cleanup = () => { if (wdToken !== undefined) stopIdleWatchdog(session, wdToken); };
 
   // Encode images into submit payload for multimodal models.
   const submitPayload = images && images.length > 0
@@ -2780,36 +2856,53 @@ async function fetchGithubSkills(timeout: number): Promise<void> {
   _skillsCache!.set("github", { data: allSkills, ts: Date.now() });
 }
 
-function listInstalledSkills(req: http.IncomingMessage, res: http.ServerResponse): void {
+// Short-TTL cache for installed-skills scans: the frontend panel polls this
+// endpoint frequently and a full scan can walk many directories. Keyed by the
+// scan roots (cwd + configured skill paths).
+const INSTALLED_SKILLS_CACHE_TTL = 15_000; // 15 seconds
+const _installedSkillsCache = new Map<string, { list: Array<{ name: string; path: string }>; ts: number }>();
+
+async function listInstalledSkills(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = new URL(req.url!, `http://${req.headers.host || "localhost"}`);
   const cwd = url.searchParams.get("cwd") || undefined;
+  const settings = getSettings();
+
+  const cacheKey = JSON.stringify([cwd ?? "", settings.skillPaths ?? []]);
+  const cached = _installedSkillsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < INSTALLED_SKILLS_CACHE_TTL) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ installed: cached.list }));
+    return;
+  }
+
   const list: Array<{ name: string; path: string }> = [];
   const seen = new Set<string>();
 
-  const addFromDir = (dir: string) => {
+  const addFromDir = async (dir: string) => {
+    let names: string[];
     try {
-      for (const name of fs.readdirSync(dir)) {
-        const skillPath = path.join(dir, name);
-        try { if (!fs.statSync(skillPath).isDirectory()) continue; } catch { continue; }
-        if (_hasSkillMd(skillPath) && !seen.has(name)) {
-          seen.add(name);
-          list.push({ name, path: skillPath });
-        }
+      names = await fs.promises.readdir(dir);
+    } catch { return; } // missing/unreadable dir -> no skills, not an error
+    for (const name of names) {
+      const skillPath = path.join(dir, name);
+      try { if (!(await fs.promises.stat(skillPath)).isDirectory()) continue; } catch { continue; }
+      if (await _hasSkillMd(skillPath) && !seen.has(name)) {
+        seen.add(name);
+        list.push({ name, path: skillPath });
       }
-    } catch {}
+    }
   };
 
   // Global skills
-  addFromDir(path.join(os.homedir(), ".agent-sh", "skills"));
-  addFromDir(path.join(os.homedir(), ".agents", "skills"));
+  await addFromDir(path.join(os.homedir(), ".agent-sh", "skills"));
+  await addFromDir(path.join(os.homedir(), ".agents", "skills"));
 
   // Additional skill paths from settings (e.g. custom install locations)
-  const settings = getSettings();
   for (const p of settings.skillPaths ?? []) {
     const resolved = p.startsWith("~/") || p === "~"
       ? path.join(os.homedir(), p.slice(1))
       : path.resolve(p);
-    addFromDir(resolved);
+    await addFromDir(resolved);
   }
 
   // Project skills: .agents/skills/ in cwd and ancestor dirs (up to home)
@@ -2817,7 +2910,7 @@ function listInstalledSkills(req: http.IncomingMessage, res: http.ServerResponse
     const home = path.resolve(os.homedir());
     let current = path.resolve(cwd);
     while (true) {
-      addFromDir(path.join(current, ".agents", "skills"));
+      await addFromDir(path.join(current, ".agents", "skills"));
       if (current === home) break;
       const parent = path.dirname(current);
       if (parent === current) break;
@@ -2825,16 +2918,25 @@ function listInstalledSkills(req: http.IncomingMessage, res: http.ServerResponse
     }
   }
 
+  _installedSkillsCache.set(cacheKey, { list, ts: Date.now() });
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ installed: list }));
 }
 
-function _hasSkillMd(dir: string): boolean {
+// Depth-limited lookup: a skill normally has SKILL.md at its root, or nested a
+// level or two down; deeper recursion only risks walking huge directory trees.
+const SKILL_MD_MAX_DEPTH = 3;
+
+async function _hasSkillMd(dir: string, depth = 0): Promise<boolean> {
   try {
-    if (fs.existsSync(path.join(dir, "SKILL.md"))) return true;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    await fs.promises.access(path.join(dir, "SKILL.md"));
+    return true;
+  } catch { /* no SKILL.md at this level */ }
+  if (depth >= SKILL_MD_MAX_DEPTH) return false;
+  try {
+    for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-      if (entry.isDirectory() && _hasSkillMd(path.join(dir, entry.name))) return true;
+      if (entry.isDirectory() && await _hasSkillMd(path.join(dir, entry.name), depth + 1)) return true;
     }
   } catch {}
   return false;
@@ -3058,6 +3160,13 @@ async function uploadImage(req: http.IncomingMessage, res: http.ServerResponse):
   if (!data || !mimeType) {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "missing data or mimeType" }));
+    return;
+  }
+  // sessionId is embedded in the output filename — reject anything that
+  // doesn't look like a session id to keep the write inside uploadsDir.
+  if (sessionId && !/^[0-9a-f]{4,32}$/i.test(sessionId)) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "invalid sessionId" }));
     return;
   }
 

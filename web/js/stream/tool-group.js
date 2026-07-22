@@ -149,11 +149,19 @@ export const append = (session, node) => {
  * Append a node to the very end of the stream, after any pending boxes.
  * Used for optimistic queued-message boxes, which must appear after all
  * existing pending boxes to preserve submission order.
+ * During replay, routes through insertStreamNode so the node lands in the
+ * replay DocumentFragment in chronological order — appending to streamEl
+ * directly would place it before the replayed history, which is only
+ * mounted on exitReplayMode.
  */
 export const appendAfterPending = (session, node) => {
   closeToolGroup(session);
   hideEmptyState(session);
-  session?.streamEl?.appendChild(node);
+  if (session?.state.replaying && session._replayFrag) {
+    insertStreamNode(session, node);
+  } else {
+    session?.streamEl?.appendChild(node);
+  }
   maybeScroll(session);
 };
 

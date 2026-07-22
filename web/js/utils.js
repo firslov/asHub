@@ -2,7 +2,7 @@ import { t } from "./i18n.js";
 import { extractMath, renderMathIn } from "./math.js";
 import { scheduleIdleWork } from "./stream/idle-work.js";
 
-marked.setOptions({ breaks: true, gfm: true });
+window.marked?.setOptions?.({ breaks: true, gfm: true });
 
 export const escape = (s) => String(s ?? "")
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -84,8 +84,13 @@ export const ansiToHtml = (raw) => {
   return out;
 };
 
-export const mdToHtml = (raw) =>
-  DOMPurify.sanitize(marked.parse(extractMath(String(raw ?? ""))));
+export const mdToHtml = (raw) => {
+  // Fall back to escaped plain text when marked/DOMPurify failed to load.
+  if (!window.marked?.parse || !window.DOMPurify?.sanitize) {
+    return `<pre>${escape(String(raw ?? ""))}</pre>`;
+  }
+  return DOMPurify.sanitize(marked.parse(extractMath(String(raw ?? ""))));
+};
 
 export { renderMathIn };
 

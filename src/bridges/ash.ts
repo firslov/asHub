@@ -66,7 +66,9 @@ const FORWARDED = [
   "agent:tool-completed",
   "agent:tool-output-chunk",
   "agent:usage",
-  "agent:error",
+  // agent:error is NOT forwarded: the wire handler below rejects the
+  // pendingTurn and the hub's submit() catch synthesizes the error frame.
+  // Forwarding it too would render the same error card twice.
   "agent:cancelled",
   // Slash-commands extension reports model/thinking/etc state and errors via these.
   "ui:info",
@@ -932,7 +934,11 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       for (const [eid, entry] of (this as any)._subagents as Map<string, SubagentEntry>) {
         entry.controller?.abort();
       }
-      setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
+      // Stop means stop: discard queued queries instead of draining into
+      // the next one. Pair each drop with queued-done (mirroring the
+      // queued-submit/queued-done pair) so hub-side queue state settles.
+      this.dropQueued();
+      setTimeout(() => { this.drainShellQueue(); }, 0);
     });
 
     // Permission gate — forward to UI as an event (so the diff preview
@@ -1044,6 +1050,15 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
     this.core.bus.emit("agent:submit", { query: next });
   }
 
+  // Discard all queued queries, emitting queued-done for each so every
+  // queued message still gets its queued-submit/queued-done pair.
+  private dropQueued(): void {
+    while (this.queryQueue.length > 0) {
+      this.queryQueue.shift();
+      this.emit("event", { name: "agent:queued-done", payload: {} } satisfies BusEvent);
+    }
+  }
+
   cancel(): void {
     this.core?.bus.emit("agent:cancel-request", {});
     // If no agent backend is registered (e.g. missing API key), the
@@ -1056,7 +1071,7 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
         this.pendingTurn = null;
         this.emit("event", { name: "agent:cancelled", payload: {} } satisfies BusEvent);
         t.resolve({ stopReason: "cancelled" });
-        this.queryQueue.length = 0;
+        this.dropQueued();
       }
     }
   }

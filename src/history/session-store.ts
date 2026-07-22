@@ -272,6 +272,29 @@ export class SessionStore {
     let raw: string;
     try { raw = fs.readFileSync(this.entriesPath, "utf-8"); }
     catch { return; }
+    // Detect a torn tail: a process killed mid-append leaves a final line
+    // that lacks its trailing newline or fails to parse. Left in place, the
+    // next append would glue onto it and the combined line would be skipped
+    // as malformed, permanently losing entries. Truncate back to the end of
+    // the last complete line.
+    if (raw) {
+      const lines = raw.split("\n");
+      let lastIdx = lines.length - 1;
+      if (lines[lastIdx] === "") lastIdx--;
+      let tailOk = lastIdx < 0;
+      if (!tailOk && raw.endsWith("\n")) {
+        try { JSON.parse(lines[lastIdx]!); tailOk = true; } catch { /* torn */ }
+      }
+      if (!tailOk) {
+        let keepBytes = 0;
+        for (let i = 0; i < lastIdx; i++) keepBytes += Buffer.byteLength(lines[i]!) + 1;
+        try {
+          fs.truncateSync(this.entriesPath, keepBytes);
+          console.warn(`[session-store] truncated ${Buffer.byteLength(raw) - keepBytes} torn byte(s) from tail of ${this.entriesPath}`);
+          raw = lines.slice(0, lastIdx).join("\n");
+        } catch { /* best effort; malformed lines are skipped below */ }
+      }
+    }
     for (const line of raw.split("\n")) {
       if (!line) continue;
       try {
@@ -283,7 +306,14 @@ export class SessionStore {
     }
     try {
       this.activeLeaf = fs.readFileSync(this.leafPath, "utf-8").trim();
-      if (!this.entries.has(this.activeLeaf)) this.activeLeaf = this.rootId;
+      if (!this.entries.has(this.activeLeaf)) {
+        // Leaf points at an entry missing from the file (e.g. dropped by the
+        // torn-tail truncation above). Falling back to the root would make
+        // the whole history invisible, so resume from the last entry instead.
+        const fallback = this.lastEntryId();
+        console.warn(`[session-store] leaf ${this.activeLeaf} not found in ${this.entriesPath}; falling back to ${fallback}`);
+        this.activeLeaf = fallback;
+      }
     } catch { this.activeLeaf = this.lastEntryId(); }
   }
 

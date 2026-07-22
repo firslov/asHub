@@ -14,7 +14,14 @@ export const showThinking = (session) => {
     `<span class="thinking-dot"></span>` +
     `<span class="thinking-dot"></span>`;
   hideEmptyState(session);
-  insertStreamNode(session, el);
+  // Route thinking dots into the active subagent if one is running.
+  const subBody = session._subagent?.querySelector(".subagent-body");
+  if (subBody) {
+    subBody.appendChild(el);
+    subBody.hidden = false;
+  } else {
+    insertStreamNode(session, el);
+  }
   session.thinking.el = el;
   maybeScroll(session);
 };
@@ -93,7 +100,16 @@ const flushThinkingBuf = (session) => {
     inner.className = "thinking-block-inner";
     body.appendChild(inner);
     block.append(head, body);
-    append(session, block);
+    // Route thinking block into the active subagent's body so the
+    // user sees thinking→tool→thinking in the correct nesting order.
+    const sub = session._subagent;
+    const subBody = sub?.querySelector(".subagent-body");
+    if (subBody) {
+      subBody.appendChild(block);
+      subBody.hidden = false;
+    } else {
+      append(session, block);
+    }
   }
   // Append batched text, preserving the single-container style.
   const inner = session.thinking.block.querySelector(".thinking-block-inner");

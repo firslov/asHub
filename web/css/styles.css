@@ -128,6 +128,14 @@
   --fs-md: 0.82rem;  /* default UI body text */
   --fs-lg: 0.9rem;   /* emphasized UI text, panel titles */
   --fs-xl: 1rem;     /* section headings, primary reading size */
+  --fs-2xl: 1.25rem; /* page-level headings, empty-state titles */
+  --fs-3xl: 2rem;    /* hero/display text */
+
+  /* Canonical font stacks — use these vars instead of repeating literals.
+     Sans: UI text; Mono: code, tool rows, panel titles; Serif: academic theme. */
+  --font-sans: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
+  --font-serif: 'Source Serif 4', 'Noto Serif SC', Georgia, serif;
 
   /* Spacing scale — shared rhythm for padding/margin/gap in component
      styles (live.css). Prefer these over ad-hoc rem literals. */
@@ -312,7 +320,7 @@ html { scroll-behavior: smooth; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  font-family: var(--font-sans);
   font-weight: 400;
   font-size: 16px;
   line-height: 1.6;
@@ -349,7 +357,7 @@ nav {
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 0.85rem;
   line-height: 1.55;
   overflow: hidden;
@@ -472,7 +480,7 @@ nav {
 .math-tex .katex { font-size: 1.15em; }
 .math-error {
   color: var(--error, #d04a4a);
-  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
 }
 

@@ -226,6 +226,9 @@ const translations = {
     "no.session.sub": "create a session to get started",
     "no.session.cta": "new session",
     "no.terminals": "no terminals — click ▷ to create",
+    "no.workspaces": "no workspaces yet",
+    "filter.no.match": "no matches",
+    "workspace.new.here": "New agent here",
 
     // ── Renderers: errors, diffs, tools ────────────────────────────
     "error": "Error",
@@ -525,6 +528,9 @@ const translations = {
     "no.session.sub": "创建会话以开始使用",
     "no.session.cta": "新会话",
     "no.terminals": "无终端 — 点击 ▷ 创建",
+    "no.workspaces": "暂无工作区",
+    "filter.no.match": "无匹配结果",
+    "workspace.new.here": "在此新建对话",
 
     // ── Renderers: errors, diffs, tools ────────────────────────────
     "error": "错误",

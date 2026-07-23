@@ -98,6 +98,33 @@ const shortenCwd = (cwd) => {
   return (path.startsWith("~") ? "~/…/" : "…/") + parts.slice(-2).join("/");
 };
 
+// ── Unified sidebar item anatomy ─────────────────────────────────────
+// All four views share: [icon slot (.side-icon)] [title + meta (.side-body)]
+// [hover actions (.side-btn)]. Session items use an absolutely-positioned
+// status dot as their icon slot instead of an inline .side-icon.
+const ARCHIVE_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>`;
+
+/** Unified empty-state row for all four sidebar views. */
+const sideEmpty = (iconHtml, text) => {
+  const li = document.createElement("li");
+  li.className = "side-empty";
+  const icon = document.createElement("span");
+  icon.className = "side-empty-icon";
+  icon.innerHTML = iconHtml;
+  const label = document.createElement("span");
+  label.textContent = text;
+  li.append(icon, label);
+  return li;
+};
+
+/** Shared title + meta (cwd / relative time) markup for sidebar items. */
+const sideBody = (titleText, { cwd, ts } = {}) => {
+  const title = escape(titleText);
+  const cwdText = cwd ? `<span class="side-cwd" title="${escape(cwd)}">${escape(shortenCwd(cwd))}</span>` : "";
+  const timeText = ts ? `<span class="side-time" title="${escape(new Date(ts).toLocaleString())}">${escape(relativeTime(ts))}</span>` : "";
+  return `<span class="side-body"><span class="side-title" title="${title}">${title}</span><span class="side-meta">${cwdText}${timeText}</span></span>`;
+};
+
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 
 const bucketKey = (ts) => {
@@ -245,7 +272,7 @@ const renderSessionItem = (s, isPinned = false) => {
     if (!close.classList.contains("confirming")) {
       close.classList.add("confirming");
       close.textContent = "?";
-      close.title = t("close.session.confirm", { title: escape(s.title || t("untitled")) });
+      close.title = t("close.session.confirm", { title: s.title || t("untitled") });
       setTimeout(() => {
         close.classList.remove("confirming");
         close.textContent = "×";
@@ -304,7 +331,7 @@ const renderSessionItem = (s, isPinned = false) => {
     if (!archiveBtn.classList.contains("confirming")) {
       archiveBtn.classList.add("confirming");
       archiveBtn.innerHTML = "?";
-      archiveBtn.title = t("archive.confirm", { title: escape(s.title || t("untitled")) });
+      archiveBtn.title = t("archive.confirm", { title: s.title || t("untitled") });
       setTimeout(() => {
         archiveBtn.classList.remove("confirming");
         archiveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>`;
@@ -518,6 +545,10 @@ const renderSessions = async (force = false) => {
     }
 
     const newChildren = [];
+    // Unified empty state — no sessions at all, or no filter matches.
+    if (buildOrder.length === 0) {
+      newChildren.push(sideEmpty("◌", query ? t("filter.no.match") : t("no.session")));
+    }
     // Walk in order, updating or creating DOM nodes.
     // Only update display content — do NOT reorder DOM nodes
     // when only metadata (isProcessing, title) changed.
@@ -556,8 +587,9 @@ const renderSessions = async (force = false) => {
     if (force) {
       sessionList.replaceChildren(...newChildren);
     } else {
-      // Remove stale session items.
+      // Remove stale session items and any previous empty-state row.
       for (const [, stale] of existingItems) stale.remove();
+      sessionList.querySelectorAll(".side-empty").forEach((el) => el.remove());
 
     // Reconcile group headers: reuse existing DOM nodes, only
     // insert/remove/update text when buckets actually change.
@@ -630,7 +662,12 @@ const renderSessions = async (force = false) => {
 const renderWorkspaces = () => {
   if (!workspaceList) return;
   const agentList = agents.value;
-  if (!agentList.length) return;
+  if (!agentList.length) {
+    if (workspacesHash === "empty") return;
+    workspacesHash = "empty";
+    workspaceList.replaceChildren(sideEmpty("◆", t("no.workspaces")));
+    return;
+  }
   const buckets = new Map();
   for (const s of agentList) {
     const key = s.cwd || "(no cwd)";
@@ -645,7 +682,7 @@ const renderWorkspaces = () => {
   groups.sort((a, b) => b.lastModified - a.lastModified);
 
   const hash = JSON.stringify(groups.map((g) => [
-    g.cwd, g.items.map((s) => [s.instanceId, s.title, s.isProcessing, s.hasUnread]),
+    g.cwd, g.items.map((s) => [s.instanceId, s.title, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt]),
   ]));
   if (hash === workspacesHash) return;
   workspacesHash = hash;
@@ -680,8 +717,8 @@ const renderWorkspaces = () => {
     const actions = document.createElement("span");
     actions.className = "workspace-actions";
     const newBtn = document.createElement("button");
-    newBtn.className = "workspace-action";
-    newBtn.title = "New agent here";
+    newBtn.className = "workspace-action side-btn";
+    newBtn.title = t("workspace.new.here");
     newBtn.textContent = "+";
     newBtn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
@@ -730,8 +767,8 @@ const renderWorkspaces = () => {
       const hasTitle = s.title && s.title !== s.instanceId;
       const titleText = hasTitle ? s.title : t("untitled");
       a.innerHTML =
-        `<span class="workspace-child-kind">◆</span>` +
-        `<span class="workspace-child-title" title="${escape(titleText)}">${escape(titleText)}</span>`;
+        `<span class="workspace-child-kind side-icon">◆</span>` +
+        sideBody(titleText, { ts: s.lastModified ?? s.startedAt });
       child.appendChild(a);
       children.appendChild(child);
     }
@@ -748,17 +785,14 @@ const renderTerminals = () => {
     .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
 
   const hash = JSON.stringify(items.map((s) => [
-    s.instanceId, s.title, s.cwd, s.isProcessing,
+    s.instanceId, s.title, s.cwd, s.isProcessing, s.lastModified ?? s.startedAt,
   ]));
   if (hash === terminalsHash) return;
   terminalsHash = hash;
 
   terminalList.innerHTML = "";
   if (items.length === 0) {
-    const empty = document.createElement("li");
-    empty.className = "terminal-empty";
-    empty.textContent = t("no.terminals");
-    terminalList.appendChild(empty);
+    terminalList.appendChild(sideEmpty("❯", t("no.terminals")));
     return;
   }
   for (const s of items) {
@@ -774,17 +808,13 @@ const renderTerminals = () => {
     });
     const hasTitle = s.title && s.title !== s.instanceId;
     const titleText = hasTitle ? s.title : t("untitled");
-    const cwdText = s.cwd ? shortenCwd(s.cwd) : "";
     a.innerHTML =
-      `<span class="terminal-kind">❯</span>` +
-      `<span class="terminal-meta">` +
-        `<span class="terminal-title" title="${escape(titleText)}">${escape(titleText)}</span>` +
-        (cwdText ? `<span class="terminal-cwd" title="${escape(s.cwd)}">${escape(cwdText)}</span>` : "") +
-      `</span>`;
+      `<span class="terminal-kind side-icon">❯</span>` +
+      sideBody(titleText, { cwd: s.cwd, ts: s.lastModified ?? s.startedAt });
     li.appendChild(a);
 
     const close = document.createElement("button");
-    close.className = "terminal-close";
+    close.className = "terminal-close side-btn";
     close.title = t("close.session");
     close.textContent = "×";
     close.addEventListener("click", async (ev) => {
@@ -795,7 +825,7 @@ const renderTerminals = () => {
       if (!close.classList.contains("confirming")) {
         close.classList.add("confirming");
         close.textContent = "?";
-        close.title = t("close.session.confirm", { title: escape(titleText) });
+        close.title = t("close.session.confirm", { title: titleText });
         setTimeout(() => {
           close.classList.remove("confirming");
           close.textContent = "×";
@@ -837,37 +867,31 @@ const renderArchive = async () => {
     const res = await fetch("/api/sessions/archived");
     if (!res.ok) return;
     const items = await res.json();
-    archiveList.hidden = false;
+    // Visibility is owned by the sidebarView effect — never unhide here,
+    // or a langchange/restore outside the archive view would leak the
+    // archive list into the current view.
     archiveList.innerHTML = "";
     const query = filterQuery();
     const visible = Array.isArray(items) && query
       ? items.filter((item) => matchesFilter(item.title || t("untitled"), item.cwd))
       : items;
     if (!Array.isArray(visible) || visible.length === 0) {
-      const empty = document.createElement("li");
-      empty.className = "archive-empty";
-      empty.textContent = t("archive.empty");
-      archiveList.appendChild(empty);
+      archiveList.appendChild(sideEmpty(ARCHIVE_ICON_SVG, query ? t("filter.no.match") : t("archive.empty")));
       return;
     }
     for (const item of visible) {
       const li = document.createElement("li");
       li.dataset.sessionId = item.id;
-      li.style.cssText = "position:relative;display:flex;align-items:center;padding:0.42rem 0.7rem 0.42rem 1.5rem;cursor:pointer;border-radius:var(--radius-xs);transition:background 0.1s;min-height:36px;";
 
-      const info = document.createElement("a");
-      info.className = "session-item-link";
-      info.href = `/${item.id}`;
-      info.style.cssText = "flex:1;min-width:0;display:flex;align-items:center;gap:0.5rem;text-decoration:none;color:var(--text-dim);font-size:0.82rem;";
-      const title = escape(item.title || t("untitled"));
-      const timeText = item.startedAt
-        ? `<span class="session-time">${escape(relativeTime(item.startedAt))}</span>`
-        : "";
-      info.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-mid);font-weight:440;font-size:0.82rem;line-height:1.3;">${title}</span>${timeText}`;
-      li.appendChild(info);
+      const a = document.createElement("a");
+      a.href = `/${item.id}`;
+      a.innerHTML =
+        `<span class="archive-icon side-icon">${ARCHIVE_ICON_SVG}</span>` +
+        sideBody(item.title || t("untitled"), { cwd: item.cwd, ts: item.startedAt });
+      li.appendChild(a);
 
       const restoreBtn = document.createElement("button");
-      restoreBtn.className = "session-btn";
+      restoreBtn.className = "archive-restore side-btn";
       restoreBtn.title = t("restore");
       restoreBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`;
       restoreBtn.addEventListener("click", async (ev) => {
@@ -979,6 +1003,7 @@ document.addEventListener("langchange", () => {
   renderSessions();
   renderWorkspaces();
   renderTerminals();
+  renderArchive();
 });
 
 // Inline update — a full re-render would clobber an in-progress title edit.

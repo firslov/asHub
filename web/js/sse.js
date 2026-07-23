@@ -88,6 +88,7 @@ const SUBAGENT_TOOL_NAMES = { plan: "plan", explore: "explore", review: "review"
 // The todolist tool renders as a single TODO card driven by agent:todo
 // events — its tool-started/completed frames must not build tool-rows.
 const TODO_TOOL_NAME = "todolist";
+const SWARM_TOOL_NAME = "agentswarm";
 
 // Parallel subagent block tracking: launch toolCallId → block and
 // subagentId → block, so nested tool events route to the right block when
@@ -100,6 +101,21 @@ const saMaps = (sv) => {
 const clearSaMaps = (sv) => {
   sv._saBlocksByCallId?.clear();
   sv._saBlocksBySaId?.clear();
+};
+// Swarm progress blocks: swarmId → block element.  Lazily created on the
+// SessionView instance; cleared on branch switch alongside the sa maps.
+const swarms = (sv) => {
+  if (!sv._swarms) sv._swarms = new Map();
+  return sv._swarms;
+};
+// Update a swarm progress block's N/M counter in place.
+const updateSwarmCount = (block, p) => {
+  const count = block.querySelector(".swarm-count");
+  if (!count) return;
+  const done = Number(p?.done ?? 0);
+  const total = block._swarmTotal || done;
+  count.textContent = `${done}/${total}`;
+  if (Number(p?.failed ?? 0) > 0) count.classList.add("swarm-failed");
 };
 // Owning subagentId of a nested tool id (`${subagentId}-tool-${n}`), or "".
 const saIdFromToolId = (id) => {
@@ -316,6 +332,36 @@ document.addEventListener("visibilitychange", () => {
   if (!el) return;
   for (const card of el.querySelectorAll(".permission-card")) measureDiffClip(card);
 });
+
+const SA_ICONS = { plan: "✦", explore: "◈", review: "◆", research: "⚗", implement: "⚒" };
+
+// Build a subagent block (head + collapsible body + result area). Used by
+// the agent:tool-started interception (sync launches) and by
+// subagent:started (swarm/async launches that have no launch tool call).
+const createSubagentBlock = (session, type, taskText) => {
+  const icon = SA_ICONS[type] || "⟡";
+  const block = document.createElement("div");
+  block.className = "subagent-block";
+  block.innerHTML =
+    `<div class="subagent-head">` +
+      `<span class="subagent-type-badge">${escape(type)}</span>` +
+      `<span class="subagent-icon">${icon}</span>` +
+      `<span class="subagent-label">${escape(String(taskText).slice(0, 80))}</span>` +
+      `<span class="subagent-tools-count"></span>` +
+      `<span class="subagent-spinner"></span>` +
+    `</div>` +
+    `<div class="subagent-body" hidden></div>` +
+    `<div class="subagent-result" hidden></div>`;
+  block.querySelector(".subagent-head")?.addEventListener("click", () => {
+    // Mark manual toggles so subagent:done won't force-expand later.
+    block.dataset.userToggled = "1";
+    const body = block.querySelector(".subagent-body");
+    const result = block.querySelector(".subagent-result");
+    if (body && body.children.length > 0) body.hidden = !body.hidden;
+    if (result && body && !body.hidden) result.hidden = false;
+  });
+  return block;
+};
 
 // Handlers run with `this` bound to the owning SessionView.
 export const handlers = {
@@ -623,6 +669,8 @@ export const handlers = {
       // balance/git fetches, busy flips and a full compactReasoning scan).
       this.enterReplayMode?.();
       clearSaMaps(this);
+      this._swarms?.clear();
+      this._pendingSwarmCalls?.clear();
     }
     // Contract H: panels holding index-based state (context panel)
     // re-fetch on this event — stale indices would drop wrong messages.
@@ -648,38 +696,33 @@ export const handlers = {
   },
 
   "agent:tool-started"(p) {
-    // todolist tool — suppress the tool-row; the TODO card is driven by
-    // agent:todo events instead (see TODO_TOOL_NAME).
-    if (p?.name === TODO_TOOL_NAME) return;
+    // todolist / agentswarm tools — suppress the tool-row.  The TODO card /
+    // swarm block (driven by their own events) are the visuals instead.
+    // IMPORTANT: close the open reply bubble first, or the post-tool summary
+    // text keeps appending to a bubble that now sits ABOVE the new block.
+    if (p?.name === TODO_TOOL_NAME || p?.name === SWARM_TOOL_NAME) {
+      closeReply(this);
+      closeToolGroup(this);
+      finalizeThinking(this);
+      startNewSegment(this);
+      // Remember the swarm launch call id so tool-completed can render the
+      // aggregated output into the swarm block (covers branch rebuilds,
+      // where no swarm/subagent frames exist).
+      if (p?.name === SWARM_TOOL_NAME && p?.toolCallId) {
+        (this._pendingSwarmCalls ??= new Set()).add(p.toolCallId);
+      }
+      return;
+    }
     // Subagent tool — intercept BEFORE creating a tool-row.
     const isSa = !!(p?.name && p.name in SUBAGENT_TOOL_NAMES);    if (isSa) {
       closeReply(this);
       closeToolGroup(this);
       const type = SUBAGENT_TOOL_NAMES[p.name];
-      const icon = { plan: "✦", explore: "◈", review: "◆", research: "⚗", implement: "⚒" }[type] || "⟡";
       const taskText = (typeof p?.rawInput === "object" ? p.rawInput?.task : null) ?? p.name;
-      const block = document.createElement("div");
-      block.className = "subagent-block";
+      const block = createSubagentBlock(this, type, taskText);
       // Remember the launch call id so agent:tool-completed can tell the
       // subagent tool's own completion apart from nested/parallel tools.
       block.dataset.callId = p?.toolCallId ?? "";
-      block.innerHTML =
-        `<div class="subagent-head">` +
-          `<span class="subagent-type-badge">${escape(type)}</span>` +
-          `<span class="subagent-icon">${icon}</span>` +
-          `<span class="subagent-label">${escape(String(taskText).slice(0, 80))}</span>` +
-          `<span class="subagent-spinner"></span>` +
-        `</div>` +
-        `<div class="subagent-body" hidden></div>` +
-        `<div class="subagent-result" hidden></div>`;
-      block.querySelector(".subagent-head")?.addEventListener("click", () => {
-        // Mark manual toggles so subagent:done won't force-expand later.
-        block.dataset.userToggled = "1";
-        const body = block.querySelector(".subagent-body");
-        const result = block.querySelector(".subagent-result");
-        if (body && body.children.length > 0) body.hidden = !body.hidden;
-        if (result && body && !body.hidden) result.hidden = false;
-      });
       insertStreamNode(this, block);
       this._subagent = block;
       this._subagentBlock = block;
@@ -700,7 +743,15 @@ export const handlers = {
     const nest = saBlock || this._subagent;
     if (nest) {
       const body = nest.querySelector(".subagent-body");
-      if (body) { body.appendChild(row); body.hidden = false; }
+      // Keep the body collapsed — subagents can run dozens of tools, and
+      // expanding them inline floods the stream.  Show a live counter in
+      // the head instead; the user can click the head to expand.
+      if (body) {
+        body.appendChild(row);
+        nest._toolCount = (nest._toolCount ?? 0) + 1;
+        const counter = nest.querySelector(".subagent-tools-count");
+        if (counter) counter.textContent = t("subagent.tools", { n: nest._toolCount });
+      }
     } else {
       appendToGroup(this, row);
       bumpToolCount(this);
@@ -710,6 +761,48 @@ export const handlers = {
 
   "agent:tool-completed"(p) {
     const id = p?.toolCallId ?? "";
+    // A suppressed agentswarm launch completing: render the aggregated
+    // rawOutput into the linked swarm block's result area.  This is also
+    // the only place swarm results survive a branch rebuild, whose
+    // synthesized replay contains no swarm/subagent frames at all.
+    if (id) {
+      const root = (this.state.replaying && this._replayFrag) || this.streamEl;
+      const swarmBlock = [...(root?.querySelectorAll(".subagent-swarm") ?? [])]
+        .find((b) => b._swarmCallId === id);
+      if (swarmBlock) {
+        const result = swarmBlock.querySelector(".subagent-result");
+        const text = typeof p?.rawOutput === "string" ? p.rawOutput : "";
+        if (result && text.trim()) {
+          result.hidden = false;
+          const rendered = renderToolBody(text.split("\n"));
+          if (rendered) result.appendChild(rendered);
+        }
+        this._pendingSwarmCalls?.delete(id);
+        return;
+      }
+      // Branch-rebuild / truncated-replay fallback: no swarm block exists
+      // (synthesized replays carry no swarm frames), but this completion
+      // belongs to a suppressed agentswarm call — render the aggregation
+      // as a standalone result block instead of dropping it entirely.
+      if (this._pendingSwarmCalls?.has(id)) {
+        this._pendingSwarmCalls.delete(id);
+        const text = typeof p?.rawOutput === "string" ? p.rawOutput : "";
+        if (text.trim()) {
+          const block = document.createElement("div");
+          block.className = "subagent-block subagent-swarm";
+          block.innerHTML =
+            `<div class="subagent-head subagent-done">` +
+              `<span class="subagent-icon">⚡</span>` +
+              `<span class="subagent-label">${escape(t("swarm.title"))}</span>` +
+            `</div>` +
+            `<div class="subagent-result"></div>`;
+          const rendered = renderToolBody(text.split("\n"));
+          if (rendered) block.querySelector(".subagent-result")?.appendChild(rendered);
+          insertStreamNode(this, block);
+        }
+        return;
+      }
+    }
     // The subagent tool's own completion: the id matches the launch call id
     // recorded on the block.  Append the result, then release the nesting
     // slot — later main-agent tools/thinking must render outside the
@@ -1012,9 +1105,10 @@ export const handlers = {
   },
 
   "subagent:started"(p) {
-    // Block already created by agent:tool-started interception.  Link the
-    // earliest un-linked block to this subagentId (launches and starts
-    // arrive in the same order) so nested tool events can find their block.
+    // Sync launches: block already created by the agent:tool-started
+    // interception — link the earliest un-linked block to this subagentId
+    // (launches and starts arrive in the same order) so nested tool events
+    // can find their block.
     const saId = p?.subagentId;
     if (!saId) return;
     saMaps(this);
@@ -1023,6 +1117,25 @@ export const handlers = {
       block._saId = saId;
       this._saBlocksBySaId.set(saId, block);
       break;
+    }
+    if (this._saBlocksBySaId.has(saId)) return;
+    // Swarm / async launches have no launch tool call, hence no block —
+    // create one from the event itself, or this subagent's inner tools
+    // would spill into the main stream as a flat tool-group.
+    const block = createSubagentBlock(this, p?.type ?? "explore", p?.task ?? "");
+    block._saId = saId;
+    this._saBlocksBySaId.set(saId, block);
+    this._subagent = block;
+    // Nest into the owning swarm's body — only when the payload names a
+    // swarm (backend tags every swarm item).  Non-swarm async launches go
+    // to the stream directly; a latest-swarm fallback would mis-nest them.
+    const swarmBlock = p?.swarmId ? this._swarms?.get(p.swarmId) : null;
+    const swarmBody = swarmBlock?.querySelector(".subagent-body");
+    if (swarmBody) {
+      swarmBody.hidden = false;
+      swarmBody.appendChild(block);
+    } else {
+      insertStreamNode(this, block);
     }
   },
 
@@ -1043,6 +1156,15 @@ export const handlers = {
       if (err) icon.style.color = "var(--error)";
     }
     head?.classList.add("subagent-done");
+    // Id badge for resume reference (e.g. #sa1).  Falls back to the id the
+    // block was linked with when the done frame carries none.
+    const badgeId = saId || block._saId || "";
+    if (badgeId && head && !head.querySelector(".subagent-id")) {
+      const badge = document.createElement("span");
+      badge.className = "subagent-id";
+      badge.textContent = `#${badgeId}`;
+      head.appendChild(badge);
+    }
     if (err) {
       const result = block.querySelector(".subagent-result");
       if (result) {
@@ -1052,10 +1174,9 @@ export const handlers = {
         result.appendChild(el);
       }
     }
-    // Auto-expand body/result only if the user hasn't toggled manually.
+    // Auto-expand the result area (not the tool body — that stays collapsed
+    // behind the counter) only if the user hasn't toggled manually.
     if (!block.dataset.userToggled) {
-      const body = block.querySelector(".subagent-body");
-      if (body && body.children.length > 0) body.hidden = false;
       const result = block.querySelector(".subagent-result");
       if (result && result.children.length > 0) result.hidden = false;
     }
@@ -1067,6 +1188,73 @@ export const handlers = {
     // result (it self-cleans the callId entry when it finalizes the block).
     if (saId) this._saBlocksBySaId?.delete(saId);
     if (this._subagent === block) this._subagent = null;
+  },
+
+  // Swarm progress block: one card per AgentSwarm launch, updated in place
+  // by progress/done frames (replay receives them in order, so the block
+  // settles on its terminal state).
+  "subagent:swarm-started"(p) {
+    const swarmId = p?.swarmId;
+    if (!swarmId) return;
+    const block = document.createElement("div");
+    block.className = "subagent-block subagent-swarm";
+    block._swarmTotal = Number(p?.total ?? 0);
+    block.innerHTML =
+      `<div class="subagent-head">` +
+        `<span class="subagent-icon">⚡</span>` +
+        `<span class="subagent-label">${escape(t("swarm.title"))}</span>` +
+        `<span class="swarm-count">0/${block._swarmTotal}</span>` +
+        `<span class="swarm-status"></span>` +
+        `<span class="subagent-spinner"></span>` +
+      `</div>` +
+      `<div class="subagent-body" hidden></div>` +
+      `<div class="subagent-result" hidden></div>`;
+    // Link the suppressed agentswarm tool call so its tool-completed can
+    // render the aggregated output into this block's result area.  FIFO:
+    // tool-started and swarm-started fire in the same order, so the oldest
+    // pending call belongs to this swarm.
+    if (this._pendingSwarmCalls?.size) {
+      block._swarmCallId = this._pendingSwarmCalls.values().next().value;
+      this._pendingSwarmCalls.delete(block._swarmCallId);
+    }
+    // Per-item subagent blocks are nested into the body by subagent:started —
+    // click toggles the whole swarm open/closed.
+    block.querySelector(".subagent-head")?.addEventListener("click", () => {
+      block.dataset.userToggled = "1";
+      const body = block.querySelector(".subagent-body");
+      if (body && body.children.length > 0) body.hidden = !body.hidden;
+    });
+    insertStreamNode(this, block);
+    swarms(this).set(swarmId, block);
+  },
+
+  "subagent:swarm-progress"(p) {
+    const block = p?.swarmId && this._swarms?.get(p.swarmId);
+    if (!block) return;
+    updateSwarmCount(block, p);
+  },
+
+  "subagent:swarm-done"(p) {
+    const swarmId = p?.swarmId;
+    const block = swarmId && this._swarms?.get(swarmId);
+    if (!block) return;
+    updateSwarmCount(block, p);
+    const head = block.querySelector(".subagent-head");
+    head?.classList.add("subagent-done");
+    head?.querySelector(".subagent-spinner")?.remove();
+    const failed = Number(p?.failed ?? 0);
+    const status = head?.querySelector(".swarm-status");
+    if (status) {
+      status.textContent = failed > 0 ? t("swarm.failed", { n: failed }) : t("swarm.done");
+      if (failed > 0) status.classList.add("swarm-failed");
+    }
+    // Collapse the per-item body on completion (unless the user toggled it).
+    if (!block.dataset.userToggled) {
+      const body = block.querySelector(".subagent-body");
+      if (body) body.hidden = true;
+    }
+    // Terminal: release the map entry; the DOM block stays in the stream.
+    this._swarms.delete(swarmId);
   },
 
   // Keepalive sent by server before _ensureBridge to prevent the 500ms

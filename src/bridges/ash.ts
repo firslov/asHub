@@ -732,7 +732,11 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool({
       name: "todolist",
       description:
-        `Maintain a structured TODO list to track progress on multi-step tasks. ` +
+        `Track YOUR OWN work progress while you execute a multi-step task (3+ steps). ` +
+        `This tool only drives a small work-tracking card in the UI — it is NOT a content format. ` +
+        `When the user asks you to produce a list, checklist, itinerary, plan, or "todo list" as the ANSWER ` +
+        `(e.g. a travel checklist), do NOT use this tool — write the list as normal Markdown in your reply instead. ` +
+        `Do not use it for single-step tasks either. ` +
         `Each call REPLACES the whole list — always pass the complete list, not just the changed items. ` +
         `Omit the 'todos' argument to query the current list; pass an empty array to clear it. ` +
         `Guidelines: keep exactly one item in_progress while work is underway; mark an item done ` +

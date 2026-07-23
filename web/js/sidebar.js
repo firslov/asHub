@@ -806,6 +806,10 @@ const renderTerminals = () => {
       close.classList.remove("confirming");
       try { await fetch(`/${s.instanceId}/`, { method: "DELETE" }); } catch {}
       if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
+      // renderTerminals reads the store, which still holds the deleted
+      // session — refetch first (renderSessions updates the store), then
+      // re-render, otherwise the closed tab stays visible.
+      await renderSessions();
       renderTerminals();
     });
     li.appendChild(close);
@@ -1044,7 +1048,11 @@ newTerminalBtn?.addEventListener("click", async (ev) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      toast(t("session.new.failed"), { type: "error", detail: detail || `HTTP ${res.status}` });
+      return;
+    }
     const sess = await res.json();
     if (sess.instanceId) {
       setSessionKind(sess.instanceId, kind);

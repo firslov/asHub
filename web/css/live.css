@@ -5198,22 +5198,24 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── TODO progress card (todolist tool) ──────────────────────────── */
 .todo-block {
   position: sticky;
-  top: 0.5rem;
+  top: 0;
   z-index: 10;
-  margin: 0.5rem 0;
+  margin: 0 0 0.5rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
   font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
   font-size: var(--fs-md);
-  background: var(--bg2);
+  background: var(--bg-elevated);
   box-shadow: var(--shadow-sm);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, border-radius 0.2s;
 }
-/* Stuck to the top of the scroller: elevate so it reads as floating above
-   the messages passing underneath. */
+/* Stuck to the top of the scroller: dock flush against the top edge
+   (squared top corners) and elevate for a floating-panel feel. */
 .todo-block.stuck {
   border-color: var(--border-mid);
+  border-top-color: transparent;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
   box-shadow: var(--shadow-lg);
 }
 .todo-block:hover {
@@ -5241,7 +5243,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   letter-spacing: inherit;
   font-weight: 500;
   color: var(--text-dim);
-  background: transparent;
+  background: var(--bg3);
   border: none;
   cursor: pointer;
   user-select: none;
@@ -5250,7 +5252,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 .todo-head:hover {
   color: var(--text);
-  background: var(--bg3);
+  background: var(--hover-bg, var(--bg3));
+  filter: brightness(1.05);
 }
 .todo-head::after {
   content: '▾';
@@ -5285,7 +5288,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   margin-left: auto;
   flex-shrink: 0;
   font-size: var(--fs-xs);
-  color: var(--text-dim);
+  font-weight: 500;
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-dim);
+  color: var(--on-accent);
   font-variant-numeric: tabular-nums;
 }
 

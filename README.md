@@ -3,7 +3,7 @@
 [English](#ashub) | [简体中文](README_CN.md)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+[![Node](https://img.shields.io/badge/node-%3E%3D20.3-brightgreen.svg)](package.json)
 
 Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent-sh sessions and exposes them through a browser UI.
 
@@ -11,11 +11,18 @@ Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent
 
 ## Features
 
-- **Multi-session** — sidebar to spawn, switch, and close sessions
+- **Multi-session** — sidebar to spawn, switch, search, and close sessions
 - **Session persistence** — conversations survive restarts
 - **Auto-title** — LLM-generated session titles with plain-text fallback
 - **Live streaming** — SSE with Markdown, syntax-highlighted code, diff views, and tool calls
 - **Reasoning compaction** — consecutive think→tool rounds auto-collapse into a single expandable block
+- **Todo list** — agent-managed task tracking, rendered as a progress card that stays pinned atop the stream
+- **Subagents** — five specialists (plan / explore / review / research / implement) with permission gating, cancellation, concurrency limits, and per-type model overrides
+- **Branch tree** — rewind and fork through conversation history; non-destructive time travel with a visual tree panel
+- **Permission gate** — file-modification approvals with countdown, full-diff preview, and session-wide option
+- **Export** — one-click export of any conversation to Markdown
+- **Skills marketplace** — browse and install skills from GitHub or Gitee
+- **System notifications** — get notified when approvals are requested or replies finish in the background
 - **Image support** — paste/upload images for multimodal models with automatic compression and Blob URL rendering
 - **Model picker** — searchable dropdown with real-time OpenRouter catalog (300+ models) grouped by provider
 - **Vision indicator** — icon in the input bar shows when the active model supports images
@@ -59,7 +66,7 @@ Download the AppImage from [Releases](https://github.com/firslov/ashub/releases)
 
 ### Run from source
 
-Requires **Node.js ≥ 20**.
+Requires **Node.js ≥ 20.3**.
 
 ```sh
 git clone https://github.com/firslov/ashub.git

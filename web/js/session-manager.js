@@ -103,15 +103,16 @@ effect(() => {
     }
   }
 
-  // Reset chrome (spinner, cancel) when switching to a non-busy session.
+  // Reset chrome (spinner) when switching to a non-busy session.
   // Prevents stale busy state from a deleted/background session from
   // blocking input clicks on Windows.
+  // NOTE: terminal views have no .state — optional chain is load-bearing;
+  // a throw here propagates out of registerSession and aborts the view's
+  // connectedCallback before it can subscribe to SSE.
   const s = activeSession.peek();
-  if (s && !s.state.isProcessing) {
+  if (s && !s.state?.isProcessing) {
     const spinner = document.getElementById("spinner");
-    const cancelBtn = document.getElementById("cancel-turn");
     if (spinner) spinner.hidden = true;
-    if (cancelBtn) cancelBtn.hidden = true;
   }
 });
 

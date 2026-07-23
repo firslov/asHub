@@ -19,6 +19,7 @@ export class TerminalBridge extends EventEmitter implements Bridge {
   readonly kind = "terminal" as const;
   private proc: pty.IPty | null = null;
   private closed = false;
+  private respawning = false;
   private initPromise: Promise<void>;
   private cols = DEFAULT_COLS;
   private rows = DEFAULT_ROWS;
@@ -36,7 +37,7 @@ export class TerminalBridge extends EventEmitter implements Bridge {
     }
   }
 
-  private async spawn(shellPath: string, shellArgs: string[], cwd: string): Promise<void> {
+  private async spawn(shellPath: string, shellArgs: string[], cwd: string, retried = false): Promise<void> {
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) {
       if (typeof v === "string") env[k] = v;
@@ -59,14 +60,60 @@ export class TerminalBridge extends EventEmitter implements Bridge {
     });
     this.proc = proc;
 
+    let gotData = false;
     proc.onData((data: string) => {
+      if (!gotData) {
+        gotData = true;
+        // On Windows, switch the console to the UTF-8 code page so localized
+        // (e.g. GBK/936) output isn't mojibake when ConPTY decodes it as
+        // UTF-8. Injected only after the shell proves alive — an early write
+        // can race ConPTY initialization. `chcp` works in cmd and powershell.
+        if (process.platform === "win32") {
+          try { proc.write("chcp 65001\r"); } catch {}
+        }
+      }
       this.emit("event", { name: "shell:pty-data", payload: { raw: data } } satisfies BusEvent);
     });
     proc.onExit(({ exitCode, signal }) => {
+      if (this.respawning) return; // intentional kill for shell fallback
       this.emit("event", { name: "shell:exit", payload: { exitCode, signal } } satisfies BusEvent);
       this.closed = true;
       this.emit("closed");
     });
+
+    if (process.platform === "win32" && !retried) {
+      // Some Windows environments yield no output from one shell under
+      // ConPTY; if nothing arrives, fall back to the other shell once.
+      setTimeout(() => {
+        if (gotData || this.closed) return;
+        const alt = /powershell/i.test(shellPath)
+          ? { path: process.env.COMSPEC ?? "cmd.exe", args: [] as string[] }
+          : { path: "powershell.exe", args: ["-NoLogo", "-NoExit"] };
+        this.respawning = true;
+        try { proc.kill(); } catch {}
+        this.respawning = false;
+        this.proc = null;
+        this.emit("event", {
+          name: "shell:pty-data",
+          payload: { raw: `\x1b[2m[no output from ${shellPath} — retrying with ${alt.path}]\x1b[0m\r\n` },
+        } satisfies BusEvent);
+        void this.spawn(alt.path, alt.args, cwd, true).catch((err) => {
+          // Never let a failed fallback escape as an unhandled rejection —
+          // in the Electron main process that can kill the whole backend.
+          process.stderr.write(`[terminal] fallback shell spawn failed: ${err instanceof Error ? err.message : err}\n`);
+        });
+      }, 2500);
+    } else if (process.platform === "win32" && retried) {
+      // Fallback shell also silent — leave a visible explanation instead of
+      // a dead cursor.
+      setTimeout(() => {
+        if (gotData || this.closed) return;
+        this.emit("event", {
+          name: "shell:pty-data",
+          payload: { raw: `\x1b[2m[terminal produced no output from either shell.\r\nThis usually indicates a ConPTY issue on this Windows build.\r\nPlease report it at https://github.com/firslov/ashub/issues]\x1b[0m\r\n` },
+        } satisfies BusEvent);
+      }, 5000);
+    }
   }
 
   ready(): Promise<void> {

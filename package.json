@@ -5,6 +5,9 @@
   "type": "module",
   "main": "electron/main.cjs",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.3"
+  },
   "bin": {
     "ashub": "./bin/ashub.js"
   },

@@ -75,7 +75,7 @@ const startRename = (btn, id) => {
   input.addEventListener("blur", () => finish(true));
   input.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
-    if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); finish(false); }
   });
 };
 

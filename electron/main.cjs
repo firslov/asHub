@@ -196,6 +196,9 @@ function createTearOutWindow(loadPath, screenPos) {
     minHeight: 600,
     title: "asHub",
     backgroundColor: isDark ? "#18181c" : "#fafaf7",
+    // Same chrome policy as the main window: frameless on Windows so the
+    // in-page custom title bar is the only one; hiddenInset on macOS.
+    frame: process.platform !== "win32",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     titleBarOverlay: process.platform === "darwin" ? {
       color: isDark ? "#18181c" : "#fafaf7",
@@ -461,21 +464,36 @@ function setupIPC() {
     }
   });
 
-  ipcMain.handle("focus-window", () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-      mainWindow.webContents.focus();
+  // Resolve the window that sent the IPC so tear-out windows control
+  // themselves instead of the main window; fall back to the main window.
+  const senderWindow = (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return win && !win.isDestroyed() ? win : mainWindow;
+  };
+
+  ipcMain.handle("focus-window", (event) => {
+    const win = senderWindow(event);
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+      win.webContents.focus();
     }
   });
 
   // Windows custom title bar controls
-  ipcMain.handle("window-minimize", () => { if (mainWindow) mainWindow.minimize(); });
-  ipcMain.handle("window-maximize", () => {
-    if (mainWindow) mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
+  ipcMain.handle("window-minimize", (event) => {
+    const win = senderWindow(event);
+    if (win) win.minimize();
   });
-  ipcMain.handle("window-close", () => { if (mainWindow) mainWindow.close(); });
+  ipcMain.handle("window-maximize", (event) => {
+    const win = senderWindow(event);
+    if (win) win.isMaximized() ? win.unmaximize() : win.maximize();
+  });
+  ipcMain.handle("window-close", (event) => {
+    const win = senderWindow(event);
+    if (win) win.close();
+  });
 
   // Sync native title bar with web UI theme changes
   ipcMain.on("theme-changed", (_event, theme) => {
@@ -573,6 +591,10 @@ if (!gotTheLock) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
+    } else {
+      // Main window was closed but tear-out windows kept the app alive;
+      // relaunching should bring the main window back.
+      createWindow();
     }
   });
 

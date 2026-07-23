@@ -1,11 +1,13 @@
 import "./i18n.js";
 
-// Platform detection
+// Platform detection (data-platform is set by the inline script in index.html)
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+const isWin = document.documentElement.dataset.platform === "win32";
 document.documentElement.classList.add(isMac ? "os-mac" : "os-other");
+if (isWin) document.documentElement.classList.add("os-win32");
 
-// Windows custom title bar controls
-if (!isMac) {
+// Windows custom title bar controls (win32 only — Linux keeps its native frame)
+if (isWin) {
   const winBar = document.getElementById("win-title-bar");
   if (winBar) winBar.removeAttribute("hidden");
   const minBtn = winBar?.querySelector(".minimize");
@@ -18,11 +20,6 @@ if (!isMac) {
   window.addEventListener("resize", () => {
     if (maxBtn) maxBtn.textContent = window.outerWidth >= screen.availWidth ? "❐" : "□";
   });
-}
-
-// Respect system reduced-motion preference
-if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-  document.querySelector(".app")?.setAttribute("data-animations", "reduced");
 }
 
 import { cancelTurn } from "./composer.js";
@@ -51,7 +48,15 @@ import "./shortcuts.js";
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
     // Panel ESC is handled by panel-manager.js
-    cancelTurn();
+    // Don't cancel a running turn while the user is editing some other
+    // field (rename inputs, config editor, …) — Esc there means "abort
+    // the edit". The main composer (#query) is excluded: Esc to cancel
+    // is expected behavior there.
+    const ae = document.activeElement;
+    const editing = ae && ae.id !== "query" && (
+      ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable
+    );
+    if (!editing) cancelTurn();
     return;
   }
   if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && ev.key === "`") {

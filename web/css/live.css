@@ -73,7 +73,6 @@
 
 .stream-empty-logo {
   position: relative;
-  animation: logo-float 6s ease-in-out infinite;
 }
 
 .stream-empty-logo::before {
@@ -86,12 +85,6 @@
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), black calc(100% - 1px));
   opacity: 0.3;
   z-index: -1;
-  animation: logo-spin 8s linear infinite;
-}
-
-@keyframes logo-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 
 .stream-empty-logo::after {
@@ -108,11 +101,6 @@
 
 .stream-empty:hover .stream-empty-logo::after {
   opacity: 0.8;
-}
-
-@keyframes logo-float {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-6px); }
 }
 
 .stream-empty-line {
@@ -136,18 +124,11 @@
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  animation: title-shimmer 12s linear infinite;
-}
-
-@keyframes title-shimmer {
-  0% { background-position: 0% 0%; }
-  100% { background-position: 200% 0%; }
 }
 
 [data-theme="dark"] .stream-empty-title {
   background: linear-gradient(135deg, #f0f0f4 0%, #d0d0d8 30%, #a8a8b4 60%, #d0d0d8 85%, #f0f0f4 100%);
   background-size: 200% 100%;
-  animation: title-shimmer 12s linear infinite;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -156,8 +137,8 @@
 /* ── Subtitle ──────────────────────────────────────────────────── */
 .stream-empty-sub {
   font-family: 'Geist', 'Inter', sans-serif;
-  font-weight: 380;
-  font-size: 0.92rem;
+  font-weight: 400;
+  font-size: var(--fs-lg);
   color: var(--text-dim);
   max-width: 38ch;
   line-height: 1.75;
@@ -171,7 +152,7 @@
   -webkit-text-fill-color: transparent;
   background-clip: text;
   font-style: normal;
-  font-weight: 550;
+  font-weight: 600;
 }
 
 /* ── CTA prompt button ─────────────────────────────────────────── */
@@ -184,8 +165,8 @@
   border: 1px solid var(--border-mid);
   border-radius: var(--radius-pill);
   font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  font-size: 0.82rem;
-  font-weight: 420;
+  font-size: var(--fs-md);
+  font-weight: 500;
   letter-spacing: -0.005em;
   color: var(--text-mid);
   cursor: pointer;
@@ -224,7 +205,7 @@
   margin-top: 12px;
 }
 .stream-empty-prompt.template {
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   padding: 0.4em 0.75em;
   opacity: 0.7;
   border: 1px solid var(--border);
@@ -269,7 +250,7 @@
   background: var(--bg-elevated);
   color: var(--text-dim);
   font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   font-weight: 400;
   cursor: pointer;
   transition: all var(--dur-normal) var(--ease-out-expo);
@@ -290,7 +271,7 @@
 }
 
 .sugg-icon {
-  font-size: 0.95rem;
+  font-size: var(--fs-lg);
   flex-shrink: 0;
 }
 
@@ -299,10 +280,10 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   margin-top: 0.9rem;
 }
-.kbd-hint { font-size: 0.7rem; color: var(--text-faint); letter-spacing: 0.03em; font-weight: 400; }
+.kbd-hint { font-size: var(--fs-xs); color: var(--text-faint); letter-spacing: 0.03em; font-weight: 400; }
 .kbd-hint kbd {
   display: inline-block;
   padding: 0.1rem 0.45rem;
@@ -313,7 +294,7 @@
   background: var(--bg3);
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 0.66rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   box-shadow: 0 1px 2px rgba(0,0,0,0.12);
 }
@@ -377,6 +358,8 @@
     width: min(300px, 90vw);
   }
   .live-wrap .terminal-body { padding: 0.9rem 1rem; }
+  /* Crowded input row: drop the usage-strip toggle to keep typing space */
+  .usage-strip-toggle { display: none; }
 }
 
 /* ── Main terminal ────────────────────────────────────────────────── */
@@ -387,11 +370,11 @@
   position: absolute;
   right: 1.5rem;
   bottom: 7.8rem;
-  background: var(--accent-gradient);
-  color: #fff;
+  background: var(--accent-dim);
+  color: var(--on-accent);
   border: none;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   letter-spacing: 0.04em;
   padding: 0.52rem 1.05rem;
@@ -446,7 +429,7 @@
   background: transparent;
   padding: 0;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   line-height: 1.6;
 }
 
@@ -485,7 +468,7 @@
   top: 0.3rem;
   left: 0.55rem;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.62rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   letter-spacing: 0.03em;
   color: var(--text-faint);
@@ -570,12 +553,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: block !important;
   position: relative !important;
   margin: 1.4rem 0 0 !important;
-  border: 1px solid rgba(125, 211, 252, 0.45) !important;
-  border-left: 3px solid rgb(56, 189, 248) !important;
-  border-radius: 5px !important;
-  background: rgba(56, 189, 248, 0.05) !important;
+  border: 1px solid var(--info-border) !important;
+  border-left: 3px solid var(--info) !important;
+  border-radius: var(--radius-sm) !important;
+  background: var(--info-bg) !important;
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace !important;
-  font-size: 0.82rem !important;
+  font-size: var(--fs-md) !important;
   line-height: 1.45 !important;
   overflow: hidden !important;
 }
@@ -583,20 +566,20 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex !important;
   align-items: center !important;
   gap: 0.5rem !important;
-  padding: 0.4rem 0.7rem !important;
-  background: rgba(56, 189, 248, 0.1) !important;
-  border-bottom: 1px solid rgba(56, 189, 248, 0.25) !important;
+  padding: var(--space-2) var(--space-3) !important;
+  background: color-mix(in srgb, var(--info) 10%, transparent) !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--info) 25%, transparent) !important;
   color: var(--text-mid);
 }
 .shell-block-head::after {
   content: "SHELL" !important;
-  font-size: 0.6rem !important;
+  font-size: var(--fs-xs) !important;
   letter-spacing: 0.14em !important;
   font-weight: 600 !important;
-  color: rgb(56, 189, 248) !important;
-  background: rgba(56, 189, 248, 0.18) !important;
+  color: var(--info) !important;
+  background: color-mix(in srgb, var(--info) 18%, transparent) !important;
   padding: 0.12rem 0.4rem !important;
-  border-radius: 3px !important;
+  border-radius: var(--radius-xs) !important;
   flex-shrink: 0 !important;
   margin-left: auto !important;
 }
@@ -611,12 +594,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   word-break: break-all;
   white-space: pre-wrap;
 }
-.shell-block-exit { font-size: 0.7rem; flex-shrink: 0; }
+.shell-block-exit { font-size: var(--fs-xs); flex-shrink: 0; }
 .shell-block-exit.ok   { color: var(--green, #6ad27a); }
 .shell-block-exit.fail { color: var(--red, #e15858); }
 .shell-block-output {
   margin: 0;
-  padding: 0.5rem 0.7rem;
+  padding: var(--space-2) var(--space-3);
   color: var(--text);
   background: transparent;
   white-space: pre-wrap;
@@ -698,13 +681,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   top: 50%;
   right: 0.8rem;
   transform: translateY(-50%);
-  font-size: 0.6rem;
+  font-size: var(--fs-xs);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--cyan, var(--accent));
   background: color-mix(in srgb, var(--cyan, var(--accent)) 14%, transparent);
   padding: 0.15rem 0.4rem;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   pointer-events: none;
   opacity: 0.85;
 }
@@ -737,10 +720,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .terminal-list li a {
   flex: 1;
   min-width: 0;
-  padding: 0.5rem 0.7rem;
+  padding: var(--space-2) var(--space-3);
   color: var(--text-dim);
   text-decoration: none;
-  font-size: 0.82rem;
+  font-size: var(--fs-md);
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -769,7 +752,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 .terminal-cwd {
   color: var(--text-faint);
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -778,7 +761,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: transparent;
   border: 0;
   color: var(--text-dim);
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   width: 1.6rem;
   height: 1.6rem;
   margin-right: 0.3rem;
@@ -792,7 +775,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .terminal-empty {
   padding: 0.7rem 0.7rem;
   color: var(--text-faint);
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   font-style: italic;
 }
 .workspace-group {
@@ -804,7 +787,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.35rem;
   padding: 0.45rem 0.6rem 0.35rem 0.7rem;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   color: var(--text-mid);
   cursor: pointer;
   user-select: none;
@@ -814,7 +797,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .workspace-caret {
   display: inline-block;
   width: 0.7rem;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
   transition: transform var(--dur-fast) var(--ease-out-expo);
 }
@@ -828,7 +811,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 .workspace-count {
   color: var(--text-dim);
-  font-size: 0.66rem;
+  font-size: var(--fs-xs);
   opacity: 0.7;
 }
 .workspace-actions {
@@ -842,7 +825,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-dim);
-  font-size: 0.66rem;
+  font-size: var(--fs-xs);
   width: 1.3rem;
   height: 1.3rem;
   border-radius: var(--radius-sm);
@@ -880,7 +863,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.42rem 0.7rem 0.42rem 1.9rem;
   color: var(--text-dim);
   text-decoration: none;
-  font-size: 0.82rem;
+  font-size: var(--fs-md);
   display: flex;
   align-items: center;
   gap: 0.45rem;
@@ -891,7 +874,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .workspace-child-kind {
   flex-shrink: 0;
   color: var(--accent);
-  font-size: 0.55rem;
+  font-size: var(--fs-xs);
   width: 0.75rem;
   text-align: center;
   line-height: 1;
@@ -1029,6 +1012,27 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   box-sizing: border-box;
 }
 
+.sidebar-filter {
+  flex-shrink: 0;
+  margin: 0.5rem 0.7rem 0.15rem;
+  padding: 0.34rem 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.sidebar-filter:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.sidebar-filter::placeholder {
+  color: var(--text-faint);
+}
+
 .title-bar-controls {
   display: flex;
   align-items: center;
@@ -1046,7 +1050,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .sidebar-title {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -1060,7 +1064,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: 1px solid transparent;
   color: var(--text-mid);
   font: inherit;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   line-height: 1;
   width: 1.8rem;
   height: 1.8rem;
@@ -1119,7 +1123,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .terminal-list,
 .archive-list {
   font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   font-weight: 400;
   line-height: 1.6;
   color: var(--text);
@@ -1138,19 +1142,19 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: block;
   overflow: hidden;
   position: relative;
-  padding: 0.6rem 0.7rem 0.6rem 1.5rem;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-5);
   color: var(--text-dim);
   text-decoration: none;
   transition: all var(--dur-normal) var(--ease-out-expo);
-  font-size: 0.84rem;
-  font-weight: 420;
+  font-size: var(--fs-md);
+  font-weight: 500;
   border-left: 2px solid transparent;
 }
 
 .session-list li:hover { background: var(--bg3); }
 .session-list li:hover a {
   color: var(--text);
-  padding-left: calc(1.5rem + 2px);
+  padding-left: calc(var(--space-5) + 2px);
   border-left-color: var(--accent-border);
 }
 
@@ -1169,7 +1173,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transition: opacity 0.15s;
   z-index: 1;
 }
-.session-list li:hover::before { opacity: 1; }
+.session-list li:hover::before,
+.session-list li:focus-within::before { opacity: 1; }
 
 /* Ensure action buttons sit above the backdrop */
 .session-list li .session-close,
@@ -1188,7 +1193,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
-  font-size: 0.95rem;
+  font-size: var(--fs-lg);
   line-height: 1;
   width: 1.7rem;
   padding: 0;
@@ -1201,7 +1206,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: center;
   border-radius: var(--radius-sm);
 }
-.session-list li:hover .session-close { opacity: 1; pointer-events: auto; }
+.session-list li:hover .session-close,
+.session-list li:focus-within .session-close { opacity: 1; pointer-events: auto; }
 
 .session-close:hover {
   color: var(--red);
@@ -1238,26 +1244,27 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-title {
   color: var(--text-mid);
-  font-weight: 440;
+  font-weight: 500;
   display: block;
-  font-size: 0.82rem;
+  font-size: var(--fs-md);
   line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.session-list li.current .session-title { color: var(--accent); font-weight: 560; }
+.session-list li.current .session-title { color: var(--accent); font-weight: 600; }
 
 .session-meta {
   display: flex;
   align-items: baseline;
   gap: 0.6rem;
   margin-top: 0.18rem;
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
   font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
 }
-.session-list li:hover .session-time { opacity: 0; transition: opacity 0.12s; }
+.session-list li:hover .session-time,
+.session-list li:focus-within .session-time { opacity: 0; transition: opacity 0.12s; }
 
 .session-cwd {
   flex: 1;
@@ -1270,7 +1277,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-time {
   flex-shrink: 0;
-  font-weight: 350;
+  font-weight: 400;
   color: var(--text-mid);
   font-feature-settings: "tnum" 1;
   font-variant-numeric: tabular-nums;
@@ -1282,11 +1289,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.6rem;
   padding: 0.75rem 1.25rem 0.3rem;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-mid);
   letter-spacing: 0.14em;
   color: var(--text-mid);
   pointer-events: none;
@@ -1310,7 +1315,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-faint);
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   line-height: 1;
   width: 1.7rem;
   padding: 0;
@@ -1324,7 +1329,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-sm);
 }
 
-.session-list li:hover .session-edit { opacity: 1; pointer-events: auto; }
+.session-list li:hover .session-edit,
+.session-list li:focus-within .session-edit { opacity: 1; pointer-events: auto; }
 .session-edit:hover {
   color: var(--accent);
   background: var(--accent-glow);
@@ -1351,10 +1357,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: center;
   border-radius: var(--radius-sm);
 }
-.session-list li:hover .session-archive-btn { opacity: 1; pointer-events: auto; }
+.session-list li:hover .session-archive-btn,
+.session-list li:focus-within .session-archive-btn { opacity: 1; pointer-events: auto; }
 .session-archive-btn:hover {
   color: var(--text-muted);
-  background: var(--hover-bg, color-mix(in srgb, var(--fg) 8%, transparent));
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
   border-color: color-mix(in srgb, var(--fg) 12%, transparent);
 }
 .session-archive-btn svg { width: 14px; height: 14px; }
@@ -1366,7 +1373,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   opacity: 1 !important;
   pointer-events: auto;
   font-weight: 600;
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   animation: pulse-archive 0.6s ease-in-out infinite alternate;
 }
 .session-archive-btn.confirming svg { display: none; }
@@ -1382,14 +1389,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   margin: 0.5rem 0;
   display: flex;
   border: 1px solid var(--border);
-  border-left: 4px solid #f59e0b;
+  border-left: 4px solid var(--warning);
   border-radius: var(--radius-md);
   background: var(--bg2);
   overflow: hidden;
   animation: permission-in 0.25s var(--ease-out-expo);
 }
 .permission-card.countdown-urgent {
-  border-left-color: #ef4444;
+  border-left-color: var(--error);
 }
 
 .permission-left-bar {
@@ -1405,13 +1412,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.6rem 0.85rem 0.45rem;
-  font-size: 0.8rem;
-  font-weight: 550;
+  padding: var(--space-2) var(--space-3) var(--space-2);
+  font-size: var(--fs-md);
+  font-weight: 600;
   color: var(--text);
 }
 .permission-icon {
-  color: #f59e0b;
+  color: var(--warning);
   display: flex;
   align-items: center;
   flex-shrink: 0;
@@ -1428,7 +1435,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: 4px;
   background: var(--bg3);
   font-family: 'Geist Mono', monospace;
-  font-size: 0.65rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--text-dim);
   white-space: nowrap;
@@ -1436,22 +1443,22 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .permission-body {
-  padding: 0 0.85rem 0.4rem;
+  padding: 0 var(--space-3) var(--space-2);
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
 }
 .permission-path {
   font-family: 'Geist Mono', monospace;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   color: var(--accent-dim);
   word-break: break-all;
 }
 .permission-desc {
   color: var(--text-faint);
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
 }
 
 .permission-diff {
@@ -1465,17 +1472,20 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.4rem;
-  padding: 0.5rem 0.85rem;
+  padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--border-light);
 }
 .permission-actions-left {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.4rem;
 }
 .permission-actions-right {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.4rem;
 }
 
@@ -1487,7 +1497,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-family: inherit;
-  font-size: 0.73rem;
+  font-size: var(--fs-sm);
   font-weight: 500;
   cursor: pointer;
   background: var(--bg3);
@@ -1499,18 +1509,18 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .permission-btn:hover svg { opacity: 1; }
 
 .permission-btn.deny:hover {
-  background: rgba(239, 68, 68, 0.08);
-  border-color: rgba(239, 68, 68, 0.3);
-  color: #ef4444;
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--error);
 }
 .permission-btn.approve {
-  background: rgba(34, 197, 94, 0.06);
-  border-color: rgba(34, 197, 94, 0.2);
-  color: #22c55e;
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success);
 }
 .permission-btn.approve:hover {
-  background: rgba(34, 197, 94, 0.12);
-  border-color: rgba(34, 197, 94, 0.35);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
 }
 .permission-btn.approve-all {
   border-color: var(--accent-border);
@@ -1537,14 +1547,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.6rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
   font-family: 'Geist Mono', monospace;
   color: var(--text-dim);
 }
-.permission-card.countdown-urgent .perm-count-text { color: #ef4444; }
+.permission-card.countdown-urgent .perm-count-text { color: var(--error); }
 .perm-ring-fill {
-  stroke: #f59e0b;
+  stroke: var(--warning);
   transition: stroke 0.3s, stroke-dashoffset 0.9s linear;
   transform: rotate(-90deg);
   transform-origin: 12px 12px;
@@ -1559,20 +1569,72 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transition: opacity 0.5s;
 }
 .permission-card.allowed {
-  border-left-color: #22c55e;
+  border-left-color: var(--success);
 }
-.permission-card.allowed .permission-icon { color: #22c55e; }
+.permission-card.allowed .permission-icon { color: var(--success); }
 .permission-card.blocked {
-  border-left-color: #ef4444;
+  border-left-color: var(--error);
 }
-.permission-card.blocked .permission-icon { color: #ef4444; }
+.permission-card.blocked .permission-icon { color: var(--error); }
+.permission-card.timeout {
+  border-left-color: var(--text-faint);
+}
+.permission-card.timeout .permission-icon { color: var(--text-faint); }
+.permission-status {
+  font-size: var(--fs-xs);
+  font-style: italic;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.permission-timeout-note {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* Approve-all two-step confirm state */
+.permission-btn.approve-all.confirming {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+/* Collapsible permission diff: fade mask + expand toggle */
+.permission-diff-wrap { position: relative; }
+.permission-diff { position: relative; }
+.permission-diff-wrap.expanded .permission-diff { max-height: none; }
+.permission-diff-wrap.clipped:not(.expanded) .permission-diff::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 42px;
+  background: linear-gradient(to bottom, transparent, var(--bg2));
+  pointer-events: none;
+}
+.permission-diff-toggle {
+  display: block;
+  width: calc(100% - 1.7rem);
+  margin: 0.15rem 0.85rem 0.1rem;
+  padding: 0.25rem 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  cursor: pointer;
+  text-align: center;
+}
+.permission-diff-toggle:hover { text-decoration: underline; }
 
 /* Dark theme refinements */
 [data-theme="dark"] .permission-card {
   background: rgba(30, 30, 40, 0.6);
 }
 [data-theme="dark"] .permission-btn.approve {
-  background: rgba(34, 197, 94, 0.08);
+  background: var(--success-bg);
 }
 [data-theme="dark"] .permission-btn.approve-all {
   background: var(--accent-glow);
@@ -1580,11 +1642,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 /* Academic theme */
 [data-theme="academic"] .permission-card {
-  border-radius: 0;
   border-left-width: 3px;
-  font-family: 'Crimson Text', 'Georgia', serif;
+  font-family: 'Source Serif 4', 'Noto Serif SC', Georgia, serif;
 }
-[data-theme="academic"] .permission-head { font-family: 'Crimson Text', 'Georgia', serif; }
+[data-theme="academic"] .permission-head { font-family: 'Source Serif 4', 'Noto Serif SC', Georgia, serif; }
 [data-theme="academic"] .permission-btn { border-radius: 0; font-family: inherit; }
 
 @keyframes permission-in {
@@ -1594,7 +1655,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .subagent-block {
   margin: 0.35rem 0;
-  border: 1px solid rgba(139, 92, 246, 0.18);
+  border: 1px solid color-mix(in srgb, var(--purple) 18%, transparent);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
@@ -1603,14 +1664,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.9rem;
+  padding: var(--space-2) var(--space-4);
   font: inherit;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.07), rgba(99, 102, 241, 0.04));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--purple) 7%, transparent), color-mix(in srgb, var(--purple) 4%, transparent));
   cursor: pointer;
   user-select: none;
 }
 .subagent-head:hover {
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(99, 102, 241, 0.06));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--purple) 10%, transparent), color-mix(in srgb, var(--purple) 6%, transparent));
 }
 .subagent-head.subagent-done {
   opacity: 0.55;
@@ -1619,46 +1680,46 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .subagent-body {
-  border-top: 1px solid rgba(139, 92, 246, 0.08);
-  padding: 0.2rem 0;
+  border-top: 1px solid color-mix(in srgb, var(--purple) 8%, transparent);
+  padding: var(--space-1) 0;
 }
 .subagent-body .tool-row {
   padding-left: 3rem;
   padding-right: 0.85rem;
-  border-left: 2px solid rgba(139, 92, 246, 0.12);
+  border-left: 2px solid color-mix(in srgb, var(--purple) 12%, transparent);
   margin-left: 1.5rem;
   margin-bottom: 0;
-  border-bottom: 1px solid rgba(139, 92, 246, 0.05);
+  border-bottom: 1px solid color-mix(in srgb, var(--purple) 5%, transparent);
 }
 .subagent-body .tool-row:last-child {
   border-bottom: none;
 }
 
 .subagent-result {
-  border-top: 1px solid rgba(139, 92, 246, 0.1);
-  padding: 0.5rem 0.85rem;
+  border-top: 1px solid color-mix(in srgb, var(--purple) 10%, transparent);
+  padding: var(--space-2) var(--space-3);
 }
 
 .subagent-type-badge {
   display: inline-flex;
   align-items: center;
   padding: 0.15rem 0.55rem;
-  font-size: 0.65rem;
-  font-weight: 550;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   border-radius: 999px;
-  color: rgba(139, 92, 246, 0.9);
-  background: rgba(139, 92, 246, 0.12);
-  border: 1px solid rgba(139, 92, 246, 0.18);
+  color: var(--purple);
+  background: color-mix(in srgb, var(--purple) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--purple) 18%, transparent);
   flex-shrink: 0;
   line-height: 1.3;
 }
 
 .subagent-icon {
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   flex-shrink: 0;
-  color: rgba(139, 92, 246, 0.7);
+  color: color-mix(in srgb, var(--purple) 70%, transparent);
   width: 1em;
   text-align: center;
 }
@@ -1670,15 +1731,15 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text-dim);
-  font-size: 0.8rem;
-  font-weight: 420;
+  font-size: var(--fs-md);
+  font-weight: 500;
 }
 
 .subagent-spinner {
   width: 11px;
   height: 11px;
-  border: 2px solid rgba(139, 92, 246, 0.15);
-  border-top-color: rgba(139, 92, 246, 0.7);
+  border: 2px solid color-mix(in srgb, var(--purple) 15%, transparent);
+  border-top-color: color-mix(in srgb, var(--purple) 70%, transparent);
   border-radius: 50%;
   flex-shrink: 0;
   animation: subagent-spin 0.7s linear infinite;
@@ -1698,7 +1759,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-sm);
   color: var(--text);
   font-family: inherit;
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   font-weight: 500;
   padding: 0.2rem 0.5rem;
   margin: 0.1rem 0;
@@ -1742,10 +1803,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   50% { opacity: 0.5; box-shadow: 0 0 10px var(--cyan-glow); }
 }
 
-/* Unread: subtle amber dot */
+/* Unread: subtle warning dot */
 .session-unread .session-status {
   opacity: 1;
-  background: var(--amber);
+  background: var(--warning);
   box-shadow: 0 0 4px var(--accent-glow);
 }
 
@@ -1806,21 +1867,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--green);
   box-shadow: 0 0 6px rgba(90, 158, 111, 0.4), 0 0 12px rgba(90, 158, 111, 0.2);
   margin-left: 0.6rem;
-  animation: pulse-dot 3s ease-in-out infinite;
   flex-shrink: 0;
   transition: background var(--dur-slow) var(--ease-out-expo),
               box-shadow var(--dur-slow) var(--ease-out-expo);
-}
-
-@keyframes pulse-dot {
-  0%, 100% {
-    box-shadow: 0 0 4px rgba(90, 158, 111, 0.35), 0 0 8px rgba(90, 158, 111, 0.15);
-    background: var(--green);
-  }
-  50% {
-    box-shadow: 0 0 10px rgba(90, 158, 111, 0.5), 0 0 20px rgba(90, 158, 111, 0.25);
-    background: #6fb880;
-  }
 }
 
 .live-dot.stale {
@@ -1843,17 +1892,17 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .live-status {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   color: var(--text-mid);
   letter-spacing: 0.05em;
-  font-weight: 420;
+  font-weight: 500;
 }
 
 /* ── Version label ─────────────────────────────────────────────────── */
 .version-label {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.68rem;
-  font-weight: 420;
+  font-size: var(--fs-xs);
+  font-weight: 500;
   color: var(--text-dim);
   letter-spacing: 0.03em;
   margin-left: auto;
@@ -1884,17 +1933,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--accent-glow);
   border-color: var(--accent-border);
   cursor: pointer;
-  animation: version-pulse 2.5s ease-in-out infinite;
 }
 
 .version-label.has-update:hover {
   background: var(--accent-soft);
   color: var(--accent-dim);
-}
-
-@keyframes version-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
-  50%      { box-shadow: 0 0 6px 2px var(--accent-glow); }
 }
 
 .version-label.up-to-date {
@@ -1929,7 +1972,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   flex-direction: column;
   border: none;
-  font-size: 0.9rem;
+  font-size: var(--fs-lg);
   background: var(--bg);
   box-shadow: none;
   overflow: hidden;
@@ -1947,12 +1990,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   opacity: 0.12;
   z-index: 1;
   pointer-events: none;
-  animation: terminal-top-line 6s ease-in-out infinite;
-}
-
-@keyframes terminal-top-line {
-  0%, 100% { opacity: 0.04; }
-  50%      { opacity: 0.28; }
 }
 
 /* ── Right-panel unified typography ───────────────────────────────── */
@@ -1966,7 +2003,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow-y: auto;
   padding: 0.5rem 0;
   font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--text);
   line-height: 1.6;
@@ -1974,21 +2011,21 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .panel-content-mono {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
 }
 
 .panel-empty {
   color: var(--text-dim);
   padding: 2rem 1.25rem;
   text-align: center;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   font-weight: 400;
   line-height: 1.65;
 }
 
 .panel-section-title {
-  font-size: 0.7rem;
-  font-weight: 550;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-mid);
@@ -2004,21 +2041,21 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   -webkit-font-smoothing: subpixel-antialiased;
 }
 
-:root.os-other { --ui-title-bar-height: 78px; }
+:root.os-win32 { --ui-title-bar-height: 78px; }
 
 /* Windows custom title bar */
 .win-title-bar { display: none; }
 /* Ensure right-side panels clear the title bar on Windows */
-.os-other .config-overlay,
-.os-other .prompt-overlay,
-.os-other .tree-panel,
-.os-other .ctx-panel,
-.os-other .files-panel,
-.os-other .toolbar {
+.os-win32 .config-overlay,
+.os-win32 .prompt-overlay,
+.os-win32 .tree-panel,
+.os-win32 .ctx-panel,
+.os-win32 .files-panel,
+.os-win32 .toolbar {
   top: 78px;
 }
 
-.os-other .win-title-bar {
+.os-win32 .win-title-bar {
   display: flex;
   align-items: center;
   height: 32px;
@@ -2032,7 +2069,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   z-index: 100;
   border-bottom: 1px solid var(--border);
 }
-.os-other .title-bar {
+.os-win32 .title-bar {
   height: 78px;
   padding: 0.35rem 1rem;
   padding-top: 36px;
@@ -2040,20 +2077,20 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--bg2);
 }
 
-.os-other .title-bar .sidebar-btn {
+.os-win32 .title-bar .sidebar-btn {
   width: 26px;
   height: 26px;
 }
 
-.os-other .title-bar .sidebar-btn svg {
+.os-win32 .title-bar .sidebar-btn svg {
   width: 15px;
   height: 15px;
 }
 
-.os-other .title-bar .sidebar-view-btn {
+.os-win32 .title-bar .sidebar-view-btn {
   width: 28px;
   height: 26px;
-  font-size: 0.65rem;
+  font-size: var(--fs-xs);
 }
 
 
@@ -2064,7 +2101,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   font-family: 'Segoe UI', system-ui, sans-serif;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   padding-left: 12px;
   color: var(--text-dim);
 }
@@ -2079,7 +2116,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   line-height: 1;
   cursor: pointer;
   transition: background 0.1s;
@@ -2087,23 +2124,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .win-title-bar-controls button:hover { background: var(--bg3); }
 .win-title-bar-controls button.close:hover { background: #c42b1c; color: #fff; }
 
-
-
-.os-other .title-bar .sidebar-btn {
-  width: 26px;
-  height: 26px;
-}
-
-.os-other .title-bar .sidebar-btn svg {
-  width: 15px;
-  height: 15px;
-}
-
-.os-other .title-bar .sidebar-view-btn {
-  width: 28px;
-  height: 26px;
-  font-size: 0.65rem;
-}
 
 /* ── Right-panel awareness ──────────────────────────────────────── */
 /* When context / files / config / prompt panels slide in from the
@@ -2201,7 +2221,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .session-topic {
   font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  font-size: 0.88rem;
+  font-size: var(--fs-lg);
   font-weight: 500;
   color: var(--text);
   white-space: nowrap;
@@ -2221,8 +2241,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* Refined pill badge for the cwd — understated, premium feel */
 .session-cwd-meta {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.64rem;
-  font-weight: 420;
+  font-size: var(--fs-xs);
+  font-weight: 500;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -2244,7 +2264,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   margin-right: 0.35rem;
   color: var(--text-faint);
   font-weight: 300;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   opacity: 0.45;
 }
 
@@ -2284,7 +2304,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow-x: auto;
   margin: 1rem 0;
   border-collapse: collapse;
-  font-size: 0.88rem;
+  font-size: var(--fs-lg);
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   overflow: hidden;
@@ -2301,7 +2321,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--bg3);
   color: var(--text-dim);
   font-weight: 600;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -2344,8 +2364,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background-attachment: local, local, scroll, scroll;
 }
 
-/* ── Animation resets ────────────────────────────────────────────── */
-.live-wrap .anim { animation: none !important; opacity: 1 !important; }
 /* ── Blockquote styling ─────────────────────────────────────────── */
 .agent-reply blockquote {
   border-left: 3px solid var(--accent-border);
@@ -2478,7 +2496,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .agent-reply li { margin: 0.28rem 0; line-height: 1.7; }
 .agent-reply h1, .agent-reply h2, .agent-reply h3 {
   font-size: 1em;
-  font-weight: 550;
+  font-weight: 600;
   color: var(--text);
   margin: 1.1rem 0 0.4rem;
   letter-spacing: -0.015em;
@@ -2487,9 +2505,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .agent-reply pre { margin: 0.85rem 0; }
 
 .agent-reply strong { color: var(--text); font-weight: 600; }
-.agent-reply em { color: var(--text); font-style: italic; font-weight: 450; }
+.agent-reply em { color: var(--text); font-style: italic; font-weight: 500; }
 .agent-reply a {
-  color: var(--accent);
+  color: var(--accent-dim);
   text-decoration: underline;
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
@@ -2537,7 +2555,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* Text copy buttons (tool body) */
 .tool-body-btn.copy-btn {
   padding: 0.15rem 0.55rem;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
 }
 
 /* Positioning */
@@ -2574,12 +2592,16 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
               transform var(--dur-fast) var(--ease-out-expo);
 }
 
-/* Hover visibility — fully opaque on interaction */
+/* Hover / keyboard-focus visibility — fully opaque on interaction */
 .agent-reply pre:hover .code-copy-btn,
+.agent-reply pre:focus-within .code-copy-btn,
 .agent-reply:hover .reply-copy-btn,
+.agent-reply:focus-within .reply-copy-btn,
 .tool-body:hover .tool-body-btn.copy-btn,
+.tool-body:focus-within .tool-body-btn.copy-btn,
 .tool-body.expanded .tool-body-btn.copy-btn,
 .tool-body-live:hover .tool-body-btn.copy-btn,
+.tool-body-live:focus-within .tool-body-btn.copy-btn,
 .tool-body-live.expanded .tool-body-btn.copy-btn {
   opacity: 1;
 }
@@ -2625,7 +2647,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 .msg-time {
   display: block;
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
   margin-bottom: 0.15rem;
@@ -2662,7 +2684,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: 0.86em;
   color: var(--accent-dim);
   border: 1px solid var(--border);
-  font-weight: 450;
+  font-weight: 500;
 }
 
 .agent-reply .md-code {
@@ -2672,7 +2694,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   margin: 0.7rem 0;
   overflow-x: auto;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   color: var(--text);
   border-left: 2px solid var(--accent-border);
   box-shadow: inset 0 1px 3px rgba(0,0,0,0.06);
@@ -2682,7 +2704,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Tool rows ───────────────────────────────────────────────────── */
 .tool-row {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.79rem;
+  font-size: var(--fs-md);
   color: var(--text-mid);
   padding: 0.35rem 0;
   display: flex;
@@ -2711,10 +2733,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-shrink: 0;
   vertical-align: -0.15em;
 }
-.tool-icon--read    { color: var(--cyan); }
-.tool-icon--search  { color: var(--purple); }
-.tool-icon--execute { color: var(--green); }
-.tool-icon--write   { color: var(--accent); }
+.tool-icon--read    { color: var(--tool-read); }
+.tool-icon--search  { color: var(--tool-search); }
+.tool-icon--execute { color: var(--tool-execute); }
+.tool-icon--write   { color: var(--tool-write); }
 /* Fallback Unicode icon tint when no SVG matched. */
 .tool-name:not(:has(.tool-icon))::first-letter {
   color: var(--accent);
@@ -2726,7 +2748,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text-faint);
   margin-left: auto;
   padding-left: 0.6rem;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   flex-shrink: 0;
   animation: tool-mark-pop 0.35s var(--ease-out-expo) both;
   white-space: nowrap;
@@ -2741,15 +2763,15 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 
 /* Kind-based tool indicators */
-.tool-row[data-kind="search"]  .tool-name { color: var(--cyan); }
-.tool-row[data-kind="read"]    .tool-name { color: var(--accent); }
-.tool-row[data-kind="write"]   .tool-name { color: var(--purple); }
-.tool-row[data-kind="execute"] .tool-name { color: var(--text); }
+.tool-row[data-kind="read"]    .tool-name { color: var(--tool-read); }
+.tool-row[data-kind="search"]  .tool-name { color: var(--tool-search); }
+.tool-row[data-kind="write"]   .tool-name { color: var(--tool-write); }
+.tool-row[data-kind="execute"] .tool-name { color: var(--tool-execute); }
 
 .tool-body {
   color: var(--text-mid);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.82rem;
+  font-size: var(--fs-md);
   padding: 0.35rem 0.9rem 0.55rem 1.6rem;
   margin-left: 0.65rem;
   border-radius: var(--radius-sm);
@@ -2787,7 +2809,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: 1px solid var(--border);
   color: var(--text-faint);
   font: inherit;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   padding: 0.1rem 0.5rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -2802,7 +2824,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Diff blocks ─────────────────────────────────────────────────── */
 .diff-block {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   line-height: 1.55;
   margin: 0.6rem 0 0.9rem;
   border: 1px solid var(--border);
@@ -2817,11 +2839,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.55rem 0.9rem;
   border-bottom: 1px solid var(--border);
   color: var(--text-mid);
-  font-size: 0.76rem;
+  font-size: var(--fs-sm);
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-weight: 450;
+  font-weight: 500;
   letter-spacing: 0.01em;
 }
 
@@ -2841,7 +2863,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text-faint);
   font: inherit;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   padding: 0.1rem 0.45rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -2850,10 +2872,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .diff-btn:hover { color: var(--cyan); border-color: var(--cyan-dim); }
 
-.diff-block.wrapped .diff-line { white-space: pre-wrap; word-break: break-word; }
+.diff-block.wrapped .diff-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  grid-template-columns: 3em 3em 1.5em 1fr;
+}
 .diff-block.wrapped .diff-text { white-space: pre-wrap; }
 .diff-block.wrapped .diff-rows { min-width: 0; }
-.diff-block.wrapped .diff-line { grid-template-columns: 3em 3em 1.5em 1fr; }
 .diff-path { color: var(--text); }
 .diff-stat { color: var(--cyan); margin-left: 0.5rem; }
 .diff-sep {
@@ -2861,7 +2886,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--bg2);
   text-align: center;
   padding: 0.18rem 0;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
 }
 
 .diff-body { overflow-x: auto; }
@@ -2882,7 +2907,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0 0.4rem;
   text-align: right;
   user-select: none;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
 }
 
 .diff-sign { padding: 0 0.3rem; user-select: none; }
@@ -2953,7 +2978,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .page-loader-text {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   letter-spacing: 0.08em;
   animation: loader-text-fade 1.6s ease-in-out infinite;
@@ -3023,10 +3048,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow: hidden;
   min-width: 0;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   letter-spacing: 0.05em;
-  font-weight: 420;
+  font-weight: 500;
 }
 
 .usage-chip {
@@ -3037,7 +3062,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--bg3);
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   flex-shrink: 0;
 }
 .usage-chip[hidden] { display: none; }
@@ -3058,8 +3083,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transition: width 0.3s;
 }
 
-.terminal-usage.warm .usage-ctx { color: var(--amber); border-color: rgba(212, 168, 83, 0.3); }
-.terminal-usage.warm .usage-bar > span { background: var(--amber); }
+.terminal-usage.warm .usage-ctx { color: var(--warning); border-color: var(--warning-border); }
+.terminal-usage.warm .usage-bar > span { background: var(--warning); }
 .terminal-usage.hot .usage-ctx { color: var(--red); border-color: rgba(199, 106, 100, 0.3); }
 .terminal-usage.hot .usage-bar > span { background: var(--red); }
 
@@ -3089,18 +3114,18 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .usage-cache .cache-ring-fill.high { stroke: var(--green); }
-.usage-cache .cache-ring-fill.mid  { stroke: var(--amber); }
+.usage-cache .cache-ring-fill.mid  { stroke: var(--warning); }
 .usage-cache .cache-ring-fill.low  { stroke: var(--red); }
 
 .usage-cache .cache-pct {
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   letter-spacing: 0.02em;
   transition: color 0.3s;
 }
 
 .usage-cache .cache-pct.high { color: var(--green); }
-.usage-cache .cache-pct.mid  { color: var(--amber); }
+.usage-cache .cache-pct.mid  { color: var(--warning); }
 .usage-cache .cache-pct.low  { color: var(--red); }
 
 /* ── Turn separator ──────────────────────────────────────────────── */
@@ -3110,10 +3135,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.85rem;
   margin: var(--ui-conversation-turn-gap, 2.4rem) 0 1.2rem;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.67rem;
+  font-size: var(--fs-xs);
   color: var(--text-faint);
   letter-spacing: 0.05em;
-  font-weight: 420;
+  font-weight: 500;
   opacity: 0;
   animation: turn-sep-in 0.5s var(--ease-out-expo) 0.1s forwards;
 }
@@ -3124,7 +3149,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.85rem;
   margin: 1.6rem 0;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-faint);
 }
 .compaction-marker .cm-line {
@@ -3166,10 +3191,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.7rem 1rem;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-dim);
   letter-spacing: 0.14em;
@@ -3181,23 +3206,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: relative;
 }
 
-.tree-head::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 25%;
-  height: 50%;
-  width: 2px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
-  opacity: 0.5;
-}
 .tree-title { color: var(--text-dim); font-weight: 500; letter-spacing: 0.14em; flex: 1; }
 
 .tree-body { padding: 0.35rem 0; }
-.tree-empty { font-size: 0.78rem; }
+.tree-empty { font-size: var(--fs-sm); }
 
-.tree-rows { font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace; font-size: 0.72rem; line-height: 1.5; }
+.tree-rows { font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace; font-size: var(--fs-sm); line-height: 1.5; }
 .tree-row {
   display: flex;
   align-items: center;
@@ -3252,19 +3266,21 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-top: 1px solid var(--text-faint);
 }
 .tree-icon { width: 1em; text-align: center; opacity: 0.7; }
-.tree-id { color: var(--text-faint); font-size: 0.65rem; }
+.tree-time { color: var(--text-faint); font-size: var(--fs-xs); flex-shrink: 0; }
+.tree-row.confirming { background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--text); }
+.tree-row.confirming .tree-leaf-badge { background: var(--warning); color: #fff; }
 .tree-preview { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .tree-active-badge {
-  font-size: 0.6rem;
+  font-size: var(--fs-xs);
   padding: 0.05rem 0.4rem;
   border-radius: 999px;
-  background: var(--accent, var(--cyan));
-  color: #fff;
+  background: var(--accent-dim, var(--cyan));
+  color: var(--on-accent);
   font-weight: 500;
   letter-spacing: 0.08em;
 }
 .tree-leaf-badge {
-  font-size: 0.6rem;
+  font-size: var(--fs-xs);
   padding: 0.05rem 0.4rem;
   border-radius: 999px;
   background: var(--border-mid);
@@ -3315,7 +3331,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.25rem 0;
   color: var(--text-dim);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.76rem;
+  font-size: var(--fs-sm);
   letter-spacing: 0.04em;
   font-weight: 400;
   opacity: 0.65;
@@ -3349,7 +3365,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.1rem 0.6rem;
   border-radius: var(--radius-xs);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.82rem;
+  font-size: var(--fs-md);
   border: 1px solid var(--border);
 }
 
@@ -3368,7 +3384,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .tool-cmd-collapsed::after {
   content: ' ▸';
-  font-size: 0.62rem;
+  font-size: var(--fs-xs);
   color: var(--text-faint);
   vertical-align: middle;
 }
@@ -3397,7 +3413,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .tool-cmd-expanded::after {
   content: ' ▾';
-  font-size: 0.62rem;
+  font-size: var(--fs-xs);
   color: var(--text-faint);
   vertical-align: middle;
 }
@@ -3415,7 +3431,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: rgba(199, 106, 100, 0.06);
   margin: 0.75rem 0;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.82rem;
+  font-size: var(--fs-md);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
 }
@@ -3424,7 +3440,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.5rem 0.85rem;
+  padding: var(--space-2) var(--space-3);
   color: var(--red);
   background: rgba(199, 106, 100, 0.1);
 }
@@ -3439,18 +3455,18 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--red);
   color: #fff;
   font-weight: 600;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   box-shadow: 0 0 8px rgba(199, 106, 100, 0.3);
 }
 
-.err-card-title { flex: 1; color: var(--text); font-weight: 550; }
+.err-card-title { flex: 1; color: var(--text); font-weight: 600; }
 
 .err-card-toggle {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-faint);
   font: inherit;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   padding: 0.1rem 0.5rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -3464,11 +3480,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .err-card-body {
   margin: 0;
-  padding: 0.65rem 1rem 0.85rem;
+  padding: var(--space-3) var(--space-4) var(--space-3);
   border-top: 1px solid rgba(199, 106, 100, 0.15);
   white-space: pre-wrap;
   color: var(--text);
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   max-height: 18rem;
   overflow-y: auto;
 }
@@ -3476,7 +3492,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── UI info ─────────────────────────────────────────────────────── */
 .ui-info {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   font-weight: 400;
   color: var(--text-mid);
   padding: 0.45rem 0 0.45rem 0.8rem;
@@ -3510,8 +3526,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow-y: auto;
   z-index: 10;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.78rem;
-  font-weight: 420;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   letter-spacing: 0.01em;
   animation: ac-slide-up 0.2s var(--ease-out-back);
 }
@@ -3542,7 +3558,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .autocomplete-item.active:hover { background: var(--accent-soft); }
 
 .ac-name { color: var(--cyan); }
-.ac-desc { color: var(--text-faint); font-size: 0.75rem; }
+.ac-desc { color: var(--text-faint); font-size: var(--fs-sm); }
 .autocomplete-item.active .ac-desc { color: var(--text-mid); }
 
 /* ── Usage strip ─────────────────────────────────────────────────── */
@@ -3579,7 +3595,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Usage strip toggle (on the input row) ─────────────────────── */
 .usage-strip-toggle {
   flex-shrink: 0;
-  margin-left: auto;
   width: 24px;
   height: 24px;
   border: 1px solid var(--border-light);
@@ -3620,12 +3635,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .usage-strip .terminal-usage {
   margin-left: 0;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   gap: 0.45rem;
 }
 
 .usage-strip .usage-chip {
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   padding: 0.1rem 0.55rem;
   background: var(--bg3);
   border: 1px solid var(--border);
@@ -3643,7 +3658,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .balance-label {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   line-height: 1;
 }
 
@@ -3676,7 +3691,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   list-style: none;
   padding: 0;
   margin: 0;
-  background: var(--card, var(--bg-elevated));
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06);
@@ -3705,7 +3720,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--bg3);
   color: var(--text);
   font-family: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   outline: none;
   box-sizing: border-box;
 }
@@ -3732,7 +3747,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .model-group-head {
   padding: 6px 14px 4px;
   font-family: 'Geist', 'Inter', system-ui, sans-serif;
-  font-size: 0.65rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -3743,7 +3758,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .model-group-badge {
-  font-size: 0.6rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   text-transform: none;
   letter-spacing: 0.03em;
@@ -3756,8 +3771,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .model-group-label {
   padding: 0.3rem 0.75rem 0.15rem;
-  font-size: 0.65rem;
-  font-weight: 550;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
@@ -3772,8 +3787,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .model-option {
   padding: 7px 14px 7px 22px;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.76rem;
-  font-weight: 420;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   color: var(--text-dim);
   border-radius: 6px;
   cursor: pointer;
@@ -3782,7 +3797,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.model-option.current { color: var(--accent); font-weight: 550; }
+.model-option.current { color: var(--accent); font-weight: 600; }
 .model-option.current::after { content: " ✓"; color: var(--accent); }
 
 .model-option[hidden] { display: none; }
@@ -3802,7 +3817,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .model-option.selected::after {
   content: " ✓";
-  font-size: 0.65rem;
+  font-size: var(--fs-xs);
   opacity: 0.7;
 }
 
@@ -3818,7 +3833,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: color-mix(in srgb, var(--bg2) 94%, transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', 'Fira Code', monospace;
+  font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
   flex-shrink: 0;
   transition: all var(--dur-slow) var(--ease-out-expo);
   border-image: linear-gradient(90deg, transparent 5%, var(--accent-border) 25%, var(--cyan) 50%, var(--accent-border) 75%, transparent 95%) 1;
@@ -3859,6 +3874,54 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   text-shadow: 0 0 16px var(--accent-glow), 0 0 32px var(--accent-glow);
 }
 
+/* Send button — submits when idle, cancels while a turn is running */
+.live-input .send-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.35;
+}
+.live-input .send-btn:disabled { cursor: default; }
+.live-input .send-btn:not(:disabled) { opacity: 1; }
+.live-input .send-btn .send-stop { display: none; }
+.live-input .send-btn.busy {
+  opacity: 1;
+  color: var(--red);
+  text-shadow: none;
+}
+.live-input .send-btn.busy .send-arrow { display: none; }
+.live-input .send-btn.busy .send-stop { display: block; }
+.live-input .send-btn.flash { color: var(--red); transform: scale(1.25); }
+
+/* Transient thinking-level chip (Shift+Tab feedback) */
+.thinking-chip {
+  position: absolute;
+  top: -1.4rem;
+  left: 1.15rem;
+  padding: 0.08rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 5;
+}
+.thinking-chip.show {
+  animation: thinking-chip-fade 1.5s var(--ease-out-expo) forwards;
+}
+@keyframes thinking-chip-fade {
+  0% { opacity: 0; transform: translateY(4px); }
+  15% { opacity: 1; transform: translateY(0); }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 .live-input textarea {
   flex: 1;
   background: transparent;
@@ -3866,8 +3929,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   outline: none;
   color: var(--text);
   font: inherit;
-  font-size: 0.92rem;
-  font-weight: 420;
+  font-size: var(--fs-lg);
+  font-weight: 500;
   letter-spacing: -0.005em;
   caret-color: var(--accent);
   transition: color var(--dur-normal) var(--ease-out-expo);
@@ -3880,7 +3943,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   field-sizing: content;
 }
 
-.live-input textarea::placeholder { color: var(--text-faint); font-weight: 380; }
+.live-input textarea::placeholder { color: var(--text-faint); font-weight: 400; }
 .live-input:focus-within textarea::placeholder { opacity: 0.4; }
 .live-input textarea:disabled { opacity: 0.4; }
 .live-input textarea:focus { outline: none; }
@@ -3905,7 +3968,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: relative;
   width: 56px;
   height: 56px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   border: 1px solid var(--border);
   background: var(--bg3);
@@ -4001,8 +4064,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text-mid);
   font: inherit;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.7rem;
-  font-weight: 420;
+  font-size: var(--fs-xs);
+  font-weight: 500;
   letter-spacing: 0.06em;
   padding: 0.32rem 0.75rem;
   margin-left: 0;
@@ -4029,67 +4092,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transition-duration: var(--dur-fast);
 }
 
-/* ── Cancel button ───────────────────────────────────────────────── */
-.cancel-btn {
-  font-size: 0.68rem;
-  padding: 0.15rem 0.55rem;
-  margin-left: 0.45rem;
-  color: var(--text-faint);
-  border-color: var(--border);
-  transition: all 0.2s;
-}
-
-#cancel-turn[data-ui-cancel-show="false"] { display: none !important; }
-
-/* Cancel button inside the input form — positioned at the left edge,
-   vertically centered with the textarea. Inherits hover/active/flash
-   states from .cancel-btn above. */
-.input-cancel-btn {
-  margin-left: -0.15rem;
-  flex-shrink: 0;
-  align-self: center;
-  padding: 0.35rem 0.48rem;
-  font-size: 0.72rem;
-  border-radius: var(--radius-sm);
-  border-color: transparent;
-  color: var(--text-faint);
-  background: transparent;
-  transition: all 0.2s var(--ease-out-expo);
-}
-
-.cancel-btn:not([hidden]) {
-  animation: cancel-pulse 2s ease-in-out infinite;
-}
-
-.cancel-btn:hover {
-  color: var(--red);
-  border-color: var(--red-dim);
-  background: rgba(199, 106, 100, 0.12);
-  box-shadow: 0 0 12px rgba(199, 106, 100, 0.2);
-  animation: none;
-}
-
-.cancel-btn:active {
-  color: #fff;
-  background: var(--red-dim);
-  border-color: var(--red);
-  box-shadow: 0 0 16px rgba(199, 106, 100, 0.3);
-  transition: all 0.05s;
-}
-
-.cancel-btn.flash {
-  color: #fff !important;
-  background: var(--red-dim) !important;
-  border-color: var(--red) !important;
-  box-shadow: 0 0 20px rgba(199, 106, 100, 0.35) !important;
-  transition: all 0.08s;
-}
-
-@keyframes cancel-pulse {
-  0%, 100% { opacity: 0.5; }
-  50%      { opacity: 1; }
-}
-
 /* ── Context panel ───────────────────────────────────────────────── */
 .ctx-panel {
   position: fixed;
@@ -4110,18 +4112,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   box-shadow: var(--shadow-panel-md);
 }
 
-.ctx-panel::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -1px;
-  width: 1px;
-  height: 100%;
-  background: linear-gradient(180deg, var(--accent) 0%, var(--cyan) 50%, transparent 80%);
-  opacity: 0.08;
-  pointer-events: none;
-}
-
 .ctx-panel[hidden] {
   display: flex !important;
   pointer-events: none;
@@ -4136,10 +4126,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.7rem 1.1rem;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-dim);
   letter-spacing: 0.14em;
@@ -4152,18 +4142,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: relative;
 }
 
-.ctx-head::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 25%;
-  height: 50%;
-  width: 2px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
-  opacity: 0.5;
-}
-
 .ctx-title {
   color: var(--text-dim);
   font-weight: 500;
@@ -4171,7 +4149,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 .ctx-meta {
   flex: 1;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-mid);
   text-transform: none;
   letter-spacing: 0;
@@ -4209,7 +4187,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.65rem 0.85rem 0.65rem 1.2rem;
   margin: 0;
   font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   font-weight: 400;
   position: relative;
   transition: all 0.15s var(--ease-out-expo);
@@ -4232,7 +4210,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   accent-color: var(--accent);
 }
 
-.ctx-tokens { color: var(--text-faint); font-size: 0.72rem; margin-left: 0.45rem; font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+.ctx-tokens { color: var(--text-faint); font-size: var(--fs-sm); margin-left: 0.45rem; font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif; }
 .bar-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .bar-btn:disabled:hover {
   color: var(--text-mid);
@@ -4246,13 +4224,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: space-between;
   align-items: center;
   color: var(--text-dim);
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   letter-spacing: 0.03em;
   margin-bottom: 0.22rem;
 }
 
-.ctx-role { color: var(--text-mid); font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace; font-size: 0.7rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+.ctx-role { color: var(--text-mid); font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace; font-size: var(--fs-xs); font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
 .ctx-role.system    { color: var(--text-dim); }
 .ctx-role.user      { color: var(--green); }
 .ctx-role.assistant { color: var(--cyan); }
@@ -4290,8 +4268,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: 1px solid var(--border);
   color: var(--text-faint);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.64rem;
-  font-weight: 420;
+  font-size: var(--fs-xs);
+  font-weight: 500;
   letter-spacing: 0.04em;
   padding: 0.22rem 0.7rem;
   border-radius: var(--radius-pill);
@@ -4353,7 +4331,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text-faint);
   font: inherit;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   padding: 0.1rem 0.5rem;
   margin-top: 0.35rem;
   border-radius: var(--radius-xs);
@@ -4375,7 +4353,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: 1px solid var(--border);
   color: var(--text-faint);
   font: inherit;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   padding: 0.14rem 0.5rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -4383,7 +4361,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .ctx-rewind:hover { color: var(--red); border-color: var(--red-dim); }
-.ctx-empty { color: var(--text-faint); padding: 1.5rem; text-align: center; font-size: 0.85rem; }
+.ctx-empty { color: var(--text-faint); padding: 1.5rem; text-align: center; font-size: var(--fs-md); }
 
 /* ── Files panel ─────────────────────────────────────────────────── */
 .files-panel {
@@ -4405,18 +4383,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   box-shadow: var(--shadow-panel-md);
 }
 
-.files-panel::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -1px;
-  width: 1px;
-  height: 100%;
-  background: linear-gradient(180deg, var(--cyan) 0%, var(--accent) 60%, transparent 90%);
-  opacity: 0.08;
-  pointer-events: none;
-}
-
 .files-panel[hidden] {
   display: flex !important;
   pointer-events: none;
@@ -4436,10 +4402,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.7rem 1rem;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-dim);
   letter-spacing: 0.14em;
@@ -4452,18 +4418,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: relative;
 }
 
-.files-head::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 25%;
-  height: 50%;
-  width: 2px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
-  opacity: 0.5;
-}
-
 .files-title {
   color: var(--text-dim);
   font-weight: 500;
@@ -4472,7 +4426,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .files-cwd {
   flex: 1;
-  font-size: 0.65rem;
+  font-size: var(--fs-xs);
   color: var(--text-faint);
   text-transform: none;
   letter-spacing: 0;
@@ -4484,12 +4438,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .files-body { padding: 0.35rem 0; }
 
-.files-empty { font-size: 0.78rem; }
+.files-empty { font-size: var(--fs-sm); }
 
 .files-empty-sub {
   display: block;
   margin-top: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-mid);
 }
 
@@ -4502,7 +4456,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-xs);
   cursor: pointer;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--text);
   transition: all 0.15s var(--ease-out-expo);
@@ -4556,7 +4510,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .files-entry-kb {
   flex-shrink: 0;
-  font-size: 0.64rem;
+  font-size: var(--fs-xs);
   color: var(--text-faint);
   opacity: 0;
   transition: opacity 0.15s;
@@ -4612,7 +4566,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .files-child {
-  font-size: 0.73rem;
+  font-size: var(--fs-sm);
   border-radius: 0;
   margin: 0 0.4rem;
 }
@@ -4641,12 +4595,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .os-other ::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   background-clip: content-box;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
 }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb, var(--text-faint));
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   transition: background 0.2s;
 }
 ::-webkit-scrollbar-thumb:hover {
@@ -4692,18 +4646,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   box-shadow: var(--shadow-panel-md);
 }
 
-.config-overlay::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -1px;
-  width: 1px;
-  height: 100%;
-  background: linear-gradient(180deg, var(--purple) 0%, var(--accent) 50%, transparent 85%);
-  opacity: 0.08;
-  pointer-events: none;
-}
-
 .config-overlay[hidden] {
   display: flex !important;
   pointer-events: none;
@@ -4734,10 +4676,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.7rem 1.15rem;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-dim);
   letter-spacing: 0.14em;
@@ -4750,18 +4692,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: relative;
 }
 
-.config-head::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 25%;
-  height: 50%;
-  width: 2px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
-  opacity: 0.5;
-}
-
 .config-title {
   color: var(--text-dim);
   font-weight: 500;
@@ -4771,7 +4701,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .config-path {
   flex: 1;
   color: var(--text-mid);
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   text-transform: none;
   letter-spacing: 0;
   overflow: hidden;
@@ -4805,7 +4735,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: rgba(139, 92, 246, 0.1);
+  background: color-mix(in srgb, var(--purple) 10%, transparent);
 }
 .config-section {
   padding: 0.45rem 0;
@@ -4822,8 +4752,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .config-section-title {
   font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  font-size: 0.68rem;
-  font-weight: 550;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   color: var(--text-dim);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -4847,7 +4777,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-md);
   color: var(--text);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   font-weight: 400;
   line-height: 1.6;
   padding: 0.8rem 0.95rem;
@@ -4875,7 +4805,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.65rem;
   padding: 0.4rem 0;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
 }
 
 .config-status-valid { color: var(--green); }
@@ -4885,15 +4815,15 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   justify-content: flex-end;
   gap: 0.45rem;
-  margin-top: 1.2rem;
-  padding-top: 1rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
   border-top: 1px solid var(--border);
 }
 
 .config-btn-save {
-  color: #fff;
-  border-color: var(--accent);
-  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent-dim);
+  background: var(--accent-dim);
   font-weight: 500;
   padding: 0.45rem 1.4rem;
 }
@@ -4902,7 +4832,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   box-shadow: 0 4px 16px var(--accent-glow);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 /* ── Config mode tabs ─────────────────────────────────────────────── */
@@ -4918,7 +4848,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .config-mode-tab {
   padding: 0.3rem 0.75rem;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.66rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--text-dim);
   background: transparent;
@@ -4969,7 +4899,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .config-label {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--text-dim);
   letter-spacing: 0.06em;
@@ -4988,7 +4918,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-md);
   color: var(--text);
   font-family: 'Geist', 'Inter', sans-serif;
-  font-size: 0.9rem;
+  font-size: var(--fs-lg);
   font-weight: 500;
   appearance: none;
   -webkit-appearance: none;
@@ -5024,7 +4954,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .config-hint {
   font-family: 'Geist', 'Inter', sans-serif;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--text-mid);
   line-height: 1.4;
@@ -5045,7 +4975,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-md);
   color: var(--text);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   transition: all 0.2s;
 }
 
@@ -5101,13 +5031,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: #fff;
 }
 .config-toggle-label {
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
-}
-.config-actions {
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--border);
-  margin-top: 0.5rem;
 }
 
 .config-apikey-toggle {
@@ -5179,7 +5104,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-md);
   overflow: hidden;
   font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  font-size: 0.79rem;
+  font-size: var(--fs-md);
   background: var(--bg2);
   box-shadow: var(--shadow-sm);
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -5196,7 +5121,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   gap: 0.5rem;
   width: 100%;
-  padding: 0.5rem 0.9rem;
+  padding: var(--space-2) var(--space-4);
   font: inherit;
   font-weight: 500;
   color: var(--text-dim);
@@ -5223,7 +5148,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .thinking-block-head::after,
 .tool-group-head::after {
   content: '▾';
-  font-size: 0.6rem;
+  font-size: var(--fs-xs);
   margin-left: auto;
   flex-shrink: 0;
   opacity: 0.45;
@@ -5267,7 +5192,216 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   max-height: 14em;
   overflow-y: auto;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
+}
+
+/* ── TODO progress card (todolist tool) ──────────────────────────── */
+.todo-block {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-family: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  font-size: var(--fs-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.2s, box-shadow 0.2s, border-radius 0.2s;
+}
+/* Stuck to the top of the scroller: dock flush against the top edge
+   (squared top corners) and elevate for a floating-panel feel. */
+.todo-block.stuck {
+  border-color: var(--border-mid);
+  border-top-color: transparent;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+.todo-block:hover {
+  border-color: var(--border-mid);
+  box-shadow: var(--shadow-md);
+}
+.todo-block.stuck:hover {
+  box-shadow: var(--shadow-lg);
+}
+/* Sentinel marking the card's natural position; when it scrolls out of
+   view the card is in its stuck state (JS toggles .stuck). */
+.todo-sticky-sentinel {
+  display: block;
+  height: 0;
+  visibility: hidden;
+}
+
+.todo-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  font: inherit;
+  letter-spacing: inherit;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: var(--bg3);
+  border: none;
+  cursor: pointer;
+  user-select: none;
+  text-align: left;
+  transition: all 0.15s;
+}
+.todo-head:hover {
+  color: var(--text);
+  background: var(--hover-bg, var(--bg3));
+  filter: brightness(1.05);
+}
+.todo-head::after {
+  content: '▾';
+  font-size: var(--fs-xs);
+  flex-shrink: 0;
+  opacity: 0.45;
+  transition: transform 0.2s var(--ease-out-expo);
+}
+.todo-block.collapsed .todo-head::after {
+  transform: rotate(-90deg);
+}
+
+.todo-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  border-radius: 50%;
+}
+
+.todo-title {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.todo-progress {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-dim);
+  color: var(--on-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Slim progress strip between head and list — always visible. */
+.todo-bar {
+  height: 3px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.todo-bar-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+  transition: width 0.45s var(--ease-out-expo);
+}
+
+.todo-body {
+  opacity: 1;
+  overflow: hidden;
+  max-height: 2000px;
+  transition: max-height 0.3s var(--ease-out-expo), opacity 0.2s;
+}
+.todo-block.collapsed .todo-body {
+  max-height: 0;
+  opacity: 0;
+}
+
+.todo-list {
+  padding: var(--space-1) 0;
+}
+
+.todo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.3rem var(--space-4);
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.todo-status {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  margin-top: 0.22em;
+}
+
+/* pending: hollow circle */
+.todo-row.is-pending .todo-status {
+  border: 1.5px solid var(--text-dim);
+  border-radius: 50%;
+  opacity: 0.45;
+}
+.todo-row.is-pending .todo-text {
+  color: var(--text-dim);
+}
+
+/* in_progress: accent spinner + highlighted row with a soft breathe */
+.todo-row.is-active {
+  background: var(--accent-glow);
+  box-shadow: inset 2px 0 0 var(--accent);
+  animation: todo-breathe 2.4s ease-in-out infinite;
+}
+.todo-row.is-active .todo-status {
+  border: 2px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: todo-spin 0.8s linear infinite;
+}
+.todo-row.is-active .todo-text {
+  font-weight: 500;
+}
+
+/* done: green check, struck-through dimmed title */
+.todo-row.is-done .todo-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.todo-row.is-done .todo-status::before {
+  content: '✓';
+  font-size: 0.85em;
+  color: var(--green);
+}
+.todo-row.is-done .todo-text {
+  color: var(--text-dim);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--text-dim) 55%, transparent);
+  opacity: 0.65;
+}
+
+.todo-empty {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+@keyframes todo-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes todo-breathe {
+  0%, 100% { background: var(--accent-glow); }
+  50%      { background: var(--accent-soft); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .todo-row.is-active { animation: none; }
+  .todo-row.is-active .todo-status { animation: none; }
+  .todo-bar-fill { transition: none; }
 }
 
 /* ── Reasoning phase (consecutive thought + tool rounds) ─────────── */
@@ -5278,7 +5412,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--bg2);
-  font-size: 0.79rem;
+  font-size: var(--fs-md);
 }
 
 .reasoning-phase-head {
@@ -5286,7 +5420,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   gap: 0.5rem;
   width: 100%;
-  padding: 0.5rem 0.9rem;
+  padding: var(--space-2) var(--space-4);
   font: inherit;
   font-weight: 500;
   color: var(--text-dim);
@@ -5302,7 +5436,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .reasoning-phase .rp-arrow {
-  font-size: 0.6rem;
+  font-size: var(--fs-xs);
   width: 0.85rem;
   flex-shrink: 0;
   display: inline-block;
@@ -5313,7 +5447,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transform: rotate(-90deg);
 }
 .reasoning-phase .rp-icon {
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   flex-shrink: 0;
   line-height: 1;
 }
@@ -5325,8 +5459,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text-dim);
   background: var(--bg3);
   padding: 0.1rem 0.45rem;
-  border-radius: 3px;
-  font-size: 0.72rem;
+  border-radius: var(--radius-xs);
+  font-size: var(--fs-sm);
   margin-left: auto;
 }
 
@@ -5354,7 +5488,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .tool-body-live {
   color: var(--text-mid);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   padding: 0.45rem 0.9rem 0.45rem 1.4rem;
   margin: 0 0 0 0.65rem;
   white-space: pre-wrap;
@@ -5386,7 +5520,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: 1px solid var(--border);
   color: var(--text-faint);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   padding: 0.1rem 0.55rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -5407,7 +5541,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   margin-top: 0.65rem;
   padding: 0.18rem 0.8rem;
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--red);
   border: 1px solid var(--red-dim);
@@ -5437,18 +5571,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   box-shadow: var(--shadow-panel-md);
 }
 
-.prompt-overlay::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -1px;
-  width: 1px;
-  height: 100%;
-  background: linear-gradient(180deg, var(--cyan) 0%, var(--accent) 50%, transparent 85%);
-  opacity: 0.08;
-  pointer-events: none;
-}
-
 .prompt-overlay[hidden] {
   display: flex !important;
   pointer-events: none;
@@ -5471,10 +5593,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.7rem 1.15rem;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-dim);
   letter-spacing: 0.14em;
@@ -5486,20 +5608,42 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: relative;
 }
 
-.prompt-head::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 25%;
-  height: 50%;
-  width: 2px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
-  opacity: 0.5;
-}
-
 .prompt-title { color: var(--text-dim); flex: 1; font-weight: 500; letter-spacing: 0.14em; }
 .prompt-head-actions { display: flex; gap: 0.4rem; }
+
+/* ── CJK panel titles: body sans stack + no tracking under Chinese ── */
+:lang(zh) .sidebar-title,
+:lang(zh) .session-group-head,
+:lang(zh) .tree-head,
+:lang(zh) .ctx-head,
+:lang(zh) .files-head,
+:lang(zh) .config-head,
+:lang(zh) .prompt-head,
+:lang(zh) .config-label {
+  font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+}
+
+:lang(zh) .sidebar-title,
+:lang(zh) .session-group-head,
+:lang(zh) .panel-section-title,
+:lang(zh) .tree-head,
+:lang(zh) .tree-title,
+:lang(zh) .ctx-head,
+:lang(zh) .ctx-title,
+:lang(zh) .files-head,
+:lang(zh) .files-title,
+:lang(zh) .config-head,
+:lang(zh) .config-title,
+:lang(zh) .config-section-title,
+:lang(zh) .config-label,
+:lang(zh) .prompt-head,
+:lang(zh) .prompt-title,
+:lang(zh) .model-group-head,
+:lang(zh) .model-group-label,
+:lang(zh) .shortcuts-section-title,
+:lang(zh) .shortcuts-subtitle {
+  letter-spacing: normal;
+}
 
 /* ── Prompt list ──────────────────────────────────────────────────── */
 .prompt-body {
@@ -5527,7 +5671,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 2rem 1.15rem;
   text-align: center;
   color: var(--text-mid);
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 
@@ -5553,7 +5697,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .prompt-item-name {
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.76rem;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--cyan);
   letter-spacing: 0.02em;
@@ -5561,7 +5705,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .prompt-item-preview {
   font-family: 'Geist', 'Inter', sans-serif;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--text-mid);
   line-height: 1.45;
@@ -5621,13 +5765,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .prompt-editor-input {
   width: 100%;
-  padding: 0.5rem 0.7rem;
+  padding: var(--space-2) var(--space-3);
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--text);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   transition: all 0.2s;
   box-sizing: border-box;
 }
@@ -5648,7 +5792,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-md);
   color: var(--text);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   resize: vertical;
   min-height: 68px;
@@ -5695,7 +5839,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.45rem;
   color: var(--text-dim);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   padding: 0.45rem 0.9rem;
   border-radius: var(--radius-sm);
   border: 1px dashed var(--border);
@@ -5749,7 +5893,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: 999px;
   padding: 0.28rem 0.95rem;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   display: inline-flex;
   align-items: center;
@@ -5796,7 +5940,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--bg);
   color: var(--text);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   border-radius: 999px;
   border: 1px solid var(--border);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
@@ -5814,7 +5958,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: absolute;
   inset: 6px;
   border: 1.5px dashed var(--accent);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   pointer-events: none;
   opacity: 0.6;
   z-index: 9000;
@@ -5830,7 +5974,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--accent);
   color: var(--bg);
   font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.72rem;
+  font-size: var(--fs-sm);
   border-radius: var(--radius-pill);
   pointer-events: none;
   z-index: 9001;
@@ -5879,7 +6023,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   top: 50%;
   transform: translateY(-50%);
   opacity: 0;
-  font-size: 0.95rem;
+  font-size: var(--fs-lg);
   line-height: 1;
   padding: 0 0.25rem;
   border-radius: 50%;
@@ -5899,52 +6043,272 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   }
 }
 
+/* ── Touch devices: keep hover-only actions tappable ──────────────── */
+@media (hover: none) {
+  .session-close,
+  .session-edit,
+  .session-archive-btn,
+  .session-pin-btn,
+  .session-cwd-btn,
+  #archive .session-btn,
+  .code-copy-btn,
+  .reply-copy-btn,
+  .tool-body-btn.copy-btn {
+    opacity: 0.5;
+    pointer-events: auto;
+  }
+}
+
 /* ── Skills panel ──────────────────────────────────────────────────── */
 
-.skills-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:16px}
-.skills-search-wrap{flex:1;position:relative}
-.skills-search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-mid);pointer-events:none}
-.skills-search-input{padding-left:32px!important;width:100%}
-.skills-header-count{font-size:.75rem;color:var(--text-mid);white-space:nowrap}
-.skills-list{display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto;margin-bottom:20px;scroll-behavior:smooth}
-.skill-card{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;transition:border-color .15s,box-shadow .15s}
-.skill-card:hover{border-color:var(--accent-dim);box-shadow:0 1px 6px rgba(0,0,0,.05)}
-.skill-card-main{flex:1;min-width:0}
-.skill-card-header{display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap}
-.skill-avatar{border-radius:50%;flex-shrink:0}
-.skill-name{font-weight:600;font-size:.85rem;color:var(--text)}
-.skill-tag{font-size:.65rem;padding:1px 6px;border-radius:4px;background:var(--bg);color:var(--text-mid);border:1px solid var(--border)}
-.skill-desc{font-size:.75rem;color:var(--text-mid);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:4px}
-.skill-meta{display:flex;gap:12px;font-size:.7rem;color:var(--text-mid);align-items:center}
-.skill-stars{font-weight:500;color:var(--text)}
-.skill-author{opacity:.8}
-.skill-updated{opacity:.6}
-.skill-install-btn{flex-shrink:0;padding:6px 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-size:.78rem;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s;white-space:nowrap}
-.skill-install-btn:hover{opacity:.9}
-.skill-install-btn.installed{background:transparent;color:var(--accent);border-color:var(--accent)}
-.skills-installed-list{display:flex;flex-direction:column;gap:4px;margin-top:8px}
-.skill-installed-item{display:flex;align-items:center;gap:10px;padding:6px 10px;font-size:.8rem;border-radius:6px}
-.skill-installed-name{font-weight:500;color:var(--accent)}
-.skill-remove-btn{flex-shrink:0;width:28px;height:28px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--text-mid);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:color .15s,background .15s,border-color .15s;margin-left:auto}
-.skill-remove-btn:hover{color:#c0392b;background:rgba(192,57,43,.08);border-color:rgba(192,57,43,.2)}
-.skill-remove-btn:disabled{opacity:.4;pointer-events:none}
-.skills-empty,.skills-loading,.skills-error{text-align:center;padding:28px 16px;color:var(--text-mid);font-size:.82rem}
-.skills-error{color:#c0392b}
-@media(max-width:700px){.skill-card{flex-direction:column;align-items:stretch}.skill-install-btn{align-self:flex-end}}
+.skills-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.skills-search-wrap {
+  flex: 1;
+  position: relative;
+}
+.skills-search-icon {
+  position: absolute;
+  left: 0.625rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-mid);
+  pointer-events: none;
+}
+.skills-search-input {
+  padding-left: 2rem !important;
+  width: 100%;
+}
+.skills-header-count {
+  font-size: var(--fs-sm);
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+.skills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 22.5rem;
+  overflow-y: auto;
+  margin-bottom: 1.25rem;
+  scroll-behavior: smooth;
+}
+.skill-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0.875rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.skill-card:hover {
+  border-color: var(--accent-dim);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05);
+}
+.skill-card-main {
+  flex: 1;
+  min-width: 0;
+}
+.skill-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.1875rem;
+  flex-wrap: wrap;
+}
+.skill-avatar {
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.skill-name {
+  font-weight: 600;
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+.skill-tag {
+  font-size: var(--fs-xs);
+  padding: 1px 0.375rem;
+  border-radius: 0.25rem;
+  background: var(--bg);
+  color: var(--text-mid);
+  border: 1px solid var(--border);
+}
+.skill-desc {
+  font-size: var(--fs-sm);
+  color: var(--text-mid);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+.skill-meta {
+  display: flex;
+  gap: 0.75rem;
+  font-size: var(--fs-xs);
+  color: var(--text-mid);
+  align-items: center;
+}
+.skill-stars {
+  font-weight: 500;
+  color: var(--text);
+}
+.skill-author { opacity: 0.8; }
+.skill-updated { opacity: 0.6; }
+.skill-install-btn {
+  flex-shrink: 0;
+  padding: 0.375rem 0.875rem;
+  border-radius: 0.4375rem;
+  border: 1px solid var(--accent-dim);
+  background: var(--accent-dim);
+  color: var(--on-accent);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+.skill-install-btn:hover { opacity: 0.9; }
+.skill-install-btn.installed {
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.skills-installed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+.skill-installed-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.375rem 0.625rem;
+  font-size: var(--fs-md);
+  border-radius: 0.375rem;
+}
+.skill-installed-name {
+  font-weight: 500;
+  color: var(--accent);
+}
+.skill-remove-btn {
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-mid);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  margin-left: auto;
+}
+.skill-remove-btn:hover {
+  color: var(--error);
+  background: var(--error-bg);
+  border-color: var(--error-border);
+}
+.skill-remove-btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.skills-empty,
+.skills-loading,
+.skills-error {
+  text-align: center;
+  padding: 1.75rem 1rem;
+  color: var(--text-mid);
+  font-size: var(--fs-md);
+}
+.skills-error { color: var(--error); }
 
-.skills-tabs{display:flex;gap:0;margin-bottom:14px;border-bottom:1px solid var(--border)}
-.skills-tab{padding:7px 16px;font-size:.78rem;font-weight:500;color:var(--text-mid);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:color .15s,border-color .15s;font-family:inherit}
-.skills-tab:hover{color:var(--text)}
-.skills-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
-.skills-tab-panel{flex:1;min-height:0;display:flex;flex-direction:column}
-.skills-tab-panel[hidden]{display:none}
-.skills-tab-panel .skills-list{flex:1;min-height:0;max-height:none}
-.skills-tab-panel .skills-installed-list{flex:1;min-height:0;overflow-y:auto}
+@media (max-width: 700px) {
+  .skill-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .skill-install-btn { align-self: flex-end; }
+}
 
-.skills-source-tabs{display:flex;gap:0;background:var(--bg);border:1px solid var(--border);border-radius:7px;overflow:hidden;align-self:flex-start;margin-bottom:14px}
-.skills-source-tab{padding:4px 10px;font-size:.7rem;font-weight:500;color:var(--text-mid);background:transparent;border:none;cursor:pointer;transition:color .15s,background .15s;font-family:inherit;line-height:1.5}
-.skills-source-tab:hover{color:var(--text)}
-.skills-source-tab.active{color:#fff;background:var(--accent)}
+.skills-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0.875rem;
+  border-bottom: 1px solid var(--border);
+}
+.skills-tab {
+  padding: 0.4375rem 1rem;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-mid);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+.skills-tab:hover { color: var(--text); }
+.skills-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.skills-tab-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.skills-tab-panel[hidden] { display: none; }
+.skills-tab-panel .skills-list {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+.skills-tab-panel .skills-installed-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.skills-source-tabs {
+  display: flex;
+  gap: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.4375rem;
+  overflow: hidden;
+  align-self: flex-start;
+  margin-bottom: 0.875rem;
+}
+.skills-source-tab {
+  padding: 0.25rem 0.625rem;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-mid);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  font-family: inherit;
+  line-height: 1.5;
+}
+.skills-source-tab:hover { color: var(--text); }
+.skills-source-tab.active {
+  color: var(--on-accent);
+  background: var(--accent-dim);
+}
 
 /* ── Subagent panel ─────────────────────────────────────────────── */
 
@@ -5965,18 +6329,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transform: translateX(calc(100% + 42px));
   transition: transform 0.45s var(--ease-panel), right 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
-}
-
-.subagent-panel::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: -1px;
-  width: 1px;
-  height: 100%;
-  background: linear-gradient(180deg, rgba(139, 92, 246, 0.6) 0%, var(--accent) 60%, transparent 90%);
-  opacity: 0.08;
-  pointer-events: none;
 }
 
 .subagent-panel[hidden] {
@@ -6015,11 +6367,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.4rem;
 }
 .sa-model-label {
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
 }
 .sa-model-select {
-  font-size: 0.68rem;
+  font-size: var(--fs-xs);
   padding: 0.15rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
@@ -6057,15 +6409,17 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-shrink: 0;
   transition: opacity 0.12s, color 0.12s;
 }
-#archive li:hover .session-btn { opacity: 1; }
+#archive li:hover .session-btn,
+#archive li:focus-within .session-btn { opacity: 1; }
 #archive .session-btn:hover { color: var(--accent); }
 #archive[hidden] { display: none; }
 #archive { padding: 0; list-style: none; }
 .archive-empty {
   padding: 1rem 0.7rem;
   color: var(--text-faint);
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   text-align: center;
+  opacity: 0.6;
 }
 
 
@@ -6088,7 +6442,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transition: opacity 0.12s, color 0.12s;
   padding: 0;
 }
-.session-list li:hover .session-pin-btn { opacity: 1; pointer-events: auto; }
+.session-list li:hover .session-pin-btn,
+.session-list li:focus-within .session-pin-btn { opacity: 1; pointer-events: auto; }
 .session-pin-btn:hover {
   color: var(--accent);
   background: var(--accent-glow);
@@ -6133,7 +6488,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   width: 30px; height: 30px;
   border: none; background: transparent;
   color: var(--text-faint);
-  cursor: pointer; border-radius: 8px;
+  cursor: pointer; border-radius: var(--radius-sm);
   display: flex; align-items: center; justify-content: center;
   transition: all 0.15s;
 }
@@ -6146,8 +6501,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-shrink: 0;
 }
 .quick-create-msg {
-  font-size: 0.92rem;
-  font-weight: 550;
+  font-size: var(--fs-lg);
+  font-weight: 600;
   color: var(--text);
   text-align: center;
 }
@@ -6176,17 +6531,17 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.6rem 0;
   border: none; background: transparent;
   color: var(--text);
-  font-family: var(--mono);
-  font-size: 0.76rem;
+  font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-size: var(--fs-sm);
   outline: none;
 }
 .quick-create-pick {
   flex-shrink: 0;
-  padding: 0.5rem 0.85rem;
+  padding: var(--space-2) var(--space-3);
   border: none; border-left: 1px solid var(--border);
   background: transparent;
   color: var(--accent);
-  font-size: 0.73rem; font-weight: 500;
+  font-size: var(--fs-sm); font-weight: 500;
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -6196,9 +6551,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.7rem;
   border: none;
   border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: #fff;
-  font-size: 0.85rem; font-weight: 600;
+  background: var(--accent-dim);
+  color: var(--on-accent);
+  font-size: var(--fs-md); font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
   margin-top: 6px;
@@ -6231,22 +6586,22 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .shortcuts-section-icon {
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   color: var(--accent);
   opacity: 0.7;
 }
 
 .shortcuts-section-title {
-  font-size: 0.68rem;
-  font-weight: 550;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--text-mid);
 }
 
 .shortcuts-subtitle {
-  font-size: 0.62rem;
-  font-weight: 550;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--text-faint);
@@ -6278,25 +6633,25 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: linear-gradient(180deg, var(--bg3) 0%, var(--bg2) 100%);
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font-family: inherit;
-  font-size: 0.68rem;
-  font-weight: 550;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   color: var(--text);
   white-space: nowrap;
   line-height: 1.45;
-  box-shadow: 0 1px 0 var(--border-dim, rgba(128,128,128,0.15));
+  box-shadow: 0 1px 0 var(--border-mid);
 }
 
 .shortcuts-row .shortcuts-range {
-  font-size: 0.62rem;
+  font-size: var(--fs-xs);
   color: var(--text-faint);
   margin: 0 -0.4rem;
 }
 
 .shortcuts-row span:last-child {
   color: var(--text-dim);
-  font-size: 0.76rem;
+  font-size: var(--fs-sm);
 }
 
 /* Platform-specific shortcuts */
@@ -6327,10 +6682,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transition: opacity 0.12s, color 0.12s;
   padding: 0;
 }
-.session-list li:hover .session-cwd-btn { opacity: 1; pointer-events: auto; }
+.session-list li:hover .session-cwd-btn,
+.session-list li:focus-within .session-cwd-btn { opacity: 1; pointer-events: auto; }
 .session-cwd-btn:hover {
   color: var(--text-muted);
-  background: var(--hover-bg, color-mix(in srgb, var(--fg) 8%, transparent));
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
 }
 .session-cwd-btn svg { width: 14px; height: 14px; }
 
@@ -6366,26 +6722,26 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: center;
   gap: 8px;
   margin-top: 20px;
-  animation: fadeUp .5s var(--ease) .8s both;
+  animation: fadeUp .5s var(--ease-out-expo) .8s both;
 }
 .hint-label {
   width: 100%;
   text-align: center;
-  font-size: .68rem;
+  font-size: var(--fs-xs);
   color: var(--text-faint);
   margin-bottom: 2px;
 }
 .hint-chip {
   padding: 7px 16px;
   border: 1px solid var(--border);
-  border-radius: 100px;
-  background: var(--surface);
-  color: var(--text2);
-  font-size: .78rem;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
   cursor: pointer;
-  transition: all .2s var(--ease);
+  transition: all .2s var(--ease-out-expo);
   white-space: nowrap;
-  font-family: var(--sans);
+  font-family: inherit;
 }
 .hint-chip:hover {
   border-color: var(--accent-border);
@@ -6395,27 +6751,31 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 /* ── Tool row color coding ────────────────────────────────────────── */
-.tool-row[data-kind="read"],
-.tool-row[data-kind="search"] {
-  border-left: 2px solid var(--cyan);
+.tool-row[data-kind="read"] {
+  border-left: 2px solid var(--tool-read);
   padding-left: 0.5rem;
-  background: rgba(56,189,248,.04);
+  background: color-mix(in srgb, var(--tool-read) 4%, transparent);
+}
+.tool-row[data-kind="search"] {
+  border-left: 2px solid var(--tool-search);
+  padding-left: 0.5rem;
+  background: color-mix(in srgb, var(--tool-search) 4%, transparent);
 }
 .tool-row[data-kind="write"],
 .tool-row[data-kind="edit"] {
-  border-left: 2px solid var(--amber);
+  border-left: 2px solid var(--tool-write);
   padding-left: 0.5rem;
-  background: rgba(245,158,11,.06);
+  background: color-mix(in srgb, var(--tool-write) 6%, transparent);
 }
 .tool-row[data-kind="shell"],
 .tool-row[data-kind="execute"] {
-  border-left: 2px solid var(--border);
+  border-left: 2px solid var(--border-mid);
   padding-left: 0.5rem;
 }
 
 .bucket-count {
   margin-left: auto;
-  font-size: 0.52rem;
+  font-size: var(--fs-xs);
   opacity: 0.45;
   font-weight: 400;
   letter-spacing: 0;
@@ -6463,7 +6823,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── 3.1 Serif font for reading area ─────────────────────────────── */
 [data-theme="academic"] .agent-reply,
 [data-theme="academic"] .stream-empty,
-[data-theme="academic"] .subagent-block {
+[data-theme="academic"] .subagent-block,
+[data-theme="academic"] .todo-block {
   font-family: "Source Serif 4", "Noto Serif SC", Georgia, "Times New Roman", serif;
 }
 

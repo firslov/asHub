@@ -38,16 +38,53 @@ export function createCapture(
   opts?: CaptureOpts,
 ): Capture {
   let liveEntryIds: (string | null)[] = [];
+  // Set when the snapshot and the persisted tree diverge beyond repair; all
+  // further appends are refused so a misaligned capture can't corrupt history.
+  let desynced = false;
+
+  // Content comparison ignoring meta: meta carries treeEntryId tags that the
+  // stored entry's message may not share.
+  const sameMessage = (a: AgentMessage, b: AgentMessage): boolean => {
+    const strip = (m: AgentMessage) => {
+      const { meta: _meta, ...rest } = m as AgentMessage & { meta?: unknown };
+      return rest;
+    };
+    return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+  };
 
   const flush = async (): Promise<void> => {
     const store = getStore();
-    if (!store) return;
+    if (!store || desynced) return;
     const snap = await bridge.snapshot();
     const messages = snap.messages as AgentMessage[];
 
     if (messages.length < liveEntryIds.length) {
-      opts?.onWarn?.(`capture: snapshot shrank (${messages.length} < ${liveEntryIds.length}) — asHub-owned compaction should never produce this; bridge contract violated or fallback path fired`);
-      return;
+      // The snapshot shrank. Path 1 — realign by content: walk the shared
+      // prefix comparing each live message against its stored tree entry,
+      // truncate liveEntryIds at the first divergence and rewind activeLeaf
+      // to match, then fall through so the divergent tail re-appends under
+      // the correct parent.
+      let prefix = 0;
+      while (prefix < messages.length) {
+        const id = liveEntryIds[prefix];
+        const entry = id ? store.getEntry(id) : undefined;
+        if (!entry || entry.type !== "message" || !sameMessage(entry.message, messages[prefix]!)) break;
+        prefix++;
+      }
+      const newLeafId = prefix > 0 ? liveEntryIds[prefix - 1]! : null;
+      if (prefix > 0 && newLeafId) {
+        opts?.onWarn?.(`capture: snapshot shrank (${messages.length} < ${liveEntryIds.length}); realigned to verified prefix of ${prefix} message(s), re-appending divergent tail`);
+        liveEntryIds = liveEntryIds.slice(0, prefix);
+        store.setActiveLeaf(newLeafId);
+      } else {
+        // Path 2 — no verifiable shared prefix (contents diverge from index
+        // 0, or the boundary entry is a compaction placeholder): any append
+        // would hang messages under the wrong parent, so halt persistence
+        // until hub re-syncs via resetTo/truncateTo.
+        desynced = true;
+        opts?.onWarn?.(`capture: snapshot shrank (${messages.length} < ${liveEntryIds.length}) and shares no verifiable prefix with the persisted tree — history persistence halted (desynced) to prevent corruption; restart or re-sync required`);
+        return;
+      }
     }
     if (messages.length === liveEntryIds.length) return;
     const newMessages = messages.slice(liveEntryIds.length);
@@ -58,8 +95,10 @@ export function createCapture(
   return {
     flush,
     getEntryIdAt: (i) => liveEntryIds[i] ?? null,
-    resetTo: (ids) => { liveEntryIds = [...ids]; },
-    truncateTo: (n) => { liveEntryIds = liveEntryIds.slice(0, Math.max(0, n)); },
+    // resetTo/truncateTo are hub-driven re-syncs (load, rewind, compaction):
+    // they re-establish a trusted alignment, so they clear the desynced flag.
+    resetTo: (ids) => { liveEntryIds = [...ids]; desynced = false; },
+    truncateTo: (n) => { liveEntryIds = liveEntryIds.slice(0, Math.max(0, n)); desynced = false; },
     length: () => liveEntryIds.length,
   };
 }

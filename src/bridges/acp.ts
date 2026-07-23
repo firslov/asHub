@@ -75,6 +75,10 @@ export class AcpBridge extends EventEmitter implements Bridge {
       cwd: opts.cwd ?? process.cwd(),
       env: extra.env ?? process.env,
       stdio: ["pipe", "pipe", "inherit"],
+      // On Windows, globally installed npm commands are .cmd shims that can
+      // only run through a shell. Node quotes each arg correctly when
+      // shell:true is used, so args with spaces still survive.
+      shell: process.platform === "win32",
     });
 
     this.child.stdout!.setEncoding("utf-8");

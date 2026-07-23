@@ -6,13 +6,47 @@ import { attachAutocomplete } from "./autocomplete.js";
 import { attachPromptAutocomplete } from "./prompt-manager.js";
 import { attachAtMentionAutocomplete } from "./at-mention.js";
 import { activeSession } from "./session-manager.js";
+import { toast } from "./toast.js";
+import { t } from "./i18n.js";
 import { effect } from "../vendor/signals-core.js";
 
 const form = document.getElementById("form");
 const input = document.getElementById("query");
-const cancelBtn = document.getElementById("cancel-turn");
+const sendBtn = document.getElementById("send-btn");
 const imagePreviews = document.getElementById("image-previews");
 const visionIndicator = document.getElementById("vision-indicator");
+
+// ── Send button (submit when idle, cancel while busy) ─────────────
+
+const updateSendBtn = () => {
+  if (!sendBtn) return;
+  const session = activeSession.peek();
+  const busy = !!session?.state?.isProcessing;
+  const hasText = !!input?.value.trim();
+  sendBtn.classList.toggle("busy", busy);
+  sendBtn.disabled = busy ? false : (!session || !hasText);
+  sendBtn.title = busy ? t("interrupt") : t("send");
+};
+
+sendBtn?.addEventListener("click", (ev) => {
+  // While a turn is running the button acts as cancel — don't submit.
+  if (sendBtn.classList.contains("busy")) {
+    ev.preventDefault();
+    cancelTurn();
+  }
+});
+
+input?.addEventListener("input", updateSendBtn);
+document.addEventListener("langchange", updateSendBtn);
+// isProcessing flips outside the signal graph (state.js setBusy) — listen for
+// its explicit event so the button toggles between send and cancel.
+document.addEventListener("ash:busy-change", updateSendBtn);
+effect(() => {
+  // Track session switch and busy flips (same pattern as sse.js).
+  const s = activeSession.value;
+  void s?.state?.isProcessing;
+  updateSendBtn();
+});
 
 // ── Image attachments ──────────────────────────────────────────────
 
@@ -153,6 +187,22 @@ input?.addEventListener("keydown", (ev) => {
 });
 
 const THINKING_LEVELS = ["off", "low", "medium", "high", "xhigh"];
+
+// Transient chip in the composer confirming the new thinking level.
+let thinkingChip = null;
+const showThinkingChip = (level) => {
+  if (!form) return;
+  if (!thinkingChip) {
+    thinkingChip = document.createElement("span");
+    thinkingChip.className = "thinking-chip";
+    form.appendChild(thinkingChip);
+  }
+  thinkingChip.textContent = t("thinking.level", { level });
+  thinkingChip.classList.remove("show");
+  void thinkingChip.offsetWidth;  // restart the fade animation
+  thinkingChip.classList.add("show");
+};
+
 input?.addEventListener("keydown", (ev) => {
   if (ev.key !== "Tab" || !ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const session = activeSession.peek();
@@ -163,6 +213,7 @@ input?.addEventListener("keydown", (ev) => {
   const next = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
   const sid = currentSessionId();
   if (!sid) return;
+  showThinkingChip(next);
   fetch(`/${sid}/thinking`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -171,6 +222,13 @@ input?.addEventListener("keydown", (ev) => {
 });
 
 const shellSupported = !/win/i.test(navigator.platform || "");
+
+// No shell mode without a shell backend — advertise the placeholder variant
+// without "! shell". scanI18n re-reads the attribute on langchange.
+if (!shellSupported && input) {
+  input.setAttribute("data-i18n-placeholder", "ask.agent.noshell");
+  input.placeholder = t("ask.agent.noshell");
+}
 
 // Also catches `!` from paste/IME, where keydown for the literal char never fires.
 input?.addEventListener("input", () => {
@@ -185,6 +243,7 @@ const doShellSubmit = async (raw) => {
   if (!sid) return;
   input.value = "";
   input.style.height = "";
+  updateSendBtn();
   try {
     await fetch(`/${sid}/pty-input`, {
       method: "POST",
@@ -240,6 +299,13 @@ const acceptAc = () => {
   return false;
 };
 
+/** Throw (with the server's response text) when a submit request is rejected. */
+const assertSubmitOk = async (res) => {
+  if (res.ok) return;
+  const detail = await res.text().catch(() => "");
+  throw new Error(detail || `HTTP ${res.status}`);
+};
+
 const doSubmit = async (query) => {
   if (!query) return;
   if (shellMode || (shellSupported && query.startsWith("!"))) {
@@ -247,12 +313,17 @@ const doSubmit = async (query) => {
     return;
   }
   const sv = activeSession.peek();
-  if (!sv || sv.state.isSubmitting) return;
+  if (!sv) return;
+  if (sv.state.isSubmitting) {
+    toast(t("submit.busy"), { type: "info" });
+    return;
+  }
   sv.state.lastQuery = query;
   queryHistory.push(query);
   sv.state.isSubmitting = true;
   input.value = "";
   input.style.height = "";
+  updateSendBtn();
   slashAc.close();
   promptAc.close();
   atAc.close();
@@ -272,7 +343,8 @@ const doSubmit = async (query) => {
     optimisticBox.dataset.queued = query;
     appendAfterPending(sv, optimisticBox);
   }
-  input.disabled = true;
+  // The input stays enabled so keystrokes during slow submits aren't
+  // swallowed; sv.state.isSubmitting above guards against double submits.
   const sid = sv.id;
   try {
     if (query.startsWith("/")) {
@@ -298,27 +370,28 @@ const doSubmit = async (query) => {
         // Fallback: use base64 directly if upload fails
       }
       const body = JSON.stringify({ query, images: imageRefs });
-      await fetch(`/${sid}/submit`, {
+      await assertSubmitOk(await fetch(`/${sid}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body,
-      });
+      }));
       attachedImages = [];
       renderImagePreviews();
     } else {
-      await fetch(`/${sid}/submit`, {
+      await assertSubmitOk(await fetch(`/${sid}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query }),
-      });
+      }));
     }
   } catch (e) {
     console.error("submit failed", e);
     optimisticBox?.remove();
     optimisticSep?.remove();
+    toast(t("submit.failed"), { type: "error", detail: String(e?.message || e) });
   } finally {
     sv.state.isSubmitting = false;
-    input.disabled = false;
+    updateSendBtn();
     input.focus();
   }
 };
@@ -443,11 +516,9 @@ export const cancelTurn = () => {
   const sid = currentSessionId();
   if (!sid) return;
   if (!state.isProcessing) return;
-  if (cancelBtn && !cancelBtn.hidden) {
-    cancelBtn.classList.add("flash");
-    setTimeout(() => cancelBtn.classList.remove("flash"), 200);
+  if (sendBtn && sendBtn.classList.contains("busy")) {
+    sendBtn.classList.add("flash");
+    setTimeout(() => sendBtn.classList.remove("flash"), 200);
   }
   fetch(`/${sid}/cancel`, { method: "POST" }).catch(() => {});
 };
-
-cancelBtn?.addEventListener("click", cancelTurn);

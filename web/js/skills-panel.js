@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { toast } from "./toast.js";
 import { activeSession } from "./session-manager.js";
 
 const skillsOverlay = document.getElementById("skills-overlay");
@@ -157,11 +158,13 @@ const renderSkills = (query) => {
             btn.textContent = "❌";
             btn.title = d?.error || "Install failed";
             setTimeout(() => { btn.textContent = t("skills.install"); btn.title = ""; }, 4000);
+            toast(t("skills.install.failed"), { type: "error", detail: d?.error || undefined });
           }
         } catch {
           btn.textContent = "❌";
           btn.title = "Network error";
           setTimeout(() => { btn.textContent = t("skills.install"); btn.title = ""; }, 4000);
+          toast(t("skills.install.failed"), { type: "error", detail: "Network error" });
         }
       }
     });

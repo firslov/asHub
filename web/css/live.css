@@ -1792,6 +1792,48 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .subagent-head.subagent-done .subagent-type-badge { opacity: 0.5; }
 
+/* Swarm progress block: same visual language as .subagent-block; the head
+   toggles the body holding per-item subagent blocks. */
+.subagent-swarm .subagent-head { cursor: pointer; }
+.subagent-swarm .subagent-head:hover {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--purple) 7%, transparent), color-mix(in srgb, var(--purple) 4%, transparent));
+}
+/* Per-item subagent blocks nested inside the swarm body get a subtle indent
+   to read as children of the group. */
+.subagent-swarm > .subagent-body {
+  margin-left: 0.9rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid color-mix(in srgb, var(--purple) 25%, transparent);
+}
+
+.swarm-count {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.swarm-status {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  flex-shrink: 0;
+}
+.swarm-failed { color: var(--error); }
+
+/* Subagent id badge appended on completion (resume reference, e.g. #sa1). */
+.subagent-id {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  flex-shrink: 0;
+}
+
+.subagent-tools-count:empty { display: none; }
+.subagent-tools-count {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .session-title-edit {
   display: block;
   width: 100%;

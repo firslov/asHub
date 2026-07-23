@@ -86,6 +86,10 @@ const FORWARDED = [
   "shell:queued",
   "subagent:started",
   "subagent:done",
+  // agentswarm fan-out lifecycle — see the agentswarm tool below.
+  "subagent:swarm-started",
+  "subagent:swarm-progress",
+  "subagent:swarm-done",
   // todolist tool state — payload {todos:[{title,status}]}, full replacement
   // each time, so the frontend just swaps its TODO card contents.
   "agent:todo",
@@ -198,9 +202,10 @@ You start with zero context beyond this prompt and the task.
   },
 };
 
-/** Names of the five subagent preset tools — stripped from subagent tool
- *  lists so a subagent can never spawn another subagent (unbounded nesting). */
-const SUBAGENT_TOOL_NAMES = new Set(Object.keys(SUBAGENT_TYPES));
+/** Names of the five subagent preset tools (plus the swarm/resume tools) —
+ *  stripped from subagent tool lists so a subagent can never spawn another
+ *  subagent (unbounded nesting). */
+const SUBAGENT_TOOL_NAMES = new Set([...Object.keys(SUBAGENT_TYPES), "agentswarm", "subagent_resume"]);
 /** Max subagents running at once; excess runs are rejected with a retry hint. */
 const MAX_CONCURRENT_SUBAGENTS = 3;
 /** Wall-clock cap per subagent run, merged with any caller/cancel signal. */
@@ -220,6 +225,9 @@ let _firstBridge = true;
       controller?: AbortController;
       result?: string;
       error?: string;
+      /** Result already surfaced to the main agent — entry is kept so
+       *  subagent:resume can continue the run later. */
+      injected?: boolean;
     }
 
 // ── todolist tool ─────────────────────────────────────────────────
@@ -308,6 +316,11 @@ export class AshBridge extends EventEmitter implements Bridge {
       `- Before destructive or hard-to-reverse actions (deleting files or branches, ` +
       `dropping data, force-pushing, killing processes), confirm with the user first ` +
       `— unless they clearly asked for exactly that.\n\n` +
+      `## Work tracking\n\n` +
+      `For multi-step tasks (3+ steps), keep a \`todolist\` updated as you go: exactly ` +
+      `one item in progress at a time, and mark each item done the moment you finish ` +
+      `it. The list is a live progress card for the user — it is not a content format, ` +
+      `so when the user simply asks for a list, answer in Markdown instead.\n\n` +
       `## Delegating to subagents\n\n` +
       `You have five subagent tools: \`plan\` (step-by-step plan), \`explore\` (locate ` +
       `code, answer where-is-X), \`review\` (audit for bugs), \`research\` (trace how ` +
@@ -317,7 +330,17 @@ export class AshBridge extends EventEmitter implements Bridge {
       `- Subagents start with zero context. Brief them like a colleague who just walked ` +
       `in: the goal, exact file paths, and what you already know.\n` +
       `- Do not delegate understanding you need yourself — read the code you must reason about.\n` +
-      `- When delegating several tasks at once, give each a distinct, non-overlapping scope.`
+      `- For a batch of 2+ independent, same-shaped tasks, use \`agentswarm\` with a ` +
+      `\`prompt_template\` containing \`{{item}}\` and an \`items\` array — it fans the ` +
+      `work out in parallel and returns an aggregated report. Give each item a distinct, ` +
+      `non-overlapping scope.\n` +
+      `- Finished subagents keep their result addressable: call \`subagent_resume\` with ` +
+      `the id and a follow-up task to continue the work instead of starting over.\n\n` +
+      `## Reply format\n\n` +
+      `Replies render as rich Markdown in the chat UI. Use short paragraphs, bullets ` +
+      `for lists, backticks for code/paths/identifiers, fenced blocks with a language ` +
+      `tag for multi-line code, and tables for structured comparisons. Keep structure ` +
+      `shallow — avoid deep nesting and heavy headings in ordinary replies.`
     );
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
@@ -447,6 +470,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       model: string | undefined,
       maxIterations: number,
       budgetTokens: number | undefined,
+      swarmId?: string,
     ) => {
       const id = `sa${++_subagentSeq}`;
       const llmClient = core.handlers.call("llm:get-client");
@@ -461,7 +485,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       _runningSubagents++;
 
       (core.bus.emit as (name: string, payload: unknown) => void)(
-        "subagent:started", { task, subagentId: id, type });
+        "subagent:started", { task, subagentId: id, type, ...(swarmId ? { swarmId } : {}) });
 
       const promise = runSubagent({
         llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
@@ -508,6 +532,8 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
           () => {
             const completed: string[] = [];
             for (const [eid, e] of _subagents) {
+              // Already surfaced once — keep the entry for subagent:resume.
+              if (e.injected) continue;
               if (e.result || e.error) {
                 // Prefer the error narrative: a timeout/error entry may also
                 // carry partial result text — don't label it "Completed".
@@ -520,7 +546,9 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
                   body +
                   `\n</subagent_result>`
                 );
-                _subagents.delete(eid);
+                // Mark instead of delete: the retained entry lets
+                // subagent:resume brief a follow-up run with this result.
+                e.injected = true;
               }
             }
             if (completed.length === 0) return null;
@@ -669,13 +697,43 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
           return { subagentTimedOut: true as const, message: `${result}\n\n[subagent terminated: timeout after ${minutes}min]` };
         }
         (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId });
-        return result;
+        // Keep the result addressable (marked injected so the context
+        // producer ignores it) so subagent:resume can continue this run.
+        _subagents.set(syncId, { id: syncId, type: opts.type ?? "generic", task: opts.task, startedAt: Date.now(), promise: Promise.resolve(result), result, injected: true });
+        return `${result}\n\nSubagent id: ${syncId} — call subagent_resume with this id and a follow-up task to continue this work.`;
       } catch (err) {
         (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, error: String(err), subagentId: syncId });
         throw err;
       } finally {
         _runningSubagents--;
       }
+    });
+
+    // ── Subagent resume (lightweight) ────────────────────────────
+    // No real session restore: the follow-up runs as a fresh synchronous
+    // subagent briefed with the previous task and a truncated result.
+    // Its own result carries a new subagent id, so resumes can be chained.
+    core.handlers.define("subagent:resume", async (opts: {
+      id: string;
+      task: string;
+      signal?: AbortSignal;
+    }) => {
+      const entry = _subagents.get(opts.id);
+      if (!entry || (!entry.result && !entry.error)) {
+        return `Error: no completed subagent run with id '${opts.id}' — only runs that already returned a result can be resumed.`;
+      }
+      const prev = (entry.result ?? `Error: ${entry.error}`).slice(0, 2000);
+      const task =
+        `Continuation of subagent ${entry.id}.\n\n` +
+        `Previous task: ${entry.task}\n\n` +
+        `Previous result:\n${prev}\n\n` +
+        `Follow-up task: ${opts.task}`;
+      return core.handlers.call("subagent:run", {
+        task,
+        type: SUBAGENT_TYPES[entry.type] ? entry.type : undefined,
+        async: false,
+        signal: opts.signal,
+      });
     });
 
     // ── Subagent tools ──────────────────────────────────────────────
@@ -723,6 +781,216 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     for (const [name, cfg] of Object.entries(SUBAGENT_TYPES)) {
       registerSubagentTool(name, cfg);
     }
+
+    // ── subagent_resume tool ──────────────────────────────────────
+    // Model-facing entry point for the subagent:resume handler above.
+    (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool({
+      name: "subagent_resume",
+      description:
+        `Continue a previously completed subagent run with a follow-up task. ` +
+        `Every synchronous subagent result ends with a 'Subagent id: ...' line — pass that id here. ` +
+        `The follow-up runs as a fresh subagent briefed with the previous task and result (truncated), ` +
+        `so use it to drill into a finding or fix issues a subagent reported without redoing its work.`,
+      input_schema: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "The subagent id from a previous result (e.g. 'sync-3')." },
+          task: { type: "string", description: "The follow-up task for the resumed subagent." },
+        },
+        required: ["id", "task"],
+      },
+      async execute(args, _onChunk, toolCtx) {
+        const result = await core.handlers.call("subagent:resume", {
+          id: (args as { id: string }).id,
+          task: (args as { task: string }).task,
+          signal: toolCtx?.signal,
+        }) as string | { concurrencyLimited: true; message: string } | { subagentTimedOut: true; message: string };
+        if (typeof result !== "string") {
+          // Concurrency-cap / timeout — same surfacing as the preset tools.
+          return { exitCode: 1, content: result.message, isError: true };
+        }
+        const isErr = result.startsWith("Error:");
+        return { exitCode: isErr ? 1 : 0, content: result, isError: isErr };
+      },
+      formatResult(_args, result) {
+        const text = String((result as { content?: unknown })?.content ?? "");
+        return { summary: text.slice(0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
+      },
+    });
+
+    // ── agentswarm tool ───────────────────────────────────────────
+    // Fan out one prompt template over N items, one subagent per item.
+    // Unlike subagent:run's reject-on-cap policy, swarm items QUEUE: the
+    // pump below starts the next item whenever a concurrency slot frees.
+    // The tool blocks until the whole swarm finishes — individual
+    // subagent:started/done and subagent:swarm-* events stream meanwhile,
+    // which keeps the hub's idle watchdog fed.
+    let _swarmSeq = 0;
+    (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool({
+      name: "agentswarm",
+      description:
+        `Run many subagents in parallel from one prompt template: '{{item}}' in prompt_template is replaced ` +
+        `by each entry of 'items' and every expanded prompt gets its own subagent (2-16 items; at most ` +
+        `${MAX_CONCURRENT_SUBAGENTS} run at once, the rest queue). Best for homogeneous batch work — ` +
+        `reviewing, searching, or summarizing a list of files, modules, or topics. ` +
+        `Rules: give items distinct, NON-OVERLAPPING scopes so subagents don't duplicate or conflict; ` +
+        `each subagent starts with ZERO context, so the template must carry all background (goal, paths, constraints); ` +
+        `you get back one aggregated report line per item.`,
+      input_schema: {
+        type: "object",
+        properties: {
+          prompt_template: { type: "string", description: "Prompt template; must contain the {{item}} placeholder, replaced per item." },
+          items: { type: "array", items: { type: "string" }, description: "2-16 item strings, each spliced into the template in place of {{item}}." },
+          type: { type: "string", enum: Object.keys(SUBAGENT_TYPES), description: "Subagent preset used for every item (default: explore)." },
+        },
+        required: ["prompt_template", "items"],
+      },
+      async execute(args, _onChunk, toolCtx) {
+        const fail = (message: string) => ({ exitCode: 1, content: message, isError: true });
+        const a = args as { prompt_template?: unknown; items?: unknown; type?: unknown };
+
+        const template = typeof a.prompt_template === "string" ? a.prompt_template : "";
+        if (!template.includes("{{item}}")) {
+          return fail("Error: 'prompt_template' must contain the {{item}} placeholder.");
+        }
+        if (!Array.isArray(a.items) || a.items.length < 2 || a.items.length > 16) {
+          return fail("Error: 'items' must be an array of 2-16 entries.");
+        }
+        const items = a.items.map((x) => String(x));
+        const type = typeof a.type === "string" && a.type ? a.type : "explore";
+        const preset = SUBAGENT_TYPES[type];
+        if (!preset) {
+          return fail(`Error: unknown swarm type '${type}' — use one of: ${Object.keys(SUBAGENT_TYPES).join(", ")}.`);
+        }
+        // Duplicate guard: distinct-looking items can collapse to the same
+        // expanded prompt — running both would waste a concurrency slot.
+        const prompts = items.map((it) => template.split("{{item}}").join(it));
+        const firstSeen = new Map<string, number>();
+        for (let i = 0; i < prompts.length; i++) {
+          const seen = firstSeen.get(prompts[i]!);
+          if (seen !== undefined) {
+            return fail(`Error: items[${i}] expands to the same prompt as items[${seen}] — each item must produce a distinct prompt.`);
+          }
+          firstSeen.set(prompts[i]!, i);
+        }
+
+        // Same tool/model resolution as subagent:run's preset path.
+        const allTools: ToolDefinition[] = (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
+        let tools: ToolDefinition[];
+        if (preset.tools.length === 0) {
+          tools = [];
+        } else if (preset.tools[0] !== "*") {
+          tools = allTools.filter((t) => preset.tools.includes(t.name));
+        } else {
+          tools = allTools;
+        }
+        tools = tools.filter((t) => !SUBAGENT_TOOL_NAMES.has(t.name));
+        const rawModel = (getSettings() as any).subagentModels?.[type] ?? preset.model;
+        const model = typeof rawModel === "string" ? rawModel.replace(/@.+$/, "") : rawModel;
+
+        const swarmId = `swarm-${++_swarmSeq}`;
+        const total = items.length;
+        (core.bus.emit as (name: string, payload: unknown) => void)(
+          "subagent:swarm-started", { swarmId, total, type });
+
+        const results: Array<{ ok: boolean; text: string } | null> = new Array(total).fill(null);
+        let next = 0;
+        let done = 0;
+        let failed = 0;
+        // Set when the main turn is cancelled: running items abort, and pump
+        // must NOT dispatch the queued remainder.
+        let cancelled = !!toolCtx?.signal?.aborted;
+        toolCtx?.signal?.addEventListener("abort", () => { cancelled = true; }, { once: true });
+
+        await new Promise<void>((resolveSwarm) => {
+          const pump = () => {
+            try {
+              while (!cancelled && next < total && _runningSubagents < MAX_CONCURRENT_SUBAGENTS) {
+                const i = next++;
+                try {
+                  // Bypass subagent:run's reject-on-cap: queue semantics are
+                  // the whole point of a swarm, so launch directly and wait
+                  // for slots instead of erroring out.
+                  const id = launchSubagent(prompts[i]!, type, preset.systemPrompt, tools, model, preset.maxIterations, preset.budgetTokens, swarmId);
+                  const entry = _subagents.get(id)!;
+                  // launchSubagent's own .then was attached first, so
+                  // entry.result/entry.error are already set when ours runs.
+                  void entry.promise.then(() => {
+                    if (entry.error) {
+                      failed++;
+                      results[i] = { ok: false, text: entry.result ? `${entry.result}\n[${entry.error}]` : entry.error };
+                    } else {
+                      done++;
+                      results[i] = { ok: true, text: entry.result ?? "" };
+                    }
+                  }).catch((err) => {
+                    failed++;
+                    results[i] = { ok: false, text: String(err) };
+                  }).finally(() => {
+                    // Mark injected so the context producer does not also
+                    // push every item's full result into the main context —
+                    // the aggregated report below is the single source.
+                    // (In .finally so reject/abort paths are covered too.)
+                    entry.injected = true;
+                    (core.bus.emit as (name: string, payload: unknown) => void)(
+                      "subagent:swarm-progress", { swarmId, done, failed });
+                    pump();
+                  });
+                } catch (err) {
+                  failed++;
+                  results[i] = { ok: false, text: String(err) };
+                  (core.bus.emit as (name: string, payload: unknown) => void)(
+                    "subagent:swarm-progress", { swarmId, done, failed });
+                }
+              }
+              // Cancelled with queued remainder: mark the not-yet-launched
+              // slots as failed (explicit indices — pending launched items
+              // settle via their own .then and must not be double-counted).
+              if (cancelled) {
+                while (next < total) {
+                  const i = next++;
+                  failed++;
+                  results[i] = { ok: false, text: "cancelled" };
+                }
+              }
+              if (done + failed >= total) {
+                clearInterval(timer);
+                (core.bus.emit as (name: string, payload: unknown) => void)(
+                  "subagent:swarm-done", { swarmId, done, failed });
+                resolveSwarm();
+              }
+            } catch (err) {
+              // A throw inside pump must not leak the interval (it would
+              // re-fire every second and produce unhandled rejections).
+              clearInterval(timer);
+              (core.bus.emit as (name: string, payload: unknown) => void)(
+                "subagent:swarm-done", { swarmId, done, failed });
+              resolveSwarm();
+            }
+          };
+          // Poll as a backstop: slots can also be freed by subagents outside
+          // this swarm, whose completion never triggers our pump.
+          const timer = setInterval(pump, 1000);
+          timer.unref?.();
+          pump();
+        });
+
+        const lines = items.map((item, i) => {
+          const r = results[i];
+          const flat = item.replace(/\s+/g, " ").trim();
+          const short = flat.length > 60 ? `${flat.slice(0, 60)}…` : flat;
+          const conclusion = (r?.text ?? "no result").trim();
+          const clipped = conclusion.length > 500 ? `${conclusion.slice(0, 500)}…` : conclusion;
+          return `[${i + 1}/${total}] ${short} → ${r?.ok ? "✓" : "✗"} ${clipped}`;
+        });
+        const header = `Swarm ${swarmId} (${type}) finished: ${done} succeeded, ${failed} failed, ${total} total.`;
+        return { exitCode: 0, content: `${header}\n${lines.join("\n")}`, isError: false };
+      },
+      formatResult(_args, result) {
+        const text = String((result as { content?: unknown })?.content ?? "");
+        return { summary: text.split("\n")[0]?.slice(0, 200) ?? "", body: { kind: "lines" as const, lines: text.split("\n") } };
+      },
+    });
 
     // ── todolist tool ─────────────────────────────────────────────
     // Session-scoped TODO list, modelled on Kimi Code's TodoList: full

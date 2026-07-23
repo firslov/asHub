@@ -123,6 +123,9 @@ const REPLAY_NAMES = new Set([
   "agent:thinking-chunk",
   "subagent:started",
   "subagent:done",
+  "subagent:swarm-started",
+  "subagent:swarm-progress",
+  "subagent:swarm-done",
   "agent:todo",
 ]);
 

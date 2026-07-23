@@ -152,22 +152,30 @@ export class SessionStore {
     this.flushHeader();
     let parent = this.activeLeaf;
     const lines: string[] = [];
+    const staged: MessageEntry[] = [];
     const newIds: string[] = [];
     for (const m of messages) {
+      // 8-hex ids can collide; re-roll rather than silently overwrite an
+      // existing entry (which would corrupt the parentId chain).
+      let id = newEntryId();
+      while (this.entries.has(id) || newIds.includes(id)) id = newEntryId();
       const e: MessageEntry = {
         type: "message",
-        id: newEntryId(),
+        id,
         parentId: parent,
         timestamp: Date.now(),
         message: m,
       };
-      this.entries.set(e.id, e);
+      staged.push(e);
       lines.push(JSON.stringify(e));
       newIds.push(e.id);
       parent = e.id;
     }
-    this.activeLeaf = parent;
+    // Persist first: commit to memory only after the lines are on disk, so a
+    // failed append can't advance activeLeaf past entries the file lacks.
     await fsp.appendFile(this.entriesPath, lines.join("\n") + "\n");
+    for (const e of staged) this.entries.set(e.id, e);
+    this.activeLeaf = parent;
     this.persistLeaf();
     return newIds;
   }
@@ -175,17 +183,20 @@ export class SessionStore {
   async appendCompaction(firstKeptId: string, tokensBefore: number = 0): Promise<string> {
     if (!this.entries.has(firstKeptId)) throw new Error(`firstKeptId unknown: ${firstKeptId}`);
     this.flushHeader();
+    let id = newEntryId();
+    while (this.entries.has(id)) id = newEntryId();
     const e: CompactionEntry = {
       type: "compaction",
-      id: newEntryId(),
+      id,
       parentId: this.activeLeaf,
       timestamp: Date.now(),
       firstKeptId,
       tokensBefore,
     };
+    // Persist first; commit to memory only after the write succeeds.
+    await fsp.appendFile(this.entriesPath, JSON.stringify(e) + "\n");
     this.entries.set(e.id, e);
     this.activeLeaf = e.id;
-    await fsp.appendFile(this.entriesPath, JSON.stringify(e) + "\n");
     this.persistLeaf();
     return e.id;
   }
@@ -228,7 +239,13 @@ export class SessionStore {
     for (let i = startIdx; i < branch.length; i++) {
       const e = branch[i]!;
       if (e.type === "message") {
-        messages.push(e.message);
+        // Return copies, not the stored entry objects: the sanitize below and
+        // any downstream mutation (via replaceMessages into the kernel) must
+        // not leak into the persisted tree. The spread keeps meta (incl.
+        // meta.treeEntryId, which capture's entryId mapping relies on).
+        const copy: AgentMessage = { ...e.message };
+        if (copy.tool_calls) copy.tool_calls = [...copy.tool_calls];
+        messages.push(copy);
         entryIds.push(e.id);
       }
     }
@@ -236,6 +253,7 @@ export class SessionStore {
     // Sanitize: if the last message is an assistant with tool_calls that
     // lack corresponding tool-result messages (e.g. session terminated
     // mid-execution), strip the orphaned tool_calls to avoid API errors.
+    // Operates on the copies above, so stored entries stay untouched.
     const last = messages[messages.length - 1];
     if (last?.role === "assistant" && Array.isArray(last.tool_calls) && last.tool_calls.length > 0) {
       // Collect tool_call_ids that have matching tool responses
@@ -325,7 +343,14 @@ export class SessionStore {
 
   private persistLeaf(): void {
     if (this.pendingHeader) return;
-    fs.writeFileSync(this.leafPath, this.activeLeaf);
+    // Best effort: the jsonl already holds the entries and load() falls back
+    // to the last entry when the leaf file is missing/stale, so a failed
+    // write must not abort callers (e.g. capture.flush()) mid-commit.
+    try {
+      fs.writeFileSync(this.leafPath, this.activeLeaf);
+    } catch (err) {
+      console.warn(`[session-store] persistLeaf failed for ${this.leafPath}: ${(err as Error).message}`);
+    }
   }
   private persistMeta(): void {
     if (this.pendingHeader) return;

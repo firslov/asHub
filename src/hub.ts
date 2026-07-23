@@ -17,7 +17,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
 import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
-import { listAllProviders, resolveApiKey } from "agent-sh/auth";
+import { listAllProviders, resolveApiKey, anyProviderConfigured } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
 import { extractText, extractImages, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
@@ -123,6 +123,7 @@ const REPLAY_NAMES = new Set([
   "agent:thinking-chunk",
   "subagent:started",
   "subagent:done",
+  "agent:todo",
 ]);
 
 /** Agent events that indicate forward progress (reset idle timeout). */
@@ -589,6 +590,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       if (req.method === "PUT" && rest === "/model") return setModelEndpoint(req, res, session);
       if (req.method === "PUT" && rest === "/sa-model") return setSubagentModel(req, res, session);
       if (req.method === "GET" && rest === "/sa-model") return getSubagentModelOverrides(req, res, session);
+      if (req.method === "GET" && rest === "/sa-types") return getSubagentTypes(req, res, session);
       if (req.method === "GET" && rest === "/pin") return togglePin(req, res, session);
       if (req.method === "PUT" && rest === "/cwd") return setCwdEndpoint(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
@@ -867,13 +869,23 @@ function settingsPath(): string {
 function getConfig(res: http.ServerResponse): void {
   const fp = settingsPath();
   fs.readFile(fp, "utf-8", (err, raw) => {
+    // anyProviderConfigured() also counts env-var and keys-file sources, not
+    // just apiKey fields in settings.json — the frontend onboarding hint
+    // relies on it. Default to true on failure (never false-alarm).
+    let anyConfigured = true;
+    try { anyConfigured = anyProviderConfigured(); } catch { /* keep true */ }
+    res.writeHead(200, { "Content-Type": "application/json" });
     if (err) {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({}));
+      res.end(JSON.stringify({ anyProviderConfigured: anyConfigured }));
       return;
     }
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(raw);
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      parsed.anyProviderConfigured = anyConfigured;
+      res.end(JSON.stringify(parsed));
+    } catch {
+      res.end(JSON.stringify({ anyProviderConfigured: anyConfigured }));
+    }
   });
 }
 
@@ -895,11 +907,19 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
   const fp = settingsPath();
   try {
     await fs.promises.mkdir(path.dirname(fp), { recursive: true });
+    // anyProviderConfigured is computed per GET, not a real setting — never
+    // persist it (the config editor round-trips the whole GET response).
+    delete parsed.anyProviderConfigured;
     // Preserve app-level settings not managed by the config editor
     try {
       const old = JSON.parse(await fs.promises.readFile(fp, "utf-8"));
       if (old[AUTO_APPROVE_KEY] !== undefined) {
         parsed[AUTO_APPROVE_KEY] = old[AUTO_APPROVE_KEY];
+      }
+      // subagentModels is written straight to disk by subagent:set-model;
+      // the editor submits an open-time snapshot, so the on-disk value wins.
+      if (old.subagentModels !== undefined) {
+        parsed.subagentModels = old.subagentModels;
       }
     } catch {}
     await fs.promises.writeFile(fp, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
@@ -1020,6 +1040,9 @@ async function createSession(
         async (liveView, entryIds) => {
           if (session) await rebuildReplay(session, liveView, entryIds);
         },
+        // Run the strategy's tree mutations under this session's contextLock
+        // so auto-compaction can't interleave with rewind/drop/fork.
+        <T>(fn: () => Promise<T>) => withContextLock(session, fn),
       )
     : undefined;
 
@@ -1429,6 +1452,20 @@ function routeEvent(session: Session, e: BusEvent): void {
     session.isProcessing = false;
     // Only mark unread if no one is watching (no active SSE client).
     session.hasUnread = session.sseClients.size === 0;
+    // A dropped queued message never got queued-submit (no processing-start
+    // was pushed for it), so besides the processing-done below, forward the
+    // dropped query itself — the frontend clears its pending box from this
+    // frame. "agent:queued-done" is in REPLAY_NAMES, so reconnects replay it
+    // and don't resurrect a ghost pending box.
+    const qp = e.payload as { query?: string; dropped?: boolean } | undefined;
+    if (qp?.dropped) {
+      pushFrame(session, "agent:queued-done", sseFrame({
+        source: session.id,
+        ts: Date.now(),
+        id: `hub:${session.id}:agent:queued-done`,
+        name: "agent:queued-done",
+      }, { query: qp.query ?? "" }));
+    }
     // Generate a fresh meta so the frame carries its own ts/id — mirroring
     // the non-queued path in submit().
     pushFrame(session, "agent:processing-done", sseFrame({
@@ -1439,9 +1476,13 @@ function routeEvent(session: Session, e: BusEvent): void {
     }, {}));
     _flushBuf(session.id);
     saveSessionMetaDebounced(session);
-    session.capture?.flush().catch((err) =>
-      console.error(`[hub] capture.flush failed for ${session.id}:`, err)
-    );
+    // Flush under the context lock so it can't interleave with an automatic
+    // compaction or a rewind/fork replacing the kernel mid-snapshot.
+    if (session.capture) {
+      withContextLock(session, () => session.capture!.flush()).catch((err) =>
+        console.error(`[hub] capture.flush failed for ${session.id}:`, err)
+      );
+    }
     if (!session.firstTurnDone && session.firstQuery) {
       session.firstTurnDone = true;
       generateTitleAsync(session).catch((err) =>
@@ -1719,44 +1760,69 @@ function expandHome(input: string): string {
 
 function pickDir(res: http.ServerResponse): void {
   const platform = process.platform;
-  let cmd: string, args: string[];
+  // Candidates are tried in order when the previous one is not installed.
+  const candidates: Array<{ cmd: string; args: string[] }> = [];
   if (platform === "darwin") {
-    cmd = "osascript";
-    args = ["-e", 'POSIX path of (choose folder with prompt "Select working directory")'];
+    candidates.push({
+      cmd: "osascript",
+      args: ["-e", 'POSIX path of (choose folder with prompt "Select working directory")'],
+    });
   } else if (platform === "win32") {
-    cmd = "powershell";
-    args = [
-      "-NoProfile", "-Command",
-      "$f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select working directory'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }",
-    ];
+    candidates.push({
+      cmd: "powershell",
+      args: [
+        "-NoProfile", "-Command",
+        "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select working directory'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }",
+      ],
+    });
   } else {
-    cmd = "zenity";
-    args = ["--file-selection", "--directory", "--title=Select working directory"];
+    candidates.push(
+      { cmd: "zenity", args: ["--file-selection", "--directory", "--title=Select working directory"] },
+      { cmd: "kdialog", args: ["--getexistingdirectory", os.homedir(), "--title", "Select working directory"] },
+      { cmd: "yad", args: ["--file-selection", "--directory", "--title=Select working directory"] },
+    );
   }
-  execFile(cmd, args, { timeout: 120_000 }, (err, stdout) => {
-    if (err) {
+
+  const tryNext = (idx: number): void => {
+    const { cmd, args } = candidates[idx];
+    execFile(cmd, args, { timeout: 120_000 }, (err, stdout, stderr) => {
+      if (err) {
+        // Tool not installed — fall back to the next candidate.
+        if ((err as NodeJS.ErrnoException).code === "ENOENT" && idx + 1 < candidates.length) {
+          tryNext(idx + 1);
+          return;
+        }
+        // An empty selection (and no unexpected stderr) means the user cancelled the dialog.
+        if (!stdout.trim() && (!stderr.trim() || /user cancel/i.test(stderr))) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ cancelled: true }));
+          return;
+        }
+        console.error(`[hub] pick-dir failed (${cmd}):`, stderr || err);
+        res.statusCode = 500;
+        res.end(`pick-dir failed: ${stderr.trim() || err.message}`);
+        return;
+      }
+      const cwd = stdout.trim();
+      if (!cwd) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ cancelled: true }));
+        return;
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ cancelled: true }));
-      return;
-    }
-    const cwd = stdout.trim();
-    if (!cwd) {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ cancelled: true }));
-      return;
-    }
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ cwd }));
-  });
+      res.end(JSON.stringify({ cwd }));
+    });
+  };
+  tryNext(0);
 }
 
 async function listDirs(res: http.ServerResponse, prefix: string): Promise<void> {
   const home = os.homedir();
   const usedTilde = prefix === "~" || prefix.startsWith("~/");
-  let raw = prefix ? expandHome(prefix) : process.cwd() + "/";
+  let raw = prefix ? expandHome(prefix) : process.cwd() + path.sep;
 
   let parent: string, partial: string;
-  if (raw.endsWith("/")) { parent = raw; partial = ""; }
+  if (raw.endsWith("/") || (process.platform === "win32" && raw.endsWith("\\"))) { parent = raw; partial = ""; }
   else { parent = path.dirname(raw); partial = path.basename(raw); }
 
   let entries: fs.Dirent[];
@@ -1772,7 +1838,7 @@ async function listDirs(res: http.ServerResponse, prefix: string): Promise<void>
   for (const e of entries) {
     if (!e.isDirectory() || e.name.startsWith(".")) continue;
     if (partial && !e.name.toLowerCase().startsWith(partialLower)) continue;
-    let full = path.join(parent, e.name) + "/";
+    let full = path.join(parent, e.name) + path.sep;
     if (usedTilde && full.startsWith(home)) full = "~" + full.slice(home.length);
     items.push({ name: full, description: "" });
     if (items.length >= 50) break;
@@ -2106,9 +2172,13 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       pushFrame(session, "agent:processing-done", sseFrame(meta("agent:processing-done"), {}));
       _flushBuf(session.id);
       saveSessionMetaDebounced(session);
-      session.capture?.flush().catch((err) =>
-        console.error(`[hub] capture.flush failed for ${session.id}:`, err)
-      );
+      // Flush under the context lock so it can't interleave with an automatic
+      // compaction or a rewind/fork replacing the kernel mid-snapshot.
+      if (session.capture) {
+        withContextLock(session, () => session.capture!.flush()).catch((err) =>
+          console.error(`[hub] capture.flush failed for ${session.id}:`, err)
+        );
+      }
 
       // After the first turn completes, generate a title via the LLM.
       if (isFirstTurn && !session.firstTurnDone) {
@@ -2164,11 +2234,14 @@ async function execCommand(
   session.lastModified = Date.now();
   // Echo the command into the stream so users see what they ran. Slash output
   // arrives back via ui:info / ui:error frames the bridge already forwards.
+  // `command: true` marks the frame as a slash command (not a real turn) so
+  // clients skip it when counting turns for rewind — the kernel gets no user
+  // message for these, so counting them would misalign rewind-to-turn.
   const meta = (n: string) => ({
     source: session.id, ts: Date.now(),
     id: `hub:${session.id}:${n}`, name: n,
   });
-  pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query: args ? `${name} ${args}` : name }));
+  pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query: args ? `${name} ${args}` : name, command: true }));
   try { session.bridge.execCommand(name, args); } catch (err) {
     pushFrame(session, "ui:error", sseFrame(meta("ui:error"), { message: String(err) }), { transient: true });
   }
@@ -2306,8 +2379,12 @@ async function forkEndpoint(req: http.IncomingMessage, res: http.ServerResponse,
   if (!resolved) { res.statusCode = 404; res.end("entry not found or prefix ambiguous"); return; }
   try {
     await withContextLock(session, async () => {
+      // Apply the target branch BEFORE moving the active leaf: if the kernel
+      // replace fails, the leaf must still point at the branch the kernel and
+      // capture actually contain, or the next turn's messages would be
+      // recorded under a leaf whose context was never loaded.
+      await applyBranchMessages(session, resolved);
       session.store!.setActiveLeaf(resolved);
-      await applyBranchMessages(session);
     });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, leafId: resolved }));
@@ -2337,6 +2414,7 @@ async function setCwdEndpoint(req: http.IncomingMessage, res: http.ServerRespons
 
 
 async function dropContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  if (session.isProcessing) { res.statusCode = 409; res.end("cannot switch branches while a turn is in progress"); return; }
   const body = await readBody(req);
   let indices: number[];
   try {
@@ -2364,7 +2442,9 @@ async function dropContext(req: http.IncomingMessage, res: http.ServerResponse, 
         const sanitized = await session.bridge.snapshot();
         session.capture.resetTo(readEntryIdTags(sanitized.messages));
       }
-      await truncateReplayAfterCompact(session);
+      // Full rebuild + broadcast (like fork) so every connected client drops
+      // the elided content, not just the tab that issued the request.
+      await rebuildReplayFromKernel(session);
       return result;
     });
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -2403,13 +2483,20 @@ function makePlaceholder(dropped: unknown[]): { role: "user"; content: string } 
   };
 }
 
-async function truncateReplayAfterCompact(session: Session): Promise<void> {
-  try {
-    const snap = await session.bridge.snapshot();
-    const messages = snap.messages as Array<{ role?: string }>;
-    const remainingUserMsgs = messages.filter((m) => m?.role === "user").length;
-    truncateReplayToTurnCount(session, remainingUserMsgs);
-  } catch {}
+/**
+ * Rebuild and broadcast the replay from the live kernel after a context
+ * mutation (rewind / drop), so every connected client sees the same state.
+ */
+async function rebuildReplayFromKernel(session: Session): Promise<void> {
+  const snap = await session.bridge.snapshot();
+  // Prefer capture's slot mapping over meta tags: messages appended by normal
+  // turns after the last replace carry no meta.treeEntryId in the kernel, but
+  // capture holds real entry ids for them — tag-based detection would render
+  // those real turns as compaction markers.
+  const entryIds = session.capture
+    ? snap.messages.map((_, i) => session.capture!.getEntryIdAt(i))
+    : readEntryIdTags(snap.messages);
+  await rebuildReplay(session, snap.messages, entryIds);
 }
 
 function withContextLock<T>(session: Session, fn: () => Promise<T>): Promise<T> {
@@ -2419,19 +2506,27 @@ function withContextLock<T>(session: Session, fn: () => Promise<T>): Promise<T> 
   return prev.then(fn).finally(release);
 }
 
-async function syncTreeAfterRewind(session: Session, newLength: number): Promise<void> {
-  if (!session.store || !session.capture) return;
-  if (newLength <= 0) {
-    session.store.setActiveLeaf(session.store.getRootId());
-    session.capture.resetTo([]);
-    return;
-  }
+/**
+ * Resolve the tree leaf for a rewind target WITHOUT mutating anything.
+ * Callers validate through this before touching the kernel so a synthetic
+ * target slot fails fast instead of leaving kernel and tree out of sync.
+ */
+function resolveRewindLeaf(session: Session, newLength: number): string {
+  if (!session.store || !session.capture) throw new Error("tree store not attached");
+  if (newLength <= 0) return session.store.getRootId();
   const leafId = session.capture.getEntryIdAt(newLength - 1);
   if (!leafId) {
     throw new Error(`rewind target index ${newLength - 1} resolves to a synthetic slot (no tree entry); rewind to a concrete message position instead`);
   }
+  return leafId;
+}
+
+async function syncTreeAfterRewind(session: Session, newLength: number): Promise<void> {
+  if (!session.store || !session.capture) return;
+  const leafId = resolveRewindLeaf(session, newLength);
   session.store.setActiveLeaf(leafId);
-  session.capture.truncateTo(newLength);
+  if (newLength <= 0) session.capture.resetTo([]);
+  else session.capture.truncateTo(newLength);
 }
 
 function synthesizeBranchFrames(
@@ -2458,6 +2553,10 @@ function synthesizeBranchFrames(
   };
   const msgs = messages as Msg[];
   let turnStarted = false;
+  // A null entryId slot only marks a compaction summary when the tag system
+  // is actually in use. Sessions without a tree store report all-null tags,
+  // and their user messages are real messages, not summaries.
+  const hasEntryIdTags = entryIds.some((id) => id !== null);
 
   const closeTurn = () => {
     if (!turnStarted) return;
@@ -2468,7 +2567,7 @@ function synthesizeBranchFrames(
 
   for (let idx = 0; idx < msgs.length; idx++) {
     const m = msgs[idx]!;
-    if (entryIds[idx] === null && m.role === "user" && typeof m.content === "string") {
+    if (hasEntryIdTags && entryIds[idx] === null && m.role === "user" && typeof m.content === "string") {
       closeTurn();
       const evictedCount = parseEvictedCount(m.content);
       frames.push(sseFrame(meta("hub:compaction-marker"), { evictedCount, summary: m.content }));
@@ -2499,6 +2598,7 @@ function synthesizeBranchFrames(
           let rawInput: unknown = undefined;
           try { rawInput = tc.function?.arguments ? JSON.parse(tc.function.arguments) : undefined; } catch {}
           frames.push(sseFrame(meta("agent:tool-started"), {
+            name: tc.function?.name ?? "tool",
             title: tc.function?.name ?? "tool",
             toolCallId: tc.id,
             kind: "execute",
@@ -2530,19 +2630,27 @@ async function rebuildReplay(
   messages: unknown[],
   entryIds: (string | null)[] = [],
 ): Promise<void> {
-  const frames = synthesizeBranchFrames(session, messages, entryIds);
+  let frames = synthesizeBranchFrames(session, messages, entryIds);
+  // Rebuilt replays obey the same cap as pushFrame. Keep the tail but pin
+  // the leading hub:branch-switched marker: without it live clients never
+  // reset/enter replay mode and render the batch on top of stale content.
+  if (frames.length > REPLAY_LIMIT) frames = [frames[0]!, ...frames.slice(-(REPLAY_LIMIT - 1))];
   session.replay = frames;
   session.segmentText = "";
   session.segmentSeq = 0;
   for (const r of session.sseClients) {
     for (const f of frames) { try { r.write(f); } catch {} }
   }
+  // Terminal marker so clients can mount the rebuilt batch atomically.
+  // Mirrors openSseMulti's replay-done: broadcast-only, never buffered or
+  // persisted (the name is deliberately not in REPLAY_NAMES).
+  pushFrame(session, "hub:replay-done", sseFrame({ source: session.id, ts: Date.now(), name: "hub:replay-done" }, {}));
   await persistReplayFile(session.id, frames);
 }
 
-async function applyBranchMessages(session: Session): Promise<void> {
+async function applyBranchMessages(session: Session, leafId?: string): Promise<void> {
   if (!session.store || !session.capture) throw new Error("tree store not attached");
-  const { messages, entryIds } = session.store.buildBranchWithIds();
+  const { messages, entryIds } = session.store.buildBranchWithIds(leafId);
   const wire = tagMessagesWithEntryIds(messages, entryIds);
   await session.bridge.compact({ kind: "replace", messages: wire });
   const sanitized = await session.bridge.snapshot();
@@ -2572,15 +2680,26 @@ function resolveEntryId(session: Session, entryId?: string, idPrefix?: string): 
 // Legacy sessions whose snapshot disagrees with the replay's agent:query
 // count would otherwise wipe surviving turns.
 function truncateReplayToTurnCount(session: Session, keepCount: number): void {
+  // Slash commands also emit agent:query frames (payload.command === true)
+  // but are not real turns — exclude them from the count.
+  const isRealTurnQuery = (f: string): boolean => {
+    if (parseFrameName(f) !== "agent:query") return false;
+    const dataLine = f.split("\n").find((l) => l.startsWith("data: "));
+    if (!dataLine) return true;
+    try {
+      const inner = JSON.parse(dataLine.slice("data: ".length));
+      return inner?.payload?.command !== true;
+    } catch { return true; }
+  };
   const replayQueryCount = session.replay.reduce(
-    (n, f) => n + (parseFrameName(f) === "agent:query" ? 1 : 0),
+    (n, f) => n + (isRealTurnQuery(f) ? 1 : 0),
     0,
   );
   if (keepCount > replayQueryCount) return;
   let agentQueryCount = 0;
   let truncateAt = session.replay.length;
   for (let i = 0; i < session.replay.length; i++) {
-    if (parseFrameName(session.replay[i]!) === "agent:query") {
+    if (isRealTurnQuery(session.replay[i]!)) {
       if (agentQueryCount >= keepCount) { truncateAt = i; break; }
       agentQueryCount++;
     }
@@ -2592,6 +2711,7 @@ function truncateReplayToTurnCount(session: Session, keepCount: number): void {
 }
 
 async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  if (session.isProcessing) { res.statusCode = 409; res.end("cannot switch branches while a turn is in progress"); return; }
   const body = await readBody(req);
   let toIndex: number;
   try {
@@ -2605,9 +2725,13 @@ async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse
   }
   try {
     const stats = await withContextLock(session, async () => {
+      // Validate the target leaf BEFORE compacting the kernel: a synthetic
+      // slot would fail the tree sync after the kernel was already rewound,
+      // stalling capture recording from then on.
+      if (session.store && session.capture) resolveRewindLeaf(session, toIndex);
       const result = await session.bridge.compact({ kind: "rewind", toIndex });
       await syncTreeAfterRewind(session, toIndex);
-      await truncateReplayAfterCompact(session);
+      await rebuildReplayFromKernel(session);
       return result;
     });
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -2624,6 +2748,7 @@ async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse
  * where the client fetches context then rewinds in two separate requests.
  */
 async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  if (session.isProcessing) { res.statusCode = 409; res.end("cannot switch branches while a turn is in progress"); return; }
   const body = await readBody(req);
   let turn: number;
   try {
@@ -2639,10 +2764,16 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
     const stats = await withContextLock(session, async () => {
       const snap = await session.bridge.snapshot();
       const msgs = snap.messages as Array<{ role?: string }>;
+      // Count real turns only: synthetic user messages (compaction summaries,
+      // drop placeholders) occupy slots with no tree entry and have no
+      // matching agent:query frame on the client, so counting them would
+      // misalign the requested turn with the wrong message index.
+      const isRealTurn = (i: number) =>
+        msgs[i]?.role === "user" && (!session.capture || session.capture.getEntryIdAt(i) !== null);
       let seen = 0;
       let toIndex = -1;
       for (let i = 0; i < msgs.length; i++) {
-        if (msgs[i]?.role === "user") {
+        if (isRealTurn(i)) {
           if (seen === turn) { toIndex = i; break; }
           seen++;
         }
@@ -2660,9 +2791,12 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
         truncateReplayToTurnCount(session, seen);
         return null;
       }
+      // Validate the target leaf BEFORE compacting the kernel (see
+      // rewindContext): a failed tree sync after the fact stalls capture.
+      if (session.store && session.capture) resolveRewindLeaf(session, toIndex);
       const result = await session.bridge.compact({ kind: "rewind", toIndex });
       await syncTreeAfterRewind(session, toIndex);
-      truncateReplayToTurnCount(session, turn);
+      await rebuildReplayFromKernel(session);
       return result;
     });
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -3007,6 +3141,7 @@ async function installSkill(req: http.IncomingMessage, res: http.ServerResponse)
       });
     }
     invalidateGlobalSkillsCache();
+    _installedSkillsCache.clear();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, path: dest }));
   } catch (err) {
@@ -3025,6 +3160,7 @@ async function uninstallSkill(req: http.IncomingMessage, res: http.ServerRespons
   try {
     await fs.promises.rm(dest, { recursive: true, force: true });
     invalidateGlobalSkillsCache();
+    _installedSkillsCache.clear();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
   } catch (err) {
@@ -3070,16 +3206,31 @@ async function setSubagentModel(req: http.IncomingMessage, res: http.ServerRespo
     res.end(JSON.stringify({ error: "missing type or model" }));
     return;
   }
+  if (!VALID_SUBAGENT_TYPES.has(parsed.type)) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "unknown subagent type" }));
+    return;
+  }
   session.bridge.execCommand?.("/sa-model", JSON.stringify({ type: parsed.type, model: parsed.model }));
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }
+
+// Whitelist for PUT /sa-model — mirrors SUBAGENT_TYPES in bridges/ash.ts.
+const VALID_SUBAGENT_TYPES = new Set(["plan", "explore", "review", "research", "implement"]);
 
 async function getSubagentModelOverrides(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   const bridge = session.bridge as any;
   const models = bridge?.getSubagentModels?.() ?? {};
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ models }));
+}
+
+async function getSubagentTypes(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  const bridge = session.bridge as any;
+  const types = bridge?.getSubagentTypes?.() ?? [];
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ types }));
 }
 
 

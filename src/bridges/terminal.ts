@@ -59,6 +59,16 @@ export class TerminalBridge extends EventEmitter implements Bridge {
     });
     this.proc = proc;
 
+    // On Windows, switch the console to the UTF-8 code page so localized
+    // (e.g. GBK/936) output isn't mojibake when ConPTY decodes it as UTF-8.
+    // `chcp` works in both cmd.exe and powershell.exe. Fire-and-forget:
+    // written shortly after spawn, failures are ignored.
+    if (process.platform === "win32") {
+      setTimeout(() => {
+        try { proc.write("chcp 65001\r"); } catch {}
+      }, 150);
+    }
+
     proc.onData((data: string) => {
       this.emit("event", { name: "shell:pty-data", payload: { raw: data } } satisfies BusEvent);
     });

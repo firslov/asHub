@@ -3,6 +3,7 @@ import { currentSessionId } from "./state.js";
 import { activeSession } from "./session-manager.js";
 import { effect } from "../vendor/signals-core.js";
 import { t } from "./i18n.js";
+import { toast } from "./toast.js";
 
 const app = document.querySelector(".app");
 const ctxPanel = document.getElementById("ctx-panel");
@@ -242,7 +243,14 @@ ctxDrop?.addEventListener("click", async () => {
     });
     if (!res.ok) throw new Error(await res.text());
   } catch (e) {
-    alert(t("ctx.drop.failed", { msg: e.message ?? e }));
+    // Server error bodies can be whole HTML pages — keep the main message
+    // short and stash the full text behind the expandable detail.
+    const msg = String(e?.message ?? e);
+    const short = msg.length > 120 ? `${msg.slice(0, 120)}…` : msg;
+    toast(t("ctx.drop.failed", { msg: short }), {
+      type: "error",
+      detail: msg.length > 120 ? msg : undefined,
+    });
     return;
   }
   renderContext();
@@ -289,6 +297,14 @@ ctxClose?.addEventListener("click", () => setCtxOpen(false));
 
 // Refresh context panel content when language changes while panel is open
 document.addEventListener("langchange", () => {
+  if (ctxPanel && !ctxPanel.hasAttribute("hidden")) renderContext();
+});
+
+// Rewind/fork rebuilds the context server-side (contract H): indices
+// rendered before the switch are stale and would drop the wrong messages,
+// so re-fetch while the panel is open.  renderContext also clears the
+// selection, discarding any stale checked rows.
+document.addEventListener("ash:branch-switched", () => {
   if (ctxPanel && !ctxPanel.hasAttribute("hidden")) renderContext();
 });
 

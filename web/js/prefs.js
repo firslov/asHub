@@ -123,8 +123,10 @@ langToggle?.addEventListener("click", () => {
   setLang(lang.value === "zh" ? "en" : "zh");
 });
 
-// UI prefs under `asHub.ui.*`. Defaults baked into HTML (data-ui-*) and CSS (var()),
-// so the fetch only diff-applies overrides.
+// UI prefs under `asHub.ui.*`. DEFAULT_UI below is the single source of
+// defaults; a tiny inline script in index.html seeds the first-screen-critical
+// subset before first paint (anti-FOUC), and CSS var() fallbacks cover the
+// var-kind prefs. The /api/config fetch only diff-applies overrides.
 const UI_PREFS = {
   "conversation.center":      { kind: "attr", attr: "data-ui-conversation-center",      target: ".terminal-wrap" },
   "conversation.message-gap": { kind: "var",  prop: "--ui-conversation-message-gap",    target: ".terminal-wrap" },
@@ -143,12 +145,10 @@ const UI_PREFS = {
   "turn.sep.show":            { kind: "attr", attr: "data-ui-turn-sep-show",            target: ".terminal-wrap" },
   "usage.align":              { kind: "attr", attr: "data-ui-usage-align",              target: ".terminal-wrap" },
   "usage.sticky":             { kind: "attr", attr: "data-ui-usage-sticky",             target: ".terminal-wrap" },
-  "usage.git-branch":         { kind: "attr", attr: "data-ui-usage-git-branch",         target: ".terminal-wrap" },
   "usage.cwd.show":           { kind: "attr", attr: "data-ui-usage-cwd-show",           target: ".terminal-wrap" },
   "usage.model.show":         { kind: "attr", attr: "data-ui-usage-model-show",         target: ".terminal-wrap" },
   "usage.cache.show":         { kind: "attr", attr: "data-ui-usage-cache-show",         target: ".terminal-wrap" },
   "usage.total.show":         { kind: "attr", attr: "data-ui-usage-total-show",         target: ".terminal-wrap" },
-  "cancel.show":              { kind: "attr", attr: "data-ui-cancel-show",              target: "#cancel-turn" },
   "tabs.enabled":             { kind: "attr", attr: "data-ui-tabs-enabled",             target: ".app" },
   "title-bar.height":         { kind: "var",  prop: "--ui-title-bar-height" },
   "title-bar.model.show":     { kind: "attr", attr: "data-ui-model-show",              target: "#instance" },
@@ -165,6 +165,7 @@ const DEFAULT_UI = {
   "conversation.message-gap": "0.9rem",
   "conversation.turn-gap": "1.2rem",
   "reply.border.show": false,
+  "reply.border.gradient": true,
   "reply.hover": false,
   "reply.code.border": false,
   "message.gradient": true,
@@ -179,7 +180,6 @@ const DEFAULT_UI = {
   "usage.cache.show": true,
   "usage.total.show": false,
   "usage.model.show": true,
-  "cancel.show": false,
   "title-bar.height": "40px",
   "title-bar.model.show": false,
   "title-bar.model.uppercase": false,

@@ -123,13 +123,14 @@ export const agentInfo = new Proxy(/** @type {any} */ ({}), {
 });
 
 const spinner = document.getElementById("spinner");
-const cancelBtn = document.getElementById("cancel-turn");
 
 // Background sessions update their own state; chrome reflects active only.
 export const setBusy = (session, b) => {
   if (session) session.state.isProcessing = b;
   if (session === activeSessionView.peek()) {
     if (spinner) spinner.hidden = !b;
-    if (cancelBtn) cancelBtn.hidden = !b;
   }
+  // isProcessing is a plain property, not a signal — notify listeners (e.g.
+  // composer's send button) explicitly instead of relying on effects.
+  document.dispatchEvent(new CustomEvent("ash:busy-change"));
 };

@@ -18,7 +18,7 @@ import { createCore, type AgentShellCore, runSubagent, type ToolDefinition } fro
 import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
-import { getSettings, updateSettings, resolveProvider, getProviderNames } from "agent-sh/settings";
+import { getSettings, reloadSettings, resolveProvider, getProviderNames, CONFIG_DIR } from "agent-sh/settings";
 import { resolveApiKey } from "agent-sh/auth";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
 import { Shell } from "agent-sh/shell";
@@ -46,6 +46,13 @@ function formatShellExchange(ex: ShellExchange): string {
 
 function indentLines(text: string, prefix: string): string {
   return text.split("\n").map((line) => prefix + line).join("\n");
+}
+
+// AbortSignal.timeout() aborts with a TimeoutError reason. runSubagent only
+// breaks its loop on signal.aborted and returns partial text, so callers
+// must check this to tell a wall-clock timeout apart from a normal finish.
+function isTimeoutSignal(signal: AbortSignal): boolean {
+  return signal.aborted && (signal.reason as { name?: string } | undefined)?.name === "TimeoutError";
 }
 
 function defaultShell(): string {
@@ -79,6 +86,12 @@ const FORWARDED = [
   "shell:queued",
   "subagent:started",
   "subagent:done",
+  // todolist tool state — payload {todos:[{title,status}]}, full replacement
+  // each time, so the frontend just swaps its TODO card contents.
+  "agent:todo",
+  // Subagent token usage — forwarded for observability, but kept off the
+  // "agent:usage" path so it never steals the main turn's cache stats.
+  "subagent:usage",
 ];
 
 // ── Subagent type definitions ─────────────────────────────────────
@@ -105,13 +118,14 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
     description: "Create a detailed step-by-step plan for a complex task. Use when user asks to 'plan', 'design', or 'outline' something. No tools.",
     systemPrompt: `You are a planning specialist. Your only job is to create clear, structured plans.
 
-- Break the task into numbered phases
-- Each phase should have concrete, ordered steps
+You start with zero context beyond this prompt and the task — if critical information is missing, state your assumptions explicitly instead of stalling.
+
+- Break the task into numbered phases with concrete, ordered steps
 - Consider dependencies between steps
 - Note any assumptions or prerequisites
 - Keep the plan actionable and focused
 - Do NOT execute anything — only plan
-- Return ONLY the plan text, no meta-commentary`,
+- Return ONLY the plan text: the caller sees nothing but your final message, so make it self-contained — no meta-commentary`,
     tools: [],
     maxIterations: 1,
     budgetTokens: 4000,
@@ -120,11 +134,13 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
     description: "Explore and search the codebase to answer a question. Use when asked to 'explore', 'search', 'find', 'locate', or 'look up' code. Read-only.",
     systemPrompt: `You are a codebase explorer. Your job is to search, read, and understand code to answer questions.
 
+You start with zero context beyond this prompt and the task.
+
 - Use glob, grep, and read_file to investigate
 - Never modify or create files
-- Summarize findings clearly
-- Cite file paths and line numbers
-- Be thorough but concise`,
+- Cite file paths and line numbers for every finding
+- Be thorough but concise
+- Return a self-contained answer: the caller sees nothing but your final message — give conclusions and key evidence, not a log of your search steps`,
     tools: ["glob", "grep", "read_file", "ls"],
     maxIterations: 15,
     budgetTokens: 8000,
@@ -133,13 +149,15 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
     description: "Review code for bugs, style issues, and improvement opportunities. Use when user asks to 'review', 'check', 'audit', or 'inspect' code. Read-only.",
     systemPrompt: `You are a code reviewer. Your job is to examine code and provide actionable feedback.
 
-- Read the relevant files thoroughly before commenting
+You start with zero context beyond this prompt and the task.
+
+- Read the relevant files thoroughly before commenting — never report a problem you haven't verified in the code
 - Identify bugs, logic errors, edge cases, and performance issues
 - Check for adherence to conventions and best practices
-- Suggest concrete improvements with code examples
 - Organize findings by severity: critical, important, nice-to-have
 - Cite exact file paths and line numbers for each finding
-- Be constructive — suggest fixes, not just problems`,
+- Be constructive — suggest concrete fixes, not just problems
+- Return a self-contained report: the caller sees nothing but your final message`,
     tools: ["glob", "grep", "read_file", "ls"],
     maxIterations: 30,
     budgetTokens: 16000,
@@ -148,12 +166,15 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
     description: "Deep investigation of code structure and dependencies. Use when asked to 'research', 'investigate', 'trace', 'analyze' or 'understand how' code works. Read-only.",
     systemPrompt: `You are a code archaeologist. Your job is to deeply understand how code works.
 
+You start with zero context beyond this prompt and the task.
+
 - Trace function calls across files — follow the chain
 - Map dependencies between modules
 - Identify patterns, anti-patterns, and architectural decisions
 - Explain WHY the code works the way it does, not just HOW
-- Provide a structured report: overview → details → implications
-- Cite every file path and line number`,
+- Structure your report: overview → details → implications
+- Cite every file path and line number
+- Return a self-contained report: the caller sees nothing but your final message`,
     tools: ["glob", "grep", "read_file", "ls"],
     maxIterations: 20,
     budgetTokens: 10000,
@@ -162,17 +183,28 @@ const SUBAGENT_TYPES: Record<string, SubagentType> = {
     description: "Implement a feature or change end-to-end. Use when asked to 'implement', 'build', 'create', 'add', 'write code for', or 'develop' something. Can read, write, and edit files.",
     systemPrompt: `You are an implementation specialist. Your job is to write working code.
 
+You start with zero context beyond this prompt and the task.
+
 - Plan before you type — understand what needs to change
-- Read existing code to understand patterns and conventions
-- Make focused, minimal changes — avoid unnecessary refactoring
-- Write clear, idiomatic code that follows the project's style
-- Test your changes if appropriate
-- Report what you changed and why`,
+- Read existing code first and follow its patterns and conventions
+- Make focused, minimal changes — no unnecessary refactoring or reformatting
+- Deliver complete code: never stub out work with placeholders like "// rest unchanged"
+- Verify your changes with the project's own tests or build when available
+- File-modifying tool calls may trigger a user approval prompt — that is expected, wait for it
+- Return a self-contained summary of what you changed and why: the caller sees nothing but your final message`,
     tools: ["*"],
     maxIterations: 25,
     budgetTokens: 12000,
   },
 };
+
+/** Names of the five subagent preset tools — stripped from subagent tool
+ *  lists so a subagent can never spawn another subagent (unbounded nesting). */
+const SUBAGENT_TOOL_NAMES = new Set(Object.keys(SUBAGENT_TYPES));
+/** Max subagents running at once; excess runs are rejected with a retry hint. */
+const MAX_CONCURRENT_SUBAGENTS = 3;
+/** Wall-clock cap per subagent run, merged with any caller/cancel signal. */
+const SUBAGENT_TIMEOUT_MS = 20 * 60 * 1000;
 
 // Guard to ensure the Electron tsx-worker/Chromium init race is
 // yielded only once — on the first bridge — not on every session.
@@ -190,6 +222,20 @@ let _firstBridge = true;
       error?: string;
     }
 
+// ── todolist tool ─────────────────────────────────────────────────
+
+type TodoStatus = "pending" | "in_progress" | "done";
+interface TodoItem {
+  title: string;
+  status: TodoStatus;
+}
+const TODO_STATUSES = new Set<TodoStatus>(["pending", "in_progress", "done"]);
+
+function renderTodos(todos: TodoItem[]): string {
+  if (todos.length === 0) return "No todos.";
+  return todos.map((t, i) => `${i + 1}. [${t.status}] ${t.title}`).join("\n");
+}
+
 
 export class AshBridge extends EventEmitter implements Bridge {
   private core: AgentShellCore | null = null;
@@ -206,6 +252,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private autoApprove = false;
   private _contextProducerUnsubscribe: (() => void) | null = null;
   private _subagents: Map<string, SubagentEntry> = new Map();
+  private _todos: TodoItem[] = [];
   private shell: Shell | null = null;
   private bridgedTerminal: BridgedTerminal | null = null;
   private agentInfoSnapshot: { name?: string; model?: string } | null = null;
@@ -240,11 +287,37 @@ export class AshBridge extends EventEmitter implements Bridge {
     // Tell the LLM it's running inside asHub — the web-hosted agent runtime.
     core.handlers.define("system-prompt:frontend", () =>
       `# asHub Runtime\n\n` +
-      `You are running inside **asHub**, a web-based agent host that provides a chat ` +
-      `interface, session management, and subagent delegation. Your responses are ` +
-      `rendered as rich Markdown in a browser-based UI. You have full access to ` +
-      `the filesystem via standard tools. The user interacts with you through the ` +
-      `asHub web interface — do not instruct them to use a terminal or CLI.`
+      `You are running inside **asHub**, a desktop agent host. The user talks to you ` +
+      `through a browser chat UI that renders your replies as rich Markdown (code ` +
+      `highlighting, math, diffs). You act through your tools — never instruct the ` +
+      `user to run terminal commands themselves.\n\n` +
+      `## Principles\n\n` +
+      `- Be helpful, concise, accurate, and candid. Skip flattery and filler — a ` +
+      `correct, plainly-stated answer respects the user. When you are unsure, or the ` +
+      `user is wrong, say so and show your reasoning.\n` +
+      `- Reply in the user's language; keep code, identifiers, and paths in their original form.\n` +
+      `- Make minimal, targeted changes that match the project's existing conventions ` +
+      `and style. Do not refactor, reformat, or rename beyond what the task requires.\n` +
+      `- Default to action: once the goal is clear, carry it through and work around ` +
+      `blockers yourself. Ask only when the answer would change your next step.\n` +
+      `- Verify before you claim done: run the tests or builds that cover your change ` +
+      `and look at the result. If you could not verify something, say so plainly.\n\n` +
+      `## Tools and safety\n\n` +
+      `- Prefer a dedicated tool over a raw shell command when one fits the job; batch ` +
+      `independent tool calls together instead of issuing them one at a time.\n` +
+      `- Before destructive or hard-to-reverse actions (deleting files or branches, ` +
+      `dropping data, force-pushing, killing processes), confirm with the user first ` +
+      `— unless they clearly asked for exactly that.\n\n` +
+      `## Delegating to subagents\n\n` +
+      `You have five subagent tools: \`plan\` (step-by-step plan), \`explore\` (locate ` +
+      `code, answer where-is-X), \`review\` (audit for bugs), \`research\` (trace how ` +
+      `something works), \`implement\` (write code end-to-end).\n` +
+      `- Delegate substantial, well-scoped work: it keeps long file dumps out of your ` +
+      `own context, and you get back only the conclusion.\n` +
+      `- Subagents start with zero context. Brief them like a colleague who just walked ` +
+      `in: the goal, exact file paths, and what you already know.\n` +
+      `- Do not delegate understanding you need yourself — read the code you must reason about.\n` +
+      `- When delegating several tasks at once, give each a distinct, non-overlapping scope.`
     );
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
@@ -263,21 +336,18 @@ export class AshBridge extends EventEmitter implements Bridge {
     // Prevent the model from silently modifying files without consent.
     (extCtx as unknown as { agent: { registerInstruction(name: string, text: string): void } }).agent.registerInstruction(
       "file-modification-safety",
-      `CRITICAL — FILE MODIFICATION POLICY:
+      `FILE MODIFICATION POLICY:
 
-1. EXPLICIT USER REQUEST: When the user directly asks you to modify, create,
-   or edit a file (e.g. "edit X", "write Y", "fix the bug in Z"), you may
-   immediately use edit_file, write_file, or bash to make those changes.
+When the user directly asks you to modify, create, or edit files, make those
+changes immediately with the appropriate tools.
 
-2. NO EXPLICIT REQUEST: When the user does NOT ask for file changes (e.g.
-   they ask a question, request analysis, code review, or explanation), you
-   MUST NOT modify any files. Instead:
-   — Describe what you propose to change and why
-   — Present it as a suggestion: "I could modify X to achieve Y. Shall I proceed?"
-   — Wait for the user to confirm before making any changes
+When the user does NOT ask for file changes (a question, analysis, review, or
+explanation), do not modify any files. Describe what you would change and why,
+and ask for confirmation first: "I could modify X to achieve Y. Shall I proceed?"
 
-This applies to ALL file-modifying tools: write_file, edit_file, and bash
-(invoked with rm, mv, sed, git, or any destructive operation).`
+This applies to all file-modifying tools: write_file, edit_file, and bash used
+for destructive operations (rm, mv, sed, git mutations). Depending on the user's
+settings, such tool calls may trigger an approval prompt — that is expected.`
     );
 
     this.gateImageToolResults(extCtx);
@@ -330,6 +400,45 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
     // In async mode (fire-and-forget), the subagent runs in the background
     // and results are injected into the main conversation via a dynamic
     // context producer on the next LLM iteration.
+
+    // runSubagent emits its own tool-started/completed/chunk events when
+    // given a bus. Our execute wrapper below already routes every call
+    // through the kernel's "tool:execute" handler (which emits those same
+    // events), so runSubagent gets a muted bus to avoid double rendering.
+    const mutedSubagentBus = {
+      emit: () => {},
+      emitTransform: (_name: string, payload: unknown) => payload,
+    } as unknown as NonNullable<Parameters<typeof runSubagent>[0]["bus"]>;
+
+    // Wrap each tool so execution goes through core.handlers "tool:execute"
+    // — the same path the main agent loop takes — instead of runSubagent's
+    // direct tool.execute(). This makes the permission gate (file-write
+    // approval) and the image gate apply to subagents too. The wrapper
+    // re-emits output chunks itself since runSubagent's bus is muted.
+    const wrapSubagentTools = (tools: ToolDefinition[], signal: AbortSignal, prefix: string): ToolDefinition[] => {
+      let toolCallSeq = 0;
+      return tools.map((tool) => ({
+        ...tool,
+        execute: (args: Record<string, unknown>) => {
+          // Prefix with the launch's subagentId (matches subagent:started) so
+          // concurrent subagents can't emit colliding toolCallIds — the
+          // frontend pairs tool events by data-call-id.
+          const toolCallId = `${prefix}-tool-${++toolCallSeq}`;
+          return core.handlers.call("tool:execute", {
+            name: tool.name,
+            id: toolCallId,
+            args,
+            tool,
+            onChunk: (chunk: string) => {
+              (core.bus.emit as (name: string, payload: unknown) => void)(
+                "agent:tool-output-chunk", { chunk, toolCallId });
+            },
+            signal,
+          }) as ReturnType<ToolDefinition["execute"]>;
+        },
+      }));
+    };
+
     const launchSubagent = (
       task: string,
       type: string,
@@ -342,33 +451,51 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       const id = `sa${++_subagentSeq}`;
       const llmClient = core.handlers.call("llm:get-client");
       const abortController = new AbortController();
+      // Cancel sources: our own controller (main-turn cancel via the
+      // agent:cancelled listener / bridge close) and the wall-clock timeout.
+      // The caller's (turn-scoped) signal is deliberately NOT merged here:
+      // the kernel aborts the previous turn's controller on every new query,
+      // which would silently kill fire-and-forget subagents on the user's
+      // next message — exactly when their results are due to be injected.
+      const signal = AbortSignal.any([abortController.signal, AbortSignal.timeout(SUBAGENT_TIMEOUT_MS)]);
+      _runningSubagents++;
 
       (core.bus.emit as (name: string, payload: unknown) => void)(
         "subagent:started", { task, subagentId: id, type });
 
       const promise = runSubagent({
         llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
-        tools,
+        tools: wrapSubagentTools(tools, signal, id),
         systemPrompt,
         task,
         model,
-        bus: core.bus,
+        bus: mutedSubagentBus,
         maxIterations,
         budgetTokens,
-        onUsage: (u) => core.bus.emit("agent:usage", u),
-        signal: abortController.signal,
+        onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
+          "subagent:usage", { ...(u as Record<string, unknown>), type }),
+        signal,
       });
 
       const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise, controller: abortController };
       _subagents.set(id, entry);
 
       promise.then((result) => {
-        entry.result = result;
+        if (isTimeoutSignal(signal)) {
+          // Wall-clock timeout: runSubagent broke out silently and returned
+          // partial text — mark it so it isn't presented as a success.
+          const minutes = SUBAGENT_TIMEOUT_MS / 60000;
+          entry.result = `${result}\n\n[subagent terminated: timeout after ${minutes}min]`;
+          entry.error = `timeout after ${minutes}min`;
+        } else {
+          entry.result = result;
+        }
       }).catch((err) => {
         entry.error = String(err);
       }).finally(() => {
+        _runningSubagents--;
         (core.bus.emit as (name: string, payload: unknown) => void)(
-          "subagent:done", { task, subagentId: id });
+          "subagent:done", { task, subagentId: id, ...(entry.error ? { error: entry.error } : {}) });
       });
 
       // Register context producer once (idempotent) to surface completed
@@ -382,10 +509,15 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
             const completed: string[] = [];
             for (const [eid, e] of _subagents) {
               if (e.result || e.error) {
+                // Prefer the error narrative: a timeout/error entry may also
+                // carry partial result text — don't label it "Completed".
+                const body = e.error
+                  ? `Error: ${e.error}${e.result ? `\nPartial: ${e.result.slice(0, 2000)}` : ""}`
+                  : (e.result ?? "").slice(0, 2000);
                 completed.push(
                   `<subagent_result id="${eid}" type="${e.type}">\n` +
-                  `Completed: "${e.task.slice(0, 80)}"\n` +
-                  (e.result ?? `Error: ${e.error}`).slice(0, 2000) +
+                  `${e.error ? "Failed" : "Completed"}: "${e.task.slice(0, 80)}"\n` +
+                  body +
                   `\n</subagent_result>`
                 );
                 _subagents.delete(eid);
@@ -409,17 +541,43 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
     });
 
     core.handlers.define("subagent:set-model", (opts: { type: string; model: string }) => {
-      const current = (getSettings() as any).subagentModels ?? {};
+      // Bypass updateSettings(): its deepMerge only ever adds keys, so an
+      // 'inherit' delete would resurrect from disk on the next read.
+      // Read-modify-write the subagentModels field wholesale instead,
+      // then drop the getSettings() cache so it re-reads.
+      const settingsPath = path.join(CONFIG_DIR, "settings.json");
+      let data: Record<string, unknown> = {};
+      try { data = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as Record<string, unknown>; } catch {}
+      const current = { ...((data.subagentModels as Record<string, string> | undefined) ?? {}) };
       if (opts.model === "inherit" || !opts.model) {
         delete current[opts.type];
       } else {
         current[opts.type] = opts.model;
       }
-      updateSettings({ subagentModels: current } as any);
+      data.subagentModels = current;
+      try {
+        fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+        reloadSettings();
+      } catch (err) {
+        process.stderr.write(`[ash-bridge] failed to persist subagent model override: ${err instanceof Error ? err.message : err}\n`);
+      }
     });
+
+    // Type metadata for the frontend subagent panel (contract C3).
+    core.handlers.define("subagent:get-types", () =>
+      Object.entries(SUBAGENT_TYPES).map(([type, cfg]) => ({
+        type,
+        description: cfg.description,
+        tools: cfg.tools,
+        maxIterations: cfg.maxIterations,
+        budgetTokens: cfg.budgetTokens,
+        async: cfg.async === true,
+      })),
+    );
 
     const _subagents = this._subagents;
     let _subagentSeq = 0;
+    let _runningSubagents = 0;
     core.handlers.define("subagent:run", async (opts: {
       task: string;
       type?: string;
@@ -431,6 +589,12 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       signal?: AbortSignal;
       tools?: ToolDefinition[];
     }) => {
+      // Concurrency cap — tell the model to retry later rather than queue.
+      // Returned as a tagged object (not a string) so registerSubagentTool
+      // can surface it as an isError tool result instead of fake success.
+      if (_runningSubagents >= MAX_CONCURRENT_SUBAGENTS) {
+        return { concurrencyLimited: true as const, message: `Error: subagent concurrency limit reached (${MAX_CONCURRENT_SUBAGENTS} running). Wait for a running subagent to finish, then retry.` };
+      }
       // Resolve type preset
       const preset = opts.type ? SUBAGENT_TYPES[opts.type] : null;
       const systemPrompt = opts.systemPrompt ?? preset?.systemPrompt ?? "";
@@ -456,8 +620,13 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       } else {
         tools = (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
       }
+      // Never hand a subagent the subagent tools themselves — `["*"]`
+      // (implement) would otherwise allow unbounded nesting.
+      tools = tools.filter((t) => !SUBAGENT_TOOL_NAMES.has(t.name));
 
       // Async fire-and-forget: launch subagent in background, return immediately.
+      // The turn-scoped opts.signal is intentionally not forwarded — a
+      // background subagent must outlive the turn that launched it.
       if (opts.async) {
         const type = opts.type ?? "generic";
         const id = launchSubagent(opts.task, type, systemPrompt, tools, model, maxIterations, budgetTokens);
@@ -467,27 +636,45 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       // Synchronous: block until subagent completes.
       const llmClient = core.handlers.call("llm:get-client");
       const syncId = `sync-${_subagentSeq++}`;
+      // Merge the caller's cancel signal with a wall-clock timeout.
+      const syncSignals = [AbortSignal.timeout(SUBAGENT_TIMEOUT_MS)];
+      if (opts.signal) syncSignals.push(opts.signal);
+      const signal = AbortSignal.any(syncSignals);
 
       (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt, type: opts.type, subagentId: syncId });
 
       try {
+        // Increment inside the try so an emit/launch failure above can't leak
+        // the concurrency counter (finally always decrements).
+        _runningSubagents++;
         const result = await runSubagent({
           llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
-          tools,
+          tools: wrapSubagentTools(tools, signal, syncId),
           systemPrompt,
           task: opts.task,
           model,
-          bus: core.bus,
-          signal: opts.signal,
+          bus: mutedSubagentBus,
+          signal,
           maxIterations,
           budgetTokens,
-          onUsage: (u) => core.bus.emit("agent:usage", u),
+          onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
+            "subagent:usage", { ...(u as Record<string, unknown>), type: opts.type }),
         });
+        if (isTimeoutSignal(signal)) {
+          // Wall-clock timeout: runSubagent broke out silently and returned
+          // partial text — surface as an error so neither the model nor the
+          // UI treats truncated output as success.
+          const minutes = SUBAGENT_TIMEOUT_MS / 60000;
+          (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId, error: `timeout after ${minutes}min` });
+          return { subagentTimedOut: true as const, message: `${result}\n\n[subagent terminated: timeout after ${minutes}min]` };
+        }
         (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId });
         return result;
       } catch (err) {
         (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, error: String(err), subagentId: syncId });
         throw err;
+      } finally {
+        _runningSubagents--;
       }
     });
 
@@ -504,13 +691,21 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
           },
           required: ["task"],
         },
-        async execute(args) {
+        async execute(args, _onChunk, toolCtx) {
           const isAsync = cfg.async === true;
           const result = await core.handlers.call("subagent:run", {
             task: (args as { task: string }).task,
             type,
             async: isAsync,
-          }) as string;
+            // Forward the kernel's abort signal so cancelling the main
+            // turn also cancels a running synchronous subagent.
+            signal: toolCtx?.signal,
+          }) as string | { concurrencyLimited: true; message: string } | { subagentTimedOut: true; message: string };
+          if (typeof result !== "string") {
+            // Concurrency-cap / timeout — surface as a real tool error so
+            // the model doesn't have to sniff the text.
+            return { exitCode: 1, content: result.message, isError: true };
+          }
           return {
             exitCode: 0,
             content: isAsync
@@ -528,6 +723,81 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
     for (const [name, cfg] of Object.entries(SUBAGENT_TYPES)) {
       registerSubagentTool(name, cfg);
     }
+
+    // ── todolist tool ─────────────────────────────────────────────
+    // Session-scoped TODO list, modelled on Kimi Code's TodoList: full
+    // replacement semantics, omit `todos` to query, `[]` to clear. State
+    // lives on the bridge (one per session); every update is broadcast as
+    // an "agent:todo" bus event so the web UI can mirror it.
+    (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool({
+      name: "todolist",
+      description:
+        `Maintain a structured TODO list to track progress on multi-step tasks. ` +
+        `Each call REPLACES the whole list — always pass the complete list, not just the changed items. ` +
+        `Omit the 'todos' argument to query the current list; pass an empty array to clear it. ` +
+        `Guidelines: keep exactly one item in_progress while work is underway; mark an item done ` +
+        `immediately when finished instead of batching completions at the end; keep titles short and actionable.`,
+      input_schema: {
+        type: "object",
+        properties: {
+          todos: {
+            type: "array",
+            description: "Full replacement TODO list. Omit to query; pass [] to clear.",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Short, actionable title." },
+                status: { type: "string", enum: ["pending", "in_progress", "done"] },
+              },
+              required: ["title"],
+            },
+          },
+        },
+      },
+      // List state only — never touches files, so skip the permission gate.
+      modifiesFiles: false,
+      execute: async (args) => {
+        const raw = (args as { todos?: unknown }).todos;
+        if (raw === undefined) {
+          return { exitCode: 0, content: renderTodos(this._todos), isError: false };
+        }
+        if (!Array.isArray(raw)) {
+          return { exitCode: 1, content: "Error: 'todos' must be an array of {title, status} items.", isError: true };
+        }
+        const next: TodoItem[] = [];
+        for (let i = 0; i < raw.length; i++) {
+          const item = raw[i] as Record<string, unknown> | null;
+          const title = typeof item?.title === "string" ? item.title.trim() : "";
+          if (!title) {
+            return { exitCode: 1, content: `Error: todos[${i}] must have a non-empty string 'title'.`, isError: true };
+          }
+          const status = (item?.status ?? "pending") as TodoStatus;
+          if (!TODO_STATUSES.has(status)) {
+            return { exitCode: 1, content: `Error: todos[${i}].status '${String(item?.status)}' is invalid — use 'pending', 'in_progress', or 'done'.`, isError: true };
+          }
+          next.push({ title, status });
+        }
+        // At most one in_progress: first one wins, the rest drop to pending.
+        let demoted = 0;
+        let seenActive = false;
+        for (const t of next) {
+          if (t.status !== "in_progress") continue;
+          if (seenActive) { t.status = "pending"; demoted++; }
+          else seenActive = true;
+        }
+        this._todos = next;
+        (core.bus.emit as (name: string, payload: unknown) => void)("agent:todo", { todos: next });
+        let text = renderTodos(next);
+        if (demoted > 0) {
+          text += `\n(Note: ${demoted} extra in_progress item(s) demoted to pending — only one task may be in progress at a time.)`;
+        }
+        return { exitCode: 0, content: text, isError: false };
+      },
+      formatResult(_args, result) {
+        const text = String((result as { content?: unknown })?.content ?? "");
+        return { summary: text.split("\n")[0]?.slice(0, 200) ?? "", body: { kind: "lines" as const, lines: text.split("\n") } };
+      },
+    });
 
     core.bus.emit("core:extensions-loaded", { names: [...builtinNames, ...userNames] });
 
@@ -653,7 +923,15 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
           label: "agent",
           promptIcon: "❯",
           indicator: "●",
-          onSubmit(query, b) { b.emit("agent:submit", { query }); },
+          onSubmit: (query, _b) => {
+            // Route through submit() so '>' queries join the same
+            // pendingTurn/queryQueue serialization as hub-submitted turns
+            // instead of emitting agent:submit directly and interrupting
+            // a turn already in progress.
+            this.submit(query).catch((err) => {
+              process.stderr.write(`[ash-bridge] '>' mode submit failed: ${err instanceof Error ? err.message : err}\n`);
+            });
+          },
           returnToSelf: true,
         });
       }
@@ -1042,7 +1320,12 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       resolve: () => {
         this.emit("event", { name: "agent:queued-done", payload: {} } satisfies BusEvent);
       },
-      reject: () => {
+      reject: (err: unknown) => {
+        // agent:error is NOT forwarded (see FORWARDED): direct turns surface
+        // it via the hub's submit() catch, but a queued turn has no such
+        // path — emit it here or the error would be swallowed entirely.
+        const message = err instanceof Error ? err.message : String(err ?? "agent error");
+        this.emit("event", { name: "agent:error", payload: { message } } satisfies BusEvent);
         this.emit("event", { name: "agent:queued-done", payload: {} } satisfies BusEvent);
       },
     };
@@ -1051,11 +1334,14 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
   }
 
   // Discard all queued queries, emitting queued-done for each so every
-  // queued message still gets its queued-submit/queued-done pair.
+  // queued message still gets its queued-submit/queued-done pair. The
+  // payload carries the dropped query text + dropped flag so the hub can
+  // push a frame the frontend uses to clear its pending box (otherwise
+  // the box lingers forever and reappears on replay).
   private dropQueued(): void {
     while (this.queryQueue.length > 0) {
-      this.queryQueue.shift();
-      this.emit("event", { name: "agent:queued-done", payload: {} } satisfies BusEvent);
+      const dropped = this.queryQueue.shift()!;
+      this.emit("event", { name: "agent:queued-done", payload: { query: dropped, dropped: true } } satisfies BusEvent);
     }
   }
 
@@ -1333,6 +1619,10 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
     return (this.core?.handlers.call("subagent:get-models") ?? {}) as Record<string, string>;
   }
 
+  getSubagentTypes(): Array<Record<string, unknown>> {
+    return (this.core?.handlers.call("subagent:get-types") ?? []) as Array<Record<string, unknown>>;
+  }
+
   /** Relay a hub-side event into the agent's internal bus so subsystems
    *  that subscribe to lifecycle events (e.g. shell:cwd-change) stay in
    *  sync when the user changes settings through the UI. */
@@ -1349,6 +1639,7 @@ This applies to ALL file-modifying tools: write_file, edit_file, and bash
       try { entry.controller?.abort(); } catch {}
     }
     (this as any)._subagents.clear();
+    this._todos = [];
     // Deny any pending permission requests
     for (const [, entry] of this.pendingPermissions) {
       clearTimeout(entry.timer);

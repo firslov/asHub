@@ -16,7 +16,11 @@ export function createCompactionStrategy(
   getCapture: () => Capture | null,
   onWarn?: (msg: string) => void,
   onCompacted?: (liveView: AgentMessage[], entryIds: (string | null)[]) => void | Promise<void>,
+  runLocked?: <T>(fn: () => Promise<T>) => Promise<T>,
 ): CompactionStrategyHook {
+  // Run tree mutations under the hub's contextLock when provided, so they
+  // cannot interleave with rewind/drop; fall back to direct execution.
+  const locked = <T>(fn: () => Promise<T>): Promise<T> => (runLocked ? runLocked(fn) : fn());
   return async (helpers, opts, next) => {
     const strategy = (opts as { strategy?: { kind?: string; target?: number; keepRecent?: number } })?.strategy;
     if (strategy?.kind === "rewind" || strategy?.kind === "replace") {
@@ -27,7 +31,9 @@ export function createCompactionStrategy(
     const capture = getCapture();
     if (!store || !capture) return await next(opts);
 
-    await capture.flush();
+    // Flush under the lock too: capture.flush() appends pending entries to
+    // the tree, so it must not interleave with rewind/drop either.
+    await locked(() => capture.flush());
     const messages = helpers.getMessages() as AgentMessage[];
     if (messages.length < 4) return await next(opts);
 
@@ -38,23 +44,27 @@ export function createCompactionStrategy(
 
     const firstKeptId = capture.getEntryIdAt(cutIdx);
     if (!firstKeptId) {
-      onWarn?.(`compaction: cutIdx ${cutIdx} resolves to synthetic slot; falling through to default strategy`);
+      onWarn?.(`compaction: no tree entry at cutIdx ${cutIdx} (live view longer than tree); falling through to kernel default strategy`);
       return await next(opts);
     }
 
     const tokensBefore = helpers.estimatePromptTokens();
     const evictedCount = cutIdx;
 
-    try {
-      await store.appendCompaction(firstKeptId, tokensBefore);
-    } catch (err) {
-      onWarn?.(`compaction: appendCompaction failed (${(err as Error).message}); falling through`);
-      return await next(opts);
-    }
-
-    const { messages: liveView, entryIds } = store.buildBranchWithIds();
-    helpers.replaceMessages(liveView);
-    capture.resetTo(entryIds);
+    const applied = await locked(async () => {
+      try {
+        await store.appendCompaction(firstKeptId, tokensBefore);
+      } catch (err) {
+        onWarn?.(`compaction: appendCompaction failed (${(err as Error).message}); falling through`);
+        return null;
+      }
+      const { messages: liveView, entryIds } = store.buildBranchWithIds();
+      helpers.replaceMessages(liveView);
+      capture.resetTo(entryIds);
+      return { liveView, entryIds };
+    });
+    if (!applied) return await next(opts);
+    const { liveView, entryIds } = applied;
     if (onCompacted) {
       try { await onCompacted(liveView, entryIds); }
       catch (err) { onWarn?.(`compaction: onCompacted hook failed: ${(err as Error).message}`); }
@@ -70,9 +80,16 @@ function findCutPoint(messages: AgentMessage[], tokenBudget: number): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     acc += estimateMessageTokens(messages[i]!);
     if (acc >= tokenBudget) {
-      let cut = i;
-      while (cut < messages.length && !isSafeCutPoint(messages, cut)) cut++;
-      return cut;
+      // Prefer a safe cut at or after the ideal cut (keeps the full budget).
+      for (let cut = i; cut < messages.length; cut++) {
+        if (isSafeCutPoint(messages, cut)) return cut;
+      }
+      // Tool-heavy tails may offer no safe cut going forward; fall back to
+      // the nearest safe cut before the ideal cut (keeps more than budget).
+      for (let cut = i - 1; cut >= 0; cut--) {
+        if (isSafeCutPoint(messages, cut)) return cut;
+      }
+      return 0;
     }
   }
   return 0;
@@ -88,6 +105,9 @@ function isSafeCutPoint(messages: AgentMessage[], idx: number): boolean {
 function estimateMessageTokens(m: AgentMessage): number {
   let chars = 0;
   if (typeof m.content === "string") chars += m.content.length;
+  // Multimodal content is an array of parts (e.g. base64 images); stringify
+  // it so large payloads count toward the budget, matching agent-sh.
+  else if (Array.isArray(m.content)) chars += JSON.stringify(m.content).length;
   if (m.tool_calls) for (const t of m.tool_calls) chars += (t.function?.arguments?.length ?? 0);
   return Math.ceil(chars * APPROX_TOKENS_PER_CHAR) + 20;
 }

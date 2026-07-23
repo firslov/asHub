@@ -4,6 +4,7 @@ import { signal, effect } from "../vendor/signals-core.js";
 import { activeSessionId, switchTo, spaEnabled, sessions, openTabs, closeTab, setSessionKind } from "./session-manager.js";
 import { agents, getSession, setSessions, updateSession, pinnedIds, allSessions } from "./store.js";
 import { t } from "./i18n.js";
+import { toast } from "./toast.js";
 
 const sessionList = document.getElementById("sessions");
 const workspaceList = document.getElementById("workspaces");
@@ -14,6 +15,7 @@ const sessionTopic = document.getElementById("session-topic");
 const sessionCwdMeta = document.getElementById("session-cwd-meta");
 const newBtn = document.getElementById("new-session");
 const newTerminalBtn = document.getElementById("new-terminal");
+const sessionFilter = document.getElementById("session-filter");
 
 export const setSessionTopic = (title) => { headerTopic.value = title ?? ""; };
 export const setSessionCwd = (cwd) => { headerCwd.value = cwd ?? ""; };
@@ -47,6 +49,12 @@ let sessionsHash = "";
 let workspacesHash = "";
 let terminalsHash = "";
 let fullHashCache = "";
+// Sidebar filter text — applies to the sessions and archive views.
+let filterText = "";
+
+const filterQuery = () => filterText.trim().toLowerCase();
+const matchesFilter = (title, cwd) =>
+  ((title ?? "") + " " + (cwd ?? "")).toLowerCase().includes(filterQuery());
 
 export { setSessions } from "./store.js";
 
@@ -176,7 +184,7 @@ const startTitleEdit = (li, instanceId, currentTitle) => {
   input.addEventListener("blur", commit);
   input.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
-    if (ev.key === "Escape") { input.value = currentTitle; input.blur(); }
+    if (ev.key === "Escape") { ev.stopPropagation(); input.value = currentTitle; input.blur(); }
   });
 };
 
@@ -428,9 +436,11 @@ const renderSessionItem = (s, isPinned = false) => {
 const renderSessions = async (force = false) => {
   try {
     const list = await (await fetch("/sessions")).json();
-    const fullHash = JSON.stringify(list.map((s) => [
+    // Include the filter query in the hash so typing/clearing the filter
+    // invalidates this early return even when the session list is unchanged.
+    const fullHash = JSON.stringify([filterQuery(), list.map((s) => [
       s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt, s.kind ?? "agent",
-    ]));
+    ])]);
     if (!force && fullHash === fullHashCache) return;
     fullHashCache = fullHash;
 
@@ -449,10 +459,17 @@ const renderSessions = async (force = false) => {
     const agentList = list.filter((s) => (s.kind ?? "agent") === "agent");
     const pinIds = pinnedIds.peek();
 
-    const hash = JSON.stringify(agentList.map((s) => [
+    // Filter by title + cwd substring; the query is part of the hash so
+    // typing always invalidates the incremental-render cache.
+    const query = filterQuery();
+    const visibleList = query
+      ? agentList.filter((s) => matchesFilter(s.title || t("untitled"), s.cwd))
+      : agentList;
+
+    const hash = JSON.stringify([query, visibleList.map((s) => [
       s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread,
       pinIds.has(s.instanceId),
-    ]));
+    ])]);
     if (hash === sessionsHash) return;
     const isFirstRender = sessionsHash === "";
     sessionsHash = hash;
@@ -471,29 +488,33 @@ const renderSessions = async (force = false) => {
       existingItems.set(li.dataset.sessionId, li);
     }
 
-    // Group items by pin-first then by time bucket
-    const pinnedItems = [];
-    const restByBucket = new Map();
-    for (const s of agentList) {
-      if (pinIds.has(s.instanceId)) {
-        pinnedItems.push(s);
-      } else {
-        const k = bucketKey(s.lastModified ?? s.startedAt);
-        if (!restByBucket.has(k)) restByBucket.set(k, []);
-        restByBucket.get(k).push(s);
-      }
-    }
-
+    // Group items by pin-first then by time bucket. With an active filter
+    // the hits are shown flat, without group headers.
     const buildOrder = [];
-    if (pinnedItems.length > 0) {
-      buildOrder.push({ kind: "head", text: t("pinned") });
-      for (const s of pinnedItems) buildOrder.push({ kind: "item", session: s, pinned: true });
-    }
-    for (const k of BUCKET_ORDER) {
-      const items = restByBucket.get(k);
-      if (!items?.length) continue;
-      buildOrder.push({ kind: "head", text: t("bucket." + k), count: items.length });
-      for (const s of items) buildOrder.push({ kind: "item", session: s });
+    if (query) {
+      for (const s of visibleList) buildOrder.push({ kind: "item", session: s, pinned: pinIds.has(s.instanceId) });
+    } else {
+      const pinnedItems = [];
+      const restByBucket = new Map();
+      for (const s of visibleList) {
+        if (pinIds.has(s.instanceId)) {
+          pinnedItems.push(s);
+        } else {
+          const k = bucketKey(s.lastModified ?? s.startedAt);
+          if (!restByBucket.has(k)) restByBucket.set(k, []);
+          restByBucket.get(k).push(s);
+        }
+      }
+      if (pinnedItems.length > 0) {
+        buildOrder.push({ kind: "head", text: t("pinned") });
+        for (const s of pinnedItems) buildOrder.push({ kind: "item", session: s, pinned: true });
+      }
+      for (const k of BUCKET_ORDER) {
+        const items = restByBucket.get(k);
+        if (!items?.length) continue;
+        buildOrder.push({ kind: "head", text: t("bucket." + k), count: items.length });
+        for (const s of items) buildOrder.push({ kind: "item", session: s });
+      }
     }
 
     const newChildren = [];
@@ -769,7 +790,20 @@ const renderTerminals = () => {
     close.addEventListener("click", async (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      if (!confirm(t("close.session.confirm", { title: escape(titleText) }))) return;
+      // Two-click confirmation — avoids native confirm() which steals
+      // OS focus on Windows and never returns it to the renderer.
+      if (!close.classList.contains("confirming")) {
+        close.classList.add("confirming");
+        close.textContent = "?";
+        close.title = t("close.session.confirm", { title: escape(titleText) });
+        setTimeout(() => {
+          close.classList.remove("confirming");
+          close.textContent = "×";
+          close.title = t("close.session");
+        }, 2500);
+        return;
+      }
+      close.classList.remove("confirming");
       try { await fetch(`/${s.instanceId}/`, { method: "DELETE" }); } catch {}
       if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
       renderTerminals();
@@ -801,14 +835,18 @@ const renderArchive = async () => {
     const items = await res.json();
     archiveList.hidden = false;
     archiveList.innerHTML = "";
-    if (!Array.isArray(items) || items.length === 0) {
+    const query = filterQuery();
+    const visible = Array.isArray(items) && query
+      ? items.filter((item) => matchesFilter(item.title || t("untitled"), item.cwd))
+      : items;
+    if (!Array.isArray(visible) || visible.length === 0) {
       const empty = document.createElement("li");
       empty.className = "archive-empty";
       empty.textContent = t("archive.empty");
       archiveList.appendChild(empty);
       return;
     }
-    for (const item of items) {
+    for (const item of visible) {
       const li = document.createElement("li");
       li.dataset.sessionId = item.id;
       li.style.cssText = "position:relative;display:flex;align-items:center;padding:0.42rem 0.7rem 0.42rem 1.5rem;cursor:pointer;border-radius:var(--radius-xs);transition:background 0.1s;min-height:36px;";
@@ -856,14 +894,23 @@ effect(() => {
   if (workspaceList) workspaceList.hidden = view !== "workspaces";
   if (terminalList) terminalList.hidden = view !== "terminals";
   if (archiveList) archiveList.hidden = view !== "archive";
+  if (sessionFilter) sessionFilter.hidden = view !== "sessions" && view !== "archive";
   for (const btn of viewButtons) {
     btn.classList.toggle("current", btn.dataset.view === view);
   }
 });
 
+// Sidebar filter: substring match on title + cwd for sessions and archive.
+sessionFilter?.addEventListener("input", () => {
+  filterText = sessionFilter.value;
+  if (sidebarView.peek() === "archive") renderArchive();
+  else renderSessions();
+});
+
 effect(() => {
   const v = sidebarView.value;
-  if (v === "workspaces") renderWorkspaces();
+  if (v === "sessions") renderSessions();
+  else if (v === "workspaces") renderWorkspaces();
   else if (v === "terminals") renderTerminals();
   else if (v === "archive") renderArchive();
 });
@@ -967,13 +1014,13 @@ const doCreateSession = async (cwd) => {
     });
     if (!res.ok) {
       const text = await res.text();
-      alert(text || `New session failed (${res.status})`);
+      toast(t("session.new.failed"), { type: "error", detail: text || `HTTP ${res.status}` });
       return;
     }
     const sess = await res.json();
     if (sess.instanceId) window.location.href = `/${sess.instanceId}/`;
   } catch (e) {
-    alert(`New session failed: ${e?.message ?? e}`);
+    toast(t("session.new.failed"), { type: "error", detail: String(e?.message ?? e) });
   }
 };
 
@@ -982,9 +1029,14 @@ newBtn?.addEventListener("click", () => {
 });
 
 newTerminalBtn?.addEventListener("click", async (ev) => {
+  const kind = (ev.metaKey || ev.ctrlKey) ? "ash-terminal" : "terminal";
+  // agent-sh Shell has no Windows backend — the session would be a dead terminal.
+  if (kind === "ash-terminal" && /win/i.test(navigator.platform || "")) {
+    toast(t("terminal.not.supported.win"), { type: "error" });
+    return;
+  }
   newTerminalBtn.disabled = true;
   try {
-    const kind = (ev.metaKey || ev.ctrlKey) ? "ash-terminal" : "terminal";
     const cwd = getSession(activeSessionId.peek())?.cwd ?? null;
     const body = cwd ? { cwd, kind } : { kind };
     const res = await fetch("/sessions", {

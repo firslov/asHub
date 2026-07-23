@@ -3,7 +3,7 @@
 [English](README.md) | [简体中文](#ashub-中文)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+[![Node](https://img.shields.io/badge/node-%3E%3D20.3-brightgreen.svg)](package.json)
 
 [agent-sh](https://github.com/guanyilun/agent-sh) 的桌面应用 —— 运行 agent-sh 会话并通过浏览器界面进行交互。
 
@@ -11,11 +11,18 @@
 
 ## 功能特性
 
-- **多会话** —— 侧边栏可创建、切换、关闭会话
+- **多会话** —— 侧边栏可创建、切换、搜索、关闭会话
 - **会话持久化** —— 重启后对话依然保留
 - **自动标题** —— LLM 生成会话标题，纯文本回退兜底
 - **实时流式输出** —— SSE 支持 Markdown、语法高亮代码、Diff 视图和工具调用
 - **推理过程折叠** —— 连续的 think→tool 轮次自动折叠为可展开的单一块
+- **任务清单** —— agent 自动维护任务追踪，渲染为吸附在消息流顶部的进度卡片
+- **子代理** —— 五种专家子代理（plan / explore / review / research / implement），支持权限审批、取消、并发限制与按类型模型覆盖
+- **分支树** —— rewind 与 fork 自由穿梭对话历史，非破坏性时间旅行，可视化树形面板
+- **权限审批** —— 文件修改审批（倒计时、完整 diff 预览、会话级放行）
+- **导出** —— 一键导出对话为 Markdown
+- **技能市场** —— 从 GitHub / Gitee 浏览安装技能
+- **系统通知** —— 后台运行时通知审批请求与回复完成
 - **图片支持** —— 多模态模型支持粘贴/上传图片，自动压缩并使用 Blob URL 渲染
 - **模型选择器** —— 按 provider 分组、可搜索的下拉列表，实时同步 OpenRouter 目录（300+ 模型）
 - **多模态指示器** —— 输入框左侧图标标识当前模型是否支持图片
@@ -59,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/firslov/ashub/main/install.sh | bas
 
 ### 源码运行
 
-需要 **Node.js ≥ 20**。
+需要 **Node.js ≥ 20.3**。
 
 ```sh
 git clone https://github.com/firslov/ashub.git

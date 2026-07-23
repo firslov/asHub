@@ -1,9 +1,10 @@
 import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
 import { compactReasoning } from "./stream/compact.js";
+import { hideUsage } from "./stream/renderers.js";
 
 import { STATE_DEFAULTS } from "./state.js";
-import { t, scanI18n } from "./i18n.js";
+import { t, lang, scanI18n } from "./i18n.js";
 
 const parseId = () =>
   (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1] ?? "";
@@ -91,7 +92,8 @@ class SessionView extends HTMLElement {
       if (this.pillEl && stick) this.pillEl.hidden = true;
     }, { signal: ac });
     this.pillEl?.addEventListener("click", () => {
-      this.streamEl.scrollTo({ top: this.streamEl.scrollHeight, behavior: "smooth" });
+      const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      this.streamEl.scrollTo({ top: this.streamEl.scrollHeight, behavior: reducedMotion ? "instant" : "smooth" });
       this.scroll.stickToBottom = true;
       if (this.pillEl) this.pillEl.hidden = true;
     }, { signal: ac });
@@ -105,7 +107,8 @@ class SessionView extends HTMLElement {
       setTimeout(() => { if (hintsEl ) hintsEl.hidden = false; }, 800);
       hintsEl.querySelectorAll(".hint-chip").forEach((chip) => {
         chip.addEventListener("click", () => {
-          const query = chip.dataset.query;
+          // Localized query: prefer data-query-{lang}, fall back to data-query.
+          const query = (lang.value === "zh" ? chip.dataset.queryZh : chip.dataset.queryEn) || chip.dataset.query;
           if (!query) return;
           const q = document.getElementById("query");
           if (q) {
@@ -124,6 +127,7 @@ class SessionView extends HTMLElement {
     if (!this.id) return;
     if (this.replayFlushTimer) { clearTimeout(this.replayFlushTimer); this.replayFlushTimer = null; }
     this.controller?.abort();
+    this._todoBlock = null; // let any pending sticky watcher exit
     this.innerHTML = "";
     this.initStreamShell();
     this.enterReplayMode();
@@ -132,7 +136,15 @@ class SessionView extends HTMLElement {
 
   resetForBranchSwitch() {
     const wasReplaying = this.state.replaying;
-    if (this.streamEl) this.streamEl.innerHTML = "";
+    if (this.streamEl) {
+      // Permission-card countdown/confirm timers would keep firing on
+      // detached nodes after the stream is cleared — disarm them first.
+      for (const card of this.streamEl.querySelectorAll(".permission-card")) {
+        clearInterval(card._timer);
+        card._disarm?.();
+      }
+      this.streamEl.innerHTML = "";
+    }
     this._replayFrag = null;
     this.state = { ...STATE_DEFAULTS };
     this.state.replaying = wasReplaying; // preserve replay mode across branch resets
@@ -143,11 +155,19 @@ class SessionView extends HTMLElement {
     this.shellBlock = { current: null };
     this._subagent = null;
     this._subagentBlock = null;
+    // Drop the todo card reference so its sticky watcher (rAF loop waiting
+    // for attachment) exits instead of spinning forever on detached DOM.
+    this._todoBlock = null;
+    // Drop stale usage/scroll state from the old branch.
+    hideUsage(this);
+    this.scroll = { stickToBottom: true, lastSeen: 0 };
+    if (this.pillEl) this.pillEl.hidden = true;
   }
 
   disconnectedCallback() {
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
     this.controller?.abort();
+    this._todoBlock = null; // let any pending sticky watcher exit
     if (this.id) unsubscribeSession(this.id);
     unregisterSession(this);
   }
@@ -210,7 +230,7 @@ class SessionView extends HTMLElement {
     hidePageLoader();
     onReplayDone(this);
     // If replay produced no content, restore the empty state.
-    if (this.emptyStateEl?.hidden && !this.streamEl?.querySelector('.turn-sep, .agent-box, .tool-row, .thinking-block, .shell-block')) {
+    if (this.emptyStateEl?.hidden && !this.streamEl?.querySelector('.turn-sep, .agent-box, .tool-row, .thinking-block, .shell-block, .todo-block, .subagent-block, .permission-card, .err-card, .agent-reply, .compaction-marker')) {
       this.emptyStateEl.hidden = false;
     }
   }

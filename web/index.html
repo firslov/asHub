@@ -7,11 +7,54 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>asHub</title>
+  <script>
+    // Anti-FOUC: seed the first-screen-critical data-ui-* defaults before the
+    // first paint, so the UI never flashes the pre-JS styling. Keep these
+    // values in sync with DEFAULT_UI in /js/prefs.js (the single source of
+    // truth; prefs.js applies the full set, including overrides, afterwards).
+    // Only prefs whose CSS affects first-screen layout/visibility are listed.
+    (() => {
+      const defaults = [
+        [".app", "data-ui-tabs-enabled", "true"],                     // tabs.enabled
+        [".terminal-wrap", "data-ui-conversation-center", "false"],   // conversation.center
+        [".terminal-wrap", "data-ui-reply-border-show", "false"],     // reply.border.show
+        [".terminal-wrap", "data-ui-message-gradient", "true"],       // message.gradient
+        [".terminal-wrap", "data-ui-turn-time-show", "false"],        // turn.time.show
+        [".terminal-wrap", "data-ui-turn-sep-show", "false"],         // turn.sep.show
+        [".terminal-wrap", "data-ui-usage-align", "left"],            // usage.align
+        [".terminal-wrap", "data-ui-usage-cache-show", "true"],       // usage.cache.show
+        [".terminal-wrap", "data-ui-usage-total-show", "false"],      // usage.total.show
+        [".live-input", "data-ui-input-gradient", "false"],           // input.gradient
+        ["#query", "data-ui-input-focus-ring", "false"],              // input.focus-ring
+        ["#instance", "data-ui-model-show", "false"],                 // title-bar.model.show
+        ["#instance", "data-ui-model-uppercase", "false"],            // title-bar.model.uppercase
+        ["#version-label", "data-ui-version-show", "true"],           // title-bar.version.show
+      ];
+      const pending = new Set(defaults.map(([sel, attr]) => sel + attr));
+      const apply = () => {
+        for (const [sel, attr, val] of defaults) {
+          if (!pending.has(sel + attr)) continue;
+          const el = document.querySelector(sel);
+          if (el) {
+            el.setAttribute(attr, val);
+            pending.delete(sel + attr);
+          }
+        }
+        if (!pending.size) obs.disconnect();
+      };
+      // Targets are parsed after this script; MutationObserver microtasks run
+      // before the first rendering, so attributes land ahead of first paint.
+      const obs = new MutationObserver(apply);
+      obs.observe(document.documentElement, { childList: true, subtree: true });
+      apply();
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500;600&family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/css/styles.css" />
   <link rel="stylesheet" href="/css/live.css" />
+  <link rel="stylesheet" href="/css/toast.css" />
   <link rel="stylesheet" id="hljs-dark" href="/vendor/hljs-github-dark.min.css" disabled />
   <link rel="stylesheet" id="hljs-light" href="/vendor/hljs-github.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.17.0/dist/katex.min.css" />
@@ -22,9 +65,13 @@
   <script src="/vendor/highlight.min.js"></script>
   <script src="/vendor/highlight-scheme.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/katex@0.17.0/dist/katex.min.js"></script>
+  <style>
+    /* Hide rows marked os-not-win on Windows (data-platform is set on <html> above). */
+    [data-platform="win32"] .shortcuts-row.os-not-win { display: none; }
+  </style>
 </head>
 <body>
-  <div class="app" data-ui-tabs-enabled="false">
+  <div class="app">
     <header class="title-bar">
       <!-- Windows custom title bar (hidden on macOS) -->
       <div id="win-title-bar" class="win-title-bar os-other" hidden>
@@ -61,10 +108,10 @@
       </span>
       <div class="session-tabs" id="session-tabs" role="tablist" hidden></div>
       <span class="bar-right">
-        <span class="terminal-title" id="instance" data-ui-model-show="true" data-ui-model-uppercase="true"></span>
+        <span class="terminal-title" id="instance"></span>
         <span class="live-dot"></span>
         <span class="live-status" id="conn">connecting…</span>
-        <span class="version-label" id="version-label" data-ui-version-show="true" title="checking for updates…"></span>
+        <span class="version-label" id="version-label" title="checking for updates…"></span>
         <span class="spinner" id="spinner" hidden></span>
       </span>
     </header>
@@ -100,6 +147,7 @@
           </svg>
         </button>
       </div>
+      <input id="session-filter" class="sidebar-filter" type="text" data-i18n-placeholder="filter.sessions" placeholder="Filter sessions…" autocomplete="off" spellcheck="false" />
       <ul id="sessions" class="session-list"></ul>
       <ul id="workspaces" class="workspace-list" hidden></ul>
       <ul id="terminals" class="terminal-list" hidden></ul>
@@ -123,7 +171,7 @@
           </div>
         </div>
       </div>
-      <div class="terminal-wrap live-wrap" data-ui-conversation-center="true" data-ui-reply-border-show="true" data-ui-reply-border-gradient="true" data-ui-reply-hover="true" data-ui-reply-code-border="true" data-ui-message-gradient="true" data-ui-usage-align="right" data-ui-usage-sticky="false" data-ui-usage-git-branch="true" data-ui-usage-cwd-show="true" data-ui-usage-model-show="false" data-ui-usage-cache-show="true" data-ui-usage-total-show="true">
+      <div class="terminal-wrap live-wrap">
         <div class="terminal">
           <div class="no-session-empty terminal-body" id="no-session-empty" hidden>
             <div class="stream-empty-mini">
@@ -140,18 +188,22 @@
               <span data-i18n="no.session.cta">+  New session</span>
             </button>
             <div class="stream-empty-templates">
-              <button type="button" class="stream-empty-prompt template" data-query="Use the review subagent to check this project for bugs">🔍 Review codebase</button>
-              <button type="button" class="stream-empty-prompt template" data-query="Explore and explain how this project works">🗺️ Explore project</button>
-              <button type="button" class="stream-empty-prompt template" data-query="Create a detailed plan for building a blog system">📋 Plan a project</button>
+              <button type="button" class="stream-empty-prompt template" data-i18n="hint.review"
+                data-query="Use the review subagent to check this project for bugs"
+                data-query-en="Use the review subagent to check this project for bugs"
+                data-query-zh="用 review 子代理检查这个项目里的 bug">🔍 Review codebase</button>
+              <button type="button" class="stream-empty-prompt template" data-i18n="hint.explore"
+                data-query="Explore and explain how this project works"
+                data-query-en="Explore and explain how this project works"
+                data-query-zh="探索这个项目并解释它是如何工作的">🗺️ Explore project</button>
+              <button type="button" class="stream-empty-prompt template" data-i18n="hint.plan"
+                data-query="Create a detailed plan for building a blog system"
+                data-query-en="Create a detailed plan for building a blog system"
+                data-query-zh="为搭建一个博客系统制定一份详细计划">📋 Plan a project</button>
             </div>
           </div>
-          <form class="live-input" id="form" data-ui-input-gradient="true">
+          <form class="live-input" id="form">
             <div class="image-previews" id="image-previews" hidden></div>
-            <button type="button" class="bar-btn cancel-btn input-cancel-btn" id="cancel-turn" data-ui-cancel-show="true" hidden data-i18n-title="interrupt" title="Interrupt response (Esc)">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                <rect x="1.5" y="1.5" width="9" height="9" rx="2"></rect>
-              </svg>
-            </button>
             <button type="button" class="vision-indicator" id="vision-indicator" hidden data-i18n-title="attach.image" title="Attach image">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -159,8 +211,13 @@
                 <polyline points="21 15 16 10 5 21"/>
               </svg>
             </button>
-            <span class="c-arrow">⟩</span>
-            <textarea id="query" data-ui-input-focus-ring="true" autocomplete="off" data-i18n-placeholder="ask.agent" placeholder="ask the agent…" rows="1"></textarea>
+            <button type="submit" class="c-arrow send-btn" id="send-btn" disabled data-i18n-title="send" title="Send (Enter)">
+              <span class="send-arrow" aria-hidden="true">⟩</span>
+              <svg class="send-stop" width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+                <rect x="1.5" y="1.5" width="9" height="9" rx="2"></rect>
+              </svg>
+            </button>
+            <textarea id="query" autocomplete="off" data-i18n-placeholder="ask.agent" placeholder="ask the agent…  (! shell · / commands · @ files · # prompts)" rows="1"></textarea>
             <button type="button" class="usage-strip-toggle" id="usage-strip-toggle" data-i18n-title="toggle.status.bar" title="Toggle status bar">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="4 6 7 9 10 6"/>
@@ -191,9 +248,18 @@
           </button>
           <div class="stream-empty-hints" hidden>
             <span class="hint-label" data-i18n="try.saying">Try saying</span>
-            <button class="hint-chip" data-query="Use the review subagent to check the codebase for bugs" data-i18n="hint.review">🔍 Review codebase</button>
-            <button class="hint-chip" data-query="Create a detailed plan for building a blog system" data-i18n="hint.plan">📋 Plan a project</button>
-            <button class="hint-chip" data-query="Help me design a weekend trip itinerary" data-i18n="hint.trip">✈️ Plan a trip</button>
+            <button class="hint-chip" data-i18n="hint.review"
+              data-query="Use the review subagent to check the codebase for bugs"
+              data-query-en="Use the review subagent to check the codebase for bugs"
+              data-query-zh="用 review 子代理检查代码库里的 bug">🔍 Review codebase</button>
+            <button class="hint-chip" data-i18n="hint.plan"
+              data-query="Create a detailed plan for building a blog system"
+              data-query-en="Create a detailed plan for building a blog system"
+              data-query-zh="为搭建一个博客系统制定一份详细计划">📋 Plan a project</button>
+            <button class="hint-chip" data-i18n="hint.trip"
+              data-query="Help me design a weekend trip itinerary"
+              data-query-en="Help me design a weekend trip itinerary"
+              data-query-zh="帮我设计一份周末旅行行程">✈️ Plan a trip</button>
           </div>
         </div>
         <div class="stream-loading" hidden>
@@ -374,6 +440,13 @@
           <circle cx="8" cy="4" r="1.6"/>
           <line x1="1.5" y1="9" x2="12.5" y2="9"/>
           <circle cx="5" cy="9" r="1.6"/>
+        </svg>
+      </button>
+      <button class="toolbar-btn" id="export-btn" data-i18n-title="export.md" title="Export conversation as Markdown">
+        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M7 1.5v7"/>
+          <polyline points="4 6 7 9 10 6"/>
+          <path d="M2 9.5v2a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-2"/>
         </svg>
       </button>
       <div class="toolbar-sep"></div>
@@ -656,7 +729,15 @@
             <div class="shortcuts-row"><kbd>↓</kbd><span data-i18n="shortcuts.recall_down">Next query</span></div>
             <div class="shortcuts-row"><kbd>⇧Tab</kbd><span data-i18n="shortcuts.cycle_thinking">Cycle thinking level</span></div>
             <div class="shortcuts-row os-mac"><kbd>⌥B</kbd><span class="shortcuts-range"> / </span><kbd>⌥F</kbd><span data-i18n="shortcuts.move_word">Move cursor by word</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+B</kbd><span class="shortcuts-range"> / </span><kbd>Ctrl+F</kbd><span data-i18n="shortcuts.move_word">Move cursor by word</span></div>
+            <div class="shortcuts-row os-mac"><kbd>Ctrl+B</kbd><span class="shortcuts-range"> / </span><kbd>Ctrl+F</kbd><span data-i18n="shortcuts.move_word">Move cursor by word</span></div>
+          </div>
+          <div class="shortcuts-sep"></div>
+          <div class="shortcuts-subtitle" data-i18n="shortcuts.syntax">Input syntax</div>
+          <div class="shortcuts-group">
+            <div class="shortcuts-row os-not-win"><kbd>!</kbd><span data-i18n="shortcuts.shell">Run shell command</span></div>
+            <div class="shortcuts-row"><kbd>/</kbd><span data-i18n="shortcuts.slash_command">Slash command</span></div>
+            <div class="shortcuts-row"><kbd>@</kbd><span data-i18n="shortcuts.mention">Mention file</span></div>
+            <div class="shortcuts-row"><kbd>#</kbd><span data-i18n="shortcuts.prompt_pick">Insert saved prompt</span></div>
           </div>
         </div>
       </div>
@@ -687,5 +768,6 @@
   </div>
 
   <script type="module" src="/js/client.js"></script>
+  <script type="module" src="/js/export.js"></script>
 </body>
 </html>

@@ -64,6 +64,24 @@ const toolCount = (g) => g.querySelectorAll(".tool-row").length;
 const updateToolGroupHead = (g) => {
   const { head } = groupState.get(g);
   head.textContent = `🔧 ${t("n.tools", { n: toolCount(g) })}`;
+  // Summarize which tools ran so the collapsed group is informative at a
+  // glance (top 3 by frequency), e.g. "read_file ×3 · grep · ls".
+  const counts = new Map();
+  for (const row of g.querySelectorAll(".tool-row")) {
+    const name = row.dataset.toolName;
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const top = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([n, c]) => (c > 1 ? `${n} ×${c}` : n))
+    .join(" · ");
+  if (top) {
+    const span = document.createElement("span");
+    span.className = "tool-group-names";
+    span.textContent = top;
+    head.appendChild(span);
+  }
 };
 
 const setToolGroupCollapsed = (g, collapsed) => {

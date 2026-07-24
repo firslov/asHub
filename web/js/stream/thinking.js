@@ -1,6 +1,7 @@
 import { hideEmptyState, maybeScroll } from "./scroll.js";
 import { append, insertStreamNode } from "./tool-group.js";
 import { t } from "../i18n.js";
+import { escape } from "../utils.js";
 
 export const hasThinkingDots = (session) => (session?.thinking.el ?? null) != null;
 export const hasThinkingBlock = (session) => (session?.thinking.block ?? null) != null;
@@ -151,7 +152,13 @@ export const finalizeThinking = (session) => {
     block.remove();
   } else {
     const head = block.querySelector(".thinking-block-head");
-    if (head) head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t("thought")}</span>`;
+    if (head) {
+      // Keep a one-line preview in the collapsed head so folded thinking
+      // blocks stay informative instead of reading as empty "thought".
+      const preview = inner.textContent.trim().replace(/\s+/g, " ").slice(0, 100);
+      head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t("thought")}</span>` +
+        (preview ? `<span class="thinking-preview">${escape(preview)}</span>` : "");
+    }
     setThinkingCollapsed(block, true);
   }
   session.thinking.block = null;
@@ -162,6 +169,13 @@ document.addEventListener("langchange", () => {
   document.querySelectorAll(".thinking-block-head").forEach((head) => {
     const block = head.closest(".thinking-block");
     const isCollapsed = block?.classList?.contains("collapsed") ?? false;
-    head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t(isCollapsed ? "thought" : "thinking")}</span>`;
+    // Preserve the collapsed preview (recompute from the body text) —
+    // rebuilding the head wholesale would drop it.
+    let previewHtml = "";
+    if (isCollapsed) {
+      const preview = block?.querySelector(".thinking-block-inner")?.textContent?.trim().replace(/\s+/g, " ").slice(0, 100) ?? "";
+      if (preview) previewHtml = `<span class="thinking-preview">${escape(preview)}</span>`;
+    }
+    head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t(isCollapsed ? "thought" : "thinking")}</span>${previewHtml}`;
   });
 });

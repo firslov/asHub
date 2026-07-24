@@ -32,7 +32,14 @@ export function compactReasoning(stream) {
         prev.elems.push(think, tools);
         prev.end = i + 1;
       } else {
-        runs.push({ elems: [think, tools], start: i, end: i + 1 });
+        // Absorb an orphaned tool-group sitting directly before this run —
+        // a "text → tools → thinking…" sequence otherwise leaves the group
+        // stranded outside any reasoning phase.
+        const before = children[i - 1];
+        const startElems = before?.classList?.contains("tool-group") && i - 1 >= startIdx
+          ? [before, think, tools]
+          : [think, tools];
+        runs.push({ elems: startElems, start: startElems.length === 3 ? i - 1 : i, end: i + 1 });
       }
       i += 2;
     } else {

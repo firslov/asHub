@@ -187,6 +187,8 @@ export const buildToolRow = (p) => {
   row.className = "tool-row";
   if (p?.toolCallId) row.dataset.callId = p.toolCallId;
   if (p?.kind) row.dataset.kind = p.kind;
+  // Bare tool name for collapsed group summaries (icon/title markup varies).
+  row.dataset.toolName = p?.name ?? p?.title ?? "";
 
   const iconSvg = renderToolIcon(p?.kind);
   const fallbackIcon = typeof p?.icon === "string" && p.icon.length > 0 ? p.icon : "";

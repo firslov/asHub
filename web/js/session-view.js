@@ -144,6 +144,9 @@ class SessionView extends HTMLElement {
         card._disarm?.();
       }
       this.streamEl.innerHTML = "";
+      // Reset the compaction cursor — a stale value larger than the new
+      // child count would make compactReasoning early-return forever.
+      this.streamEl._compactedUntil = 0;
     }
     this._replayFrag = null;
     this.state = { ...STATE_DEFAULTS };

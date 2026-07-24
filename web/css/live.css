@@ -5188,6 +5188,21 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-bottom-color: transparent;
 }
 
+/* One-line previews in collapsed heads so folded blocks stay informative. */
+.thinking-preview,
+.tool-group-names {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.thinking-preview { font-style: italic; }
+.tool-group-names { margin-left: 0.35rem; }
+.tool-group-names::before { content: "· "; }
+
 .thinking-block-inner {
   padding: 0.55rem 0.9rem;
   color: var(--text-dim);

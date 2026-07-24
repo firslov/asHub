@@ -24,7 +24,7 @@ import {
 import { createUserBox } from "./actions.js";
 import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
 import { startShellBlock, finishShellBlock, queueShellBlock } from "./stream/shell-block.js";
-import { createTodoBlock, updateTodoBlock } from "./stream/todo-block.js";
+import { createTodoBlock, updateTodoBlock, settleTodoBlock } from "./stream/todo-block.js";
 
 // Lazy file panel — only loaded when shell cwd changes
 const refreshFilesIfOpen = async () => {
@@ -549,6 +549,7 @@ export const handlers = {
     finalizeThinking(this);
     finalizeLiveOutput(this);
     renderUsage(this);
+    settleTodoBlock(this);
     if (this.usageStripEl) this.usageStripEl.hidden = false;
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
@@ -573,6 +574,7 @@ export const handlers = {
     finalizeThinking(this);
     finalizeLiveOutput(this);
     setBusy(this, false);
+    settleTodoBlock(this);
     if (!this.state.replaying) setSessionStatus(this.id, "");
     if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change"));
     this._subagent = null;
@@ -585,6 +587,7 @@ export const handlers = {
     hideThinking(this);
     finalizeThinking(this);
     finalizeLiveOutput(this);
+    settleTodoBlock(this);
     const raw = String(p?.message ?? "");
     const kind = classifyError(raw);
     // Friendly headline for known categories; the original message is

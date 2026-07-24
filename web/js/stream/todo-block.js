@@ -111,10 +111,23 @@ export const createTodoBlock = (session) => {
   return block;
 };
 
+// Settle the card after the turn ends: unstick it from the top of the
+// scroller and collapse the list (unless the user toggled it manually),
+// so completed work doesn't keep a floating card on the page.  The next
+// agent:todo event (new work) re-sticks it via updateTodoBlock.
+export const settleTodoBlock = (session) => {
+  const block = liveBlock(session);
+  if (!block) return;
+  block.classList.add("settled");
+  if (!block.dataset.userToggled) setTodoCollapsed(block, true);
+};
+
 /** Re-render the task list, progress counter and bar from the latest call. */
 export const updateTodoBlock = (session, todos) => {
   const block = liveBlock(session);
   if (!block) return;
+  // New todo activity means work is underway again — re-stick the card.
+  block.classList.remove("settled");
   ensureStickyWatch(session, block);
   const list = block.querySelector(".todo-list");
   const progress = block.querySelector(".todo-progress");

@@ -5237,6 +5237,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: 0 0 var(--radius-md) var(--radius-md);
   box-shadow: var(--shadow-lg);
 }
+/* Turn finished: settle back into the flow — no more sticky pinning. */
+.todo-block.settled { position: static; }
 .todo-block:hover {
   border-color: var(--border-mid);
   box-shadow: var(--shadow-md);

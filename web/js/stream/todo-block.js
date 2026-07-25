@@ -142,6 +142,10 @@ export const updateTodoBlock = (session, todos) => {
   if (progress) progress.textContent = total > 0 ? `${done}/${total}` : "";
   if (fill) fill.style.width = total > 0 ? `${(done / total) * 100}%` : "0%";
 
+  // A fully-completed (or cleared) list has no reason to stay pinned —
+  // settle immediately even mid-turn instead of waiting for turn end.
+  if (total === 0 || done === total) settleTodoBlock(session);
+
   // Cleared list: keep the card as a quiet "all clear" note rather than
   // removing it — no layout jump, position stays at the first call.
   if (total === 0) {

@@ -5188,10 +5188,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding-bottom: 0;
   opacity: 0;
 }
-.thinking-block.collapsed .thinking-block-head,
-.tool-group.collapsed .tool-group-head {
-  border-bottom-color: transparent;
-}
 
 /* One-line previews in collapsed heads so folded blocks stay informative. */
 .thinking-preview,

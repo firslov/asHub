@@ -2828,10 +2828,15 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .tool-icon {
-  width: 0.95em;
-  height: 0.95em;
+  width: 1.05rem;
+  height: 1.05rem;
   flex-shrink: 0;
-  vertical-align: -0.15em;
+  padding: 0.15rem;
+  border-radius: 50%;
+  background: var(--bg3);
+  box-shadow: 0 0 0 1px var(--border-mid);
+  box-sizing: content-box;
+  vertical-align: -0.25em;
 }
 .tool-icon--read    { color: var(--tool-read); }
 .tool-icon--search  { color: var(--tool-search); }
@@ -5103,20 +5108,21 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Unified card: thinking-block & tool-group ─────────────────── */
 .thinking-block,
 .tool-group {
-  margin: 0.5rem 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
+  margin: 0.4rem 0;
+  border: none;
+  border-left: 2px solid var(--border-mid);
+  border-radius: 0;
+  padding-left: 0.8rem;
   font-family: var(--font-sans);
   font-size: var(--fs-md);
-  background: var(--bg2);
-  box-shadow: var(--shadow-sm);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  background: transparent;
+  box-shadow: none;
+  transition: border-color 0.2s;
 }
 .thinking-block:hover,
 .tool-group:hover {
-  border-color: var(--border-mid);
-  box-shadow: var(--shadow-md);
+  border-left-color: var(--accent-border);
+  box-shadow: none;
 }
 
 .thinking-block-head,
@@ -5125,17 +5131,16 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   gap: 0.5rem;
   width: 100%;
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-1) var(--space-2) var(--space-1) 0;
   font: inherit;
   font-weight: 500;
   color: var(--text-dim);
   background: transparent;
   border: none;
-  border-bottom: 1px solid var(--border-light);
   cursor: pointer;
   user-select: none;
   text-align: left;
-  transition: all 0.15s;
+  transition: color 0.15s;
 }
 .tool-group-head {
   /* button reset — buttons add letter-spacing in some browsers */
@@ -5145,7 +5150,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .thinking-block-head:hover,
 .tool-group-head:hover {
   color: var(--text);
-  background: var(--bg3);
+  background: transparent;
 }
 
 /* Collapse chevron — shared by both cards */
@@ -5171,7 +5176,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transition: max-height 0.3s var(--ease-out-expo), opacity 0.2s;
 }
 .tool-group-body {
-  padding: 0.35rem 0.9rem;
+  padding: 0.1rem 0.2rem 0.2rem;
 }
 .tool-group:not(.collapsed) .tool-group-body {
   max-height: none;
@@ -5182,10 +5187,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding-top: 0;
   padding-bottom: 0;
   opacity: 0;
-}
-.thinking-block.collapsed .thinking-block-head,
-.tool-group.collapsed .tool-group-head {
-  border-bottom-color: transparent;
 }
 
 /* One-line previews in collapsed heads so folded blocks stay informative. */
@@ -5427,12 +5428,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 /* ── Reasoning phase (consecutive thought + tool rounds) ─────────── */
 .reasoning-phase {
-  margin: 0.5rem 0;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent-dim, #a78bfa66);
-  border-radius: var(--radius-md);
+  margin: 0.4rem 0;
+  border: none;
+  border-left: 2px solid var(--accent-dim);
+  border-radius: 0;
+  padding-left: 0.8rem;
   overflow: hidden;
-  background: var(--bg2);
+  background: transparent;
   font-size: var(--fs-md);
 }
 
@@ -5441,7 +5443,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   gap: 0.5rem;
   width: 100%;
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-1) var(--space-2) var(--space-1) 0;
   font: inherit;
   font-weight: 500;
   color: var(--text-dim);
@@ -5450,10 +5452,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   cursor: pointer;
   user-select: none;
   text-align: left;
+  transition: color 0.15s;
 }
 .reasoning-phase-head:hover {
   color: var(--text);
-  background: var(--bg3);
+  background: transparent;
 }
 
 .reasoning-phase .rp-arrow {

@@ -250,23 +250,32 @@ export class SessionStore {
       }
     }
 
-    // Sanitize: if the last message is an assistant with tool_calls that
-    // lack corresponding tool-result messages (e.g. session terminated
-    // mid-execution), strip the orphaned tool_calls to avoid API errors.
-    // Operates on the copies above, so stored entries stay untouched.
-    const last = messages[messages.length - 1];
-    if (last?.role === "assistant" && Array.isArray(last.tool_calls) && last.tool_calls.length > 0) {
-      // Collect tool_call_ids that have matching tool responses
+    // Sanitize: strip orphaned tool_calls from any assistant message whose
+    // tool-result messages are missing (e.g. session terminated mid-execution,
+    // or compaction evicted the tool results).  Operates on the copies above,
+    // so stored entries stay untouched.
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]!;
+      if (m.role !== "assistant" || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0) continue;
+
+      // Collect tool_call_ids that have matching tool responses anywhere in
+      // the rebuilt message list.
       const answeredIds = new Set<string>();
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const m = messages[i]!;
-        if (m.role === "tool" && m.tool_call_id) answeredIds.add(m.tool_call_id);
+      for (let j = 0; j < messages.length; j++) {
+        const t = messages[j]!;
+        if (t.role === "tool" && t.tool_call_id) answeredIds.add(t.tool_call_id);
       }
-      const dangling = last.tool_calls.filter((tc) => !answeredIds.has(tc.id ?? ""));
-      if (dangling.length > 0) {
-        // Strip only the orphaned tool_calls, keep text content if any
-        last.tool_calls = last.tool_calls.filter((tc) => answeredIds.has(tc.id ?? ""));
-        if (last.tool_calls.length === 0) delete last.tool_calls;
+      const dangling = m.tool_calls.filter((tc) => !answeredIds.has(tc.id ?? ""));
+      if (dangling.length === 0) continue;
+
+      // Strip only the orphaned tool_calls, keep text content if any.
+      m.tool_calls = m.tool_calls.filter((tc) => answeredIds.has(tc.id ?? ""));
+      if (m.tool_calls.length === 0) {
+        delete m.tool_calls;
+        // DeepSeek (and other strict providers) reject assistant messages
+        // that have neither content nor tool_calls.  Add a placeholder so
+        // the rebuilt message list stays API-valid.
+        if (!m.content) m.content = "[interrupted]";
       }
     }
 

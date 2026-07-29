@@ -254,17 +254,15 @@ export class SessionStore {
     // tool-result messages are missing (e.g. session terminated mid-execution,
     // or compaction evicted the tool results).  Operates on the copies above,
     // so stored entries stay untouched.
+    // Build the answered-id set once — it is identical for every candidate.
+    const answeredIds = new Set<string>();
+    for (const t of messages) {
+      if (t.role === "tool" && t.tool_call_id) answeredIds.add(t.tool_call_id);
+    }
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]!;
       if (m.role !== "assistant" || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0) continue;
 
-      // Collect tool_call_ids that have matching tool responses anywhere in
-      // the rebuilt message list.
-      const answeredIds = new Set<string>();
-      for (let j = 0; j < messages.length; j++) {
-        const t = messages[j]!;
-        if (t.role === "tool" && t.tool_call_id) answeredIds.add(t.tool_call_id);
-      }
       const dangling = m.tool_calls.filter((tc) => !answeredIds.has(tc.id ?? ""));
       if (dangling.length === 0) continue;
 

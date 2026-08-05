@@ -306,8 +306,12 @@ export class SessionStore {
       const lines = raw.split("\n");
       let lastIdx = lines.length - 1;
       if (lines[lastIdx] === "") lastIdx--;
+      // Keep a complete final line even when it lacks its trailing newline:
+      // a process killed mid-append can leave the buffer cut exactly between
+      // the last entry and the "\n", and that entry is fully recoverable.
+      // Only truncate when the tail genuinely fails to parse.
       let tailOk = lastIdx < 0;
-      if (!tailOk && raw.endsWith("\n")) {
+      if (!tailOk) {
         try { JSON.parse(lines[lastIdx]!); tailOk = true; } catch { /* torn */ }
       }
       if (!tailOk) {

@@ -14,6 +14,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
+import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
 import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
@@ -495,11 +496,79 @@ const MIME: Record<string, string> = {
   ".ttf": "font/ttf",
 };
 
+/**
+ * DNS-rebinding / hostile-Host guard. A rebinding page resolves its own
+ * hostname to 127.0.0.1 and requests with Host: <that hostname> — a
+ * same-origin request that CORS cannot stop. Only accept requests whose
+ * Host is an IP literal, "localhost", or an explicitly configured bind
+ * hostname. Missing Host (HTTP/1.0, raw local clients) is allowed: the
+ * browser-based rebinding threat always carries a hostname.
+ */
+function isAllowedHost(hostHeader: string | undefined, bindHost: string): boolean {
+  if (!hostHeader) return true;
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${hostHeader}`).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (hostname === "localhost") return true;
+  const bare = hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname;
+  if (isIP(bare) !== 0) return true;
+  if (bindHost && bindHost.toLowerCase() === hostname) return true;
+  return false;
+}
+
+/** Placeholder substituted for configured provider API keys on the wire. */
+const MASKED_API_KEY = "••••••••";
+
+/** Strip real API keys out of a settings.json object before sending it to the client. */
+function maskApiKeys(config: Record<string, unknown>): void {
+  const providers = (config as { providers?: Record<string, Record<string, unknown>> }).providers;
+  if (!providers || typeof providers !== "object") return;
+  for (const p of Object.values(providers)) {
+    if (p && typeof p === "object" && typeof p.apiKey === "string" && p.apiKey) {
+      p.apiKey = MASKED_API_KEY;
+    }
+  }
+}
+
+/**
+ * Restore masked API keys from the on-disk settings before persisting a
+ * client-submitted config. The config editor round-trips the GET response,
+ * so an untouched apiKey arrives back as MASKED_API_KEY — write the real
+ * value back instead of clobbering it with the placeholder.
+ */
+function unmaskApiKeys(parsed: Record<string, unknown>, old: Record<string, unknown>): void {
+  const newProviders = (parsed as { providers?: Record<string, Record<string, unknown>> }).providers;
+  const oldProviders = (old as { providers?: Record<string, Record<string, unknown>> }).providers;
+  if (!newProviders || typeof newProviders !== "object") return;
+  if (!oldProviders || typeof oldProviders !== "object") return;
+  for (const [name, p] of Object.entries(newProviders)) {
+    if (!p || typeof p !== "object" || p.apiKey !== MASKED_API_KEY) continue;
+    const prev = oldProviders[name];
+    if (prev && typeof prev === "object") {
+      if (typeof prev.apiKey === "string" && prev.apiKey) p.apiKey = prev.apiKey;
+      else delete p.apiKey;
+    }
+  }
+}
+
 export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => Promise<void> } {
   const sessions = new Map<string, Session>();
 
   const server = http.createServer(async (req, res) => {
     const url = req.url ?? "/";
+
+    // Reject requests with a foreign Host header before any route handling
+    // (DNS-rebinding protection — see isAllowedHost).
+    if (!isAllowedHost(req.headers.host, opts.host)) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("bad host");
+      return;
+    }
 
     if (req.method === "GET" && url === "/api/config") return getConfig(res);
     if (req.method === "PUT" && url === "/api/config") return updateConfig(req, res, sessions);
@@ -885,6 +954,9 @@ function getConfig(res: http.ServerResponse): void {
     try {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       parsed.anyProviderConfigured = anyConfigured;
+      // Never send real API keys to the renderer — mask them; the editor
+      // round-trips the masked value and updateConfig restores the originals.
+      maskApiKeys(parsed);
       res.end(JSON.stringify(parsed));
     } catch {
       res.end(JSON.stringify({ anyProviderConfigured: anyConfigured }));
@@ -924,6 +996,9 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
       if (old.subagentModels !== undefined) {
         parsed.subagentModels = old.subagentModels;
       }
+      // Masked apiKeys in the submitted config come from the GET round-trip —
+      // restore the real values before persisting.
+      unmaskApiKeys(parsed, old);
     } catch {}
     await fs.promises.writeFile(fp, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
     try {
@@ -1422,11 +1497,18 @@ function routeEvent(session: Session, e: BusEvent): void {
     session.hasUnread = false;
     session._cancelled = false;
     session.toolsRunning = 0;
+    // Same stale-segment guard as submit()'s non-queued path: a previously
+    // errored turn may have left text in segmentText — never let it leak
+    // into the queued turn that is about to start.
+    session.segmentText = "";
     // submit() cleaned up its idle watchdog as soon as the bridge reported
     // this turn as queued, so arm a fresh one now that the turn is actually
     // starting — otherwise a stuck queued turn would leave isProcessing true
     // forever.
     startIdleWatchdog(session, (err) => {
+      // Flush any in-flight text before the error card so the stuck turn's
+      // partial output survives replay and never contaminates the next turn.
+      flushSegment(session);
       session.isProcessing = false;
       pushFrame(session, "agent:error", sseFrame({
         source: session.id,
@@ -2000,6 +2082,12 @@ async function openSseMulti(
     }
     if (tail > 0) {
       session.hasUnread = false;
+      // Persist any text emitted since the last flush (an in-flight turn's
+      // response-chunks accumulate in segmentText and are NOT in replay) so
+      // a client connecting mid-turn sees the partial output instead of an
+      // empty turn. Live clients already rendered the chunks and skip the
+      // segment frame (hasReply/sawLiveSegment guard in the frontend).
+      flushSegment(session);
       const start = tail === Infinity ? 0 : Math.max(0, session.replay.length - tail);
       for (let i = start; i < session.replay.length; i++) {
         try { res.write(session.replay[i]); } catch { return; }
@@ -2123,6 +2211,10 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     session.isProcessing = true;
     session.hasUnread = false;
     session._cancelled = false;
+    // A turn that ended in error without a flush leaves stale text in
+    // segmentText (see submit()'s catch). Reset here so a fresh turn can
+    // never inherit it.
+    session.segmentText = "";
     pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query }));
     pushFrame(session, "agent:processing-start", sseFrame(meta("agent:processing-start"), {}));
   }
@@ -2193,6 +2285,11 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     })
     .catch((err) => {
       cleanup();
+      // Persist any text the agent emitted before the error so it survives
+      // reload/replay — and MUST run before the error frame so the segment
+      // renders before the error card. Without it, the leftover text would
+      // also bleed into the next turn's first flush (stale segment bug).
+      flushSegment(session);
       session.isProcessing = false;
       pushFrame(session, "agent:error", sseFrame(meta("agent:error"), { message: String(err) }));
     });

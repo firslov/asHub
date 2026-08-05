@@ -107,9 +107,24 @@ export class AcpBridge extends EventEmitter implements Bridge {
   async submit(text: string): Promise<{ stopReason: string }> {
     await this.initPromise;
     if (!this.sessionId) throw new Error("session not initialized");
+
+    // The hub encodes multimodal submissions as JSON { query, images } (see
+    // hub.ts submit()). ACP children have no universally-supported image
+    // block — the reference ash-acp-bridge extracts only text/resource
+    // blocks and silently drops everything else. Forwarding the raw JSON
+    // verbatim would corrupt the prompt with an escaped object literal, so
+    // parse it, keep only the query, and let the child ignore the images.
+    let query = text;
+    try {
+      const parsed = JSON.parse(text) as { query?: unknown; images?: unknown };
+      if (typeof parsed.query === "string" && Array.isArray(parsed.images)) {
+        query = parsed.query;
+      }
+    } catch { /* plain text */ }
+
     return this.request("session/prompt", {
       sessionId: this.sessionId,
-      prompt: [{ type: "text", text }],
+      prompt: [{ type: "text", text: query }],
     }) as Promise<{ stopReason: string }>;
   }
 

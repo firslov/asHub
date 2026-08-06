@@ -62,6 +62,9 @@ const refresh = async () => {
 const isVisible = (entry) => {
   if (!entry) return false;
   if (entry.type === "session" || entry.type === "compaction") return true;
+  // System-note entries (legacy persisted project-skills messages) are
+  // structural nodes only — never rendered as switchable branches.
+  if (entry.systemNote) return false;
   return entry.role === "user";
 };
 

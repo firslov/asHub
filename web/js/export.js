@@ -57,6 +57,9 @@ const toMarkdown = (meta, msgs) => {
   if (meta.cwd) lines.push(`- cwd: ${meta.cwd}`);
   lines.push(`- exported: ${new Date().toISOString()}`, "");
   for (const m of msgs) {
+    // System notes (project-skills discovery messages) are invisible to the
+    // UI — never export them as user turns.
+    if (m?.systemNote) continue;
     const role = String(m?.role ?? "");
     if (role === "system") continue;
     if (role === "user") {

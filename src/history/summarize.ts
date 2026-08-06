@@ -7,6 +7,28 @@ export function stripContextWrappers(text: string): string {
   }
 }
 
+/**
+ * agent-sh injects project-skills discovery notes directly into the
+ * conversation as role:"user" messages (agent-loop's shell:cwd-change
+ * handler, fixed prefix). The web UI never sees them — no agent:query frame
+ * is emitted — yet they occupy kernel message slots and get persisted into
+ * the session tree. That skews the frontend turn counter against the
+ * backend's rewind indexing (each note shifts every later turn by one).
+ * Everywhere asHub reasons about *visible* turns (rewind targets, capture
+ * persistence, replay synthesis, tree rendering) it must treat these notes
+ * as invisible.
+ *
+ * Content-based detection is deliberate: agent-sh exposes no marker on the
+ * message, and this is currently the only persistent source of such notes.
+ */
+const PROJECT_SKILLS_NOTE_PREFIX = "[Project skills available:";
+
+export function isSystemNoteMessage(m: unknown): boolean {
+  const msg = m as { role?: string; content?: unknown } | null;
+  if (!msg || msg.role !== "user") return false;
+  return typeof msg.content === "string" && msg.content.startsWith(PROJECT_SKILLS_NOTE_PREFIX);
+}
+
 export function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {

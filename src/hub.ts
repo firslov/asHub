@@ -21,7 +21,7 @@ import { resolveProvider, getProviderNames, getSettings } from "agent-sh/setting
 import { listAllProviders, resolveApiKey, anyProviderConfigured } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
-import { extractText, extractImages, snippet, stripContextWrappers, summarizeMessage } from "./history/summarize.js";
+import { extractText, extractImages, snippet, stripContextWrappers, summarizeMessage, isSystemNoteMessage } from "./history/summarize.js";
 import { createCompactionStrategy } from "./history/compaction-strategy.js";
 import { invalidateGlobalSkillsCache } from "agent-sh/skills";
 
@@ -2373,6 +2373,12 @@ async function autocomplete(
 async function getContext(res: http.ServerResponse, session: Session): Promise<void> {
   try {
     const snap = await session.bridge.snapshot();
+    // Tag system notes for the UI so panels/export can hide them. Use a
+    // shallow copy — never mutate kernel messages — and keep the array
+    // order/int indices untouched: drop/rewind rely on exact alignment.
+    snap.messages = snap.messages.map((m) =>
+      isSystemNoteMessage(m) ? { ...(m as object), systemNote: true } : m
+    );
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(snap));
   } catch (err) {
@@ -2381,7 +2387,7 @@ async function getContext(res: http.ServerResponse, session: Session): Promise<v
   }
 }
 
-function getBranchEntries(session: Session): Array<{ id: string; type: string; parentId: string | null; timestamp: number; preview: string; role?: string; summary?: string }> | null {
+function getBranchEntries(session: Session): Array<{ id: string; type: string; parentId: string | null; timestamp: number; preview: string; role?: string; summary?: string; systemNote?: boolean }> | null {
   if (!session.store) return null;
   const branch = session.store.getBranch();
   return branch.map((e) => {
@@ -2396,6 +2402,9 @@ function getBranchEntries(session: Session): Array<{ id: string; type: string; p
     return {
       id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp,
       role: e.message.role,
+      // Mark system notes (legacy persisted project-skills messages) so the
+      // tree panel can render them as structural but invisible nodes.
+      systemNote: isSystemNoteMessage(e.message) || undefined,
       preview: snippet(display, 80),
     };
   });
@@ -2424,7 +2433,7 @@ async function treeEndpoint(res: http.ServerResponse, session: Session): Promise
     if (e.type === "compaction") return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, firstKeptId: e.firstKeptId };
     const text = extractText(e.message.content);
     const display = e.message.role === "user" ? stripContextWrappers(text) : text;
-    return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, role: e.message.role, preview: snippet(display, 80) };
+    return { id: e.id, type: e.type, parentId: e.parentId, timestamp: e.timestamp, role: e.message.role, systemNote: isSystemNoteMessage(e.message) || undefined, preview: snippet(display, 80) };
   });
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ leafId: session.store.getActiveLeaf(), rootId: session.store.getRootId(), entries: all }));
@@ -2614,11 +2623,13 @@ function withContextLock<T>(session: Session, fn: () => Promise<T>): Promise<T> 
 function resolveRewindLeaf(session: Session, newLength: number): string {
   if (!session.store || !session.capture) throw new Error("tree store not attached");
   if (newLength <= 0) return session.store.getRootId();
-  const leafId = session.capture.getEntryIdAt(newLength - 1);
-  if (!leafId) {
-    throw new Error(`rewind target index ${newLength - 1} resolves to a synthetic slot (no tree entry); rewind to a concrete message position instead`);
+  // Walk back past invisible slots (system-note placeholders have a null
+  // entry id and cannot be a tree leaf) to the last persisted entry.
+  for (let i = newLength - 1; i >= 0; i--) {
+    const leafId = session.capture.getEntryIdAt(i);
+    if (leafId) return leafId;
   }
-  return leafId;
+  return session.store.getRootId();
 }
 
 async function syncTreeAfterRewind(session: Session, newLength: number): Promise<void> {
@@ -2667,6 +2678,11 @@ function synthesizeBranchFrames(
 
   for (let idx = 0; idx < msgs.length; idx++) {
     const m = msgs[idx]!;
+    // System notes are invisible to the UI — never synthesize a user turn
+    // or a compaction marker for them (a note carries a null entry-id
+    // placeholder in new sessions and would otherwise match the marker
+    // branch below).
+    if (isSystemNoteMessage(m)) continue;
     if (hasEntryIdTags && entryIds[idx] === null && m.role === "user" && typeof m.content === "string") {
       closeTurn();
       const evictedCount = parseEvictedCount(m.content);
@@ -2865,11 +2881,14 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
       const snap = await session.bridge.snapshot();
       const msgs = snap.messages as Array<{ role?: string }>;
       // Count real turns only: synthetic user messages (compaction summaries,
-      // drop placeholders) occupy slots with no tree entry and have no
-      // matching agent:query frame on the client, so counting them would
-      // misalign the requested turn with the wrong message index.
+      // drop placeholders) occupy slots with no tree entry, and system notes
+      // (project-skills discovery, role:"user") are invisible to the UI — so
+      // neither has a matching agent:query frame on the client, and counting
+      // them would misalign the requested turn with the wrong message index.
       const isRealTurn = (i: number) =>
-        msgs[i]?.role === "user" && (!session.capture || session.capture.getEntryIdAt(i) !== null);
+        msgs[i]?.role === "user"
+        && !isSystemNoteMessage(msgs[i])
+        && (!session.capture || session.capture.getEntryIdAt(i) !== null);
       let seen = 0;
       let toIndex = -1;
       for (let i = 0; i < msgs.length; i++) {

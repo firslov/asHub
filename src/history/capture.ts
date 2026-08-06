@@ -1,5 +1,6 @@
 import type { Bridge } from "../bridges/types.js";
 import type { AgentMessage, SessionStore } from "./session-store.js";
+import { isSystemNoteMessage } from "./summarize.js";
 
 export function tagMessagesWithEntryIds(
   messages: unknown[],
@@ -66,13 +67,22 @@ export function createCapture(
       // the correct parent.
       let prefix = 0;
       while (prefix < messages.length) {
+        const m = messages[prefix]!;
+        // System-note slots carry a null placeholder by design (they are
+        // never persisted) — they can't be verified against the tree, so
+        // skip them instead of breaking the prefix walk.
+        if (isSystemNoteMessage(m)) { prefix++; continue; }
         const id = liveEntryIds[prefix];
         const entry = id ? store.getEntry(id) : undefined;
-        if (!entry || entry.type !== "message" || !sameMessage(entry.message, messages[prefix]!)) break;
+        if (!entry || entry.type !== "message" || !sameMessage(entry.message, m)) break;
         prefix++;
       }
-      const newLeafId = prefix > 0 ? liveEntryIds[prefix - 1]! : null;
-      if (prefix > 0 && newLeafId) {
+      // The rewind leaf must be a real tree entry — walk back past any
+      // trailing system-note (null) slots before using it as the new leaf.
+      let leafIdx = prefix - 1;
+      while (leafIdx >= 0 && liveEntryIds[leafIdx] == null) leafIdx--;
+      const newLeafId = leafIdx >= 0 ? liveEntryIds[leafIdx]! : null;
+      if (newLeafId) {
         opts?.onWarn?.(`capture: snapshot shrank (${messages.length} < ${liveEntryIds.length}); realigned to verified prefix of ${prefix} message(s), re-appending divergent tail`);
         liveEntryIds = liveEntryIds.slice(0, prefix);
         store.setActiveLeaf(newLeafId);
@@ -88,8 +98,16 @@ export function createCapture(
     }
     if (messages.length === liveEntryIds.length) return;
     const newMessages = messages.slice(liveEntryIds.length);
-    const newIds = await store.appendMessages(newMessages);
-    liveEntryIds = [...liveEntryIds, ...newIds];
+    // System notes (project-skills discovery messages) are invisible to the
+    // UI and must not be persisted into the tree — but liveEntryIds must stay
+    // index-aligned with the kernel snapshot, so each skipped note leaves a
+    // null placeholder at its slot (isRealTurn/rewind target resolution skip
+    // null slots).
+    const toAppend = newMessages.filter((m) => !isSystemNoteMessage(m));
+    const newIds = await store.appendMessages(toAppend);
+    let ai = 0;
+    const aligned = newMessages.map((m) => (isSystemNoteMessage(m) ? null : newIds[ai++]));
+    liveEntryIds = [...liveEntryIds, ...aligned];
   };
 
   return {

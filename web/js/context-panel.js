@@ -168,6 +168,10 @@ const renderContext = async () => {
   for (const g of groups) groupSizes.set(g, (groupSizes.get(g) ?? 0) + 1);
 
   msgs.forEach((m, i) => {
+    // System notes (project-skills discovery) are invisible to the UI — skip
+    // rendering them. The forEach index stays the true kernel index, so the
+    // checkbox/drop mapping remains aligned.
+    if (m?.systemNote) return;
     const wrap = document.createElement("div");
     wrap.className = "ctx-msg";
     wrap.dataset.idx = String(i);

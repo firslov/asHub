@@ -134,6 +134,8 @@ const buildSubsParam = () => {
   return parts.join(",");
 };
 
+const CONNECT_TIMEOUT_MS = 15_000;
+
 const reopen = () => {
   reopenScheduled = false;
   es?.close();
@@ -147,12 +149,28 @@ const reopen = () => {
   if (lastSeenId > 0) params.set("since", String(lastSeenId));
   const next = new EventSource(`/events?${params}`);
   es = next;
+  let connectTimer = setTimeout(() => {
+    // EventSource never fires onopen/onerror when the TCP handshake
+    // succeeds but the server never sends response headers (e.g. Windows
+    // firewall accepting SYN but blocking application data).  Force a
+    // retry so we don't get stuck on "connecting" forever.
+    connectTimer = null;
+    if (es === next) {
+      es.close();
+      es = null;
+      retryCount++;
+      globalConnState.value = retryCount >= MAX_RETRIES ? "failed" : "reconnecting";
+      if (retryCount < MAX_RETRIES) scheduleReopen();
+    }
+  }, CONNECT_TIMEOUT_MS);
   next.onopen = () => {
+    if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
     globalConnState.value = "connected";
     retryCount = 0;
     for (const id of subState.keys()) subState.set(id, "ready");
   };
   next.onerror = () => {
+    if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
     retryCount++;
     if (retryCount >= MAX_RETRIES) {
       globalConnState.value = "failed";

@@ -73,6 +73,11 @@ interface Session {
    *  must be dropped entirely (no replay persistence, no SSE writes) so
    *  they can't recreate the deleted session files. */
   _closed?: boolean;
+  /** Set only by closeSession (NOT archiveSession — archived sessions
+   *  keep their files for unarchive).  Marks that deleteSessionFiles is
+   *  in flight, so a meta write completing mid-deletion must clean up
+   *  after itself. */
+  _deletingFiles?: boolean;
   /** Idle-watchdog timer handle — see startIdleWatchdog/stopIdleWatchdog. */
   _idleTimer?: ReturnType<typeof setTimeout>;
   /** Timestamp when the idle window was first exceeded (0 = not exceeded). */
@@ -224,9 +229,11 @@ async function saveSessionMeta(session: Session): Promise<void> {
   // while we read the existing meta.
   if (session._closed) return;
   await fs.promises.writeFile(metaPath, JSON.stringify(merged));
-  // If the session closed while we were writing, remove what we just
-  // wrote so the file can't resurrect the session on next launch.
-  if (session._closed) {
+  // If the session's files are being deleted while we wrote, remove what
+  // we just wrote so it can't resurrect the session on next launch.
+  // Only for closeSession (_deletingFiles), NOT archive — an archived
+  // session keeps its files for unarchive.
+  if (session._deletingFiles) {
     await fs.promises.unlink(metaPath).catch(() => {});
   }
 }
@@ -2018,6 +2025,7 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
   if (s) {
     stopIdleWatchdog(s);
     s._closed = true;
+    s._deletingFiles = true;
     try { s.bridge?.close(); } catch {}
     // End and clear SSE clients synchronously: the bridge's onClose may
     // fire late (or not at all), and in-flight bridge events must not

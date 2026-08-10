@@ -212,12 +212,23 @@ const _metaTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const META_DEBOUNCE_MS = 500;
 
 async function saveSessionMeta(session: Session): Promise<void> {
+  // Closed/archived session: its files were (or are being) deleted —
+  // writing meta.json would resurrect the session on next launch.
+  if (session._closed) return;
   await ensureSessionsDir();
   const metaPath = sessionMetaPath(session.id);
   let existing: Record<string, unknown> = {};
   try { existing = JSON.parse(await fs.promises.readFile(metaPath, "utf-8")); } catch {}
   const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified, lastFrameSeq: session.lastFrameSeq };
+  // Re-check right before the write: the session may have been closed
+  // while we read the existing meta.
+  if (session._closed) return;
   await fs.promises.writeFile(metaPath, JSON.stringify(merged));
+  // If the session closed while we were writing, remove what we just
+  // wrote so the file can't resurrect the session on next launch.
+  if (session._closed) {
+    await fs.promises.unlink(metaPath).catch(() => {});
+  }
 }
 
 /** Debounced version for non-critical fire-and-forget callers. */
@@ -226,6 +237,7 @@ function saveSessionMetaDebounced(session: Session): void {
   if (pending) clearTimeout(pending);
   _metaTimers.set(session.id, setTimeout(async () => {
     _metaTimers.delete(session.id);
+    if (session._closed) return;
     await saveSessionMeta(session);
   }, META_DEBOUNCE_MS));
 }
@@ -233,6 +245,10 @@ function saveSessionMetaDebounced(session: Session): void {
 const _writeBufs = new Map<string, { frames: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 const _writeLocks = new Map<string, Promise<void>>();
 const _mkdirDone = new Set<string>();
+/** In-flight session-file deletions (closeSession) — awaited on shutdown
+ *  so a close-then-quit can't leave orphaned files that resurrect the
+ *  session on next launch. */
+const _pendingDeletes = new Set<Promise<void>>();
 const BATCH_FLUSH_MS = 2000;
 
 function _flushBuf(sessionId: string): void {
@@ -308,6 +324,11 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
     _flushBuf(id);
   }
   await Promise.allSettled(Array.from(_writeLocks.values()));
+
+  // 5. Await in-flight session-file deletions (closeSession).  Without
+  // this, a close-then-quit can leave the session's files on disk and
+  // the session reappears on the next launch.
+  await Promise.allSettled(Array.from(_pendingDeletes));
 }
 
 function persistReplayFile(sessionId: string, frames: string[]): Promise<void> {
@@ -2013,10 +2034,22 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
   if (metaTimer) { clearTimeout(metaTimer); _metaTimers.delete(id); }
   const lock = _writeLocks.get(id);
   _writeLocks.delete(id);
-  void (async () => {
-    if (lock) { try { await lock; } catch {} }
-    await deleteSessionFiles(id);
+  // Delete files immediately (don't await the replay write lock — a slow
+  // or stuck flush must not delay removal), then wait for the lock chain
+  // to settle and delete AGAIN in case an in-flight append recreated a
+  // file between the first unlink and completion.  Tracked so shutdown
+  // awaits it: a close-then-quit must not leave files that resurrect
+  // the session on next launch.
+  const pendingDelete = (async () => {
+    try {
+      await deleteSessionFiles(id);
+      if (lock) { try { await lock; } catch {} }
+      await deleteSessionFiles(id);
+    } finally {
+      _pendingDeletes.delete(pendingDelete);
+    }
   })();
+  _pendingDeletes.add(pendingDelete);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }

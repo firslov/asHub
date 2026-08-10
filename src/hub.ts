@@ -1250,7 +1250,7 @@ async function createSession(
         session.firstTurnDone = !!(msgs?.length);
         b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
         b.onClose(() => {
-          try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+          try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); } catch (err) { console.error("[hub] bridge onClose error:", err); }
         });
         b.onError((err) => {
           try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
@@ -1280,7 +1280,7 @@ async function createSession(
     if (!isRestored && isAgent) {
       bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       bridge.onClose(() => {
-        try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+        try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); } catch (err) { console.error("[hub] bridge onClose error:", err); }
       });
       bridge.onError((err) => {
         try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
@@ -1294,7 +1294,7 @@ async function createSession(
     if (!isRestored && isTerminalKind) {
       bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       bridge.onClose(() => {
-        try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } } catch (err) { console.error("[hub] bridge onClose error:", err); }
+        try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); } catch (err) { console.error("[hub] bridge onClose error:", err); }
       });
     }
     await bridge.ready();
@@ -1487,7 +1487,10 @@ function routeEvent(session: Session, e: BusEvent): void {
     const blocks = (e.payload as { blocks?: Array<{ type: string; text?: string }> })?.blocks ?? [];
     for (const b of blocks) if (b.type === "text") session.segmentText += b.text ?? "";
     const frame = sseFrame(meta, e.payload);
-    for (const r of session.sseClients) { try { r.write(frame); } catch {} }
+    for (const r of session.sseClients) {
+      if (r.writableEnded) continue;
+      try { r.write(frame); } catch {}
+    }
     return;
   }
 
@@ -1643,7 +1646,10 @@ function pushFrame(session: Session, name: string, frame: string, opts?: { trans
       void saveFrameSeq().catch(() => {});
     }
   }
-  for (const r of session.sseClients) { try { r.write(frame); } catch {} }
+  for (const r of session.sseClients) {
+    if (r.writableEnded) continue;
+    try { r.write(frame); } catch {}
+  }
 }
 
 // ── Session title management ─────────────────────────────────────────
@@ -1743,6 +1749,10 @@ async function archiveSession(
     stopIdleWatchdog(session);
     try { session.bridge?.cancel(); } catch {}
     try { session.bridge?.close(); } catch {}
+    // End + clear SSE clients so late bridge events (e.g. permission
+    // timeout) can't write to ended responses.
+    for (const r of session.sseClients) { try { r.end(); } catch {} }
+    session.sseClients.clear();
     sessions.delete(id);
     const buf = _writeBufs.get(id);
     if (buf?.timer) { clearTimeout(buf.timer); buf.timer = null; }
@@ -1974,6 +1984,11 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
   if (s) {
     stopIdleWatchdog(s);
     try { s.bridge?.close(); } catch {}
+    // End and clear SSE clients synchronously: the bridge's onClose may
+    // fire late (or not at all), and in-flight bridge events must not
+    // write to already-ended responses.
+    for (const r of s.sseClients) { try { r.end(); } catch {} }
+    s.sseClients.clear();
     sessions.delete(id);
   }
   const buf = _writeBufs.get(id);
@@ -2107,6 +2122,10 @@ async function openSseMulti(
         }
       }
     }
+    // Swallow stream errors (e.g. a late write-after-end racing an
+    // end()) — without a listener, errorOrDestroy escalates to an
+    // uncaught exception and kills the hub process.
+    res.on("error", () => {});
     session.sseClients.add(res);
   }
 
@@ -2755,6 +2774,7 @@ async function rebuildReplay(
   session.segmentText = "";
   session.segmentSeq = 0;
   for (const r of session.sseClients) {
+    if (r.writableEnded) continue;
     for (const f of frames) { try { r.write(f); } catch {} }
   }
   // Terminal marker so clients can mount the rebuilt batch atomically.

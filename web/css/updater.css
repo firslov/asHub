@@ -1,0 +1,142 @@
+/* Update download card — see web/js/updater.js.
+   Uses global CSS tokens, so all three themes adapt automatically. */
+
+.update-card {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 10001;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(340px, calc(100vw - 36px));
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg), 0 0 0 1px var(--accent-glow);
+  font-size: 13px;
+  line-height: 1.45;
+  animation: update-card-in var(--dur-normal) var(--ease-out-expo);
+}
+
+.update-card-exit {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+@keyframes update-card-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.update-card-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent-glow), var(--cyan-glow));
+  color: var(--accent);
+}
+
+.update-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.update-card-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.update-card-detail {
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+
+/* ── Progress ── */
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.update-bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg2);
+  overflow: hidden;
+}
+
+.update-bar-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--accent), var(--cyan));
+  box-shadow: 0 0 8px var(--accent-glow);
+  transition: width 220ms ease;
+  animation: update-bar-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes update-bar-pulse {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.25); }
+}
+
+.update-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-pct { font-weight: 600; color: var(--text-mid); }
+.update-speed { color: var(--text-dim); }
+
+/* ── Buttons ── */
+.update-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.update-btn {
+  appearance: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 120ms ease, transform 80ms ease, background 120ms ease;
+}
+
+.update-btn:active { transform: translateY(1px); }
+
+.update-btn.primary {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--cyan));
+  box-shadow: 0 2px 8px var(--accent-glow);
+}
+.update-btn.primary:hover { filter: brightness(1.1); }
+
+.update-btn.ghost {
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border-mid);
+}
+.update-btn.ghost:hover {
+  color: var(--text);
+  background: var(--bg2);
+}

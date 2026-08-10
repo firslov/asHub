@@ -164,6 +164,11 @@ let mainWindow = null;
 let _shuttingDown = false;
 let shutdownHubRef = null;
 
+// If an update is found before the window exists (startup check races
+// window creation), buffer the version and deliver it once the window
+// loads so the in-app update card never misses an available update.
+let pendingUpdateVersion = null;
+
 // MRU order so cross-window drag hit-tests pick the topmost window.
 const windowZOrder = [];
 function trackWindow(win) {
@@ -273,6 +278,14 @@ function createWindow() {
 
   mainWindow.loadURL(`http://127.0.0.1:${HUB_PORT}/`);
 
+  // Deliver an update-available found before this window existed.
+  mainWindow.webContents.on("did-finish-load", () => {
+    if (pendingUpdateVersion && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-available", pendingUpdateVersion);
+      pendingUpdateVersion = null;
+    }
+  });
+
   // Inject traffic-light safe area on macOS hiddenInset windows
   if (process.platform === "darwin") {
     mainWindow.webContents.on("did-finish-load", () => {
@@ -297,44 +310,33 @@ function setupAutoUpdater() {
 
   autoUpdater.on("update-available", (info) => {
     console.log("[updater] update available:", info.version);
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("update-available", info.version);
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "Update Available",
-        message: `asHub ${info.version} is available.`,
-        detail: "Download and install now?",
-        buttons: ["Download", "Later"],
-        defaultId: 0,
-      }).then(({ response }) => {
-        if (response === 0) {
-          autoUpdater.downloadUpdate();
-        }
-      });
+    } else {
+      pendingUpdateVersion = info.version;
     }
   });
 
   autoUpdater.on("download-progress", (progress) => {
     if (mainWindow) {
       mainWindow.setProgressBar(progress.percent / 100);
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("update-download-progress", {
+          percent: progress.percent,
+          transferred: progress.transferred,
+          total: progress.total,
+          bytesPerSecond: progress.bytesPerSecond,
+        });
+      }
     }
   });
 
-  autoUpdater.on("update-downloaded", () => {
+  autoUpdater.on("update-downloaded", (info) => {
     if (mainWindow) {
       mainWindow.setProgressBar(-1);
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "Update Ready",
-        message: "The update has been downloaded. Restart to install.",
-        detail: "Restart now?",
-        buttons: ["Restart", "Later"],
-        defaultId: 0,
-      }).then(({ response }) => {
-        if (response === 0) {
-          autoUpdater.quitAndInstall();
-        }
-      });
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("update-downloaded", info.version);
+      }
     }
   });
 
@@ -349,10 +351,9 @@ function setupAutoUpdater() {
 	      fallbackToGitHub();
 	      return;
 	    }
-	    dialog.showErrorBox(
-	      "Update Check Failed",
-	      `Unable to check for updates:\n\n${err.message}`
-	    );
+	    if (mainWindow && !mainWindow.isDestroyed()) {
+	      mainWindow.webContents.send("update-error", err.message);
+	    }
 	  });
 }
 
@@ -375,6 +376,24 @@ function setupIPC() {
       return { updateAvailable: !!result?.updateInfo, version: result?.updateInfo?.version };
     } catch (err) {
       return { error: err.message };
+    }
+  });
+
+  ipcMain.handle("start-update-download", async () => {
+    try {
+      await autoUpdater.downloadUpdate();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle("quit-and-install", async () => {
+    try {
+      autoUpdater.quitAndInstall();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
     }
   });
 

@@ -8,12 +8,17 @@ const onChannel = (channel, callback) => {
 contextBridge.exposeInMainWorld("electronAPI", {
   pickDirectory: () => ipcRenderer.invoke("pick-directory"),
   checkForUpdate: () => ipcRenderer.invoke("check-for-update"),
+  startUpdateDownload: () => ipcRenderer.invoke("start-update-download"),
+  quitAndInstall: () => ipcRenderer.invoke("quit-and-install"),
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
   focusWindow: () => ipcRenderer.invoke("focus-window"),
   windowMinimize: () => ipcRenderer.invoke("window-minimize"),
   windowMaximize: () => ipcRenderer.invoke("window-maximize"),
   windowClose: () => ipcRenderer.invoke("window-close"),
   onUpdateAvailable: (cb) => onChannel("update-available", cb),
+  onUpdateDownloadProgress: (cb) => onChannel("update-download-progress", cb),
+  onUpdateDownloaded: (cb) => onChannel("update-downloaded", cb),
+  onUpdateError: (cb) => onChannel("update-error", cb),
   /** Send theme change to main process to update native title bar */
   onThemeChange: (theme) => ipcRenderer.send("theme-changed", theme),
   openSessionWindow: (sessionId, pos) => ipcRenderer.invoke("open-session-window", sessionId, pos),

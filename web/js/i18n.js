@@ -308,6 +308,19 @@ const translations = {
     "version.available": "v{ver} available",
     "version.update.hint": "Update to v{ver} — click to download",
 
+    // ── Update card ────────────────────────────────────────────────
+    "update.available": "New version v{ver} is available",
+    "update.available.hint": "Download and install the update",
+    "update.download": "Download",
+    "update.downloading": "Downloading v{ver}…",
+    "update.downloaded": "v{ver} downloaded",
+    "update.downloaded.hint": "Restart asHub to apply the update",
+    "update.restart": "Restart & Install",
+    "update.later": "Later",
+    "update.retry": "Retry",
+    "update.failed": "Update download failed",
+    "update.failed.hint": "Check your network and try again",
+
     // ── Suggestion cards ───────────────────────────────────────────
     "sugg.analyze": "Analyze this project — what files are most important and how are they organized?",
     "sugg.explain": "Read the README and tell me the key features.",
@@ -613,6 +626,19 @@ const translations = {
     // ── Version ────────────────────────────────────────────────────
     "version.available": "v{ver} 可用",
     "version.update.hint": "更新到 v{ver} — 点击下载",
+
+    // ── Update card ────────────────────────────────────────────────
+    "update.available": "新版本 v{ver} 可用",
+    "update.available.hint": "下载并安装更新",
+    "update.download": "下载",
+    "update.downloading": "正在下载 v{ver}…",
+    "update.downloaded": "v{ver} 已下载",
+    "update.downloaded.hint": "重启 asHub 以应用更新",
+    "update.restart": "重启并安装",
+    "update.later": "稍后",
+    "update.retry": "重试",
+    "update.failed": "更新下载失败",
+    "update.failed.hint": "请检查网络后重试",
 
     // ── Suggestion cards ───────────────────────────────────────────
     "sugg.analyze": "分析这个项目 —— 哪些文件最重要，它们是如何组织的？",

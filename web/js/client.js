@@ -29,6 +29,7 @@ import "./prefs.js";
 import { registerPanel } from "./panel-manager.js";
 import "./links.js";
 import "./version.js";
+import "./updater.js";
 import "./sidebar.js";
 import "./tabs.js";
 import "./no-session.js";

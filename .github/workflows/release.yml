@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g. 0.19.5)'
+        required: true
+        type: string
+        default: '0.19.5'
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Tag first so electron-builder publishes against an existing tag ──
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - run: npm version ${{ inputs.version }} --no-git-tag-version
+
+      - run: |
+          git add package.json
+          git commit -m "chore: bump version to ${{ inputs.version }}"
+          git tag v${{ inputs.version }}
+          git push origin main --tags
+
+  # ── Build and publish on all platforms ──
+  build:
+    needs: tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: mac
+            flags: --mac
+          - os: windows-latest
+            target: win
+            flags: --win
+          - os: ubuntu-latest
+            target: linux
+            flags: --linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Fetch Windows ripgrep binaries (cross-compile)
+        if: matrix.target == 'win'
+        run: bash scripts/pre-dist-win.sh
+        shell: bash
+
+      - name: Build and publish ${{ matrix.target }}
+        run: npx electron-builder ${{ matrix.flags }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

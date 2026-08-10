@@ -1,7 +1,15 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+// Append-style subscription: multiple renderer modules may listen on the
+// same channel (e.g. "update-available" is used by both version.js and
+// updater.js).  Dedup by callback reference so re-registering the same
+// handler doesn't stack duplicates.
+const _ipcListeners = new Map(); // channel -> Set<callback>
 const onChannel = (channel, callback) => {
-  ipcRenderer.removeAllListeners(channel);
+  let set = _ipcListeners.get(channel);
+  if (!set) { set = new Set(); _ipcListeners.set(channel, set); }
+  if (set.has(callback)) return;
+  set.add(callback);
   ipcRenderer.on(channel, (_event, ...args) => callback(...args));
 };
 

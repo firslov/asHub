@@ -318,25 +318,21 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("download-progress", (progress) => {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setProgressBar(progress.percent / 100);
-      if (!mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("update-download-progress", {
-          percent: progress.percent,
-          transferred: progress.transferred,
-          total: progress.total,
-          bytesPerSecond: progress.bytesPerSecond,
-        });
-      }
+      mainWindow.webContents.send("update-download-progress", {
+        percent: progress.percent,
+        transferred: progress.transferred,
+        total: progress.total,
+        bytesPerSecond: progress.bytesPerSecond,
+      });
     }
   });
 
   autoUpdater.on("update-downloaded", (info) => {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setProgressBar(-1);
-      if (!mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("update-downloaded", info.version);
-      }
+      mainWindow.webContents.send("update-downloaded", info.version);
     }
   });
 

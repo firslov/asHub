@@ -56,10 +56,12 @@ const render = () => {
     const pctEl = card.querySelector(".update-pct");
     const speedEl = card.querySelector(".update-speed");
     const detailEl = card.querySelector(".update-card-detail");
+    const titleEl = card.querySelector(".update-card-title");
     if (fill) fill.style.width = `${pct}%`;
     if (pctEl) pctEl.textContent = `${pct.toFixed(0)}%`;
     if (speedEl) speedEl.textContent = speed;
     if (detailEl) detailEl.textContent = `${fmtBytes(progress.transferred)} / ${fmtBytes(progress.total)} · ${speed}`;
+    if (titleEl) titleEl.textContent = t("update.downloading", { ver: version });
     return;
   }
   el.dataset.state = state;
@@ -153,10 +155,16 @@ const onDownload = async () => {
   if (!window.electronAPI?.startUpdateDownload) return;
   state = "downloading";
   render();
-  const res = await window.electronAPI.startUpdateDownload();
-  if (res && res.ok === false) {
+  try {
+    const res = await window.electronAPI.startUpdateDownload();
+    if (res && res.ok === false) {
+      state = "error";
+      errorMsg = res.error || "";
+      render();
+    }
+  } catch (err) {
     state = "error";
-    errorMsg = res.error || "";
+    errorMsg = String(err?.message ?? err ?? "");
     render();
   }
 };
@@ -170,6 +178,10 @@ const bindEvents = () => {
   if (!api) return;
 
   api.onUpdateAvailable((newVersion) => {
+    // A re-check can re-fire update-available while a download is in
+    // flight (e.g. the user clicked the version label) — don't clobber
+    // the in-progress/downloaded card back to "available".
+    if (state === "downloading" || state === "downloaded") return;
     version = String(newVersion ?? "");
     progress = { percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 };
     errorMsg = "";
@@ -195,6 +207,10 @@ const bindEvents = () => {
   });
 
   api.onUpdateError((msg) => {
+    // The error event also fires for update CHECK failures (e.g. mirror +
+    // GitHub both unreachable at startup) before any card was shown.
+    // Stay silent then — the user never started a download.
+    if (state === "idle") return;
     errorMsg = String(msg ?? "");
     state = "error";
     render();

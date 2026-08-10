@@ -2048,7 +2048,8 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
   // file between the first unlink and completion.  Tracked so shutdown
   // awaits it: a close-then-quit must not leave files that resurrect
   // the session on next launch.
-  const pendingDelete = (async () => {
+  let pendingDelete: Promise<void>;
+  pendingDelete = (async () => {
     try {
       await deleteSessionFiles(id);
       if (lock) { try { await lock; } catch {} }

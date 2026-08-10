@@ -232,7 +232,10 @@ effect(() => {
     case "connecting":    conn.textContent = t("connecting"); break;
     case "reconnecting":  conn.textContent = t("reconnecting"); break;
     case "failed":        conn.textContent = t("conn.failed"); break;
-    case "nosession":     conn.textContent = t("no.session"); break;
+    case "nosession":
+      conn.textContent = t("no.session");
+      hidePageLoader();
+      break;
   }
   if (dot) dot.classList.toggle("stale", cs !== "connected");
   if (conn) conn.style.cursor = cs === "failed" ? "pointer" : "";

@@ -69,6 +69,10 @@ interface Session {
   store?: SessionStore;
   capture?: Capture;
   _cancelled?: boolean;
+  /** Set true when the session is closed/archived.  Late bridge events
+   *  must be dropped entirely (no replay persistence, no SSE writes) so
+   *  they can't recreate the deleted session files. */
+  _closed?: boolean;
   /** Idle-watchdog timer handle — see startIdleWatchdog/stopIdleWatchdog. */
   _idleTimer?: ReturnType<typeof setTimeout>;
   /** Timestamp when the idle window was first exceeded (0 = not exceeded). */
@@ -1250,7 +1254,7 @@ async function createSession(
         session.firstTurnDone = !!(msgs?.length);
         b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
         b.onClose(() => {
-          try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); } catch (err) { console.error("[hub] bridge onClose error:", err); }
+          try { session._closed = true; stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); } catch (err) { console.error("[hub] bridge onClose error:", err); }
         });
         b.onError((err) => {
           try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
@@ -1280,7 +1284,7 @@ async function createSession(
     if (!isRestored && isAgent) {
       bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       bridge.onClose(() => {
-        try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); } catch (err) { console.error("[hub] bridge onClose error:", err); }
+        try { session._closed = true; stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); } catch (err) { console.error("[hub] bridge onClose error:", err); }
       });
       bridge.onError((err) => {
         try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
@@ -1294,7 +1298,7 @@ async function createSession(
     if (!isRestored && isTerminalKind) {
       bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       bridge.onClose(() => {
-        try { stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); } catch (err) { console.error("[hub] bridge onClose error:", err); }
+        try { session._closed = true; stopIdleWatchdog(session); sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); } catch (err) { console.error("[hub] bridge onClose error:", err); }
       });
     }
     await bridge.ready();
@@ -1451,6 +1455,9 @@ function stopIdleWatchdog(session: Session, token?: number): void {
  * interleaved text/tool ordering (mirrors web-renderer.ts).
  */
 function routeEvent(session: Session, e: BusEvent): void {
+  // Drop late bridge events for closed/archived sessions entirely — no
+  // SSE writes, no replay persistence, no watchdog re-arming.
+  if (session._closed) return;
   const meta = {
     source: session.id,
     ts: Date.now(),
@@ -1631,7 +1638,12 @@ function sseFrame(meta: object, payload: unknown): string {
   return `id: ${++frameSeq}\ndata: ${JSON.stringify({ meta, payload })}\n\n`;
 }
 
-function pushFrame(session: Session, name: string, frame: string, opts?: { transient?: boolean }): void {  if (opts?.transient) {
+function pushFrame(session: Session, name: string, frame: string, opts?: { transient?: boolean }): void {
+  // Session closed/archived: drop late bridge events entirely.  Their
+  // frames were never seen by a client, and persisting them would
+  // recreate the deleted replay file as an orphan.
+  if (session._closed) return;
+  if (opts?.transient) {
     session.replay.push(frame);
     if (session.replay.length > REPLAY_LIMIT) session.replay.shift();
   } else if (REPLAY_NAMES.has(name)) {
@@ -1747,6 +1759,7 @@ async function archiveSession(
   const session = sessions.get(id);
   if (session) {
     stopIdleWatchdog(session);
+    session._closed = true;
     try { session.bridge?.cancel(); } catch {}
     try { session.bridge?.close(); } catch {}
     // End + clear SSE clients so late bridge events (e.g. permission
@@ -1983,6 +1996,7 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
   const s = sessions.get(id);
   if (s) {
     stopIdleWatchdog(s);
+    s._closed = true;
     try { s.bridge?.close(); } catch {}
     // End and clear SSE clients synchronously: the bridge's onClose may
     // fire late (or not at all), and in-flight bridge events must not
@@ -2768,6 +2782,9 @@ async function rebuildReplay(
   messages: unknown[],
   entryIds: (string | null)[] = [],
 ): Promise<void> {
+  // Session closed (e.g. compaction hook fired after close): skip —
+  // persisting rebuilt frames would recreate the deleted replay file.
+  if (session._closed) return;
   let frames = synthesizeBranchFrames(session, messages, entryIds);
   // Rebuilt replays obey the same cap as pushFrame. Keep the tail but pin
   // the leading hub:branch-switched marker: without it live clients never

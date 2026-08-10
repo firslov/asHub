@@ -220,6 +220,10 @@ const bindEvents = () => {
   document.addEventListener("langchange", () => {
     if (state !== "idle" && el?.isConnected) render();
   });
+
+  // All listeners above are registered — tell the main process it can
+  // flush any update-available buffered during the startup race.
+  api.notifyUpdaterReady?.();
 };
 
 bindEvents();

@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onUpdateDownloadProgress: (cb) => onChannel("update-download-progress", cb),
   onUpdateDownloaded: (cb) => onChannel("update-downloaded", cb),
   onUpdateError: (cb) => onChannel("update-error", cb),
+  notifyUpdaterReady: () => ipcRenderer.send("updater-ready"),
   /** Send theme change to main process to update native title bar */
   onThemeChange: (theme) => ipcRenderer.send("theme-changed", theme),
   openSessionWindow: (sessionId, pos) => ipcRenderer.invoke("open-session-window", sessionId, pos),

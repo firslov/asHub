@@ -164,10 +164,11 @@ let mainWindow = null;
 let _shuttingDown = false;
 let shutdownHubRef = null;
 
-// If an update is found before the window exists (startup check races
-// window creation), buffer the version and deliver it once the window
-// loads so the in-app update card never misses an available update.
+// If an update is found before the renderer's update card is subscribed,
+// buffer the version and deliver it once the page signals readiness
+// (updater.js's notifyUpdaterReady) or on did-finish-load fallback.
 let pendingUpdateVersion = null;
+let updaterReady = false;
 
 // MRU order so cross-window drag hit-tests pick the topmost window.
 const windowZOrder = [];
@@ -278,7 +279,8 @@ function createWindow() {
 
   mainWindow.loadURL(`http://127.0.0.1:${HUB_PORT}/`);
 
-  // Deliver an update-available found before this window existed.
+  // Deliver an update-available found before this window existed or
+  // before the page subscribed (fallback if updater-ready IPC never came).
   mainWindow.webContents.on("did-finish-load", () => {
     if (pendingUpdateVersion && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("update-available", pendingUpdateVersion);
@@ -310,9 +312,11 @@ function setupAutoUpdater() {
 
   autoUpdater.on("update-available", (info) => {
     console.log("[updater] update available:", info.version);
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (updaterReady && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("update-available", info.version);
     } else {
+      // Window missing or page not yet subscribed — buffer for delivery
+      // once the renderer signals updater-ready (or did-finish-load).
       pendingUpdateVersion = info.version;
     }
   });
@@ -390,6 +394,16 @@ function setupIPC() {
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err.message };
+    }
+  });
+
+  // Renderer signals that its update card listeners are registered; flush
+  // any update-available buffered during the startup race.
+  ipcMain.on("updater-ready", () => {
+    updaterReady = true;
+    if (pendingUpdateVersion && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-available", pendingUpdateVersion);
+      pendingUpdateVersion = null;
     }
   });
 

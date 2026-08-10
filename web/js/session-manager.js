@@ -171,6 +171,12 @@ const reopen = () => {
   };
   next.onerror = () => {
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+    // Per the WHATWG spec, close() on a CONNECTING EventSource queues an
+    // error event asynchronously.  Ignore events from stale instances
+    // (closed by a newer reopen/pause/unsubscribe/timer) so retryCount and
+    // the conn state aren't clobbered — e.g. closing the last session while
+    // CONNECTING must land on "nosession", not get stuck on "reconnecting".
+    if (es !== next) return;
     retryCount++;
     if (retryCount >= MAX_RETRIES) {
       globalConnState.value = "failed";

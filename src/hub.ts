@@ -2066,6 +2066,13 @@ async function openSseMulti(
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
+  // Swallow stream errors (e.g. a late write-after-end racing an end(),
+  // or a client disconnect mid-replay) — without a listener,
+  // errorOrDestroy escalates to an uncaught exception and kills the hub.
+  // Attach before ANY writes: replay writes happen after the potentially
+  // slow `await session._ensureBridge()`, during which the client may
+  // disconnect.
+  res.on("error", () => {});
   res.write(`: connected ${subs.length}\n\n`);
 
   for (const { id, tail } of subs) {
@@ -2122,10 +2129,6 @@ async function openSseMulti(
         }
       }
     }
-    // Swallow stream errors (e.g. a late write-after-end racing an
-    // end()) — without a listener, errorOrDestroy escalates to an
-    // uncaught exception and kills the hub process.
-    res.on("error", () => {});
     session.sseClients.add(res);
   }
 

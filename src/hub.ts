@@ -254,8 +254,9 @@ const _writeLocks = new Map<string, Promise<void>>();
 const _mkdirDone = new Set<string>();
 /** In-flight session-file deletions (closeSession) — awaited on shutdown
  *  so a close-then-quit can't leave orphaned files that resurrect the
- *  session on next launch. */
-const _pendingDeletes = new Set<Promise<void>>();
+ *  session on next launch.  Keyed by session id; entries self-remove in
+ *  their finally, so no self-reference is needed. */
+const _pendingDeletes = new Map<string, Promise<void>>();
 const BATCH_FLUSH_MS = 2000;
 
 function _flushBuf(sessionId: string): void {
@@ -335,7 +336,7 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
   // 5. Await in-flight session-file deletions (closeSession).  Without
   // this, a close-then-quit can leave the session's files on disk and
   // the session reappears on the next launch.
-  await Promise.allSettled(Array.from(_pendingDeletes));
+  await Promise.allSettled(Array.from(_pendingDeletes.values()));
 }
 
 function persistReplayFile(sessionId: string, frames: string[]): Promise<void> {
@@ -2048,17 +2049,16 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
   // file between the first unlink and completion.  Tracked so shutdown
   // awaits it: a close-then-quit must not leave files that resurrect
   // the session on next launch.
-  let pendingDelete: Promise<void>;
-  pendingDelete = (async () => {
+  const pendingDelete = (async () => {
     try {
       await deleteSessionFiles(id);
       if (lock) { try { await lock; } catch {} }
       await deleteSessionFiles(id);
     } finally {
-      _pendingDeletes.delete(pendingDelete);
+      _pendingDeletes.delete(id);
     }
   })();
-  _pendingDeletes.add(pendingDelete);
+  _pendingDeletes.set(id, pendingDelete);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }

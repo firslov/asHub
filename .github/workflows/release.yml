@@ -22,10 +22,13 @@ jobs:
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      - run: npm version ${{ inputs.version }} --no-git-tag-version
       - run: |
-          git add package.json
-          git commit -m "chore: bump version to ${{ inputs.version }}"
+          CUR=$(node -p "require('./package.json').version")
+          if [ "$CUR" != "${{ inputs.version }}" ]; then
+            npm version ${{ inputs.version }} --no-git-tag-version
+            git add package.json
+            git commit -m "chore: bump version to ${{ inputs.version }}"
+          fi
       - run: |
           git tag -d v${{ inputs.version }} 2>/dev/null || true
           git push origin :refs/tags/v${{ inputs.version }} 2>/dev/null || true

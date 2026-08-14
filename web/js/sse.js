@@ -201,6 +201,7 @@ function syncAllBalanceChips() {
       refreshModelChip(s);
     } else {
       el._balanceLabel = "";
+      refreshModelChip(s);
     }
   }
 }
@@ -1496,6 +1497,11 @@ const selectModel = (session, modelId, provider) => {
   if (provider) session.agentInfo.provider = provider;
   // Clear modalities until agent:info confirms the new model's capabilities.
   session.agentInfo.modalities = undefined;
+  // Switching to a non-balance provider: drop any stale balance label
+  // immediately so the chip doesn't flash the previous provider's balance.
+  if (provider && !BALANCE_PROVIDERS.has(provider) && session.modelEl) {
+    session.modelEl._balanceLabel = "";
+  }
   refreshModelChip(session);
   // Update vision indicator immediately while waiting for backend.
   const btn = document.getElementById("vision-indicator");

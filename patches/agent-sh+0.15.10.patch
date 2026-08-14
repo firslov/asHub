@@ -1,0 +1,35 @@
+diff --git a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
+index 187dac1..81ee64f 100644
+--- a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
++++ b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
+@@ -8,10 +8,9 @@ const BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+ const ID = "zai-coding-plan";
+ 
+ const DEFAULT_MODELS = [
+-  { id: "glm-5.1",     reasoning: true, contextWindow: 200_000 },
+-  { id: "glm-5-turbo", reasoning: true, contextWindow: 200_000 },
++  { id: "glm-5.3",     reasoning: true, contextWindow: 1_048_576 },
++  { id: "glm-5-turbo", reasoning: true, contextWindow: 204_800 },
+   { id: "glm-4.7",     reasoning: true, contextWindow: 204_800 },
+-  { id: "glm-4.5-air", reasoning: true, contextWindow: 131_072 },
+ ];
+ 
+ function buildReasoningParams(level: string, _model?: string): Record<string, unknown> {
+diff --git a/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js b/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
+index f604d85..1737edf 100644
+--- a/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
++++ b/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
+@@ -2,10 +2,9 @@ import { resolveApiKey } from "../../cli/auth/keys.js";
+ const BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+ const ID = "zai-coding-plan";
+ const DEFAULT_MODELS = [
+-    { id: "glm-5.1", reasoning: true, contextWindow: 200_000 },
+-    { id: "glm-5-turbo", reasoning: true, contextWindow: 200_000 },
+-    { id: "glm-4.7", reasoning: true, contextWindow: 204_800 },
+-    { id: "glm-4.5-air", reasoning: true, contextWindow: 131_072 },
++    { id: "glm-5.3", reasoning: true, contextWindow: 1048576 },
++    { id: "glm-5-turbo", reasoning: true, contextWindow: 204800 },
++    { id: "glm-4.7", reasoning: true, contextWindow: 204800 },
+ ];
+ function buildReasoningParams(level, _model) {
+     if (level === "off")

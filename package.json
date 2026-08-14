@@ -20,7 +20,7 @@
     "electron:pack": "npm run build && electron-builder --dir",
     "electron:dist:mac": "npm run build && electron-builder --mac",
     "electron:dist:win": "bash scripts/pre-dist-win.sh && npm run build && electron-builder --win",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "patch-package && electron-builder install-app-deps"
   },
   "dependencies": {
     "agent-sh": "^0.15.10",
@@ -32,6 +32,7 @@
     "@types/node": "^25.9.1",
     "electron": "^40.0.0",
     "electron-builder": "^26.8.1",
+    "patch-package": "^8.0.0",
     "typescript": "^6.0.3"
   },
   "optionalDependencies": {

@@ -630,7 +630,20 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       const budgetTokens = opts.budgetTokens ?? preset?.budgetTokens;
       const rawModel = opts.model ?? (opts.type ? (getSettings() as any).subagentModels?.[opts.type] : undefined) ?? preset?.model;
       // Strip @provider suffix — subagent reuses the main session's provider.
-      const model = typeof rawModel === "string" ? rawModel.replace(/@.+$/, "") : rawModel;
+      const stripped = typeof rawModel === "string" ? rawModel.replace(/@.+$/, "") : rawModel;
+      // A stale override can reference a model from a previous provider (e.g.
+      // "deepseek-v4-flash" after switching the session to zai-coding-plan).
+      // Since the subagent reuses the main provider's client, the stripped id
+      // must exist on that provider — otherwise fall back to the active model
+      // instead of sending a foreign model code to the wrong endpoint.
+      let model = stripped;
+      if (typeof stripped === "string" && stripped) {
+        const current = core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+        const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string }>;
+        const prov = current?.provider;
+        const valid = modes.some((m) => m.id === stripped && (!prov || (m.provider ?? "") === prov));
+        if (!valid && current?.model) model = current.model;
+      }
 
       // Tool filtering
       let tools: ToolDefinition[];
@@ -886,7 +899,17 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
         }
         tools = tools.filter((t) => !SUBAGENT_TOOL_NAMES.has(t.name));
         const rawModel = (getSettings() as any).subagentModels?.[type] ?? preset.model;
-        const model = typeof rawModel === "string" ? rawModel.replace(/@.+$/, "") : rawModel;
+        const stripped = typeof rawModel === "string" ? rawModel.replace(/@.+$/, "") : rawModel;
+        // Stale override guard (same as subagent:run) — never send a model
+        // code from a previous provider to the current provider's endpoint.
+        let model = stripped;
+        if (typeof stripped === "string" && stripped) {
+          const current = core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+          const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string }>;
+          const prov = current?.provider;
+          const valid = modes.some((m) => m.id === stripped && (!prov || (m.provider ?? "") === prov));
+          if (!valid && current?.model) model = current.model;
+        }
 
         const swarmId = `swarm-${++_swarmSeq}`;
         const total = items.length;

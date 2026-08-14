@@ -2201,6 +2201,8 @@ async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, ses
   let data = "";
   try { data = (JSON.parse(body) as { data?: string }).data ?? ""; } catch {}
   if (typeof data !== "string") { res.statusCode = 400; res.end("invalid data"); return; }
+  if (data.length > 4096) { res.statusCode = 400; res.end("input too large"); return; }
+  data = data.replace(/\0/g, "");
   try { session.bridge.writePty(data); } catch (err) {
     res.statusCode = 500; res.end(`pty write failed: ${err instanceof Error ? err.message : err}`); return;
   }

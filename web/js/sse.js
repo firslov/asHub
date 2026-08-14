@@ -188,7 +188,11 @@ function syncAllBalanceChips() {
     if (!el) continue;
     const provider = s.agentInfo?.provider ?? "";
     if (!BALANCE_PROVIDERS.has(provider)) {
-      el.hidden = true;
+      // Not a balance-tracked provider: `.usage-model-balance` doubles as
+      // the model-name chip, so it must stay visible.  Just drop any stale
+      // balance label and re-render the model-only chip.
+      el._balanceLabel = "";
+      refreshModelChip(s);
       continue;
     }
     const cached = _balanceCache.get(provider);

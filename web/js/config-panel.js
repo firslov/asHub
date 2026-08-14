@@ -259,8 +259,30 @@ const switchConfigMode = (mode) => {
 };
 
 let apiKeyVisible = false;
-configApikeyToggle?.addEventListener("click", () => {
+let _maskedApiKey = "";
+configApikeyToggle?.addEventListener("click", async () => {
   apiKeyVisible = !apiKeyVisible;
+  if (apiKeyVisible) {
+    // GET /api/config masks API keys by design — fetch the real value on
+    // demand so the "show" button actually reveals it.
+    _maskedApiKey = configApikey.value;
+    const providerId = configProvider.value;
+    if (providerId) {
+      try {
+        const r = await fetch(`/api/config/apikey?provider=${encodeURIComponent(providerId)}`);
+        if (r.ok) {
+          const data = await r.json();
+          if (typeof data.apiKey === "string" && data.apiKey && apiKeyVisible) {
+            configApikey.value = data.apiKey;
+          }
+        }
+      } catch { /* keep masked */ }
+    }
+  } else {
+    // Restore the masked placeholder so the real key doesn't linger in the
+    // DOM after hiding.
+    if (_maskedApiKey) configApikey.value = _maskedApiKey;
+  }
   configApikey.type = apiKeyVisible ? "text" : "password";
   configApikeyToggle.classList.toggle("showing", apiKeyVisible);
 });
@@ -268,6 +290,11 @@ configApikeyToggle?.addEventListener("click", () => {
 configProvider?.addEventListener("change", () => {
   updateProviderDesc();
   updateModelField();
+  // Reset reveal state — the masked placeholder for the new provider must
+  // not stay in "text" input mode.
+  apiKeyVisible = false;
+  configApikey.type = "password";
+  configApikeyToggle?.classList.remove("showing");
   try {
     const cfg = JSON.parse(originalConfig || serverConfig || "{}");
     if (cfg.providers && cfg.providers[configProvider.value]) {

@@ -604,6 +604,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     }
 
     if (req.method === "GET" && url === "/api/config") return getConfig(res);
+    if (req.method === "GET" && url.startsWith("/api/config/apikey")) return getApiKey(req, res);
     if (req.method === "PUT" && url === "/api/config") return updateConfig(req, res, sessions);
     if (req.method === "POST" && url === "/api/config/reload") return reloadConfig(res);
     if (req.method === "GET" && url === "/api/settings/auto-approve") return getAutoApprove(res);
@@ -993,6 +994,40 @@ function getConfig(res: http.ServerResponse): void {
       res.end(JSON.stringify(parsed));
     } catch {
       res.end(JSON.stringify({ anyProviderConfigured: anyConfigured }));
+    }
+  });
+}
+
+/**
+ * On-demand reveal of a single provider's API key.  GET /api/config masks
+ * keys by design, so the "show API key" button fetches the real value here
+ * only when the user explicitly asks to see it.
+ */
+function getApiKey(req: http.IncomingMessage, res: http.ServerResponse): void {
+  let provider = "";
+  try {
+    provider = (new URL(req.url ?? "", "http://localhost")).searchParams.get("provider") ?? "";
+  } catch { /* ignore */ }
+  if (!provider) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "missing provider" }));
+    return;
+  }
+  const fp = settingsPath();
+  fs.readFile(fp, "utf-8", (err, raw) => {
+    if (err) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ apiKey: "" }));
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as { providers?: Record<string, { apiKey?: unknown }> };
+      const pk = parsed?.providers?.[provider]?.apiKey;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ apiKey: typeof pk === "string" ? pk : "" }));
+    } catch {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ apiKey: "" }));
     }
   });
 }

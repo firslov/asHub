@@ -260,6 +260,7 @@ const switchConfigMode = (mode) => {
 
 let apiKeyVisible = false;
 let _maskedApiKey = "";
+let _revealedApiKey = "";
 configApikeyToggle?.addEventListener("click", async () => {
   apiKeyVisible = !apiKeyVisible;
   if (apiKeyVisible) {
@@ -273,6 +274,7 @@ configApikeyToggle?.addEventListener("click", async () => {
         if (r.ok) {
           const data = await r.json();
           if (typeof data.apiKey === "string" && data.apiKey && apiKeyVisible) {
+            _revealedApiKey = data.apiKey;
             configApikey.value = data.apiKey;
           }
         }
@@ -280,8 +282,11 @@ configApikeyToggle?.addEventListener("click", async () => {
     }
   } else {
     // Restore the masked placeholder so the real key doesn't linger in the
-    // DOM after hiding.
-    if (_maskedApiKey) configApikey.value = _maskedApiKey;
+    // DOM after hiding — but only if the user didn't edit the revealed key.
+    if (_revealedApiKey && configApikey.value === _revealedApiKey) {
+      configApikey.value = _maskedApiKey;
+    }
+    _revealedApiKey = "";
   }
   configApikey.type = apiKeyVisible ? "text" : "password";
   configApikeyToggle.classList.toggle("showing", apiKeyVisible);
@@ -293,6 +298,8 @@ configProvider?.addEventListener("change", () => {
   // Reset reveal state — the masked placeholder for the new provider must
   // not stay in "text" input mode.
   apiKeyVisible = false;
+  _maskedApiKey = "";
+  _revealedApiKey = "";
   configApikey.type = "password";
   configApikeyToggle?.classList.remove("showing");
   try {

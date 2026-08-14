@@ -1497,6 +1497,8 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       const message = (payload as { message?: string })?.message ?? "agent error";
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.reject(new Error(message)); }
+      // Mirror processing-done/cancelled: an errored turn must also release
+      // queued shell input, or it lingers until the NEXT turn settles.
       setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
     onAny("agent:cancelled", () => {
@@ -1538,7 +1540,14 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
 
       // Wait for user decision (30s timeout → auto-deny)
       const decision = await new Promise<{ outcome: string; reason?: string }>((resolve) => {
-        const timer = setTimeout(() => resolve({ outcome: "denied", reason: "timeout" }), 30_000);
+        const timer = setTimeout(() => {
+          // Remove the entry on timeout (mirrors AcpBridge) so a late
+          // decidePermission() is a no-op: re-resolving this settled
+          // promise is harmless, but sessionWide approval would wrongly
+          // whitelist the kind for the rest of the session.
+          this.pendingPermissions.delete(requestId);
+          resolve({ outcome: "denied", reason: "timeout" });
+        }, 30_000);
         this.pendingPermissions.set(requestId, { resolve, timer, kind });
       });
 

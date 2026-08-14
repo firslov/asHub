@@ -76,13 +76,6 @@ class SessionView extends HTMLElement {
     this._subagent = null;
     this._subagentBlock = null;
     this.scroll = { stickToBottom: true, lastSeen: 0 };
-    this.infiniteScroll = {
-      firstContentId: null,
-      totalFrames: 0,
-      loading: false,
-      exhausted: false,
-      loadGeneration: 0,
-    };
     this.replayFlushTimer = null;
 
     const ac = this.controller.signal;

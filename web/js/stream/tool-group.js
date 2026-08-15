@@ -40,9 +40,18 @@ export const insertStreamNode = (session, node) => {
     target.appendChild(node);
     return;
   }
-  const thinking = target.querySelector(".thinking");
-  if (thinking) {
-    target.insertBefore(node, thinking);
+  // Skip past ALL trailing thinking nodes: a window can hold several (e.g.
+  // processing-start re-arming showThinking before the previous orphan was
+  // swept).  Inserting before only the first would strand new content after
+  // the orphans; anchor on the last one so ordering stays correct.
+  let anchor = null;
+  for (let i = target.children.length - 1; i >= 0; i--) {
+    const child = target.children[i];
+    if (child.classList.contains("thinking")) { anchor = child; continue; }
+    break;
+  }
+  if (anchor) {
+    target.insertBefore(node, anchor);
     return;
   }
   const firstPending = target.querySelector(".agent-box.pending");

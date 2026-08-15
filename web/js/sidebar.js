@@ -386,7 +386,7 @@ const renderSessionItem = (s, isPinned = false) => {
     ev.preventDefault();
     ev.stopPropagation();
     try {
-      const res = await fetch(`/${s.instanceId}/pin`);
+      const res = await fetch(`/${s.instanceId}/pin`, { method: "POST" });
       if (res.ok) renderSessions(true);
     } catch {}
   });
@@ -1054,7 +1054,11 @@ const doCreateSession = async (cwd) => {
 };
 
 newBtn?.addEventListener("click", () => {
-  doCreateSession(getDefaultCwd());
+  // Debounce like newTerminalBtn — rapid double-clicks otherwise race two
+  // POST /sessions and land the user on the slower one's full-page redirect.
+  if (newBtn.disabled) return;
+  newBtn.disabled = true;
+  doCreateSession(getDefaultCwd()).finally(() => { newBtn.disabled = false; });
 });
 
 newTerminalBtn?.addEventListener("click", async (ev) => {

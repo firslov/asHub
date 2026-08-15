@@ -111,17 +111,17 @@ const renderSkills = (query) => {
     return `<div class="skill-card">
       <div class="skill-card-main">
         <div class="skill-card-header">
-          <img class="skill-avatar" src="${s.avatar}&s=40" alt="" width="20" height="20" loading="lazy" />
+          <img class="skill-avatar" src="${esc(s.avatar)}&s=40" alt="" width="20" height="20" loading="lazy" />
           <span class="skill-name">${esc(s.displayName || s.name)}</span>
           ${s.topics?.slice(0, 3).map((tag) => `<span class="skill-tag">${esc(tag)}</span>`).join("") || ""}
         </div>
         <div class="skill-desc">${esc(s.description || "")}</div>
         <div class="skill-meta">
           <span class="skill-author">${esc(s.author)}</span>
-          <span class="skill-updated">${s.updated || ""}</span>
+          <span class="skill-updated">${esc(s.updated || "")}</span>
         </div>
       </div>
-      <button class="skill-install-btn ${isInstalled ? "installed" : ""}" data-id="${s.id}" data-name="${s.name}">
+      <button class="skill-install-btn ${isInstalled ? "installed" : ""}" data-id="${esc(s.id)}" data-name="${esc(s.name)}">
         ${isInstalled ? t("skills.installed") : t("skills.install")}
       </button>
     </div>`;

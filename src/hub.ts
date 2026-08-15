@@ -84,6 +84,10 @@ interface Session {
   _idleSince?: number;
   /** Token identifying the current idle-watchdog owner (turn). */
   _idleToken?: number;
+  /** Watchdog token owned by the currently-running queued turn — stopped
+   *  by token on agent:queued-done so a late queued-done can never kill a
+   *  newer turn's watchdog (same discipline as submit()'s wdToken). */
+  _queuedWdToken?: number;
   contextLock: Promise<void>;
   /** Highest frameSeq ever emitted for this session — persisted in meta. */
   lastFrameSeq: number;
@@ -700,6 +704,10 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       if (req.method === "GET" && rest === "/pin") return togglePin(req, res, session);
       if (req.method === "PUT" && rest === "/cwd") return setCwdEndpoint(req, res, session);
       if (req.method === "DELETE" && rest === "/") return closeSession(res, sessions, id);
+      // POST is the canonical pin toggle (state mutation).  GET is kept as
+      // a legacy fallback for pages loaded before this change, but no longer
+      // emitted by the frontend.
+      if ((req.method === "POST" || req.method === "GET") && rest === "/pin") return togglePin(req, res, session);
 
       const file = rest === "/" || rest === "/index.html" ? "/index.html" : rest;
       return serveStatic(res, opts.webRoot, file);
@@ -1578,8 +1586,10 @@ function routeEvent(session: Session, e: BusEvent): void {
     // submit() cleaned up its idle watchdog as soon as the bridge reported
     // this turn as queued, so arm a fresh one now that the turn is actually
     // starting — otherwise a stuck queued turn would leave isProcessing true
-    // forever.
-    startIdleWatchdog(session, (err) => {
+    // forever.  Record the token so queued-done stops THIS watchdog only:
+    // a tokenless stop would also kill a newer turn's watchdog if the
+    // queued-done arrives after the user already submitted again.
+    const queuedToken = startIdleWatchdog(session, (err) => {
       // Flush any in-flight text before the error card so the stuck turn's
       // partial output survives replay and never contaminates the next turn.
       flushSegment(session);
@@ -1591,6 +1601,7 @@ function routeEvent(session: Session, e: BusEvent): void {
         name: "agent:error",
       }, { message: String(err) }));
     });
+    session._queuedWdToken = queuedToken;
     const query = (e.payload as { query?: string })?.query ?? "";
     // Generate fresh meta for each frame so they don't share the same
     // id / ts — mirroring submit()'s non-queued path.
@@ -1606,7 +1617,11 @@ function routeEvent(session: Session, e: BusEvent): void {
   }
 
   if (e.name === "agent:queued-done") {
-    stopIdleWatchdog(session);
+    // Stop only THIS queued turn's watchdog (by token) — a tokenless stop
+    // would also kill a newer turn's watchdog when a late queued-done
+    // arrives after the user already submitted the next message.
+    stopIdleWatchdog(session, session._queuedWdToken);
+    session._queuedWdToken = undefined;
     flushSegment(session);
     session.isProcessing = false;
     // Only mark unread if no one is watching (no active SSE client).
@@ -1670,6 +1685,15 @@ function routeEvent(session: Session, e: BusEvent): void {
     session.isProcessing = false;
     session._cancelled = true;
     session.toolsRunning = 0;
+  }
+
+  // A queued turn that died with agent:error (bridge drainQueue's reject
+  // emits it directly): stop that turn's watchdog here too, or it fires
+  // minutes later and pushes a phantom error card on top of the real one.
+  // (submit()'s non-queued error path already cleans up its own watchdog.)
+  if (e.name === "agent:error") {
+    stopIdleWatchdog(session, session._queuedWdToken);
+    session._queuedWdToken = undefined;
   }
 
   // After cancel, drop tool events from still-running subagents.
@@ -1831,9 +1855,16 @@ async function archiveSession(
     for (const r of session.sseClients) { try { r.end(); } catch {} }
     session.sseClients.clear();
     sessions.delete(id);
+    // Archived sessions keep their files for unarchive — flush any replay
+    // frames still sitting in the write buffer (up to BATCH_FLUSH_MS of
+    // tail content) BEFORE removing the buffer, or the restored session
+    // would silently lose its last moments.
+    _flushBuf(id);
+    const lock = _writeLocks.get(id);
     const buf = _writeBufs.get(id);
     if (buf?.timer) { clearTimeout(buf.timer); buf.timer = null; }
     _writeBufs.delete(id);
+    if (lock) { try { await lock; } catch {} }
   }
   await saveArchivedSession(id, Date.now());
   res.writeHead(200, { "Content-Type": "application/json" });
@@ -2212,13 +2243,17 @@ async function openSseMulti(
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
       try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
     } else if (since > 0) {
-      session.hasUnread = false;
+      // Only clear hasUnread once this connection has actually received the
+      // missed frames — clearing up-front would lose the unread badge if
+      // this connection drops before any frame is delivered.
+      let sentAny = false;
       for (const line of session.replay) {
         const m = line.match(frameIdRe);
         if (m && Number(m[1]) > since) {
-          try { res.write(line); } catch { return; }
+          try { res.write(line); sentAny = true; } catch { return; }
         }
       }
+      if (sentAny) session.hasUnread = false;
     }
     session.sseClients.add(res);
   }
@@ -2843,7 +2878,7 @@ function synthesizeBranchFrames(
       const content = typeof m.content === "string" ? m.content : extractText(m.content);
       frames.push(sseFrame(meta("agent:tool-completed"), {
         toolCallId: m.tool_call_id,
-        exitCode: 0,
+        exitCode: inferToolExitCode(content),
         rawOutput: content,
         kind: "execute",
       }));
@@ -2852,6 +2887,23 @@ function synthesizeBranchFrames(
   }
   closeTurn();
   return frames;
+}
+
+/**
+ * Infer a tool call's exit code from its persisted result content so branch
+ * rebuilds (fork/rewind/compaction) keep failure marks instead of rendering
+ * every historical tool call as ✓ success.
+ *
+ * agent-sh persists tool results as plain content: every failed call gets a
+ * canonical "Error: " prefix (see agent-sh tool-protocol.ts recordResults
+ * AND every built-in tool's error returns — e.g. `Error: old_text not
+ * found…`).  The structured exitCode/isError fields never reach the
+ * persisted message.  Bash output itself does NOT carry an "exit N" line
+ * (executor.ts keeps the code out of `output`), so prefix sniffing is the
+ * only reliable signal.
+ */
+function inferToolExitCode(content: string): number {
+  return /^Error: /.test(String(content ?? "").trimStart()) ? 1 : 0;
 }
 
 async function rebuildReplay(
@@ -2913,6 +2965,11 @@ function resolveEntryId(session: Session, entryId?: string, idPrefix?: string): 
 // Legacy sessions whose snapshot disagrees with the replay's agent:query
 // count would otherwise wipe surviving turns.
 function truncateReplayToTurnCount(session: Session, keepCount: number): void {
+  // A turn still in flight owns the replay tail: its agent:query frame is
+  // already pushed while the kernel message may not be captured yet, so
+  // truncating here would irreversibly cut a REAL turn from replay.
+  // Wait for the turn to settle — a later rewind will re-run this path.
+  if (session.isProcessing) return;
   // Slash commands also emit agent:query frames (payload.command === true)
   // but are not real turns — exclude them from the count.
   const isRealTurnQuery = (f: string): boolean => {
@@ -2995,6 +3052,11 @@ async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse,
   }
   try {
     const stats = await withContextLock(session, async () => {
+      // Converge persistence state first: flush pending capture appends so
+      // the snapshot below reflects every completed turn.  Without this,
+      // a snapshot racing a not-yet-flushed capture would under-count turns
+      // and the truncation fallback below could cut REAL turns from replay.
+      if (session.capture) { try { await session.capture.flush(); } catch {} }
       const snap = await session.bridge.snapshot();
       const msgs = snap.messages as Array<{ role?: string }>;
       // Count real turns only: synthetic user messages (compaction summaries,
@@ -3581,6 +3643,10 @@ async function listPinnedSessions(res: http.ServerResponse): Promise<void> {
 }
 
 async function togglePin(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  if (req.method === "POST") {
+    // Drain the (ignored) body so the client's request completes cleanly.
+    try { await readBody(req); } catch {}
+  }
   const pinned = await loadPinnedSessions();
   if (pinned.has(session.id)) {
     pinned.delete(session.id);

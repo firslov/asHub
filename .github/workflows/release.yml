@@ -113,5 +113,11 @@ jobs:
           pip install --quiet coscmd
           coscmd config -a "$COS_SECRET_ID" -s "$COS_SECRET_KEY" \
             -b ashub-release-1258678103 -r ap-beijing
-          coscmd upload -r release/ /
+          # Only upload what auto-update needs: the latest*.yml metadata,
+          # the installers, and their blockmaps.  Skip the unpacked app
+          # dirs (linux-unpacked/win-unpacked/mac*) — they're build
+          # byproducts, not update artifacts.
+          for f in release/latest*.yml release/*.dmg release/*.zip release/*.exe release/*.AppImage release/*.blockmap; do
+            [ -f "$f" ] && coscmd upload "$f" /
+          done
           echo "Uploaded to https://ashub-release-1258678103.cos.ap-beijing.myqcloud.com/"

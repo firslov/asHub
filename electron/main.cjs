@@ -696,8 +696,15 @@ if (!gotTheLock) {
     _shuttingDown = true;
     event.preventDefault();
     Promise.resolve()
-      .then(() => shutdownHubRef())
+      // Bound the graceful shutdown: a hung bridge/delete must not block
+      // the quit (or electron-updater's install step) forever.
+      .then(() => Promise.race([
+        shutdownHubRef(),
+        new Promise((resolve) => setTimeout(resolve, 5000)),
+      ]))
       .catch((err) => console.error("[electron] shutdown failed:", err))
-      .finally(() => app.exit(0));
+      // app.quit() (not app.exit) so the normal will-quit/quit flow runs —
+      // electron-updater installs the pending update there.
+      .finally(() => app.quit());
   });
 }

@@ -123,4 +123,10 @@ jobs:
           for f in release/latest*.yml release/*.dmg release/*.zip release/*.exe release/*.AppImage release/*.blockmap; do
             [ -f "$f" ] && coscmd upload "$f" /
           done
+          # Remove unpacked app dirs / junk left by earlier uploads (they are
+          # build byproducts, not update artifacts, and just waste storage).
+          for d in linux-unpacked win-unpacked mac mac-arm64 mac-universal; do
+            coscmd delete -r -f "$d/" 2>/dev/null || true
+          done
+          coscmd delete -f ".DS_Store" 2>/dev/null || true
           echo "Uploaded to https://ashub-release-1258678103.cos.ap-beijing.myqcloud.com/"

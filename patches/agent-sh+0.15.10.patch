@@ -1,22 +1,5 @@
-diff --git a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
-index 187dac1..81ee64f 100644
---- a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
-+++ b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
-@@ -8,10 +8,9 @@ const BASE_URL = "https://api.z.ai/api/coding/paas/v4";
- const ID = "zai-coding-plan";
- 
- const DEFAULT_MODELS = [
--  { id: "glm-5.1",     reasoning: true, contextWindow: 200_000 },
--  { id: "glm-5-turbo", reasoning: true, contextWindow: 200_000 },
-+  { id: "glm-5.3",     reasoning: true, contextWindow: 1_048_576 },
-+  { id: "glm-5-turbo", reasoning: true, contextWindow: 204_800 },
-   { id: "glm-4.7",     reasoning: true, contextWindow: 204_800 },
--  { id: "glm-4.5-air", reasoning: true, contextWindow: 131_072 },
- ];
- 
- function buildReasoningParams(level: string, _model?: string): Record<string, unknown> {
 diff --git a/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js b/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
-index f604d85..1737edf 100644
+index f604d85..bee66d1 100644
 --- a/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
 +++ b/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
 @@ -2,10 +2,9 @@ import { resolveApiKey } from "../../cli/auth/keys.js";
@@ -33,3 +16,50 @@ index f604d85..1737edf 100644
  ];
  function buildReasoningParams(level, _model) {
      if (level === "off")
+@@ -15,10 +14,11 @@ function buildReasoningParams(level, _model) {
+ }
+ export default function activate(ctx) {
+     const { key } = resolveApiKey(ID);
++    const sdkKey = key ?? process.env.ZAI_API_KEY ?? process.env.ZHIPU_API_KEY ?? "no-key";
+     ctx.agent.providers.configure(ID, { reasoningParams: buildReasoningParams });
+     ctx.agent.providers.register({
+         id: ID,
+-        apiKey: key ?? process.env.ZAI_API_KEY ?? process.env.ZHIPU_API_KEY,
++        apiKey: sdkKey,
+         baseURL: BASE_URL,
+         defaultModel: DEFAULT_MODELS[0].id,
+         models: DEFAULT_MODELS,
+diff --git a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
+index 187dac1..eec9233 100644
+--- a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
++++ b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
+@@ -8,10 +8,9 @@ const BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+ const ID = "zai-coding-plan";
+ 
+ const DEFAULT_MODELS = [
+-  { id: "glm-5.1",     reasoning: true, contextWindow: 200_000 },
+-  { id: "glm-5-turbo", reasoning: true, contextWindow: 200_000 },
++  { id: "glm-5.3",     reasoning: true, contextWindow: 1_048_576 },
++  { id: "glm-5-turbo", reasoning: true, contextWindow: 204_800 },
+   { id: "glm-4.7",     reasoning: true, contextWindow: 204_800 },
+-  { id: "glm-4.5-air", reasoning: true, contextWindow: 131_072 },
+ ];
+ 
+ function buildReasoningParams(level: string, _model?: string): Record<string, unknown> {
+@@ -22,10 +21,15 @@ function buildReasoningParams(level: string, _model?: string): Record<string, un
+ 
+ export default function activate(ctx: AgentContext): void {
+   const { key } = resolveApiKey(ID);
++  // Register with a placeholder key when none is configured so the
++  // provider and its fixed model list still show up in the UI (and
++  // `auth list` can enumerate it).  A real key re-registers on settings
++  // change.  Mirrors the ollama built-in provider pattern.
++  const sdkKey = key ?? process.env.ZAI_API_KEY ?? process.env.ZHIPU_API_KEY ?? "no-key";
+   ctx.agent.providers.configure(ID, { reasoningParams: buildReasoningParams });
+   ctx.agent.providers.register({
+     id: ID,
+-    apiKey: key ?? process.env.ZAI_API_KEY ?? process.env.ZHIPU_API_KEY,
++    apiKey: sdkKey,
+     baseURL: BASE_URL,
+     defaultModel: DEFAULT_MODELS[0].id,
+     models: DEFAULT_MODELS,

@@ -49,7 +49,7 @@
   --red-dim:     #932e2e;
   --purple:      #6c5fa7;
   --purple-rgb:  108, 95, 167;
-  --amber:       var(--accent);
+  --amber:       #b8860b;
 
   /* Status color light variants for highlight states */
   --green-light: #6ab87e;
@@ -225,7 +225,7 @@
   --red-light:    #e87670;
   --purple:       #8b7bbf;
   --purple-rgb:   139, 123, 191;
-  --amber:        var(--accent);
+  --amber:        #e0c060;
 
   --warning:      #e08a4a;
   --warning-rgb:  224, 138, 74;
@@ -298,7 +298,7 @@
   --red-light:    #9e4848;
   --purple:       #4a4468;
   --purple-rgb:   74, 68, 104;
-  --amber:        var(--accent);
+  --amber:        #7a5a30;
 
   --warning:      #a55a24;
   --warning-rgb:  165, 90, 36;

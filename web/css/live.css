@@ -1417,9 +1417,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .session-archive-btn svg { width: 14px; height: 14px; }
 
 .session-archive-btn.confirming {
-  color: var(--amber, #d4a853);
-  border-color: rgba(var(--accent-rgb), 0.4);
-  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
   opacity: 1 !important;
   pointer-events: auto;
   font-weight: 600;

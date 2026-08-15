@@ -169,8 +169,24 @@ const onDownload = async () => {
   }
 };
 
-const onRestart = () => {
-  window.electronAPI?.quitAndInstall?.();
+const onRestart = async () => {
+  const api = window.electronAPI;
+  if (!api?.quitAndInstall) return;
+  try {
+    const res = await api.quitAndInstall();
+    // quitAndInstall() initiates the quit immediately, so a successful
+    // call normally never resolves — but if it does return with an error
+    // (e.g. no pending download), surface it instead of doing nothing.
+    if (res && res.ok === false) {
+      errorMsg = res.error || "";
+      state = "error";
+      render();
+    }
+  } catch (err) {
+    errorMsg = String(err?.message ?? err ?? "");
+    state = "error";
+    render();
+  }
 };
 
 const bindEvents = () => {

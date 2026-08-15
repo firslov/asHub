@@ -162,6 +162,7 @@ function fallbackToGitHub() {
 
 let mainWindow = null;
 let _shuttingDown = false;
+let _installOnQuit = false;
 let shutdownHubRef = null;
 
 // If an update is found before the renderer's update card is subscribed,
@@ -390,9 +391,18 @@ function setupIPC() {
 
   ipcMain.handle("quit-and-install", async () => {
     try {
+      // Flag the quit as an update install so the before-quit handler
+      // skips the slow graceful hub shutdown.  On macOS Squirrel.Mac's
+      // ShipIt installer is already waiting for the app to terminate;
+      // a 5s teardown can make it miss the install window and appear to
+      // do nothing.
+      _installOnQuit = true;
+      console.log("[updater] quit-and-install requested");
       autoUpdater.quitAndInstall();
       return { ok: true };
     } catch (err) {
+      console.error("[updater] quit-and-install failed:", err.message);
+      _installOnQuit = false;
       return { ok: false, error: err.message };
     }
   });
@@ -693,6 +703,17 @@ if (!gotTheLock) {
   app.on("before-quit", (event) => {
     if (mainWindow) mainWindow.removeAllListeners("closed");
     if (_shuttingDown || !shutdownHubRef) return;
+
+    // Installing an update: quit immediately.  The ShipIt installer on
+    // macOS (and the NSIS/AppImage installer elsewhere) is already
+    // waiting for termination — a graceful hub shutdown here delays it
+    // and can make the install silently fail.  Best-effort shutdown in
+    // the background, then let the quit proceed without preventDefault.
+    if (_installOnQuit) {
+      shutdownHubRef().catch(() => {});
+      return;
+    }
+
     _shuttingDown = true;
     event.preventDefault();
     Promise.resolve()

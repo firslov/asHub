@@ -80,6 +80,18 @@ jobs:
           path: release
           merge-multiple: true
       - run: ls -la release/
+      # Re-run safety: delete an existing release for this tag so
+      # action-gh-release can recreate it (a fresh tag was pushed above).
+      - name: Remove existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ inputs.version }}" >/dev/null 2>&1; then
+            gh release delete "v${{ inputs.version }}" --yes
+            echo "removed existing release v${{ inputs.version }}"
+          else
+            echo "no existing release"
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ inputs.version }}

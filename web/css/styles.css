@@ -145,6 +145,13 @@
   --fs-2xl: 1.25rem; /* page-level headings, empty-state titles */
   --fs-3xl: 2rem;    /* hero/display text */
 
+  /* Letter-spacing scale — one tracking system for the whole UI.
+     Mono uppercase labels track wide; badges track medium; buttons and
+     field labels track tight.  Don't add new literals. */
+  --tracking-label:    0.14em;  /* uppercase mono section/panel titles */
+  --tracking-label-sm: 0.08em;  /* small uppercase badges, micro labels */
+  --tracking-btn:      0.06em;  /* uppercase button & field-label text */
+
   /* Canonical font stacks — use these vars instead of repeating literals.
      Sans: UI text; Mono: code, tool rows, panel titles; Serif: academic theme. */
   --font-sans: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;

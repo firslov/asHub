@@ -575,7 +575,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .shell-block-head::after {
   content: "SHELL" !important;
   font-size: var(--fs-xs) !important;
-  letter-spacing: 0.14em !important;
+  letter-spacing: var(--tracking-label) !important;
   font-weight: 600 !important;
   color: var(--info) !important;
   background: color-mix(in srgb, var(--info) 18%, transparent) !important;
@@ -683,7 +683,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   right: 0.8rem;
   transform: translateY(-50%);
   font-size: var(--fs-xs);
-  letter-spacing: 0.14em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   color: var(--cyan, var(--accent));
   background: color-mix(in srgb, var(--cyan, var(--accent)) 14%, transparent);
@@ -890,7 +890,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: var(--tracking-label);
   color: var(--text-faint);
   cursor: pointer;
   user-select: none;
@@ -1093,7 +1093,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-weight: 500;
-  letter-spacing: 0.16em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   color: var(--text-dim);
   margin-right: auto;
@@ -1333,7 +1333,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: var(--tracking-label);
   color: var(--text-faint);
   pointer-events: none;
   user-select: none;
@@ -2125,7 +2125,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label-sm);
   color: var(--text-faint);
 }
 
@@ -3084,7 +3084,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   color: var(--text-dim);
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label-sm);
   animation: loader-text-fade 1.6s ease-in-out infinite;
 }
 
@@ -3359,7 +3359,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--accent-dim, var(--cyan));
   color: var(--on-accent);
   font-weight: 500;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label-sm);
 }
 .tree-leaf-badge {
   font-size: var(--fs-xs);
@@ -3367,7 +3367,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: 999px;
   background: var(--border-mid);
   color: var(--text-dim);
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label-sm);
 }
 
 @keyframes turn-sep-in {
@@ -3832,7 +3832,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label-sm);
   color: var(--text-faint);
   display: flex;
   align-items: center;
@@ -3856,7 +3856,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-label-sm);
   color: var(--text-muted);
   border-top: 1px solid var(--border-light);
   margin-top: 0.2rem;
@@ -4148,7 +4148,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-weight: 500;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-btn);
   padding: 0.32rem 0.75rem;
   margin-left: 0;
   border-radius: var(--radius-sm);
@@ -4213,7 +4213,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--text-dim);
-  letter-spacing: 0.14em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   white-space: nowrap;
   background: var(--bg3);
@@ -4226,7 +4226,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .ctx-title, .tree-title, .files-title, .config-title, .prompt-title {
   color: var(--text-dim);
   font-weight: 500;
-  letter-spacing: 0.14em;
+  letter-spacing: var(--tracking-label);
 }
 
 /* Heads without a meta element let the title push actions right. */
@@ -4899,7 +4899,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--text-dim);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-btn);
   text-transform: uppercase;
 }
 

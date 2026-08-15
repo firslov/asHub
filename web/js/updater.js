@@ -14,6 +14,22 @@ let version = "";
 let progress = { percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 };
 let errorMsg = "";
 let el = null;
+// Ad-hoc signed build (no Developer ID): in-place update install can never
+// work, so the card switches to a manual-install flow.  Defaults to false —
+// non-Electron (browser) contexts keep the old UI hidden anyway.
+let manualInstall = false;
+if (window.electronAPI?.getUpdateMode) {
+  window.electronAPI.getUpdateMode()
+    .then((mode) => {
+      manualInstall = !!mode?.manual;
+      // The mode arrives async and can lose the race against a fast
+      // update-downloaded (cached update validated at startup): re-render
+      // so a card already showing the broken "Restart & Install" button
+      // switches to the manual flow.
+      if (manualInstall && state === "downloaded" && el?.isConnected) render();
+    })
+    .catch(() => {});
+}
 
 const fmtBytes = (n) => {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
@@ -109,6 +125,17 @@ const render = () => {
     case "downloaded":
       icon = "✅";
       title = t("update.downloaded", { ver: version });
+      if (manualInstall) {
+        // Ad-hoc signed builds can't auto-install (Squirrel's signature
+        // check rejects any other build's CDHash) — guide the user to the
+        // downloaded archive instead of a button that silently no-ops.
+        detail = t("update.manual.hint");
+        buttons = [
+          [t("update.manual.open"), "primary", onOpenDownload],
+          [t("update.later"), "ghost", dismiss],
+        ];
+        break;
+      }
       detail = t("update.downloaded.hint");
       buttons = [
         [t("update.restart"), "primary", onRestart],
@@ -179,6 +206,28 @@ const onRestart = async () => {
     // (e.g. no pending download), surface it instead of doing nothing.
     if (res && res.ok === false) {
       errorMsg = res.error || "";
+      state = "error";
+      render();
+    }
+  } catch (err) {
+    errorMsg = String(err?.message ?? err ?? "");
+    state = "error";
+    render();
+  }
+};
+
+// Manual-install path (ad-hoc builds): reveal the downloaded archive in
+// Finder, or open the releases page when no download is cached.
+const onOpenDownload = async () => {
+  const api = window.electronAPI;
+  if (!api?.openUpdateDownload) return;
+  try {
+    const res = await api.openUpdateDownload();
+    if (res && res.ok) {
+      // File/folder opened — the card's job is done.
+      dismiss();
+    } else {
+      errorMsg = res?.error || "";
       state = "error";
       render();
     }

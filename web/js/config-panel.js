@@ -40,6 +40,7 @@ const PROVIDER_LABELS = {
   deepseek: "DeepSeek",
   zhipu: "Z.AI",
   openrouter: "OpenRouter",
+  "zai-coding-plan": "Z.AI Coding Plan",
 };
 
 export const providerLabel = (id) => PROVIDER_LABELS[id] ?? id;

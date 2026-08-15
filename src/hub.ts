@@ -96,6 +96,13 @@ interface Session {
 const REPLAY_LIMIT = 3000;
 const AUTO_APPROVE_KEY = "ashub.permissions.autoApprove";
 
+/**
+ * Maximum request body size. Prevents memory exhaustion from malicious requests.
+ * Set to 1MB - sufficient for large terminal pastes, chat messages with images,
+ * config updates, and skill installation. Returns 413 Payload Too Large when exceeded.
+ */
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024; // 1MB
+
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;
 
@@ -998,7 +1005,14 @@ function getConfig(res: http.ServerResponse): void {
 }
 
 async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse, sessions: Map<string, Session>): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(body) as Record<string, unknown>;
@@ -1071,7 +1085,14 @@ function getAutoApprove(res: http.ServerResponse): void {
 }
 
 async function setAutoApprove(req: http.IncomingMessage, res: http.ServerResponse, sessions: Map<string, Session>): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let parsed: { autoApprove?: boolean };
   try { parsed = JSON.parse(body); } catch {
     res.statusCode = 400; res.end("invalid JSON"); return;
@@ -1780,7 +1801,14 @@ async function archiveSession(
   res: http.ServerResponse,
   sessions: Map<string, Session>,
 ): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let id = "";
   try { id = (JSON.parse(body) as { id?: string }).id ?? ""; } catch {}
   if (!id || !/^[0-9a-f]{4,32}$/i.test(id)) { res.statusCode = 400; res.end("invalid id"); return; }
@@ -1811,7 +1839,14 @@ async function unarchiveSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
 ): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let id = "";
   try { id = (JSON.parse(body) as { id?: string }).id ?? ""; } catch {}
   if (!id || !/^[0-9a-f]{4,32}$/i.test(id)) { res.statusCode = 400; res.end("invalid id"); return; }
@@ -1858,7 +1893,14 @@ async function spawnSession(
   sessions: Map<string, Session>,
   opts: HubOpts,
 ): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let kind: SessionKind = "agent";
   let cwd: string | null = null;
   try {
@@ -2064,7 +2106,14 @@ function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, 
 }
 
 async function updateTitle(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let title = "";
   try { title = ((JSON.parse(body) as { title?: string }).title ?? "").trim(); } catch {}
   if (!title) { res.statusCode = 400; res.end("empty title"); return; }
@@ -2076,7 +2125,14 @@ async function updateTitle(req: http.IncomingMessage, res: http.ServerResponse, 
 
 async function generateTitle(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   // Use the stored firstQuery, or accept one from the request body.
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let query = session.firstQuery?.trim() ?? "";
   try {
     const parsed = JSON.parse(body) as { query?: string };
@@ -2197,12 +2253,17 @@ async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, ses
   if (!session.bridge.writePty) {
     res.statusCode = 400; res.end("session has no PTY"); return;
   }
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413; // Payload Too Large
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let data = "";
   try { data = (JSON.parse(body) as { data?: string }).data ?? ""; } catch {}
   if (typeof data !== "string") { res.statusCode = 400; res.end("invalid data"); return; }
-  if (data.length > 4096) { res.statusCode = 400; res.end("input too large"); return; }
-  data = data.replace(/\0/g, "");
   try { session.bridge.writePty(data); } catch (err) {
     res.statusCode = 500; res.end(`pty write failed: ${err instanceof Error ? err.message : err}`); return;
   }
@@ -2216,7 +2277,14 @@ async function ptyResize(req: http.IncomingMessage, res: http.ServerResponse, se
   if (!session.bridge.resizePty) {
     res.statusCode = 400; res.end("session has no PTY"); return;
   }
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let cols = 0, rows = 0;
   try {
     const parsed = JSON.parse(body) as { cols?: number; rows?: number };
@@ -2232,7 +2300,14 @@ async function ptyResize(req: http.IncomingMessage, res: http.ServerResponse, se
 }
 
 async function submit(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let query = "";
   let images: Array<{ data: string; mimeType: string }> | undefined;
 
@@ -2383,7 +2458,14 @@ async function setThinking(
   res: http.ServerResponse,
   session: Session,
 ): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let level = "";
   try { level = String((JSON.parse(body) as { level?: string }).level ?? "").trim(); } catch {}
   if (!level) { res.statusCode = 400; res.end("missing level"); return; }
@@ -2400,7 +2482,14 @@ async function execCommand(
   res: http.ServerResponse,
   session: Session,
 ): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let name = "", args = "";
   try {
     const parsed = JSON.parse(body) as { name?: string; args?: string };
@@ -2520,7 +2609,14 @@ async function treeEndpoint(res: http.ServerResponse, session: Session): Promise
 }
 
 async function setModelEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let model: string;
   let provider: string | undefined;
   try {
@@ -2554,7 +2650,14 @@ async function setModelEndpoint(req: http.IncomingMessage, res: http.ServerRespo
 async function forkEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   if (!session.store || !session.capture) { res.statusCode = 409; res.end("session has no tree store"); return; }
   if (session.isProcessing) { res.statusCode = 409; res.end("cannot switch branches while a turn is in progress"); return; }
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let entryId: string | undefined;
   let idPrefix: string | undefined;
   try {
@@ -2583,7 +2686,14 @@ async function forkEndpoint(req: http.IncomingMessage, res: http.ServerResponse,
   }
 }
 async function setCwdEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let cwd: string;
   try { cwd = JSON.parse(body).cwd; } catch { res.statusCode = 400; res.end("invalid body"); return; }
   if (!cwd || typeof cwd !== "string") { res.statusCode = 400; res.end("missing cwd"); return; }
@@ -2604,7 +2714,14 @@ async function setCwdEndpoint(req: http.IncomingMessage, res: http.ServerRespons
 
 async function dropContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   if (session.isProcessing) { res.statusCode = 409; res.end("cannot switch branches while a turn is in progress"); return; }
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let indices: number[];
   try {
     const parsed = JSON.parse(body) as { indices?: number[] };
@@ -2912,7 +3029,14 @@ function truncateReplayToTurnCount(session: Session, keepCount: number): void {
 
 async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   if (session.isProcessing) { res.statusCode = 409; res.end("cannot switch branches while a turn is in progress"); return; }
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let toIndex: number;
   try {
     const parsed = JSON.parse(body) as { toIndex?: number };
@@ -2949,7 +3073,14 @@ async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse
  */
 async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   if (session.isProcessing) { res.statusCode = 409; res.end("cannot switch branches while a turn is in progress"); return; }
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let turn: number;
   try {
     const parsed = JSON.parse(body) as { turn?: number };
@@ -3280,7 +3411,14 @@ async function _hasSkillMd(dir: string, depth = 0): Promise<boolean> {
 }
 
 async function installSkill(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let fullId: string;
   try { fullId = JSON.parse(body).id; } catch { res.statusCode = 400; res.end("invalid JSON"); return; }
 
@@ -3354,7 +3492,14 @@ async function installSkill(req: http.IncomingMessage, res: http.ServerResponse)
 }
 
 async function uninstallSkill(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let name: string;
   try { name = JSON.parse(body).name; } catch { res.statusCode = 400; res.end("invalid JSON"); return; }
   if (!name || name.includes("..") || name.includes("/")) { res.statusCode = 400; res.end("invalid name"); return; }
@@ -3373,11 +3518,22 @@ async function uninstallSkill(req: http.IncomingMessage, res: http.ServerRespons
 }
 
 function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (c) => chunks.push(c));
+    let totalBytes = 0;
+
+    req.on("data", (chunk: Buffer) => {
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+        req.destroy(); // Stop reading immediately
+        reject(new Error(`request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`));
+        return;
+      }
+      chunks.push(chunk);
+    });
+
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", () => resolve(""));
+    req.on("error", () => resolve("")); // Preserve existing error behavior
   });
 }
 
@@ -3397,7 +3553,14 @@ function serveStatic(res: http.ServerResponse, root: string, urlPath: string): v
 }
 
 async function setSubagentModel(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let parsed: { type?: string; model?: string };
   try { parsed = JSON.parse(body); } catch {
     res.writeHead(400, { "Content-Type": "application/json" });
@@ -3438,7 +3601,14 @@ async function getSubagentTypes(req: http.IncomingMessage, res: http.ServerRespo
 
 
 async function unpinSession(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  const body = await readBody(req);
+  let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
   let id = "";
   try { id = JSON.parse(body).id; } catch {
     res.writeHead(400, { "Content-Type": "application/json" });
@@ -3455,7 +3625,14 @@ async function unpinSession(req: http.IncomingMessage, res: http.ServerResponse)
 // Permission decision forwarded from client to bridge.
 async function decidePermission(req: http.IncomingMessage, res: http.ServerResponse, sessions: Map<string, Session>): Promise<void> {
   try {
-    const body = await readBody(req);
+    let body: string;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    res.statusCode = 413;
+    res.end(err instanceof Error ? err.message : "request too large");
+    return;
+  }
     const { requestId, outcome, sessionId, sessionWide } = JSON.parse(body) as Record<string, unknown>;
     if (!requestId || !outcome || !sessionId) {
       res.writeHead(400);

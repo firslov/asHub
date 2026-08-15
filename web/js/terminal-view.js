@@ -40,7 +40,10 @@ class TerminalView extends HTMLElement {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ data }),
-      }).catch(() => {});
+      }).catch((err) => {
+        console.error("PTY input failed:", err);
+        // Future: Could add visual feedback to the terminal
+      });
     });
 
     this.resizeObserver = new ResizeObserver(() => this.scheduleFit());

@@ -132,8 +132,12 @@
 
   /* Duration tokens — single source of truth for all transitions */
   --dur-fast:   0.15s;
+  --dur-quick:  0.2s;
   --dur-normal: 0.25s;
+  --dur-medium: 0.3s;
+  --dur-layout: 0.35s;
   --dur-slow:   0.4s;
+  --dur-panel:  0.45s;
 
   /* Font-size scale — shared type ramp for component styles (live.css).
      Map hardcoded font-sizes to these instead of adding new literals. */
@@ -519,6 +523,7 @@ nav {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

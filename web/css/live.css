@@ -171,7 +171,7 @@
   letter-spacing: -0.005em;
   color: var(--text-mid);
   cursor: pointer;
-  transition: all 0.35s var(--ease-out-expo);
+  transition: all var(--dur-layout) var(--ease-out-expo);
   background: var(--bg-elevated);
   position: relative;
   overflow: hidden;
@@ -184,7 +184,7 @@
   inset: 0;
   background: linear-gradient(135deg, var(--accent-glow) 0%, var(--cyan-glow) 100%);
   opacity: 0;
-  transition: opacity 0.35s ease;
+  transition: opacity var(--dur-layout) ease;
 }
 
 .stream-empty-prompt:hover {
@@ -224,7 +224,7 @@
   font-size: var(--fs-2xl);
   position: relative;
   z-index: 1;
-  transition: transform 0.35s var(--ease-out-expo);
+  transition: transform var(--dur-layout) var(--ease-out-expo);
 }
 .stream-empty-prompt:hover .c-arrow {
   transform: translateX(2px);
@@ -511,7 +511,7 @@ body.exiting .app {
   grid-template-rows: auto 1fr;
   height: 100vh;
   overflow: hidden;
-  transition: grid-template-columns 0.35s var(--ease-in-out);
+  transition: grid-template-columns var(--dur-layout) var(--ease-in-out);
   padding-right: var(--toolbar-w); /* space for toolbar */
 }
 .app.sidebar-collapsed { grid-template-columns: 0 1fr; }
@@ -1434,7 +1434,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-md);
   background: var(--bg2);
   overflow: hidden;
-  animation: permission-in 0.25s var(--ease-out-expo);
+  animation: permission-in var(--dur-normal) var(--ease-out-expo);
 }
 .permission-card.countdown-urgent {
   border-left-color: var(--error);
@@ -1596,7 +1596,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .permission-card.countdown-urgent .perm-count-text { color: var(--error); }
 .perm-ring-fill {
   stroke: var(--warning);
-  transition: stroke 0.3s, stroke-dashoffset 0.9s linear;
+  transition: stroke var(--dur-medium), stroke-dashoffset 0.9s linear;
   transform: rotate(-90deg);
   transform-origin: 12px 12px;
 }
@@ -1717,7 +1717,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .subagent-head.subagent-done {
   opacity: 0.55;
   background: transparent;
-  transition: all 0.4s var(--ease-out-expo);
+  transition: all var(--dur-slow) var(--ease-out-expo);
 }
 
 .subagent-body {
@@ -1993,7 +1993,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--fg) 4%, transparent);
   border: 1px solid var(--border-light);
-  transition: all 0.3s var(--ease-out-expo);
+  transition: all var(--dur-medium) var(--ease-out-expo);
   cursor: default;
   user-select: none;
   white-space: nowrap;
@@ -2231,7 +2231,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 @media (min-width: 901px) {
   .live-wrap .terminal {
     padding-right: 0;
-    transition: padding-right 0.35s var(--ease-in-out);
+    transition: padding-right var(--dur-layout) var(--ease-in-out);
   }
 	  /* single panel: 300px */
 	  .app.ctx-open .live-wrap .terminal,
@@ -2513,7 +2513,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.45rem 0 0.45rem 1.2rem;
   margin-top: 1.5rem;
   background: linear-gradient(90deg, var(--accent-glow) 0%, transparent 70%);
-  animation: agent-box-in 0.4s var(--ease-out-expo) both;
+  animation: agent-box-in var(--dur-slow) var(--ease-out-expo) both;
   transition: transform var(--dur-normal) var(--ease-out-expo),
               box-shadow var(--dur-normal) var(--ease-out-expo);
 }
@@ -2543,7 +2543,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-sm);
   transition: transform var(--dur-normal) var(--ease-out-expo),
               box-shadow var(--dur-normal) var(--ease-out-expo);
-  animation: reply-fade-in 0.3s var(--ease-out-expo) both;
+  animation: reply-fade-in var(--dur-medium) var(--ease-out-expo) both;
 }
 @keyframes reply-fade-in {
   from { opacity: 0.65; transform: translateY(4px); }
@@ -2740,7 +2740,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   gap: 0.2rem;
   opacity: 0.22;
-  transition: opacity 0.2s ease;
+  transition: opacity var(--dur-quick) ease;
   z-index: 5;
   pointer-events: none;
 }
@@ -2854,7 +2854,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding-left: 0.6rem;
   font-size: var(--fs-sm);
   flex-shrink: 0;
-  animation: tool-mark-pop 0.35s var(--ease-out-expo) both;
+  animation: tool-mark-pop var(--dur-layout) var(--ease-out-expo) both;
   white-space: nowrap;
 }
 .tool-row.ok .tool-mark { color: var(--green-dim); }
@@ -3053,7 +3053,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   justify-content: center;
   background: var(--bg);
-  transition: opacity 0.35s ease, visibility 0.35s ease;
+  transition: opacity var(--dur-layout) ease, visibility var(--dur-layout) ease;
   opacity: 1;
   visibility: visible;
 }
@@ -3100,7 +3100,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: 1px;
   overflow: hidden;
   opacity: 0;
-  transition: opacity 0.3s ease;
+  transition: opacity var(--dur-medium) ease;
 }
 .page-loader-bar.visible {
   opacity: 1;
@@ -3184,7 +3184,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: block;
   height: 100%;
   background: var(--text-mid);
-  transition: width 0.3s;
+  transition: width var(--dur-medium);
 }
 
 .terminal-usage.warm .usage-ctx { color: var(--warning); border-color: var(--warning-border); }
@@ -3225,7 +3225,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   font-weight: 500;
   letter-spacing: 0.02em;
-  transition: color 0.3s;
+  transition: color var(--dur-medium);
 }
 
 .usage-cache .cache-pct.high { color: var(--green); }
@@ -3283,7 +3283,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
-  transition: transform 0.45s var(--ease-panel);
+  transition: transform var(--dur-panel) var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
 .tree-panel[hidden] { display: flex !important; pointer-events: none; }
@@ -3611,7 +3611,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-sm);
   font-weight: 500;
   letter-spacing: 0.01em;
-  animation: ac-slide-up 0.2s var(--ease-out-back);
+  animation: ac-slide-up var(--dur-quick) var(--ease-out-back);
 }
 
 @keyframes ac-slide-up {
@@ -3655,7 +3655,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--bg2);
   border-top: 1px solid var(--border-light);
   flex-shrink: 0;
-  transition: all 0.3s var(--ease-out-expo);
+  transition: all var(--dur-medium) var(--ease-out-expo);
 }
 
 .usage-branch[hidden] { display: none; }
@@ -3687,7 +3687,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s var(--ease-out-expo);
+  transition: all var(--dur-quick) var(--ease-out-expo);
   padding: 0;
   margin-left: 2px;
 }
@@ -3699,7 +3699,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .usage-strip-toggle svg {
-  transition: transform 0.25s var(--ease-out-expo);
+  transition: transform var(--dur-normal) var(--ease-out-expo);
 }
 
 .usage-strip-toggle.collapsed svg {
@@ -3730,7 +3730,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 /* ── Balance chip (DeepSeek) ─────────────────────────────────────── */
 .usage-balance {
-  transition: all 0.3s var(--ease-out-expo);
+  transition: all var(--dur-medium) var(--ease-out-expo);
   cursor: default;
 }
 
@@ -3754,7 +3754,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .usage-model {
   cursor: pointer;
-  transition: all 0.2s var(--ease-out-expo);
+  transition: all var(--dur-quick) var(--ease-out-expo);
 }
 
 .usage-model:hover {
@@ -4097,7 +4097,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: center;
   padding: 0 2px;
   line-height: 1;
-  transition: color 0.2s;
+  transition: color var(--dur-quick);
 }
 
 .vision-indicator:hover { color: var(--cyan); }
@@ -4185,7 +4185,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
-  transition: transform 0.45s var(--ease-panel);
+  transition: transform var(--dur-panel) var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
 
@@ -4470,7 +4470,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
-  transition: transform 0.45s var(--ease-panel), right 0.45s var(--ease-panel);
+  transition: transform var(--dur-panel) var(--ease-panel), right var(--dur-panel) var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
 
@@ -4579,7 +4579,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: center;
   opacity: 0;
   color: var(--text-mid);
-  transition: transform 0.2s var(--ease-out-expo), opacity var(--dur-fast);
+  transition: transform var(--dur-quick) var(--ease-out-expo), opacity var(--dur-fast);
 }
 
 .files-entry:hover .files-entry-chevron,
@@ -4650,7 +4650,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb, var(--text-faint));
   border-radius: var(--radius-xs);
-  transition: background 0.2s;
+  transition: background var(--dur-quick);
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-mid);
@@ -4664,7 +4664,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 /* ── Session item animation ─────────────────────────────────────── */
 .session-list li {
-  animation: session-item-in 0.3s var(--ease-out-expo) both;
+  animation: session-item-in var(--dur-medium) var(--ease-out-expo) both;
 }
 .session-list.no-anim li {
   animation: none;
@@ -4689,7 +4689,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
-  transition: transform 0.45s var(--ease-panel);
+  transition: transform var(--dur-panel) var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
 
@@ -4780,7 +4780,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   resize: vertical;
   box-sizing: border-box;
   tab-size: 2;
-  transition: all 0.2s;
+  transition: all var(--dur-quick);
   letter-spacing: 0.01em;
 }
 
@@ -4853,7 +4853,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: none;
   border-radius: calc(var(--radius-sm) - 1px);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--dur-quick);
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
@@ -4920,7 +4920,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   appearance: none;
   -webkit-appearance: none;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--dur-quick);
 }
 
 .config-select:focus {
@@ -4942,7 +4942,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   transform: translateY(-50%);
   color: var(--text-mid);
   pointer-events: none;
-  transition: color 0.2s;
+  transition: color var(--dur-quick);
 }
 
 .config-select-wrap:focus-within .config-select-chevron {
@@ -4973,7 +4973,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-md);
-  transition: all 0.2s;
+  transition: all var(--dur-quick);
 }
 
 .config-input:focus {
@@ -5005,7 +5005,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--bg3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  transition: background 0.2s, border-color 0.2s;
+  transition: background var(--dur-quick), border-color var(--dur-quick);
   flex-shrink: 0;
 }
 .config-toggle-slider::after {
@@ -5017,7 +5017,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   height: 14px;
   border-radius: 50%;
   background: var(--text-dim);
-  transition: transform 0.2s, background 0.2s;
+  transition: transform var(--dur-quick), background var(--dur-quick);
 }
 .config-toggle input:checked + .config-toggle-slider {
   background: var(--accent);
@@ -5105,7 +5105,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-md);
   background: transparent;
   box-shadow: none;
-  transition: border-color 0.2s;
+  transition: border-color var(--dur-quick);
 }
 .thinking-block:hover,
 .tool-group:hover {
@@ -5149,7 +5149,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   margin-left: auto;
   flex-shrink: 0;
   opacity: 0.45;
-  transition: transform 0.2s var(--ease-out-expo);
+  transition: transform var(--dur-quick) var(--ease-out-expo);
 }
 .thinking-block.collapsed .thinking-block-head::after,
 .tool-group.collapsed .tool-group-head::after {
@@ -5161,7 +5161,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   opacity: 1;
   overflow: hidden;
   max-height: 2000px;
-  transition: max-height 0.3s var(--ease-out-expo), opacity 0.2s;
+  transition: max-height var(--dur-medium) var(--ease-out-expo), opacity var(--dur-quick);
 }
 .tool-group-body {
   padding: 0.1rem 0.2rem 0.2rem;
@@ -5216,7 +5216,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-md);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-sm);
-  transition: border-color 0.2s, box-shadow 0.2s, border-radius 0.2s;
+  transition: border-color var(--dur-quick), box-shadow var(--dur-quick), border-radius var(--dur-quick);
 }
 /* Stuck to the top of the scroller: dock flush against the top edge
    (squared top corners) and elevate for a floating-panel feel. */
@@ -5270,7 +5270,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   flex-shrink: 0;
   opacity: 0.45;
-  transition: transform 0.2s var(--ease-out-expo);
+  transition: transform var(--dur-quick) var(--ease-out-expo);
 }
 .todo-block.collapsed .todo-head::after {
   transform: rotate(-90deg);
@@ -5316,14 +5316,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   width: 0;
   background: var(--accent);
   border-radius: 0 2px 2px 0;
-  transition: width 0.45s var(--ease-out-expo);
+  transition: width var(--dur-panel) var(--ease-out-expo);
 }
 
 .todo-body {
   opacity: 1;
   overflow: hidden;
   max-height: 2000px;
-  transition: max-height 0.3s var(--ease-out-expo), opacity 0.2s;
+  transition: max-height var(--dur-medium) var(--ease-out-expo), opacity var(--dur-quick);
 }
 .todo-block.collapsed .todo-body {
   max-height: 0;
@@ -5479,7 +5479,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .reasoning-phase-body {
   border-top: 1px solid var(--border);
   padding: 0.35rem 0.55rem;
-  transition: max-height 0.45s var(--ease-out-expo), opacity 0.3s var(--ease-out-expo), padding 0.45s ease, border-top-color 0.3s ease;
+  transition: max-height var(--dur-panel) var(--ease-out-expo), opacity var(--dur-medium) var(--ease-out-expo), padding var(--dur-panel) ease, border-top-color var(--dur-medium) ease;
 }
 .reasoning-phase.collapsed .reasoning-phase-body,
 .reasoning-phase-body[hidden] {
@@ -5577,7 +5577,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
-  transition: transform 0.45s var(--ease-panel);
+  transition: transform var(--dur-panel) var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
 
@@ -5752,7 +5752,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-md);
-  transition: all 0.2s;
+  transition: all var(--dur-quick);
   box-sizing: border-box;
 }
 
@@ -5776,7 +5776,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   line-height: 1.5;
   resize: vertical;
   min-height: 68px;
-  transition: all 0.2s;
+  transition: all var(--dur-quick);
   box-sizing: border-box;
 }
 
@@ -5815,7 +5815,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: 1px dashed var(--border);
   background: transparent;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--dur-quick);
 }
 
 .prompt-add-btn:hover {
@@ -5826,7 +5826,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .prompt-add-btn svg {
   flex-shrink: 0;
-  transition: transform 0.2s;
+  transition: transform var(--dur-quick);
 }
 
 .prompt-add-btn:hover svg {
@@ -6010,6 +6010,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -6288,7 +6289,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-direction: column;
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
-  transition: transform 0.45s var(--ease-panel), right 0.45s var(--ease-panel);
+  transition: transform var(--dur-panel) var(--ease-panel), right var(--dur-panel) var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
 
@@ -6412,7 +6413,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  animation: fadeUp 0.2s var(--ease-out-expo);
+  animation: fadeUp var(--dur-quick) var(--ease-out-expo);
 }
 .quick-create-close {
   position: absolute;
@@ -6797,11 +6798,11 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 [data-theme="academic"] .win-title-bar-drag {
-  color: #5a5a65;
+  color: var(--text-dim);
 }
 
 [data-theme="academic"] .win-title-bar-controls button:hover {
-  background: #e8e3da;
+  background: var(--bg3);
 }
 
 [data-theme="academic"] .win-title-bar-controls button.close:hover {
@@ -6883,7 +6884,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 [data-theme="academic"] .diff-head {
   background: #ebe6db;
-  color: #5a5a65;
+  color: var(--text-dim);
 }
 
 [data-theme="academic"] .diff-sep {
@@ -6902,7 +6903,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 [data-theme="academic"] .tool-row {
-  background: #f2efe8;
+  background: var(--bg-elevated);
   border-color: rgba(30, 59, 92, 0.10);
 }
 

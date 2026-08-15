@@ -62,7 +62,14 @@ const toggleTheme = () => {
 
 try {
   const stored = localStorage.getItem(LS_THEME);
-  setTheme(THEMES.includes(stored ?? "") ? stored : "light");
+  if (THEMES.includes(stored ?? "")) {
+    setTheme(stored);
+  } else {
+    // No explicit preference yet — follow the system color scheme instead
+    // of defaulting to light (respects prefers-color-scheme).
+    const prefersDark = !!window.matchMedia?.("(prefers-color-scheme: dark)")?.matches;
+    setTheme(prefersDark ? "dark" : "light");
+  }
 } catch { setTheme("light"); }
 
 themeToggle?.addEventListener("click", toggleTheme);

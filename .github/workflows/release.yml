@@ -111,8 +111,11 @@ jobs:
             exit 0
           fi
           pip install --quiet coscmd
+          # Use the global-acceleration endpoint (cos.accelerate.myqcloud.com)
+          # so the cross-pacific upload from the GitHub runner rides Tencent's
+          # backbone instead of the slow public internet path.
           coscmd config -a "$COS_SECRET_ID" -s "$COS_SECRET_KEY" \
-            -b ashub-release-1258678103 -r ap-beijing
+            -b ashub-release-1258678103 -e cos.accelerate.myqcloud.com --retry 10
           # Only upload what auto-update needs: the latest*.yml metadata,
           # the installers, and their blockmaps.  Skip the unpacked app
           # dirs (linux-unpacked/win-unpacked/mac*) — they're build

@@ -343,20 +343,20 @@
   }
   .sidebar-toggle { display: none; }
   .ctx-panel {
-    width: min(300px, 92vw);
+    width: min(var(--panel-w), 92vw);
     z-index: 20;
     box-shadow: -4px 0 24px rgba(0, 0, 0, 0.25);
   }
   .files-panel {
-    width: min(300px, 85vw);
+    width: min(var(--panel-w), 85vw);
     z-index: 19;
     box-shadow: -4px 0 24px rgba(0, 0, 0, 0.25);
   }
   .app.ctx-open.files-open .files-panel {
-    right: calc(42px + min(300px, 92vw));
+    right: calc(var(--toolbar-w) + min(var(--panel-w), 92vw));
   }
   .config-overlay {
-    width: min(300px, 90vw);
+    width: min(var(--panel-w), 90vw);
   }
   .live-wrap .terminal-body { padding: 0.9rem 1rem; }
   /* Crowded input row: drop the usage-strip toggle to keep typing space */
@@ -512,7 +512,7 @@ body.exiting .app {
   height: 100vh;
   overflow: hidden;
   transition: grid-template-columns 0.35s var(--ease-in-out);
-  padding-right: 42px; /* space for toolbar */
+  padding-right: var(--toolbar-w); /* space for toolbar */
 }
 .app.sidebar-collapsed { grid-template-columns: 0 1fr; }
 .app.sidebar-collapsed .sidebar { display: none; }
@@ -935,7 +935,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   left: auto;
   right: 0;
   bottom: 0;
-  width: 42px;
+  width: var(--toolbar-w);
   z-index: 25;
   display: flex;
   flex-direction: column;
@@ -2239,41 +2239,41 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 	  .app.files-open .live-wrap .terminal,
 	  .app.tree-open .live-wrap .terminal,
 	  .app.sa-open .live-wrap .terminal {
-	    padding-right: 300px;
+	    padding-right: var(--panel-w);
 	  }
 	  /* both ctx+files open: 600px */
 	  .app.ctx-open.files-open .live-wrap .terminal {
-	    padding-right: 600px;
+	    padding-right: calc(2 * var(--panel-w));
 	  }
 	  /* ctx + subagent open */
 	  .app.ctx-open.sa-open:not(.files-open) .live-wrap .terminal {
-	    padding-right: 600px;
+	    padding-right: calc(2 * var(--panel-w));
 	  }
 	  /* files + subagent open */
 	  .app.files-open.sa-open:not(.ctx-open) .live-wrap .terminal {
-	    padding-right: 600px;
+	    padding-right: calc(2 * var(--panel-w));
 	  }
 	  /* all three open: ctx + files + subagent */
 	  .app.ctx-open.files-open.sa-open .live-wrap .terminal {
-	    padding-right: 900px;
+	    padding-right: calc(3 * var(--panel-w));
 	  }
     /* tree + subagent open */
     .app.tree-open.sa-open:not(.ctx-open):not(.files-open) .live-wrap .terminal {
-      padding-right: 600px;
+      padding-right: calc(2 * var(--panel-w));
     }
     /* tree + ctx open */
     .app.ctx-open.tree-open:not(.files-open):not(.sa-open) .live-wrap .terminal {
-      padding-right: 600px;
+      padding-right: calc(2 * var(--panel-w));
     }
     /* tree + files open */
     .app.files-open.tree-open:not(.ctx-open):not(.sa-open) .live-wrap .terminal {
-      padding-right: 600px;
+      padding-right: calc(2 * var(--panel-w));
     }
   /* config / prompt / shortcuts overlays */
   .app:has(.config-overlay.open) .live-wrap .terminal,
   .app:has(.prompt-overlay.open) .live-wrap .terminal,
   .app.shortcuts-open .live-wrap .terminal {
-    padding-right: 300px;
+    padding-right: var(--panel-w);
   }
 }
 
@@ -2284,7 +2284,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   flex-shrink: 0;
   gap: 0.6rem;
   padding: 0.7rem 1.2rem;
-  margin-right: -42px; /* negate .app padding-right so bar reaches toolbar edge */
+  margin-right: calc(-1 * var(--toolbar-w)); /* negate .app padding-right so bar reaches toolbar edge */
   border-bottom: 1px solid var(--border);
   height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
@@ -3275,8 +3275,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: fixed;
   top: var(--ui-title-bar-height, 40px);
   bottom: 0;
-  right: 42px;
-  width: 300px;
+  right: var(--toolbar-w);
+  width: var(--panel-w);
   z-index: 14;
   border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg2) 88%, transparent);
@@ -3285,7 +3285,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 42px));
+  transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -4182,8 +4182,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: fixed;
   top: var(--ui-title-bar-height, 40px);
   bottom: 0;
-  right: 42px;
-  width: 300px;
+  right: var(--toolbar-w);
+  width: var(--panel-w);
   z-index: 15;
   border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg2) 88%, transparent);
@@ -4192,7 +4192,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 42px));
+  transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -4469,8 +4469,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: fixed;
   top: var(--ui-title-bar-height, 40px);
   bottom: 0;
-  right: 42px;
-  width: 300px;
+  right: var(--toolbar-w);
+  width: var(--panel-w);
   z-index: 14;
   border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg2) 88%, transparent);
@@ -4479,7 +4479,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 42px));
+  transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform 0.45s var(--ease-panel), right 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -4496,7 +4496,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 /* When both panels open, shift files panel left of ctx panel */
 .app.ctx-open.files-open .files-panel {
-  right: calc(42px + 300px);
+  right: calc(var(--toolbar-w) + var(--panel-w));
 }
 
 .files-empty-sub {
@@ -4690,8 +4690,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: fixed;
   top: var(--ui-title-bar-height, 40px);
   bottom: 0;
-  right: 42px;
-  width: 300px;
+  right: var(--toolbar-w);
+  width: var(--panel-w);
   z-index: 16;
   background: color-mix(in srgb, var(--bg2) 88%, transparent);
   backdrop-filter: blur(18px);
@@ -4700,7 +4700,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 42px));
+  transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -5580,8 +5580,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: fixed;
   top: var(--ui-title-bar-height, 40px);
   bottom: 0;
-  right: 42px;
-  width: 300px;
+  right: var(--toolbar-w);
+  width: var(--panel-w);
   z-index: 17;
   background: color-mix(in srgb, var(--bg2) 88%, transparent);
   backdrop-filter: blur(18px);
@@ -5590,7 +5590,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 42px));
+  transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -6293,8 +6293,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   position: fixed;
   top: var(--ui-title-bar-height, 40px);
   bottom: 0;
-  right: 42px;
-  width: 300px;
+  right: var(--toolbar-w);
+  width: var(--panel-w);
   z-index: 14;
   border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg2) 88%, transparent);
@@ -6303,7 +6303,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transform: translateX(calc(100% + 42px));
+  transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform 0.45s var(--ease-panel), right 0.45s var(--ease-panel);
   box-shadow: var(--shadow-panel-md);
 }
@@ -6320,13 +6320,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 /* Shift subagent panel when other panels are also open */
 .app.ctx-open.sa-open:not(.files-open) .subagent-panel {
-  right: calc(42px + 300px);
+  right: calc(var(--toolbar-w) + var(--panel-w));
 }
 .app.files-open.sa-open:not(.ctx-open) .subagent-panel {
-  right: calc(42px + 300px);
+  right: calc(var(--toolbar-w) + var(--panel-w));
 }
 .app.ctx-open.files-open.sa-open .subagent-panel {
-  right: calc(42px + 600px);
+  right: calc(var(--toolbar-w) + 2 * var(--panel-w));
 }
 
 
@@ -6511,7 +6511,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Shortcuts panel ────────────────────────────────────────────── */
 
 .shortcuts-modal {
-  max-width: 300px;
+  max-width: var(--panel-w);
 }
 
 .shortcuts-body {

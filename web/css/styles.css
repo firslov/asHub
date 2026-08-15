@@ -102,6 +102,13 @@
   --radius-xl:  20px;
   --radius-pill: 999px;
 
+  /* Layout geometry — single source of truth for the app shell.
+     Keeps the right-side toolbar and every side panel/overlay on one
+     shared grid so all windows stay visually consistent.
+     (--sidebar-w is dynamic, managed by prefs.js on .app.) */
+  --toolbar-w: 42px;
+  --panel-w:   300px;
+
   /* Scrollbar */
   --scrollbar-thumb: #c8c8d2;
   --scrollbar-track: transparent;

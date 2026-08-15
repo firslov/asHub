@@ -112,6 +112,35 @@ Module._resolveFilename = function (request, parent, isMain, options) {
 const isDev = !app.isPackaged;
 const HUB_PORT = 7878;
 
+// ── Update install capability ─────────────────────────────────────────
+// Squirrel.Mac (and the NSIS/AppImage installers) verify that the new
+// bundle satisfies the CURRENT app's designated requirement before
+// replacing it.  Ad-hoc signed builds (identity: "-") have a CDHash-based
+// requirement that changes on every build, so in-place auto-install can
+// never succeed between two ad-hoc versions — ShipIt silently bails
+// (empty ShipIt state dir, no error UI).  Detect the ad-hoc case once at
+// startup and steer the update card to a manual-install flow instead.
+function detectAdhocSignature() {
+  if (process.platform !== "darwin") return false;
+  try {
+    // Synchronous is fine: runs once during startup bootstrap.
+    // codesign -dv prints "Signature=adhoc" on STDERR with exit code 0,
+    // so use spawnSync to read stderr on both success and failure paths.
+    const r = require("child_process").spawnSync(
+      "/usr/bin/codesign", ["-dv", process.execPath], { encoding: "utf8" }
+    );
+    return /Signature=adhoc/i.test(r.stderr || "");
+  } catch {
+    // codesign missing or failed — assume signed (fail open to the normal
+    // flow; a wrong guess only shows the same broken button as today).
+    return false;
+  }
+}
+const isAdhocSigned = detectAdhocSignature();
+
+const fs = require("fs");
+const crypto = require("crypto");
+
 // ── Download mirror ────────────────────────────────────────────────────
 // Route auto-updater traffic through a mirror for faster GitHub access.
 // Falls back to GitHub directly if the mirror is unreachable.
@@ -120,9 +149,6 @@ const GITHUB_OWNER = "firslov";
 const GITHUB_REPO = "ashub";
 
 let mirrorFailed = false;
-
-const fs = require("fs");
-const crypto = require("crypto");
 
 function getInstallId() {
   const file = path.join(app.getPath("userData"), ".install-id");
@@ -164,6 +190,9 @@ let mainWindow = null;
 let _shuttingDown = false;
 let _installOnQuit = false;
 let shutdownHubRef = null;
+// Path of the last downloaded update archive (macOS ad-hoc manual-install
+// flow).  Set on update-downloaded, cleared when the download cache is.
+let cachedUpdateFile = null;
 
 // If an update is found before the renderer's update card is subscribed,
 // buffer the version and deliver it once the page signals readiness
@@ -335,6 +364,11 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("update-downloaded", (info) => {
+    console.log("[updater] update downloaded:", info.version);
+    // Remember the downloaded archive for the ad-hoc manual-install flow
+    // (shell.showItemInFolder needs a concrete path; the download cache
+    // dir is stable per app but the file name carries the version).
+    try { cachedUpdateFile = autoUpdater.downloadedUpdateHelper?.file || null; } catch { cachedUpdateFile = null; }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setProgressBar(-1);
       mainWindow.webContents.send("update-downloaded", info.version);
@@ -390,6 +424,17 @@ function setupIPC() {
   });
 
   ipcMain.handle("quit-and-install", async () => {
+    // Ad-hoc signed builds can never pass Squirrel's designated-requirement
+    // check across versions (CDHash differs per build), so quitAndInstall
+    // would silently do nothing.  Redirect to the manual-install flow
+    // instead — reveal the downloaded dmg (or the releases page) and let
+    // the user drag the new app into /Applications.
+    if (isAdhocSigned) {
+      console.log("[updater] ad-hoc build: redirecting quit-and-install to manual install");
+      const res = await openUpdateDownload();
+      if (res.ok) return { ok: true, manual: true };
+      return { ok: false, manual: true, error: res.error };
+    }
     try {
       // Flag the quit as an update install so the before-quit handler
       // skips the slow graceful hub shutdown.  On macOS Squirrel.Mac's
@@ -406,6 +451,33 @@ function setupIPC() {
       return { ok: false, error: err.message };
     }
   });
+
+  // Manual-install helper for ad-hoc builds: reveal the downloaded update
+  // archive in Finder, falling back to the releases page when no download
+  // is cached.  Returns { ok, target } so the renderer can explain what
+  // was opened.
+  async function openUpdateDownload() {
+    try {
+      if (cachedUpdateFile && fs.existsSync(cachedUpdateFile)) {
+        shell.showItemInFolder(cachedUpdateFile);
+        return { ok: true, target: "file" };
+      }
+    } catch (err) {
+      console.error("[updater] reveal update file failed:", err.message);
+    }
+    try {
+      await shell.openExternal(`https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`);
+      return { ok: true, target: "releases" };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  ipcMain.handle("open-update-download", () => openUpdateDownload());
+
+  // Ad-hoc signature flag for the renderer: the update card switches to a
+  // manual-install flow instead of the (permanently broken) in-place one.
+  ipcMain.handle("get-update-mode", () => ({ manual: isAdhocSigned }));
 
   // Renderer signals that its update card listeners are registered; flush
   // any update-available buffered during the startup race.

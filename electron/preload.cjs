@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   checkForUpdate: () => ipcRenderer.invoke("check-for-update"),
   startUpdateDownload: () => ipcRenderer.invoke("start-update-download"),
   quitAndInstall: () => ipcRenderer.invoke("quit-and-install"),
+  openUpdateDownload: () => ipcRenderer.invoke("open-update-download"),
+  getUpdateMode: () => ipcRenderer.invoke("get-update-mode"),
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
   focusWindow: () => ipcRenderer.invoke("focus-window"),
   windowMinimize: () => ipcRenderer.invoke("window-minimize"),

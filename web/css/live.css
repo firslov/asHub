@@ -291,7 +291,7 @@
   margin: 0 0.1rem;
   border: 1px solid var(--border-mid);
   border-bottom-width: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg3);
   color: var(--text-dim);
   font-family: inherit;
@@ -501,7 +501,7 @@ body {
 
 body.exiting .app {
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .app {
@@ -1034,7 +1034,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   cursor: col-resize;
   z-index: 5;
   background: transparent;
-  transition: background 0.15s;
+  transition: background var(--dur-fast);
 }
 .sidebar-resize:hover,
 .app.sidebar-resizing .sidebar-resize {
@@ -1063,7 +1063,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text);
   font-family: inherit;
   font-size: var(--fs-sm);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
 }
 .sidebar-filter:focus {
   outline: none;
@@ -1210,7 +1210,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast);
   z-index: 1;
 }
 .session-list li:hover::before,
@@ -1473,7 +1473,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 .permission-kind-badge {
   padding: 0.15rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg3);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -1543,7 +1543,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   cursor: pointer;
   background: var(--bg3);
   color: var(--text);
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
   white-space: nowrap;
 }
 .permission-btn svg { flex-shrink: 0; opacity: 0.7; }
@@ -1749,7 +1749,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--purple);
   background: color-mix(in srgb, var(--purple) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--purple) 18%, transparent);
@@ -2767,7 +2767,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   font-family: var(--font-mono);
   line-height: 1.4;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
 }
 .msg-action-btn:hover {
   color: var(--text);
@@ -2902,7 +2902,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   gap: 0.4rem;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast);
   z-index: 1;
 }
 .tool-body:hover .tool-body-actions,
@@ -2917,7 +2917,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.1rem 0.5rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
 }
 
 .tool-body-btn:hover {
@@ -2956,7 +2956,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   gap: 0.4rem;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast);
 }
 
 .diff-block:hover .diff-actions { opacity: 1; }
@@ -2971,7 +2971,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.1rem 0.45rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
 }
 
 .diff-btn:hover { color: var(--cyan); border-color: var(--cyan-dim); }
@@ -3264,7 +3264,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 .compaction-marker .cm-pill {
   padding: 0.2rem 0.6rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--border-mid);
   color: var(--text-muted, var(--text-faint));
   font-weight: 500;
@@ -3355,7 +3355,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .tree-active-badge {
   font-size: var(--fs-xs);
   padding: 0.05rem 0.4rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-dim, var(--cyan));
   color: var(--on-accent);
   font-weight: 500;
@@ -3364,7 +3364,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .tree-leaf-badge {
   font-size: var(--fs-xs);
   padding: 0.05rem 0.4rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--border-mid);
   color: var(--text-dim);
   letter-spacing: var(--tracking-label-sm);
@@ -3552,7 +3552,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.1rem 0.5rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
 }
 
 .err-card-toggle:hover {
@@ -3779,7 +3779,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   box-shadow: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  animation: dropdown-in 0.15s var(--ease-out-expo);
+  animation: dropdown-in var(--dur-fast) var(--ease-out-expo);
 }
 @keyframes dropdown-in {
   from { opacity: 0; transform: translateY(-4px); }
@@ -3798,7 +3798,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   width: 100%;
   padding: 7px 10px 7px 1.8rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg3);
   color: var(--text);
   font-family: var(--font-sans);
@@ -3845,7 +3845,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   text-transform: none;
   letter-spacing: 0.03em;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-glow);
   color: var(--accent);
 }
@@ -3872,9 +3872,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-dim);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 0.15s var(--ease-out-expo);
+  transition: all var(--dur-fast) var(--ease-out-expo);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3984,7 +3984,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   top: -1.4rem;
   left: 1.15rem;
   padding: 0.08rem 0.55rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   background: var(--bg3);
   color: var(--accent);
@@ -4080,7 +4080,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast);
 }
 
 .image-preview-item:hover .image-preview-remove { opacity: 1; }
@@ -4108,13 +4108,13 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .agent-box-img {
   max-width: 320px;
   max-height: 240px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   margin: 6px 0 2px;
   border: 1px solid var(--border);
   object-fit: contain;
   background: var(--bg-elevated);
   cursor: pointer;
-  transition: transform 0.15s var(--ease-out-expo);
+  transition: transform var(--dur-fast) var(--ease-out-expo);
 }
 
 .agent-box-img:hover { transform: scale(1.02); }
@@ -4129,7 +4129,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  animation: fadeIn 0.15s;
+  animation: fadeIn var(--dur-fast);
 }
 
 .img-lightbox img {
@@ -4279,7 +4279,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-sm);
   font-weight: 400;
   position: relative;
-  transition: all 0.15s var(--ease-out-expo);
+  transition: all var(--dur-fast) var(--ease-out-expo);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
@@ -4425,7 +4425,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   margin-top: 0.35rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
 }
 
 .ctx-chevron:hover { color: var(--accent); border-color: var(--accent-border); }
@@ -4446,7 +4446,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.14rem 0.5rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
 }
 
 /* Danger hover — shared by all destructive row/message actions. */
@@ -4508,7 +4508,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--text);
-  transition: all 0.15s var(--ease-out-expo);
+  transition: all var(--dur-fast) var(--ease-out-expo);
   user-select: none;
 }
 
@@ -4529,7 +4529,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   justify-content: center;
   opacity: 0.7;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast);
 }
 
 .files-entry:hover .files-entry-icon { opacity: 1; }
@@ -4562,7 +4562,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-xs);
   color: var(--text-faint);
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast);
 }
 
 .files-entry:hover .files-entry-kb {
@@ -4579,7 +4579,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: center;
   opacity: 0;
   color: var(--text-mid);
-  transition: transform 0.2s var(--ease-out-expo), opacity 0.15s;
+  transition: transform 0.2s var(--ease-out-expo), opacity var(--dur-fast);
 }
 
 .files-entry:hover .files-entry-chevron,
@@ -5004,7 +5004,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   height: 20px;
   background: var(--bg3);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   transition: background 0.2s, border-color 0.2s;
   flex-shrink: 0;
 }
@@ -5047,7 +5047,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-radius: var(--radius-sm);
   color: var(--text-mid);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
   padding: 0;
 }
 
@@ -5128,7 +5128,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   cursor: pointer;
   user-select: none;
   text-align: left;
-  transition: color 0.15s;
+  transition: color var(--dur-fast);
 }
 .tool-group-head {
   /* button reset — buttons add letter-spacing in some browsers */
@@ -5258,7 +5258,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   cursor: pointer;
   user-select: none;
   text-align: left;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
 }
 .todo-head:hover {
   color: var(--text);
@@ -5440,7 +5440,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   cursor: pointer;
   user-select: none;
   text-align: left;
-  transition: color 0.15s;
+  transition: color var(--dur-fast);
 }
 .reasoning-phase-head:hover {
   color: var(--text);
@@ -5536,7 +5536,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: 0.1rem 0.55rem;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
   margin-right: 0.4rem;
 }
 
@@ -5667,7 +5667,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.5rem;
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border-light);
-  transition: background 0.15s;
+  transition: background var(--dur-fast);
 }
 
 .prompt-item:hover { background: var(--bg3); }
@@ -5706,7 +5706,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.25rem;
   flex-shrink: 0;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--dur-fast);
 }
 
 .prompt-item:hover .prompt-item-actions { opacity: 1; }
@@ -5722,7 +5722,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: transparent;
   color: var(--text-mid);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
 }
 
 .prompt-item-btn:hover {
@@ -5860,7 +5860,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   appearance: none;
   background: color-mix(in srgb, var(--bg2) 50%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0.28rem 0.95rem;
   font: inherit;
   font-size: var(--fs-sm);
@@ -5875,7 +5875,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   white-space: nowrap;
   position: relative;
   margin: 0 2px;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
 .session-tab:hover {
@@ -5911,7 +5911,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
   white-space: nowrap;
@@ -6075,7 +6075,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition: background var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
 }
 .skill-card:hover {
   background: var(--bg3);
@@ -6142,7 +6142,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-size: var(--fs-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  transition: background var(--dur-fast), opacity var(--dur-fast);
   white-space: nowrap;
 }
 .skill-install-btn:hover { opacity: 0.9; }
@@ -6164,7 +6164,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   padding: var(--space-2) var(--space-3);
   font-size: var(--fs-md);
   border-radius: var(--radius-sm);
-  transition: background 0.15s;
+  transition: background var(--dur-fast);
 }
 .skill-installed-item:hover { background: var(--bg3); }
 .skill-installed-name {
@@ -6183,7 +6183,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
   margin-left: auto;
 }
 .skill-remove-btn:hover {
@@ -6219,7 +6219,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: none;
   border-bottom: 2px solid transparent;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color var(--dur-fast), border-color var(--dur-fast);
   font-family: inherit;
 }
 .skills-tab:hover { color: var(--text); }
@@ -6263,7 +6263,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition: color var(--dur-fast), background var(--dur-fast);
   font-family: inherit;
   line-height: 1.5;
 }
@@ -6341,7 +6341,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font-family: inherit;
   cursor: pointer;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-fast);
   flex: 1;
   max-width: 100%;
 }
@@ -6422,12 +6422,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--text-faint);
   cursor: pointer; border-radius: var(--radius-sm);
   display: flex; align-items: center; justify-content: center;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
 }
 .quick-create-close:hover { background: var(--bg2); color: var(--text); }
 .quick-create-icon {
   width: 52px; height: 52px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
@@ -6447,7 +6447,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  transition: border-color 0.15s;
+  transition: border-color var(--dur-fast);
 }
 .quick-create-cwd-row:focus-within { border-color: var(--accent); }
 .quick-create-cwd-icon {
@@ -6475,7 +6475,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--accent);
   font-size: var(--fs-sm); font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--dur-fast);
 }
 .quick-create-pick:hover { background: var(--bg3); }
 .quick-create-go {
@@ -6487,7 +6487,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--on-accent);
   font-size: var(--fs-md); font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--dur-fast);
   margin-top: 6px;
 }
 .quick-create-go:hover { background: var(--accent-hover); }

@@ -102,11 +102,14 @@ jobs:
       # Upload artifacts to Tencent COS so the updater can download from a
       # fast domestic endpoint instead of the slow VPS→GitHub link.
       - name: Upload to COS
-        if: ${{ secrets.COS_SECRET_ID != '' }}
         env:
           COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
         run: |
+          if [ -z "$COS_SECRET_ID" ] || [ -z "$COS_SECRET_KEY" ]; then
+            echo "COS credentials not set — skipping upload"
+            exit 0
+          fi
           pip install --quiet coscmd
           coscmd config -a "$COS_SECRET_ID" -s "$COS_SECRET_KEY" \
             -b ashub-release-1258678103 -r ap-beijing

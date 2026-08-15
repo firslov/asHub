@@ -20,8 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Commit as the workflow trigger (repo owner), not the GitHub bot,
+          # so automated version bumps don't add a bot entry to contributors.
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
       - run: |
           CUR=$(node -p "require('./package.json').version")
           if [ "$CUR" != "${{ inputs.version }}" ]; then

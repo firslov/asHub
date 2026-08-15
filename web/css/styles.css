@@ -87,6 +87,10 @@
   --border-light: rgba(0, 0, 0, 0.04);
   --border-mid:   rgba(0, 0, 0, 0.11);
   --border-accent: rgba(184, 134, 11, 0.25);
+  /* Raised-edge highlight — a subtle "lit" line on the leading edge of an
+     elevated surface.  Combined with the drop shadow it gives panels a
+     machined/raised read instead of a flat 1px border. */
+  --edge-highlight: rgba(255, 255, 255, 0.55);
 
   /* Sophisticated shadows */
   --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.05);
@@ -221,6 +225,7 @@
   --border-light: rgba(255, 255, 255, 0.06);
   --border-mid:   rgba(255, 255, 255, 0.14);
   --border-accent: rgba(224, 192, 96, 0.30);
+  --edge-highlight: rgba(255, 255, 255, 0.07);
 
   --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.25);
   --shadow-md:   0 4px 14px rgba(0, 0, 0, 0.3);
@@ -286,6 +291,7 @@
   --border-light: rgba(30, 59, 92, 0.05);
   --border-mid:   rgba(30, 59, 92, 0.14);
   --border-accent: rgba(30, 59, 92, 0.22);
+  --edge-highlight: rgba(255, 255, 255, 0.5);
 
   --shadow-sm:   0 1px 3px rgba(30, 35, 45, 0.06);
   --shadow-md:   0 4px 16px rgba(30, 35, 45, 0.08);

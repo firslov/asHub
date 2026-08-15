@@ -3284,7 +3284,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform var(--dur-panel) var(--ease-panel);
-  box-shadow: var(--shadow-panel-md);
+  box-shadow: inset 1px 0 0 var(--edge-highlight), var(--shadow-panel-md);
 }
 .tree-panel[hidden] { display: flex !important; pointer-events: none; }
 .app.tree-open .tree-panel { transform: translateX(0); pointer-events: auto; }
@@ -4186,7 +4186,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform var(--dur-panel) var(--ease-panel);
-  box-shadow: var(--shadow-panel-md);
+  box-shadow: inset 1px 0 0 var(--edge-highlight), var(--shadow-panel-md);
 }
 
 .ctx-panel[hidden] {
@@ -4471,7 +4471,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform var(--dur-panel) var(--ease-panel), right var(--dur-panel) var(--ease-panel);
-  box-shadow: var(--shadow-panel-md);
+  box-shadow: inset 1px 0 0 var(--edge-highlight), var(--shadow-panel-md);
 }
 
 .files-panel[hidden] {
@@ -4690,7 +4690,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform var(--dur-panel) var(--ease-panel);
-  box-shadow: var(--shadow-panel-md);
+  box-shadow: inset 1px 0 0 var(--edge-highlight), var(--shadow-panel-md);
 }
 
 .config-overlay[hidden] {
@@ -5578,7 +5578,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform var(--dur-panel) var(--ease-panel);
-  box-shadow: var(--shadow-panel-md);
+  box-shadow: inset 1px 0 0 var(--edge-highlight), var(--shadow-panel-md);
 }
 
 .prompt-overlay[hidden] {
@@ -6290,7 +6290,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   overflow: hidden;
   transform: translateX(calc(100% + var(--toolbar-w)));
   transition: transform var(--dur-panel) var(--ease-panel), right var(--dur-panel) var(--ease-panel);
-  box-shadow: var(--shadow-panel-md);
+  box-shadow: inset 1px 0 0 var(--edge-highlight), var(--shadow-panel-md);
 }
 
 .subagent-panel[hidden] {

@@ -710,6 +710,7 @@ if (!gotTheLock) {
     // and can make the install silently fail.  Best-effort shutdown in
     // the background, then let the quit proceed without preventDefault.
     if (_installOnQuit) {
+      _shuttingDown = true;
       shutdownHubRef().catch(() => {});
       return;
     }

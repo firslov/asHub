@@ -109,6 +109,13 @@
   --toolbar-w: 42px;
   --panel-w:   300px;
 
+  /* Unified shell material — one surface for the sidebar, side panels,
+     overlays and toolbar so the whole app reads as a single consistent
+     surface.  Solid (vs. translucent blur) reads more professional for a
+     desktop tool and guarantees identical rendering in every window. */
+  --surface-panel: var(--bg2);
+  --icon-btn-size: 2rem;
+
   /* Scrollbar */
   --scrollbar-thumb: #c8c8d2;
   --scrollbar-track: transparent;

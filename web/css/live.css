@@ -943,7 +943,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   justify-content: center;
   gap: 0.25rem;
   padding: 0.5rem 0;
-  background: var(--bg2);
+  background: var(--surface-panel);
   border-left: 1px solid var(--border);
 }
 
@@ -1010,7 +1010,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg2);
+  background: var(--surface-panel);
 }
 
 .sidebar::after {
@@ -1045,9 +1045,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.7rem 0.85rem;
+  padding: var(--space-3) var(--space-3);
   border-bottom: 1px solid var(--border);
-  background: var(--bg2);
+  background: var(--surface-panel);
   flex-shrink: 0;
   height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
@@ -1107,8 +1107,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   font: inherit;
   font-size: var(--fs-sm);
   line-height: 1;
-  width: 1.8rem;
-  height: 1.8rem;
+  width: var(--icon-btn-size);
+  height: var(--icon-btn-size);
   border-radius: var(--radius-sm);
   cursor: pointer;
   padding: 0;
@@ -1127,7 +1127,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--accent);
   background: var(--accent-glow);
   border-color: var(--accent-border);
-  transform: scale(1.06);
 }
 
 #new-session:active {
@@ -1142,7 +1141,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .sidebar-btn:active {
-  transform: scale(0.92);
+  transform: scale(0.94);
   transition-duration: var(--dur-fast);
 }
 
@@ -3279,9 +3278,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   width: var(--panel-w);
   z-index: 14;
   border-left: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg2) 88%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: var(--surface-panel);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4167,13 +4164,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   color: var(--accent);
   border-color: var(--accent-border);
   background: var(--accent-glow);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 .bar-btn:active {
-  transform: scale(0.96);
-  box-shadow: 0 1px 3px var(--accent-glow);
+  transform: scale(0.94);
   transition-duration: var(--dur-fast);
 }
 
@@ -4186,9 +4180,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   width: var(--panel-w);
   z-index: 15;
   border-left: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg2) 88%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: var(--surface-panel);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4267,8 +4259,8 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 .bar-btn.icon {
-  width: 2.1rem;
-  height: 2.1rem;
+  width: var(--icon-btn-size);
+  height: var(--icon-btn-size);
   padding: 0;
   text-align: center;
   margin-left: 0;
@@ -4473,9 +4465,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   width: var(--panel-w);
   z-index: 14;
   border-left: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg2) 88%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: var(--surface-panel);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4693,9 +4683,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   right: var(--toolbar-w);
   width: var(--panel-w);
   z-index: 16;
-  background: color-mix(in srgb, var(--bg2) 88%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: var(--surface-panel);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -5583,9 +5571,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   right: var(--toolbar-w);
   width: var(--panel-w);
   z-index: 17;
-  background: color-mix(in srgb, var(--bg2) 88%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: var(--surface-panel);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -6297,9 +6283,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   width: var(--panel-w);
   z-index: 14;
   border-left: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg2) 88%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: var(--surface-panel);
   display: flex;
   flex-direction: column;
   overflow: hidden;

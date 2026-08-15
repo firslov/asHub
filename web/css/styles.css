@@ -9,46 +9,57 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  /* Light palette — clean, warm paper tones for comfortable reading */
-  --bg:           #fafaf7;
-  --bg2:          #f3f2ee;
-  --bg3:          #ebeae5;
-  --bg4:          #e2e1db;
-  --bg-elevated:  #efeeea;
+  /* Light palette — clean, warm paper tones for comfortable reading.
+     Surface ramp: bg (content) → bg2 (panel body) → bg3 (head/hover)
+     → bg4 (pressed), with an even perceptual step between each. */
+  --bg:           #fafaf8;
+  --bg2:          #f0efe9;
+  --bg3:          #e6e5de;
+  --bg4:          #dcdbd3;
+  --bg-elevated:  #fdfdfa;
 
-  /* Sophisticated accent: warm amber/gold */
-  --accent:       #c2851a;
-  --accent-dim:   #9a6f08;
-  --accent-light: #c99a3a;
-  --accent-hover: #a6730e;
-  --accent-glow:  rgba(184, 134, 11, 0.1);
-  --accent-soft:  rgba(184, 134, 11, 0.16);
-  --accent-border: rgba(184, 134, 11, 0.32);
+  /* Accent: warm amber/gold — the single brand accent. Every derived
+     state (glow/soft/border) is computed from --accent-rgb so it can
+     never drift into a second gold. */
+  --accent:        #c2851a;
+  --accent-rgb:    194, 133, 26;
+  --accent-dim:    #9a6f08;
+  --accent-light:  #c99a3a;
+  --accent-hover:  #a6730e;
+  --accent-glow:   rgba(var(--accent-rgb), 0.10);
+  --accent-soft:   rgba(var(--accent-rgb), 0.16);
+  --accent-border: rgba(var(--accent-rgb), 0.32);
 
-  /* Cyan for secondary accents */
-  --cyan:         #2d8a94;
-  --cyan-dim:     #23767f;
-  --cyan-light:   #54b8c2;
-  --cyan-glow:    rgba(45, 138, 148, 0.08);
-  --cyan-soft:    rgba(45, 138, 148, 0.14);
+  /* Cyan is a SEMANTIC color only (info / read / terminal kind), never a
+     decorative second accent. */
+  --cyan:       #2d8a94;
+  --cyan-rgb:   45, 138, 148;
+  --cyan-dim:   #23767f;
+  --cyan-light: #54b8c2;
+  --cyan-glow:  rgba(var(--cyan-rgb), 0.08);
+  --cyan-soft:  rgba(var(--cyan-rgb), 0.14);
 
-  /* Status colors */
-  --green:        #4a8a5e;
-  --green-dim:    #3d7550;
-  --red:          #b33a3a;
-  --red-dim:      #932e2e;
-  --amber:        #b8860b;
-  --purple:       #6c5fa7;
+  /* Status colors — each with an RGB triplet so tinted states
+     (rgba(var(--X-rgb), a)) always match the base token. */
+  --green:       #4a8a5e;
+  --green-rgb:   74, 138, 94;
+  --green-dim:   #3d7550;
+  --red:         #b33a3a;
+  --red-rgb:     179, 58, 58;
+  --red-dim:     #932e2e;
+  --purple:      #6c5fa7;
+  --purple-rgb:  108, 95, 167;
+  --amber:       var(--accent);
 
   /* Status color light variants for highlight states */
-  --green-light:  #6ab87e;
-  --red-rgb:     199, 106, 100;
-  --red-light:    #e06c6c;
+  --green-light: #6ab87e;
+  --red-light:   #e06c6c;
 
   /* Semantic status tokens — single source for success/warning/error/info.
      Base tokens alias the per-theme palette, so theme overrides apply. */
   --success:        var(--green);
   --warning:        #c25e1e;
+  --warning-rgb:    194, 94, 30;
   --error:          var(--red);
   --info:           var(--cyan);
   --on-accent:      #fff;
@@ -86,7 +97,7 @@
   --border:       rgba(0, 0, 0, 0.07);
   --border-light: rgba(0, 0, 0, 0.04);
   --border-mid:   rgba(0, 0, 0, 0.11);
-  --border-accent: rgba(184, 134, 11, 0.25);
+  --border-accent: rgba(var(--accent-rgb), 0.25);
   /* Raised-edge highlight — a subtle "lit" line on the leading edge of an
      elevated surface.  Combined with the drop shadow it gives panels a
      machined/raised read instead of a flat 1px border. */
@@ -96,7 +107,7 @@
   --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.05);
   --shadow-md:   0 4px 14px rgba(0, 0, 0, 0.06);
   --shadow-lg:   0 8px 36px rgba(0, 0, 0, 0.07);
-  --shadow-glow: 0 0 40px rgba(184, 134, 11, 0.04);
+  --shadow-glow: 0 0 40px rgba(var(--accent-rgb), 0.04);
 
   /* Radius system */
   --radius-xs:  4px;
@@ -115,9 +126,10 @@
 
   /* Unified shell material — one surface for the sidebar, side panels,
      overlays and toolbar so the whole app reads as a single consistent
-     surface.  Solid (vs. translucent blur) reads more professional for a
-     desktop tool and guarantees identical rendering in every window. */
+     surface.  Distinguished from the content by color contrast (no hard
+     border), with the drop shadow + edge highlight carrying the depth. */
   --surface-panel: var(--bg2);
+  --surface-head:  var(--bg3);
   --icon-btn-size: 2rem;
 
   /* Scrollbar */
@@ -126,7 +138,7 @@
 
   /* Logo / brand */
   --logo-bg:      linear-gradient(135deg, #1a1a1f 0%, #252528 100%);
-  --logo-border:  rgba(184, 134, 11, 0.14);
+  --logo-border:  rgba(var(--accent-rgb), 0.14);
 
   /* Transitions */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -174,44 +186,49 @@
   --space-4: 1rem;
   --space-5: 1.5rem;
 
-  /* Brand gradients */
+  /* Brand gradients — single accent hue only */
   --accent-gradient: linear-gradient(135deg, var(--accent), var(--accent-dim));
-  --brand-gradient:  linear-gradient(135deg, var(--accent) 0%, var(--cyan) 100%);
+  --brand-gradient:  linear-gradient(135deg, var(--accent) 0%, var(--accent-dim) 100%);
 }
 
 /* ── Dark theme ──────────────────────────────────────────────────── */
 [data-theme="dark"] {
-  --bg:           #18181c;
-  --bg2:          #212126;
-  --bg3:          #2a2a32;
-  --bg4:          #33333c;
+  --bg:           #17171b;
+  --bg2:          #1f1f24;
+  --bg3:          #282830;
+  --bg4:          #313139;
   --bg-elevated:  #2a2a32;
 
-  --accent:       #e8c850;
-  --accent-dim:   #c9a84e;
-  --accent-light: #f0d070;
-  --accent-hover: #c9a84e;
-  --accent-glow:  rgba(224, 192, 96, 0.15);
-  --accent-soft:  rgba(224, 192, 96, 0.22);
-  --accent-border: rgba(224, 192, 96, 0.35);
+  --accent:        #e8c850;
+  --accent-rgb:    232, 200, 80;
+  --accent-dim:    #c9a84e;
+  --accent-light:  #f0d070;
+  --accent-hover:  #c9a84e;
+  --accent-glow:   rgba(var(--accent-rgb), 0.15);
+  --accent-soft:   rgba(var(--accent-rgb), 0.22);
+  --accent-border: rgba(var(--accent-rgb), 0.35);
 
   --cyan:         #58c8d4;
+  --cyan-rgb:     88, 200, 212;
   --cyan-dim:     #45b0bc;
   --cyan-light:   #70d8e0;
-  --cyan-glow:    rgba(88, 200, 212, 0.12);
-  --cyan-soft:    rgba(88, 200, 212, 0.18);
+  --cyan-glow:    rgba(var(--cyan-rgb), 0.12);
+  --cyan-soft:    rgba(var(--cyan-rgb), 0.18);
 
   --green:        #5a9e6f;
+  --green-rgb:    90, 158, 111;
   --green-dim:    #4a8a5e;
   --green-light:  #78c68e;
   --red:          #c76a64;
+  --red-rgb:      199, 106, 100;
   --red-dim:      #b55a54;
   --red-light:    #e87670;
-  --red-rgb:      199, 106, 100;
-  --amber:        #e0c060;
   --purple:       #8b7bbf;
+  --purple-rgb:   139, 123, 191;
+  --amber:        var(--accent);
 
   --warning:      #e08a4a;
+  --warning-rgb:  224, 138, 74;
   --on-accent:    #1a1a1e;
 
   --text:         #e8e8ec;
@@ -224,13 +241,15 @@
   --border:       rgba(255, 255, 255, 0.10);
   --border-light: rgba(255, 255, 255, 0.06);
   --border-mid:   rgba(255, 255, 255, 0.14);
-  --border-accent: rgba(224, 192, 96, 0.30);
+  --border-accent: rgba(var(--accent-rgb), 0.30);
   --edge-highlight: rgba(255, 255, 255, 0.07);
+  --surface-panel: var(--bg2);
+  --surface-head:  var(--bg3);
 
   --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.25);
   --shadow-md:   0 4px 14px rgba(0, 0, 0, 0.3);
   --shadow-lg:   0 8px 36px rgba(0, 0, 0, 0.35);
-  --shadow-glow: 0 0 40px rgba(224, 192, 96, 0.06);
+  --shadow-glow: 0 0 40px rgba(var(--accent-rgb), 0.06);
 
   --shadow-panel-sm:  0 2px 8px rgba(0, 0, 0, 0.30);
   --shadow-panel-md:  0 4px 18px rgba(0, 0, 0, 0.35);
@@ -240,44 +259,49 @@
   --scrollbar-thumb: #484854;
 
   --logo-bg:      linear-gradient(135deg, #2a2a30 0%, #32323a 100%);
-  --logo-border:  rgba(224, 192, 96, 0.22);
+  --logo-border:  rgba(var(--accent-rgb), 0.22);
 }
 
 /* ── Academic theme ────────────────────────────────────────────────── */
 /* Cool cream tones with scholarly burgundy accents.
    Designed for focused, distraction-free reading with gravitas. */
 [data-theme="academic"] {
-  --bg:           #f7f5f0;
-  --bg2:          #f0ece4;
-  --bg3:          #e8e3da;
-  --bg4:          #ded8ce;
-  --bg-elevated:  #f2efe8;
+  --bg:           #f8f5ef;
+  --bg2:          #eeeadf;
+  --bg3:          #e2ddd0;
+  --bg4:          #d6d0c2;
+  --bg-elevated:  #fbfaf4;
 
   --accent:       #1e3b5c;
+  --accent-rgb:   30, 59, 92;
   --accent-dim:   #162d47;
   --accent-light: #2e5a8c;
   --accent-hover: #162d47;
-  --accent-glow:  rgba(30, 59, 92, 0.07);
-  --accent-soft:  rgba(30, 59, 92, 0.12);
-  --accent-border: rgba(30, 59, 92, 0.22);
+  --accent-glow:  rgba(var(--accent-rgb), 0.07);
+  --accent-soft:  rgba(var(--accent-rgb), 0.12);
+  --accent-border: rgba(var(--accent-rgb), 0.22);
 
   --cyan:         #2d6b7a;
+  --cyan-rgb:     45, 107, 122;
   --cyan-dim:     #225360;
   --cyan-light:   #4a8e9e;
-  --cyan-glow:    rgba(45, 107, 122, 0.07);
-  --cyan-soft:    rgba(45, 107, 122, 0.12);
+  --cyan-glow:    rgba(var(--cyan-rgb), 0.07);
+  --cyan-soft:    rgba(var(--cyan-rgb), 0.12);
 
   --green:        #3d6040;
+  --green-rgb:    61, 96, 64;
   --green-dim:    #304d33;
   --green-light:  #4e7a52;
   --red:          #8b3a3a;
+  --red-rgb:      139, 58, 58;
   --red-dim:      #702d2d;
   --red-light:    #9e4848;
-  --red-rgb:      139, 58, 58;
-  --amber:        #7a5a30;
   --purple:       #4a4468;
+  --purple-rgb:   74, 68, 104;
+  --amber:        var(--accent);
 
   --warning:      #a55a24;
+  --warning-rgb:  165, 90, 36;
   --on-accent:    #fff;
 
   --text:         #1a1a1f;
@@ -290,13 +314,15 @@
   --border:       rgba(30, 59, 92, 0.09);
   --border-light: rgba(30, 59, 92, 0.05);
   --border-mid:   rgba(30, 59, 92, 0.14);
-  --border-accent: rgba(30, 59, 92, 0.22);
+  --border-accent: rgba(var(--accent-rgb), 0.22);
   --edge-highlight: rgba(255, 255, 255, 0.5);
+  --surface-panel: var(--bg2);
+  --surface-head:  var(--bg3);
 
   --shadow-sm:   0 1px 3px rgba(30, 35, 45, 0.06);
   --shadow-md:   0 4px 16px rgba(30, 35, 45, 0.08);
   --shadow-lg:   0 8px 40px rgba(30, 35, 45, 0.10);
-  --shadow-glow: 0 0 40px rgba(30, 59, 92, 0.04);
+  --shadow-glow: 0 0 40px rgba(var(--accent-rgb), 0.04);
 
   --shadow-panel-sm:  0 2px 10px rgba(30, 35, 45, 0.08);
   --shadow-panel-md:  0 4px 22px rgba(30, 35, 45, 0.10);
@@ -305,7 +331,7 @@
 
   --scrollbar-thumb: #c4bdb0;
   --logo-bg:      linear-gradient(135deg, #1e3b5c 0%, #162d47 100%);
-  --logo-border:  rgba(30, 59, 92, 0.20);
+  --logo-border:  rgba(var(--accent-rgb), 0.20);
 }
 
 [data-theme="dark"] ::selection {
@@ -339,11 +365,11 @@ html { scroll-behavior: smooth; }
 
 /* ── Selection ───────────────────────────────────────────────────── */
 ::selection {
-  background: rgba(184, 134, 11, 0.2);
+  background: rgba(var(--accent-rgb), 0.2);
   color: var(--text);
 }
 ::-moz-selection {
-  background: rgba(184, 134, 11, 0.2);
+  background: rgba(var(--accent-rgb), 0.2);
   color: var(--text);
 }
 
@@ -435,7 +461,7 @@ nav {
   border-radius: var(--radius-md);
   padding: 0 0.85rem 0.65rem;
   position: relative;
-  background: rgba(212, 168, 83, 0.04);
+  background: rgba(var(--accent-rgb), 0.04);
   overflow: hidden;
 }
 
@@ -446,7 +472,7 @@ nav {
   left: 0;
   width: 2px;
   height: 100%;
-  background: linear-gradient(180deg, var(--accent) 0%, var(--cyan) 100%);
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-dim) 100%);
   opacity: 0.6;
 }
 

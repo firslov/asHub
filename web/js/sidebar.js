@@ -120,8 +120,13 @@ const sideEmpty = (iconHtml, text) => {
 /** Shared title + meta (cwd / relative time) markup for sidebar items. */
 const sideBody = (titleText, { cwd, ts } = {}) => {
   const title = escape(titleText);
-  const cwdText = cwd ? `<span class="side-cwd" title="${escape(cwd)}">${escape(shortenCwd(cwd))}</span>` : "";
   const timeText = ts ? `<span class="side-time" title="${escape(new Date(ts).toLocaleString())}">${escape(relativeTime(ts))}</span>` : "";
+  // No cwd → single-line: title (ellipsis) + inline time, so rows that only
+  // carry a timestamp don't waste a whole second line.
+  if (!cwd) {
+    return `<span class="side-body side-body-row"><span class="side-title" title="${title}">${title}</span>${timeText}</span>`;
+  }
+  const cwdText = `<span class="side-cwd" title="${escape(cwd)}">${escape(shortenCwd(cwd))}</span>`;
   return `<span class="side-body"><span class="side-title" title="${title}">${title}</span><span class="side-meta">${cwdText}${timeText}</span></span>`;
 };
 
@@ -681,14 +686,18 @@ const renderWorkspaces = () => {
   });
   groups.sort((a, b) => b.lastModified - a.lastModified);
 
-  const hash = JSON.stringify(groups.map((g) => [
+  const hash = JSON.stringify([filterQuery(), groups.map((g) => [
     g.cwd, g.items.map((s) => [s.instanceId, s.title, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt]),
-  ]));
+  ])]);
   if (hash === workspacesHash) return;
   workspacesHash = hash;
 
   workspaceList.innerHTML = "";
+  const query = filterQuery();
+  let anyRendered = false;
   for (const g of groups) {
+    const visible = g.items.filter((s) => matchesFilter(s.title || t("untitled"), s.cwd));
+    if (!visible.length) continue;
     const li = document.createElement("li");
     li.className = "workspace-group";
     li.dataset.cwd = g.cwd;
@@ -711,7 +720,7 @@ const renderWorkspaces = () => {
 
     const count = document.createElement("span");
     count.className = "workspace-count";
-    count.textContent = String(g.items.length);
+    count.textContent = String(visible.length);
     head.appendChild(count);
 
     const actions = document.createElement("span");
@@ -748,7 +757,7 @@ const renderWorkspaces = () => {
 
     const children = document.createElement("ul");
     children.className = "workspace-children";
-    for (const s of g.items) {
+    for (const s of visible) {
       const child = document.createElement("li");
       child.dataset.sessionId = s.instanceId;
       if (s.instanceId === activeSessionId.peek()) child.classList.add("current");
@@ -775,6 +784,10 @@ const renderWorkspaces = () => {
     li.appendChild(children);
 
     workspaceList.appendChild(li);
+    anyRendered = true;
+  }
+  if (!anyRendered) {
+    workspaceList.replaceChildren(sideEmpty("◆", query ? t("filter.no.match") : t("no.workspaces")));
   }
 };
 
@@ -922,16 +935,19 @@ effect(() => {
   if (workspaceList) workspaceList.hidden = view !== "workspaces";
   if (terminalList) terminalList.hidden = view !== "terminals";
   if (archiveList) archiveList.hidden = view !== "archive";
-  if (sessionFilter) sessionFilter.hidden = view !== "sessions" && view !== "archive";
+  if (sessionFilter) sessionFilter.hidden = view !== "sessions" && view !== "archive" && view !== "workspaces";
   for (const btn of viewButtons) {
     btn.classList.toggle("current", btn.dataset.view === view);
   }
 });
 
-// Sidebar filter: substring match on title + cwd for sessions and archive.
+// Sidebar filter: substring match on title + cwd for sessions, workspaces
+// and archive.
 sessionFilter?.addEventListener("input", () => {
   filterText = sessionFilter.value;
-  if (sidebarView.peek() === "archive") renderArchive();
+  const v = sidebarView.peek();
+  if (v === "archive") renderArchive();
+  else if (v === "workspaces") renderWorkspaces();
   else renderSessions();
 });
 

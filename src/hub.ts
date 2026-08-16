@@ -2777,6 +2777,16 @@ function resolveRewindLeaf(session: Session, newLength: number): string {
     const leafId = session.capture.getEntryIdAt(i);
     if (leafId) return leafId;
   }
+  // Every slot up to the target is a null placeholder (a compaction summary
+  // and/or system notes).  The correct leaf is the entry just before the last
+  // compaction — the last evicted message — not the root.  Returning the root
+  // would orphan the pre-compaction history, so the next append/rebuild would
+  // silently drop the evicted context ("rewind jumped back to the root node").
+  const branch = session.store.getBranch();
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const e = branch[i]!;
+    if (e.type === "compaction") return e.parentId;
+  }
   return session.store.getRootId();
 }
 

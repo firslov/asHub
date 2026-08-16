@@ -322,6 +322,13 @@ export class SessionStore {
           console.warn(`[session-store] truncated ${Buffer.byteLength(raw) - keepBytes} torn byte(s) from tail of ${this.entriesPath}`);
           raw = lines.slice(0, lastIdx).join("\n");
         } catch { /* best effort; malformed lines are skipped below */ }
+      } else if (!raw.endsWith("\n")) {
+        // A complete final line that lost its trailing newline (torn between
+        // the entry and the "\n") parses fine, but the file is left without a
+        // newline.  Restore it so the next append doesn't glue its first line
+        // onto this one — otherwise the combined line becomes malformed and
+        // both entries are dropped on the next load().
+        try { fs.appendFileSync(this.entriesPath, "\n"); } catch { /* best effort */ }
       }
     }
     for (const line of raw.split("\n")) {

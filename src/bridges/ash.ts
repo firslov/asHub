@@ -132,7 +132,7 @@ You start with zero context beyond this prompt and the task — if critical info
 - Return ONLY the plan text: the caller sees nothing but your final message, so make it self-contained — no meta-commentary`,
     tools: [],
     maxIterations: 1,
-    budgetTokens: 4000,
+    budgetTokens: 6000,
   },
   explore: {
     description: "Explore and search the codebase to answer a question. Use when asked to 'explore', 'search', 'find', 'locate', or 'look up' code. Read-only.",
@@ -147,7 +147,7 @@ You start with zero context beyond this prompt and the task.
 - Return a self-contained answer: the caller sees nothing but your final message — give conclusions and key evidence, not a log of your search steps`,
     tools: ["glob", "grep", "read_file", "ls"],
     maxIterations: 15,
-    budgetTokens: 8000,
+    budgetTokens: 12000,
   },
   review: {
     description: "Review code for bugs, style issues, and improvement opportunities. Use when user asks to 'review', 'check', 'audit', or 'inspect' code. Read-only.",
@@ -163,8 +163,8 @@ You start with zero context beyond this prompt and the task.
 - Be constructive — suggest concrete fixes, not just problems
 - Return a self-contained report: the caller sees nothing but your final message`,
     tools: ["glob", "grep", "read_file", "ls"],
-    maxIterations: 30,
-    budgetTokens: 16000,
+    maxIterations: 40,
+    budgetTokens: 32000,
   },
   research: {
     description: "Deep investigation of code structure and dependencies. Use when asked to 'research', 'investigate', 'trace', 'analyze' or 'understand how' code works. Read-only.",
@@ -181,7 +181,7 @@ You start with zero context beyond this prompt and the task.
 - Return a self-contained report: the caller sees nothing but your final message`,
     tools: ["glob", "grep", "read_file", "ls"],
     maxIterations: 20,
-    budgetTokens: 10000,
+    budgetTokens: 20000,
   },
   implement: {
     description: "Implement a feature or change end-to-end. Use when asked to 'implement', 'build', 'create', 'add', 'write code for', or 'develop' something. Can read, write, and edit files.",
@@ -198,7 +198,7 @@ You start with zero context beyond this prompt and the task.
 - Return a self-contained summary of what you changed and why: the caller sees nothing but your final message`,
     tools: ["*"],
     maxIterations: 25,
-    budgetTokens: 12000,
+    budgetTokens: 20000,
   },
 };
 
@@ -206,8 +206,9 @@ You start with zero context beyond this prompt and the task.
  *  stripped from subagent tool lists so a subagent can never spawn another
  *  subagent (unbounded nesting). */
 const SUBAGENT_TOOL_NAMES = new Set([...Object.keys(SUBAGENT_TYPES), "agentswarm", "subagent_resume"]);
-/** Max subagents running at once; excess runs are rejected with a retry hint. */
-const MAX_CONCURRENT_SUBAGENTS = 3;
+/** Max subagents running at once.  Synchronous launches (incl. resume) wait
+ *  briefly for a free slot; async launches reject immediately with a hint. */
+const MAX_CONCURRENT_SUBAGENTS = 10;
 /** Wall-clock cap per subagent run, merged with any caller/cancel signal. */
 const SUBAGENT_TIMEOUT_MS = 20 * 60 * 1000;
 
@@ -462,6 +463,19 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       }));
     };
 
+    // Budget note appended to a subagent task so the model KNOWS its
+    // completion-token budget and paces itself — without it, review/research
+    // presets write exhaustive reports that get truncated mid-sentence when
+    // the budget runs out (the "[budget exhausted]" hard cut).
+    const withBudgetNote = (task: string, budgetTokens: number | undefined): string => {
+      if (!budgetTokens || budgetTokens <= 0) return task;
+      return task +
+        `\n\n[Budget: you have at most ${budgetTokens.toLocaleString()} completion tokens for your ENTIRE run ` +
+        `(tool-call arguments and any intermediate text count against it, not just your final report). ` +
+        `Plan accordingly: keep tool usage lean, prioritize conclusions and evidence over exhaustive detail, ` +
+        `and start your final report well before the budget runs out — a truncated report loses its tail sections.]`;
+    };
+
     const launchSubagent = (
       task: string,
       type: string,
@@ -487,11 +501,17 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       (core.bus.emit as (name: string, payload: unknown) => void)(
         "subagent:started", { task, subagentId: id, type, ...(swarmId ? { swarmId } : {}) });
 
-      const promise = runSubagent({
+      // Retry is only safe when the run is side-effect-free.  A subagent
+      // whose toolset includes file-modifying tools (implement preset has
+      // ["*"]) may have already executed tools when a later LLM stream
+      // fails — re-running would repeat writes/commands.  Read-only presets
+      // (plan/explore/review/research) are safe to retry whole.
+      const retryable = !tools.some((t) => t?.modifiesFiles === true);
+      const runOnce = () => runSubagent({
         llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
         tools: wrapSubagentTools(tools, signal, id),
         systemPrompt,
-        task,
+        task: withBudgetNote(task, budgetTokens),
         model,
         bus: mutedSubagentBus,
         maxIterations,
@@ -500,6 +520,13 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
           "subagent:usage", { ...(u as Record<string, unknown>), type }),
         signal,
       });
+      const promise = retryable
+        ? runSubagentWithRetry(runOnce, (info) => {
+            (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {
+              message: `(subagent ${id} hit transient LLM error: ${info.err.message} — retrying in ${info.delayMs / 1000}s, attempt ${info.attempt + 1}/3)`,
+            });
+          })
+        : runOnce();
 
       const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise, controller: abortController };
       _subagents.set(id, entry);
@@ -561,6 +588,48 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       return id;
     };
 
+    // ── Transient-error retry for subagent runs ───────────────────────
+    // agent-sh's main loop wraps every LLM call in streamWithRetry (429/
+    // 5xx/network → exponential backoff), but runSubagent's internal
+    // streamOnce is a bare llmClient.stream() — a single "Connection
+    // error." kills the whole subagent run.  We can't reach inside
+    // runSubagent, so retry the WHOLE run instead.
+    //
+    // SAFETY: only wrap side-effect-free (read-only) runs.  A failed run
+    // produced no final text, so re-running duplicates nothing — but tool
+    // side effects (file writes/commands) WOULD be repeated if a later
+    // stream failed after earlier tools had executed.  The call sites
+    // therefore guard on `tools.some(t => t.modifiesFiles)` and skip retry
+    // for file-modifying toolsets; this helper itself is side-effect
+    // agnostic and must not be called with a mutating toolset.
+    const runSubagentWithRetry = async <R,>(
+      launch: () => Promise<R>,
+      onRetry?: (info: { attempt: number; delayMs: number; err: Error }) => void,
+    ): Promise<R> => {
+      const RETRIES = 2; // 1 initial + 2 retries
+      const DELAYS = [2_000, 4_000];
+      const RETRYABLE = /econnreset|econnrefused|etimedout|fetch failed|network|socket hang up|connection error/i;
+      const isRetryable = (err: unknown): boolean => {
+        if (!(err instanceof Error)) return false;
+        if (RETRYABLE.test(err.message)) return true;
+        const status = (err as { status?: number }).status;
+        return status === 429 || status === 500 || status === 502 || status === 503 || status === 529;
+      };
+      let lastErr: unknown;
+      for (let attempt = 0; attempt <= RETRIES; attempt++) {
+        try {
+          return await launch();
+        } catch (err) {
+          lastErr = err;
+          if (attempt >= RETRIES || !isRetryable(err)) throw err;
+          const delayMs = DELAYS[attempt] ?? 4_000;
+          onRetry?.({ attempt: attempt + 1, delayMs, err: err instanceof Error ? err : new Error(String(err)) });
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+      }
+      throw lastErr; // unreachable — kept for type completeness
+    };
+
     // ── Subagent model overrides ────────────────────────────────
     // Persisted globally via agent-sh settings so all sessions share them.
 
@@ -606,6 +675,21 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     const _subagents = this._subagents;
     let _subagentSeq = 0;
     let _runningSubagents = 0;
+    // Bounded wait for a free subagent slot.  The model often calls
+    // subagent_resume right after a budget-exhausted run reports back —
+    // at that moment the swarm's stragglers may still hold all slots, and
+    // rejecting instantly forces a retry loop.  Waiting briefly (≤90s in
+    // 5s steps) lets a finishing subagent free the slot; the caller's
+    // signal aborts the wait on turn cancel.
+    const waitForSubagentSlot = async (signal?: AbortSignal): Promise<boolean> => {
+      const deadline = Date.now() + 90_000;
+      while (_runningSubagents >= MAX_CONCURRENT_SUBAGENTS && Date.now() < deadline) {
+        if (signal?.aborted) return false;
+        await new Promise((r) => setTimeout(r, 5_000));
+      }
+      return _runningSubagents < MAX_CONCURRENT_SUBAGENTS;
+    };
+
     core.handlers.define("subagent:run", async (opts: {
       task: string;
       type?: string;
@@ -617,11 +701,20 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       signal?: AbortSignal;
       tools?: ToolDefinition[];
     }) => {
-      // Concurrency cap — tell the model to retry later rather than queue.
-      // Returned as a tagged object (not a string) so registerSubagentTool
-      // can surface it as an isError tool result instead of fake success.
+      // Concurrency cap.  Synchronous launches (incl. subagent_resume, which
+      // reruns synchronously) wait briefly for a slot instead of failing
+      // instantly — resuming right after a swarm finishes is the common case
+      // and one of its stragglers usually frees a slot within seconds.
+      // Async launches keep the reject-immediately semantics (fire-and-forget
+      // callers can't block the turn on a wait).
       if (_runningSubagents >= MAX_CONCURRENT_SUBAGENTS) {
-        return { concurrencyLimited: true as const, message: `Error: subagent concurrency limit reached (${MAX_CONCURRENT_SUBAGENTS} running). Wait for a running subagent to finish, then retry.` };
+        if (opts.async) {
+          return { concurrencyLimited: true as const, message: `Error: subagent concurrency limit reached (${MAX_CONCURRENT_SUBAGENTS} running). Wait for a running subagent to finish, then retry.` };
+        }
+        const gotSlot = await waitForSubagentSlot(opts.signal);
+        if (!gotSlot) {
+          return { concurrencyLimited: true as const, message: `Error: subagent concurrency limit reached (${MAX_CONCURRENT_SUBAGENTS} running, still busy after waiting 90s). Wait for a running subagent to finish, then retry.` };
+        }
       }
       // Resolve type preset
       const preset = opts.type ? SUBAGENT_TYPES[opts.type] : null;
@@ -688,11 +781,15 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
         // Increment inside the try so an emit/launch failure above can't leak
         // the concurrency counter (finally always decrements).
         _runningSubagents++;
-        const result = await runSubagent({
+        // Same side-effect guard as the async path: only retry read-only
+        // subagents — file-modifying toolsets may have already run tools
+        // when a later stream fails, so a whole-run retry would repeat them.
+        const retryable = !tools.some((t) => t?.modifiesFiles === true);
+        const runOnce = () => runSubagent({
           llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
           tools: wrapSubagentTools(tools, signal, syncId),
           systemPrompt,
-          task: opts.task,
+          task: withBudgetNote(opts.task, budgetTokens),
           model,
           bus: mutedSubagentBus,
           signal,
@@ -701,6 +798,13 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
           onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
             "subagent:usage", { ...(u as Record<string, unknown>), type: opts.type }),
         });
+        const result = retryable
+          ? await runSubagentWithRetry(runOnce, (info) => {
+              (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {
+                message: `(subagent ${syncId} hit transient LLM error: ${info.err.message} — retrying in ${info.delayMs / 1000}s, attempt ${info.attempt + 1}/3)`,
+              });
+            })
+          : await runOnce();
         if (isTimeoutSignal(signal)) {
           // Wall-clock timeout: runSubagent broke out silently and returned
           // partial text — surface as an error so neither the model nor the

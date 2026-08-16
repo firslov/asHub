@@ -123,6 +123,7 @@ export const globalConnState = signal(
 const subState = new Map();
 let es = null;
 let reopenScheduled = false;
+let paused = false;
 let lastSeenId = 0;
 let retryCount = 0;
 const MAX_RETRIES = 10;
@@ -138,6 +139,7 @@ const CONNECT_TIMEOUT_MS = 15_000;
 
 const reopen = () => {
   reopenScheduled = false;
+  if (paused) return; // pauseSSE() must not be undone by a queued reopen
   es?.close();
   es = null;
   if (subState.size === 0) {
@@ -233,12 +235,15 @@ export const resyncSession = (id) => {
 };
 
 export const pauseSSE = () => {
+  paused = true;
+  reopenScheduled = false; // cancel a queued reopen so it can't fire mid-pause
   es?.close();
   es = null;
   globalConnState.value = "reconnecting";
 };
 
 export const resumeSSE = () => {
+  paused = false;
   if (es) return; // already connected
   if (subState.size === 0) return;
   scheduleReopen();

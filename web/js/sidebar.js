@@ -15,6 +15,8 @@ const sessionTopic = document.getElementById("session-topic");
 const sessionCwdMeta = document.getElementById("session-cwd-meta");
 const newBtn = document.getElementById("new-session");
 const newTerminalBtn = document.getElementById("new-terminal");
+const newSessionAction = document.getElementById("sidebar-action-sessions");
+const newTerminalAction = document.getElementById("sidebar-action-terminals");
 const sessionFilter = document.getElementById("session-filter");
 
 export const setSessionTopic = (title) => { headerTopic.value = title ?? ""; };
@@ -936,6 +938,8 @@ effect(() => {
   if (terminalList) terminalList.hidden = view !== "terminals";
   if (archiveList) archiveList.hidden = view !== "archive";
   if (sessionFilter) sessionFilter.hidden = view !== "sessions" && view !== "archive" && view !== "workspaces";
+  if (newSessionAction) newSessionAction.hidden = view !== "sessions";
+  if (newTerminalAction) newTerminalAction.hidden = view !== "terminals";
   for (const btn of viewButtons) {
     btn.classList.toggle("current", btn.dataset.view === view);
   }

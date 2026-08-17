@@ -31,12 +31,17 @@ const HIGHLIGHT_DEBOUNCE_MS = 100; // re-highlight at most 10×/second during st
 /**
  * Adaptive throttle: longer text benefits from longer intervals since
  * each parse costs more.  50ms for short text keeps the rendering snappy;
- * stepping up for longer text keeps the main thread responsive.
+ * stepping up for longer text keeps the main thread responsive.  Very long
+ * replies (>30k chars) parse 3×/s or less — full-text markdown + math +
+ * sanitize is O(n) per flush, so the extra wait is invisible but the saved
+ * main-thread time is what keeps typing/scrolling smooth elsewhere.
  */
 const throttleFor = (textLen) => {
   if (textLen < 5000) return 50;
   if (textLen < 10000) return 100;
-  return 200;
+  if (textLen < 30000) return 200;
+  if (textLen < 60000) return 350;
+  return 500;
 };
 
 const _structKey = (blocks) => {

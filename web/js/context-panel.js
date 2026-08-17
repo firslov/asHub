@@ -46,7 +46,19 @@ const computeGroups = (msgs) => {
   return groupOf;
 };
 
-const tokensOf = (m) => Math.ceil(JSON.stringify(m ?? null).length / 4);
+// Token estimate is O(JSON.stringify(msg)) — expensive for long messages and
+// recomputed on every selection change.  Cache per message object reference
+// (a WeakMap lets old messages GC once the panel refetches a fresh array).
+const _tokCache = new WeakMap();
+const tokensOf = (m) => {
+  if (m == null) return 0;
+  let v = _tokCache.get(m);
+  if (v === undefined) {
+    v = Math.ceil(JSON.stringify(m).length / 4);
+    _tokCache.set(m, v);
+  }
+  return v;
+};
 const fmtTok = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
 const stripContextWrappers = (s) => {

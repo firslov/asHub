@@ -65,6 +65,9 @@ export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpe
   };
 
   const request = () => {
+    // During IME composition the buffer is in flux (pinyin, not a real
+    // token) — skip the shouldOpen scan and fetch; compositionend re-runs it.
+    if (composing) return;
     const buffer = inputEl.value;
     if (!shouldOpen(buffer)) { close(); return; }
     const my = ++state.token;
@@ -87,6 +90,9 @@ export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpe
 
   inputEl.addEventListener("input", request);
   inputEl.addEventListener("blur", () => setTimeout(close, 100));
+  let composing = false;
+  inputEl.addEventListener("compositionstart", () => { composing = true; close(); });
+  inputEl.addEventListener("compositionend", () => { composing = false; request(); });
   inputEl.addEventListener("keydown", (ev) => {
     if (!state.open) return;
     if (ev.key === "ArrowDown") {

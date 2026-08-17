@@ -16,6 +16,22 @@ const sendBtn = document.getElementById("send-btn");
 const imagePreviews = document.getElementById("image-previews");
 const visionIndicator = document.getElementById("vision-indicator");
 
+// ── IME composition: freeze textarea height while composing ──────
+// During Chinese/Japanese IME composition, `input` fires on every pinyin
+// candidate and `field-sizing: content` relayouts the textarea each time —
+// that per-keystroke forced layout delays the OS candidate window.  We pin
+// the CURRENT height via inline style for the duration of the composition
+// (inline height overrides field-sizing, so no per-keystroke relayout), then
+// clear it on compositionend so field-sizing resizes once from the final
+// text.  Pinning offsetHeight (not switching to field-sizing: fixed) avoids
+// collapsing a multi-line box to its rows="1" default mid-composition.
+input?.addEventListener("compositionstart", () => {
+  input.style.height = input.offsetHeight + "px";
+});
+input?.addEventListener("compositionend", () => {
+  input.style.height = "";
+});
+
 // ── Send button (submit when idle, cancel while busy) ─────────────
 
 const updateSendBtn = () => {
@@ -490,10 +506,12 @@ input?.addEventListener("keydown", (ev) => {
   }
 });
 
-input?.addEventListener("input", () => {
-  input.style.height = "auto";
-  input.style.height = Math.min(input.scrollHeight, 12 * 16) + "px";
-});
+// Autosize is handled natively by `field-sizing: content` on the textarea
+// (see live.css).  The previous JS implementation forced a synchronous
+// reflow on EVERY keystroke (height="auto" → read scrollHeight → write
+// height), which blocked the renderer and made typing lag on weaker GPUs
+// (Windows / Intel Mac).  Removing it eliminates that per-keystroke reflow.
+// (kept as a no-op listener removal note — no height writes here anymore)
 
 document.addEventListener("keydown", (ev) => {
   const meta = ev.metaKey || ev.ctrlKey;

@@ -1062,6 +1062,55 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   box-sizing: border-box;
 }
 
+/* ── Sidebar "new" action rows (top of each sub-menu) ─────────────── */
+.sidebar-action {
+  flex-shrink: 0;
+  padding: 0.5rem 0.7rem 0;
+}
+
+.sidebar-new-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.42rem 0.7rem;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    background var(--dur-fast) var(--ease-out-expo),
+    border-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.sidebar-new-btn svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.sidebar-new-btn:hover {
+  color: var(--accent);
+  background: var(--accent-glow);
+  border-color: var(--accent-border);
+  border-style: solid;
+}
+
+.sidebar-new-btn:active {
+  transform: scale(0.985);
+}
+
+.sidebar-new-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
 .sidebar-filter {
   flex-shrink: 0;
   margin: 0.5rem 0.7rem 0.15rem;
@@ -1126,21 +1175,6 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-}
-
-#new-session {
-  transition: all var(--dur-normal) var(--ease-out-expo);
-}
-
-#new-session:hover {
-  color: var(--accent);
-  background: var(--accent-glow);
-  border-color: var(--accent-border);
-}
-
-#new-session:active {
-  transform: scale(0.94);
-  transition-duration: var(--dur-fast);
 }
 
 .sidebar-btn:hover {
@@ -3920,12 +3954,18 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   gap: 0.55rem;
   padding: var(--ui-input-padding-y, 0.9rem) 1.15rem;
   border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg2) 94%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* Opaque-ish background (94% solid): the backdrop blur was nearly
+     invisible through it yet forced a GPU sample of the scrolling stream on
+     every repaint — a real typing-lag source on weak GPUs (Windows / Intel
+     Mac).  Drop the blur; keep the tint. */
+  background: color-mix(in srgb, var(--bg2) 96%, var(--bg3));
   font-family: var(--font-sans);
   flex-shrink: 0;
-  transition: all var(--dur-slow) var(--ease-out-expo);
+  /* transition: all would animate the textarea height on every keystroke
+     (field-sizing: content changes it) — narrow it to paint-only props. */
+  transition: background var(--dur-slow) var(--ease-out-expo),
+    border-image-source var(--dur-slow) var(--ease-out-expo),
+    box-shadow var(--dur-slow) var(--ease-out-expo);
   border-image: linear-gradient(90deg, transparent 5%, var(--accent-border) 25%, var(--accent-light) 50%, var(--accent-border) 75%, transparent 95%) 1;
   border-top-width: 1px;
   border-top-style: solid;
@@ -3933,14 +3973,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 
 .live-input:focus-within {
   border-image-source: linear-gradient(90deg, transparent 5%, var(--accent) 25%, var(--accent-light) 50%, var(--accent) 75%, transparent 95%);
-  background: color-mix(in srgb, var(--bg3) 96%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--bg3) 96%, var(--bg2));
   box-shadow:
     inset 0 2px 8px rgba(0, 0, 0, 0.06),
     0 -1px 0 var(--accent-glow),
     0 -6px 24px var(--accent-glow);
-  transition: all var(--dur-slow) var(--ease-out-expo);
+  transition: background var(--dur-slow) var(--ease-out-expo),
+    border-image-source var(--dur-slow) var(--ease-out-expo),
+    box-shadow var(--dur-slow) var(--ease-out-expo);
 }
 
 .live-input[data-ui-input-gradient="false"],

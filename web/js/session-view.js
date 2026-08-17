@@ -190,6 +190,9 @@ class SessionView extends HTMLElement {
 
   enterReplayMode() {
     this.state.replaying = true;
+    // Invalidate any in-flight chunked insert from a previous replay so its
+    // remaining batches don't append stale nodes into the fresh stream.
+    this._replayInsertToken = (this._replayInsertToken ?? 0) + 1;
     this._replayEnterTs = performance.now();
     this._replayFrameCount = 0;
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
@@ -211,16 +214,63 @@ class SessionView extends HTMLElement {
   }
 
   exitReplayMode() {
-    this.state.replaying = false;
     if (this.replayFlushTimer) { clearTimeout(this.replayFlushTimer); this.replayFlushTimer = null; }
     // Run compaction on the fragment BEFORE appending to live DOM.
     // This avoids an extra layout pass: the fragment is not yet attached,
     // so DOM mutations here are free.
-    if (this._replayFrag && this._replayFrag.childNodes.length > 0 && this.streamEl) {
-      compactReasoning(this._replayFrag);
-      this.streamEl.appendChild(this._replayFrag);
+    const frag = this._replayFrag;
+    if (frag && frag.childNodes.length > 0 && this.streamEl) {
+      compactReasoning(frag);
+      // Chunked insert: appending hundreds of nodes in ONE appendChild is a
+      // single long task that freezes the main thread when opening a long
+      // session.  Move nodes in small batches, yielding between batches.
+      // NOTE: replaying stays TRUE until the last batch — during the insert,
+      // newly-arriving live events keep appending to `frag` (replay path) and
+      // are drained by later batches, so ordering is preserved.  Only
+      // _insertReplayFragmentChunked flips replaying off when frag is empty.
+      this._insertReplayFragmentChunked(frag);
+    } else {
+      this._replayFrag = null;
+      this.state.replaying = false;
+      this._finishReplayInsert();
     }
-    this._replayFrag = null;
+  }
+
+  // Insert replay nodes a batch at a time, yielding to the event loop so the
+  // UI stays responsive while a long history materializes.  Each batch is one
+  // appendChild (one reflow), so this is cheaper per-node than appending
+  // individually, but never blocks for more than a few nodes at once.
+  // Nodes are pulled from the fragment dynamically (not a fixed snapshot) so
+  // any live frames that arrive mid-insert — replaying is still true — are
+  // also drained in order.
+  _insertReplayFragmentChunked(frag) {
+    const streamEl = this.streamEl;
+    const token = ++this._replayInsertToken;
+    const BATCH = 20;
+
+    const insertBatch = () => {
+      // A newer replay (or session close) superseded this insert — abandon it.
+      if (token !== this._replayInsertToken || !streamEl?.isConnected) return;
+      const batch = document.createDocumentFragment();
+      while (batch.childNodes.length < BATCH && frag.firstChild) {
+        batch.appendChild(frag.firstChild);
+      }
+      if (batch.childNodes.length > 0) streamEl.appendChild(batch);
+      if (frag.firstChild) {
+        const schedule = typeof requestIdleCallback === "function"
+          ? (fn) => requestIdleCallback(fn, { timeout: 100 })
+          : (fn) => requestAnimationFrame(fn);
+        schedule(insertBatch);
+      } else {
+        this._replayFrag = null;
+        this.state.replaying = false;
+        this._finishReplayInsert();
+      }
+    };
+    insertBatch();
+  }
+
+  _finishReplayInsert() {
     // Hide loading skeleton now that content is rendered.
     if (this.loadingEl) this.loadingEl.hidden = true;
     hidePageLoader();

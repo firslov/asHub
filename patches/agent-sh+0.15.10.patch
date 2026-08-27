@@ -1,8 +1,8 @@
 diff --git a/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js b/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
-index f604d85..1737edf 100644
+index f604d85..44c088e 100644
 --- a/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
 +++ b/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
-@@ -2,10 +2,9 @@ import { resolveApiKey } from "../../cli/auth/keys.js";
+@@ -2,15 +2,15 @@ import { resolveApiKey } from "../../cli/auth/keys.js";
  const BASE_URL = "https://api.z.ai/api/coding/paas/v4";
  const ID = "zai-coding-plan";
  const DEFAULT_MODELS = [
@@ -11,11 +11,20 @@ index f604d85..1737edf 100644
 -    { id: "glm-4.7", reasoning: true, contextWindow: 204_800 },
 -    { id: "glm-4.5-air", reasoning: true, contextWindow: 131_072 },
 +    { id: "glm-5.3", reasoning: true, contextWindow: 1048576 },
++    { id: "glm-5.3-flash", reasoning: true, contextWindow: 1048576, modalities: ["text", "image"] },
 +    { id: "glm-5-turbo", reasoning: true, contextWindow: 204800 },
 +    { id: "glm-4.7", reasoning: true, contextWindow: 204800 },
  ];
- function buildReasoningParams(level, _model) {
-     if (level === "off")
+-function buildReasoningParams(level, _model) {
+-    if (level === "off")
++function buildReasoningParams(level, model) {
++    if (level === "off" && model !== "glm-5.3-flash")
+         return { thinking: { type: "disabled" } };
+-    const effort = level === "xhigh" ? "high" : level;
++    const effort = level === "xhigh" ? "high" : level === "off" ? "low" : level;
+     return { thinking: { type: "enabled" }, reasoning_effort: effort };
+ }
+ export default function activate(ctx) {
 diff --git a/node_modules/agent-sh/dist/cli/auth/keys.js b/node_modules/agent-sh/dist/cli/auth/keys.js
 index 62c4c94..6b2052b 100644
 --- a/node_modules/agent-sh/dist/cli/auth/keys.js
@@ -29,22 +38,35 @@ index 62c4c94..6b2052b 100644
  /** Built-ins + settings + keys.json. Sync, no extension load. */
  export function listAllProviders() {
 diff --git a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
-index 187dac1..81ee64f 100644
+index 187dac1..9b92fad 100644
 --- a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
 +++ b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
-@@ -8,10 +8,9 @@ const BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+@@ -8,15 +8,18 @@ const BASE_URL = "https://api.z.ai/api/coding/paas/v4";
  const ID = "zai-coding-plan";
  
  const DEFAULT_MODELS = [
 -  { id: "glm-5.1",     reasoning: true, contextWindow: 200_000 },
 -  { id: "glm-5-turbo", reasoning: true, contextWindow: 200_000 },
-+  { id: "glm-5.3",     reasoning: true, contextWindow: 1_048_576 },
-+  { id: "glm-5-turbo", reasoning: true, contextWindow: 204_800 },
-   { id: "glm-4.7",     reasoning: true, contextWindow: 204_800 },
+-  { id: "glm-4.7",     reasoning: true, contextWindow: 204_800 },
 -  { id: "glm-4.5-air", reasoning: true, contextWindow: 131_072 },
++  { id: "glm-5.3",       reasoning: true, contextWindow: 1_048_576 },
++  { id: "glm-5.3-flash", reasoning: true, contextWindow: 1_048_576, modalities: ["text", "image"] },
++  { id: "glm-5-turbo",   reasoning: true, contextWindow: 204_800 },
++  { id: "glm-4.7",       reasoning: true, contextWindow: 204_800 },
  ];
  
- function buildReasoningParams(level: string, _model?: string): Record<string, unknown> {
+-function buildReasoningParams(level: string, _model?: string): Record<string, unknown> {
+-  if (level === "off") return { thinking: { type: "disabled" } };
+-  const effort = level === "xhigh" ? "high" : level;
++function buildReasoningParams(level: string, model?: string): Record<string, unknown> {
++  // glm-5.3-flash can't disable thinking (thinking.type only supports
++  // "enabled"), so "off" falls back to a low-effort enabled block instead of
++  // the invalid { thinking: { type: "disabled" } } shape.
++  if (level === "off" && model !== "glm-5.3-flash") return { thinking: { type: "disabled" } };
++  const effort = level === "xhigh" ? "high" : level === "off" ? "low" : level;
+   return { thinking: { type: "enabled" }, reasoning_effort: effort };
+ }
+ 
 diff --git a/node_modules/agent-sh/src/cli/auth/keys.ts b/node_modules/agent-sh/src/cli/auth/keys.ts
 index 5c8b21c..33ce21d 100644
 --- a/node_modules/agent-sh/src/cli/auth/keys.ts

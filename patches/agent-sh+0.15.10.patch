@@ -50,19 +50,19 @@ index 62c4c94..6b2052b 100644
  /** Built-ins + settings + keys.json. Sync, no extension load. */
  export function listAllProviders() {
 diff --git a/node_modules/agent-sh/src/agent/providers/deepseek.ts b/node_modules/agent-sh/src/agent/providers/deepseek.ts
-index d67146e..213d5a6 100644
+index d67146e..ab27d73 100644
 --- a/node_modules/agent-sh/src/agent/providers/deepseek.ts
 +++ b/node_modules/agent-sh/src/agent/providers/deepseek.ts
 @@ -11,6 +11,7 @@ const BASE_URL = "https://api.deepseek.com";
  const DEFAULT_MODELS = [
    { id: "deepseek-v4-flash", reasoning: true, echoReasoning: true, contextWindow: 1_000_000 },
    { id: "deepseek-v4-pro", reasoning: true, echoReasoning: true, contextWindow: 1_000_000 },
-+  { id: "deepseek-v4-flash-vision-exp", reasoning: true, echoReasoning: true, contextWindow: 1_000_000, modalities: ["text", "image"] },
++  { id: "deepseek-v4-flash-vision-exp", reasoning: true, echoReasoning: true, contextWindow: 1_000_000, modalities: ["text", "image"] as ("text" | "image")[] },
  ];
  
  function buildReasoningParams(level: string, _model?: string): Record<string, unknown> {
 diff --git a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
-index 187dac1..9b92fad 100644
+index 187dac1..15ae207 100644
 --- a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
 +++ b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
 @@ -8,15 +8,18 @@ const BASE_URL = "https://api.z.ai/api/coding/paas/v4";
@@ -74,7 +74,7 @@ index 187dac1..9b92fad 100644
 -  { id: "glm-4.7",     reasoning: true, contextWindow: 204_800 },
 -  { id: "glm-4.5-air", reasoning: true, contextWindow: 131_072 },
 +  { id: "glm-5.3",       reasoning: true, contextWindow: 1_048_576 },
-+  { id: "glm-5.3-flash", reasoning: true, contextWindow: 1_048_576, modalities: ["text", "image"] },
++  { id: "glm-5.3-flash", reasoning: true, contextWindow: 1_048_576, modalities: ["text", "image"] as ("text" | "image")[] },
 +  { id: "glm-5-turbo",   reasoning: true, contextWindow: 204_800 },
 +  { id: "glm-4.7",       reasoning: true, contextWindow: 204_800 },
  ];

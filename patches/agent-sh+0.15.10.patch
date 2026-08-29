@@ -1,3 +1,15 @@
+diff --git a/node_modules/agent-sh/dist/agent/providers/deepseek.js b/node_modules/agent-sh/dist/agent/providers/deepseek.js
+index 2038f5b..dde84ee 100644
+--- a/node_modules/agent-sh/dist/agent/providers/deepseek.js
++++ b/node_modules/agent-sh/dist/agent/providers/deepseek.js
+@@ -3,6 +3,7 @@ const BASE_URL = "https://api.deepseek.com";
+ const DEFAULT_MODELS = [
+     { id: "deepseek-v4-flash", reasoning: true, echoReasoning: true, contextWindow: 1_000_000 },
+     { id: "deepseek-v4-pro", reasoning: true, echoReasoning: true, contextWindow: 1_000_000 },
++    { id: "deepseek-v4-flash-vision-exp", reasoning: true, echoReasoning: true, contextWindow: 1_000_000, modalities: ["text", "image"] },
+ ];
+ function buildReasoningParams(level, _model) {
+     return level === "off"
 diff --git a/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js b/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
 index f604d85..44c088e 100644
 --- a/node_modules/agent-sh/dist/agent/providers/zai-coding-plan.js
@@ -37,6 +49,18 @@ index 62c4c94..6b2052b 100644
  ];
  /** Built-ins + settings + keys.json. Sync, no extension load. */
  export function listAllProviders() {
+diff --git a/node_modules/agent-sh/src/agent/providers/deepseek.ts b/node_modules/agent-sh/src/agent/providers/deepseek.ts
+index d67146e..213d5a6 100644
+--- a/node_modules/agent-sh/src/agent/providers/deepseek.ts
++++ b/node_modules/agent-sh/src/agent/providers/deepseek.ts
+@@ -11,6 +11,7 @@ const BASE_URL = "https://api.deepseek.com";
+ const DEFAULT_MODELS = [
+   { id: "deepseek-v4-flash", reasoning: true, echoReasoning: true, contextWindow: 1_000_000 },
+   { id: "deepseek-v4-pro", reasoning: true, echoReasoning: true, contextWindow: 1_000_000 },
++  { id: "deepseek-v4-flash-vision-exp", reasoning: true, echoReasoning: true, contextWindow: 1_000_000, modalities: ["text", "image"] },
+ ];
+ 
+ function buildReasoningParams(level: string, _model?: string): Record<string, unknown> {
 diff --git a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts b/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts
 index 187dac1..9b92fad 100644
 --- a/node_modules/agent-sh/src/agent/providers/zai-coding-plan.ts

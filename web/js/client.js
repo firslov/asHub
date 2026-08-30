@@ -44,7 +44,6 @@ registerPanel("subagent",  { toggleBtnId: "sa-toggle",        panelId: "subagent
 import "./session-view.js";
 import "./terminal-view.js";
 import "./lifecycle.js";
-import "./shortcuts.js";
 
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {

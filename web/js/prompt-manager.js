@@ -38,7 +38,6 @@ const promptEditorContent = document.getElementById("prompt-editor-content");
 const promptEditorSave = document.getElementById("prompt-editor-save");
 const promptEditorCancel = document.getElementById("prompt-editor-cancel");
 const promptEmpty = document.getElementById("prompt-empty");
-const shortcutsToggle = document.getElementById("shortcuts-toggle");
 const tabPrompts = document.getElementById("tab-prompts");
 const tabShortcuts = document.getElementById("tab-shortcuts");
 
@@ -171,22 +170,19 @@ export const setActiveTab = (tab) => {
     if (p.dataset.panel === tab) p.removeAttribute("hidden");
     else p.setAttribute("hidden", "");
   }
-  // Keep the toolbar toggles in sync with the active tab.
-  promptToggle?.classList.toggle("active", tab === "prompts");
-  shortcutsToggle?.classList.toggle("active", tab === "shortcuts");
 };
 
 // ── Panel open / close ────────────────────────────────────────────
 export const setPromptOpen = (on, tab = "prompts") => {
   if (on) {
     promptOverlay.removeAttribute("hidden"); promptOverlay.classList.add("open");
+    promptToggle?.classList.add("active");
     setActiveTab(tab);
     if (tab === "prompts") renderList();
   } else {
     promptOverlay.setAttribute("hidden", "");
     promptOverlay.classList.remove("open");
     promptToggle?.classList.remove("active");
-    shortcutsToggle?.classList.remove("active");
     cancelEdit();
   }
 };
@@ -269,22 +265,20 @@ document.addEventListener("langchange", () => {
 import { registerPanel, closeOtherPanels } from './panel-manager.js';
 
 // Toggle the merged commands panel.  Closed → open on `tab`; open on the same
-// tab → close; open on the other tab → switch tabs.
-export const toggleCommands = (tab) => {
+// Single toolbar button toggles the merged commands panel (default: prompts
+// tab).  Tab switching happens inside via the .commands-tab buttons.
+const toggleCommands = () => {
   const open = promptOverlay && !promptOverlay.hasAttribute("hidden");
-  const active = open
-    ? Array.from(document.querySelectorAll(".commands-panel")).find((p) => !p.hasAttribute("hidden"))?.dataset.panel
-    : null;
-  if (open && active === tab) {
+  if (open) {
     setPromptOpen(false);
   } else {
     closeOtherPanels("prompts");
-    setPromptOpen(true, tab);
+    setPromptOpen(true, "prompts");
   }
 };
 
-promptToggle?.addEventListener("click", () => toggleCommands("prompts"));
+promptToggle?.addEventListener("click", toggleCommands);
 
 // Register the panel (no toggle button) so ESC-to-close and close-others
-// still know about it; the toolbar toggles are wired above/shortcuts.js.
+// still know about it; the toolbar toggle is wired above.
 registerPanel('prompts', { toggleBtnId: null, panelId: 'prompt-overlay', open: () => setPromptOpen(true), close: () => setPromptOpen(false) });

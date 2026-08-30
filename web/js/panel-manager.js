@@ -24,6 +24,8 @@ const closeOthers = (except) => {
   }
 };
 
+export const closeOtherPanels = (except) => closeOthers(except);
+
 export const registerPanel = (name, { toggleBtnId, panelId, load, open, close }) => {
   if (!load) {
     // Direct registration (eager or from lazy-loaded module)

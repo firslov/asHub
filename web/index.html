@@ -643,7 +643,10 @@
     <div class="prompt-overlay" id="prompt-overlay" hidden>
       <div class="prompt-modal">
         <div class="prompt-head">
-          <span class="prompt-title" data-i18n="quick.prompts">Quick Prompts</span>
+          <div class="commands-tabs" role="tablist">
+            <button class="commands-tab active" id="tab-prompts" data-tab="prompts" role="tab" data-i18n="quick.prompts">Quick Prompts</button>
+            <button class="commands-tab" id="tab-shortcuts" data-tab="shortcuts" role="tab" data-i18n="shortcuts.title">Keyboard Shortcuts</button>
+          </div>
           <div class="prompt-head-actions">
             <button class="bar-btn icon" id="prompt-close" data-i18n-title="close" title="Close">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
@@ -653,7 +656,7 @@
             </button>
           </div>
         </div>
-        <div class="prompt-body" id="prompt-body">
+        <div class="prompt-body commands-panel" id="prompt-body" data-panel="prompts">
           <div class="prompt-list-wrap">
             <ul class="prompt-list" id="prompt-list">
               <li class="prompt-empty" id="prompt-empty" data-i18n="prompts.empty">No quick prompts yet — add one below.</li>
@@ -668,31 +671,7 @@
             </div>
           </div>
         </div>
-        <div class="prompt-footer">
-          <button class="bar-btn prompt-add-btn" id="prompt-add-btn">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-              <line x1="6" y1="1" x2="6" y2="11"></line>
-              <line x1="1" y1="6" x2="11" y2="6"></line>
-            </svg>
-            <span data-i18n="prompts.add.prompt">add prompt</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Keyboard shortcuts overlay -->
-  <div class="prompt-overlay" id="shortcuts-overlay" hidden>
-    <div class="prompt-modal shortcuts-modal">
-      <div class="prompt-head">
-        <span class="prompt-title" data-i18n="shortcuts.title">Keyboard Shortcuts</span>
-        <div class="prompt-head-actions">
-          <button class="bar-btn icon" id="shortcuts-close" data-i18n-title="close" title="Close">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg>
-          </button>
-        </div>
-      </div>
-      <div class="shortcuts-body">
+        <div class="shortcuts-body commands-panel" id="shortcuts-body" data-panel="shortcuts" hidden>
         <div class="shortcuts-section">
           <div class="shortcuts-section-head">
             <span class="shortcuts-section-icon">⌘</span>
@@ -750,6 +729,16 @@
             <div class="shortcuts-row"><kbd>@</kbd><span data-i18n="shortcuts.mention">Mention file</span></div>
             <div class="shortcuts-row"><kbd>#</kbd><span data-i18n="shortcuts.prompt_pick">Insert saved prompt</span></div>
           </div>
+        </div>
+        </div>
+        <div class="prompt-footer commands-panel" data-panel="prompts">
+          <button class="bar-btn prompt-add-btn" id="prompt-add-btn">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <line x1="6" y1="1" x2="6" y2="11"></line>
+              <line x1="1" y1="6" x2="11" y2="6"></line>
+            </svg>
+            <span data-i18n="prompts.add.prompt">add prompt</span>
+          </button>
         </div>
       </div>
     </div>

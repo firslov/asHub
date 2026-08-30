@@ -2313,8 +2313,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
     }
   /* config / prompt / shortcuts overlays */
   .app:has(.config-overlay.open) .live-wrap .terminal,
-  .app:has(.prompt-overlay.open) .live-wrap .terminal,
-  .app.shortcuts-open .live-wrap .terminal {
+  .app:has(.prompt-overlay.open) .live-wrap .terminal {
     padding-right: var(--panel-w);
   }
 }
@@ -4294,6 +4293,41 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .config-head-actions, .prompt-head-actions {
   display: flex;
   gap: 0.4rem;
+}
+
+/* ── Segmented tabs inside a panel head (e.g. Quick Prompts / Shortcuts) ── */
+.commands-tabs {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.commands-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font: inherit;
+  padding: 0.18rem 0.55rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+  transition: color var(--dur-fast) var(--ease-out-expo), background var(--dur-fast) var(--ease-out-expo);
+}
+.commands-tab:hover {
+  color: var(--text);
+}
+.commands-tab.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+/* These panels carry their own `display` (flex), which would override the
+ * UA `[hidden]{display:none}` — reassert it so tab switching truly hides. */
+.commands-panel[hidden] {
+  display: none !important;
 }
 
 .ctx-actions {

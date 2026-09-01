@@ -23,7 +23,7 @@
     "postinstall": "patch-package && electron-builder install-app-deps"
   },
   "dependencies": {
-    "agent-sh": "^0.15.10",
+    "agent-sh": "^0.15.11",
     "electron-updater": "^6.8.3",
     "tsx": "^4.22.4"
   },

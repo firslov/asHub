@@ -1,0 +1,24 @@
+diff --git a/node_modules/agent-sh/dist/cli/auth/keys.js b/node_modules/agent-sh/dist/cli/auth/keys.js
+index 62c4c94..6b2052b 100644
+--- a/node_modules/agent-sh/dist/cli/auth/keys.js
++++ b/node_modules/agent-sh/dist/cli/auth/keys.js
+@@ -7,6 +7,7 @@ export const KNOWN_PROVIDERS = [
+     { id: "openai", label: "OpenAI", envVar: "OPENAI_API_KEY" },
+     { id: "openrouter", label: "OpenRouter", envVar: "OPENROUTER_API_KEY" },
+     { id: "deepseek", label: "DeepSeek", envVar: "DEEPSEEK_API_KEY" },
++    { id: "zai-coding-plan", label: "Z.AI Coding Plan", envVar: "ZAI_API_KEY" },
+ ];
+ /** Built-ins + settings + keys.json. Sync, no extension load. */
+ export function listAllProviders() {
+diff --git a/node_modules/agent-sh/src/cli/auth/keys.ts b/node_modules/agent-sh/src/cli/auth/keys.ts
+index 5c8b21c..33ce21d 100644
+--- a/node_modules/agent-sh/src/cli/auth/keys.ts
++++ b/node_modules/agent-sh/src/cli/auth/keys.ts
+@@ -23,6 +23,7 @@ export const KNOWN_PROVIDERS: ProviderAuthInfo[] = [
+   { id: "openai",     label: "OpenAI",     envVar: "OPENAI_API_KEY" },
+   { id: "openrouter", label: "OpenRouter", envVar: "OPENROUTER_API_KEY" },
+   { id: "deepseek",   label: "DeepSeek",   envVar: "DEEPSEEK_API_KEY" },
++  { id: "zai-coding-plan", label: "Z.AI Coding Plan", envVar: "ZAI_API_KEY" },
+ ];
+ 
+ /** Built-ins + settings + keys.json. Sync, no extension load. */

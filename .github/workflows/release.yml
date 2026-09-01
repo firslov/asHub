@@ -7,7 +7,7 @@ on:
         description: 'Version number (e.g. 0.19.9)'
         required: true
         type: string
-        default: '0.19.9'
+        default: '0.19.11'
 
 permissions:
   contents: write

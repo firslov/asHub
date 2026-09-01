@@ -5,11 +5,13 @@ import { setComposerText } from "./composer.js";
 import { t } from "./i18n.js";
 import { toast } from "./toast.js";
 
-const rewindToTurn = async (turn) => {
+const rewindToTurn = async ({ turn, entryId }) => {
   const res = await fetch(`/${currentSessionId()}/context/rewind-to-turn`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ turn }),
+    // Prefer the stable tree entry id; the legacy turn number is only a
+    // fallback for frames rendered before entryId tagging existed.
+    body: JSON.stringify(entryId ? { entryId } : { turn }),
   });
   if (!res.ok) {
     const msg = await res.text();
@@ -18,16 +20,27 @@ const rewindToTurn = async (turn) => {
   return res.json().catch(() => null);
 };
 
+// Guard against double-clicks: one rewind per session at a time.  A queued
+// second request would be interpreted against the ALREADY-rewound state
+// (stale turn numbers), which looked like "rewind jumped to a fork point".
+let rewindInFlightFor = null;
+
 const rewindFromBox = async (box) => {
   if (state.isProcessing) return;
+  const sid = currentSessionId();
+  if (rewindInFlightFor === sid) return;
+  const entryId = box.dataset.entryId || null;
   const turn = Number(box.dataset.turn);
-  if (!Number.isInteger(turn) || turn < 0) return;
+  if (!entryId && (!Number.isInteger(turn) || turn < 0)) return;
   let data;
+  rewindInFlightFor = sid;
   try {
-    data = await rewindToTurn(turn);
+    data = await rewindToTurn({ turn, entryId });
   } catch (e) {
     toast(t("rewind.action.failed", { msg: e.message ?? e }), { type: "error" });
     return;
+  } finally {
+    rewindInFlightFor = null;
   }
   // stats === null means the context was already at this point — nothing moved
   if (!data || data.stats == null) {

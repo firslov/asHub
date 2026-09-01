@@ -109,6 +109,7 @@ const flushReply = (session) => {
   const newBlocks = Array.from(tmp.children);
   const prevCount = r._renderedBlockCount ?? 0;
   const newStructKey = _structKey(newBlocks);
+  let rebuilt = false; // slow path ran → new blocks need highlighting now
 
   if (newStructKey === r._lastStructKey && prevCount > 0) {
     // ── Fast path: block structure unchanged ────────────────────────
@@ -135,10 +136,15 @@ const flushReply = (session) => {
     // Setting innerHTML on a <pre> wipes hljs spans and the copy button.
     // Re-highlight immediately (via highlightWithin, which re-injects the
     // button) so the user never sees plain text during streaming.
+    // NOTE: do NOT touch r._lastHighlightAt here — the debounced pass below
+    // also renders math, and highlightWithin is idempotent (it skips blocks
+    // with data-highlighted), so a same-flush re-run is a cheap no-op while
+    // starving the debounce would leave KaTeX placeholders unrendered.
     if (codeChanged) highlightWithin(r.current);
   } else {
     // ── Slow path: structure changed / first render ────────────────
     r._lastStructKey = newStructKey;
+    rebuilt = true;
 
     if (prevCount === 0 || newBlocks.length < prevCount) {
       // First render, or block count decreased (e.g. unclosed code fence
@@ -146,9 +152,23 @@ const flushReply = (session) => {
       // in a single operation to avoid layout thrashing.
       r.current.replaceChildren(...newBlocks);
     } else {
-      // Block-level incremental: keep earlier blocks (Markdown-immutable),
-      // replace only the trailing block(s) whose content may have changed.
-      const keepCount = Math.max(0, prevCount - 1);
+      // Block-level incremental: keep the unchanged PREFIX, rebuild from
+      // the first difference onward.  Changes happen at the tail in
+      // streaming (earlier blocks are Markdown-immutable once closed), so
+      // a closed block that didn't change keeps its highlight/copy button
+      // instead of being rebuilt every time a new block appears.  tagName
+      // must be compared too: _blockContentEqual only compares inner
+      // content, so a setext heading (p → h1, same text) would otherwise
+      // keep the stale <p>.
+      const existing = r.current.children;
+      const limit = Math.min(existing.length, prevCount, newBlocks.length);
+      let keepCount = 0;
+      while (keepCount < limit &&
+             existing[keepCount].tagName === newBlocks[keepCount].tagName &&
+             existing[keepCount].className === newBlocks[keepCount].className &&
+             _blockContentEqual(existing[keepCount], newBlocks[keepCount])) {
+        keepCount++;
+      }
       while (r.current.children.length > keepCount) {
         r.current.lastChild?.remove();
       }
@@ -162,8 +182,14 @@ const flushReply = (session) => {
   r._renderedLen = r.text.length;
 
   // Debounce syntax highlighting & math rendering during live streaming.
+  // Blocks rebuilt by the slow path are highlighted synchronously instead —
+  // highlightWithin skips already-highlighted blocks, so only the fresh
+  // ones are processed and never hit the screen un-highlighted.  During
+  // REPLAY, skip the forced sync pass: every reply's closeReply lands here,
+  // and per-reply sync highlight would block the main thread — replayed
+  // sessions are batch-processed async in onReplayDone anyway.
   const now = Date.now();
-  if (!r._lastHighlightAt || now - r._lastHighlightAt >= HIGHLIGHT_DEBOUNCE_MS) {
+  if ((rebuilt && !session.state.replaying) || !r._lastHighlightAt || now - r._lastHighlightAt >= HIGHLIGHT_DEBOUNCE_MS) {
     renderMathIn(r.current);
     highlightWithin(r.current);
     r._lastHighlightAt = now;

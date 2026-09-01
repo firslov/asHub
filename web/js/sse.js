@@ -471,6 +471,7 @@ export const handlers = {
       if (!isCommand) {
         this.state.currentTurn++;
         matched.dataset.turn = String(this.state.currentTurn);
+        if (p?.entryId) matched.dataset.entryId = p.entryId;
       }
       matched.classList.remove("pending");
       delete matched.dataset.queued;
@@ -479,8 +480,25 @@ export const handlers = {
     if (!isCommand) this.state.currentTurn++;
     renderTurnSep(this, meta?.ts);
     const box = createUserBox(queryText, images, meta?.ts, isCommand ? null : this.state.currentTurn);
-    if (!isCommand) box.dataset.turn = String(this.state.currentTurn);
+    if (!isCommand) {
+      box.dataset.turn = String(this.state.currentTurn);
+      if (p?.entryId) box.dataset.entryId = p.entryId;
+    }
     append(this, box);
+  },
+
+  // Late-arriving tree entry id for a live turn's query frame (pushed by
+  // the hub once capture.flush() has persisted the turn).  Match the first
+  // untagged box by query text: tag frames arrive in turn order, before any
+  // later turn's box exists.
+  "agent:query-tagged"(p) {
+    const entryId = p?.entryId;
+    const queryText = p?.query ?? "";
+    if (!entryId) return;
+    const root = (this.state.replaying && this._replayFrag) || this.streamEl;
+    for (const b of root?.querySelectorAll(".agent-box[data-turn]:not([data-entry-id])") ?? []) {
+      if (b._queryText === queryText) { b.dataset.entryId = entryId; break; }
+    }
   },
 
   // A queued message was cancelled and dropped before it ran — remove its

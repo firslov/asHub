@@ -426,9 +426,18 @@
 .scroll-pill:active { transform: translateY(0) scale(0.96); }
 
 /* ── Code blocks ─────────────────────────────────────────────────── */
+/* Layout properties live on `pre code` whether or not hljs has run, so
+   highlighting kicking in mid-stream only recolors tokens and never
+   reflows the block.  The `.hljs` variant keeps higher specificity than
+   the vendor theme (`pre code.hljs{padding:1em}`), which is loaded after
+   this file; the bare variant overrides the inline-code look from
+   styles.css (`.agent-reply code`) for not-yet-highlighted blocks. */
+.agent-reply pre code,
 .agent-reply pre code.hljs {
+  display: block;
   background: transparent;
   padding: 0;
+  border: 0;
   font-family: var(--font-mono);
   font-size: var(--fs-md);
   line-height: 1.6;

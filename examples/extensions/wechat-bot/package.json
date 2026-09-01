@@ -1,0 +1,10 @@
+{
+  "name": "agent-sh-wechat-bot",
+  "version": "0.1.0",
+  "description": "Send WeChat messages from agent-sh via the wechat-ilink-bot webhook",
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "agent-sh": "^0.15.10"
+  }
+}

@@ -56,7 +56,20 @@ export function createCapture(
   const flush = async (): Promise<void> => {
     const store = getStore();
     if (!store || desynced) return;
-    const snap = await bridge.snapshot();
+    let snap;
+    try {
+      snap = await bridge.snapshot();
+    } catch (err) {
+      // Backends without snapshot support (ACP) can never be captured:
+      // disable permanently and stay quiet — turn-end flushes would
+      // otherwise error-log every single turn.  Other (transient) failures
+      // still propagate to the caller's catch-log.
+      if (err instanceof Error && /does not support/.test(err.message)) {
+        desynced = true;
+        return;
+      }
+      throw err;
+    }
     const messages = snap.messages as AgentMessage[];
 
     if (messages.length < liveEntryIds.length) {

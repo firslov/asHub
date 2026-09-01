@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
-import type { Bridge, BridgeFactory, BusEvent, SessionKind } from "./bridges/types.js";
+import type { Bridge, BridgeFactory, BusEvent, ContextSnapshot, SessionKind } from "./bridges/types.js";
 import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
 import { listAllProviders, resolveApiKey, anyProviderConfigured } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
@@ -97,7 +97,6 @@ interface Session {
   _restorePromise?: Promise<void>;
 }
 
-const REPLAY_LIMIT = 3000;
 const AUTO_APPROVE_KEY = "ashub.permissions.autoApprove";
 
 let frameSeq = 0;
@@ -111,9 +110,14 @@ function parseFrameName(frame: string): string {
     return (inner?.meta?.name ?? "") as string;
   } catch { return ""; }
 }
+// NOTE: agent:thinking-chunk is deliberately NOT replayed/persisted — it is
+// by far the largest frame source (one frame per reasoning delta) and would
+// drown out real history.  Live clients still receive chunks via the direct
+// SSE write in pushFrame; restored sessions simply show no thinking blocks.
 const REPLAY_NAMES = new Set([
   "agent:info",
   "agent:query",
+  "agent:query-tagged",
   "agent:response-segment",
   "agent:response-done",
   "agent:usage",
@@ -134,7 +138,6 @@ const REPLAY_NAMES = new Set([
   "shell:command-done",
   "shell:cwd-change",
   "shell:queued",
-  "agent:thinking-chunk",
   "subagent:started",
   "subagent:done",
   "subagent:swarm-started",
@@ -1260,9 +1263,16 @@ async function createSession(
               const replayPath = path.join(SESSIONS_DIR, `${id}.replay.jsonl`);
               const replayRaw = await fs.promises.readFile(replayPath, "utf-8");
               const replayFrames = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n")
-                .filter((f) => { const n = parseFrameName(f); return n !== "ui:error" && n !== "ui:info"; });
+                // Drop transient UI frames and legacy thinking-chunk frames
+                // (no longer persisted; they only inflate the frame count).
+                .filter((f) => {
+                  const n = parseFrameName(f);
+                  return n !== "ui:error" && n !== "ui:info" && n !== "agent:thinking-chunk";
+                });
               if (replayFrames.length > 0) {
-                session.replay = replayFrames.length > REPLAY_LIMIT ? replayFrames.slice(-REPLAY_LIMIT) : replayFrames;
+                // Keep the FULL history: tail=100 resyncs slice at send time
+                // (openSseMulti), so truncating here only loses old turns.
+                session.replay = replayFrames;
                 loadedReplay = true;
               }
             } catch {}
@@ -1309,7 +1319,6 @@ async function createSession(
                   { source: id, ts: Date.now(), id: `hub:${id}:recovery`, name: "agent:cancelled" },
                   {},
                 ));
-                if (session.replay.length > REPLAY_LIMIT) session.replay.shift();
               }
             }
 
@@ -1653,7 +1662,10 @@ function routeEvent(session: Session, e: BusEvent): void {
     // Flush under the context lock so it can't interleave with an automatic
     // compaction or a rewind/fork replacing the kernel mid-snapshot.
     if (session.capture) {
-      withContextLock(session, () => session.capture!.flush()).catch((err) =>
+      withContextLock(session, async () => {
+        await session.capture!.flush();
+        await tagLastQueryFrame(session);
+      }).catch((err) =>
         console.error(`[hub] capture.flush failed for ${session.id}:`, err)
       );
     }
@@ -1733,10 +1745,11 @@ function pushFrame(session: Session, name: string, frame: string, opts?: { trans
   if (session._closed) return;
   if (opts?.transient) {
     session.replay.push(frame);
-    if (session.replay.length > REPLAY_LIMIT) session.replay.shift();
   } else if (REPLAY_NAMES.has(name)) {
+    // The replay keeps the FULL history (no sliding window): thinking-chunk
+    // frames — the original reason for the cap — are no longer replayed, so
+    // growth is modest, and tail=N subscribers slice at send time anyway.
     session.replay.push(frame);
-    if (session.replay.length > REPLAY_LIMIT) session.replay.shift();
     persistReplayFrame(session.id, frame);
     // Track highest frameSeq per-session for fast restore
     const m = frame.match(frameIdRe);
@@ -2418,7 +2431,10 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
       // Flush under the context lock so it can't interleave with an automatic
       // compaction or a rewind/fork replacing the kernel mid-snapshot.
       if (session.capture) {
-        withContextLock(session, () => session.capture!.flush()).catch((err) =>
+        withContextLock(session, async () => {
+          await session.capture!.flush();
+          await tagLastQueryFrame(session);
+        }).catch((err) =>
           console.error(`[hub] capture.flush failed for ${session.id}:`, err)
         );
       }
@@ -2798,6 +2814,93 @@ async function syncTreeAfterRewind(session: Session, newLength: number): Promise
   else session.capture.truncateTo(newLength);
 }
 
+/**
+ * After a turn's capture.flush(), the user message that opened the turn has
+ * a real tree entry id.  Broadcast it as an agent:query-tagged frame so
+ * clients can address rewind targets by stable entryId instead of by
+ * client-counted turn number (which drifts whenever the replay window is
+ * truncated).  The replay file stays append-only (original query frame +
+ * tag frame); the IN-MEMORY copy of the query frame is additionally patched
+ * to carry the entryId, which keeps this scan from re-tagging frames on
+ * later flushes and lets full-file rewrites persist the id inline.
+ *
+ * Queued turns finish back-to-back, so several query frames may be awaiting
+ * a tag when one flush lands — tag them all.  Matching is by query text
+ * against the kernel's real user messages (newest first): a turn that died
+ * before reaching the kernel has no message and simply stays untagged,
+ * falling back to the legacy turn-number rewind.
+ */
+async function tagLastQueryFrame(session: Session): Promise<void> {
+  if (!session.capture || session._closed) return;
+  // Untagged non-command query frames at the replay tail, newest first.
+  // Stop at the first frame already carrying an entryId (patched below, or
+  // rebuilt with it inline): everything older is already addressed.
+  const pending: Array<{ idx: number; query: string }> = [];
+  for (let i = session.replay.length - 1; i >= 0; i--) {
+    const f = session.replay[i]!;
+    if (parseFrameName(f) !== "agent:query") continue;
+    const dataLine = f.split("\n").find((l) => l.startsWith("data: "));
+    if (!dataLine) break;
+    try {
+      const inner = JSON.parse(dataLine.slice("data: ".length));
+      if (inner?.payload?.command === true) continue;
+      if (inner?.payload?.entryId) break;
+      pending.push({ idx: i, query: typeof inner?.payload?.query === "string" ? inner.payload.query : "" });
+    } catch { break; }
+  }
+  if (pending.length === 0) return;
+  // Backends without snapshot support (ACP) can't be tagged — their rewind
+  // stays on the legacy turn-number path.  Bail quietly instead of throwing
+  // into the caller's "capture.flush failed" catch-log every single turn.
+  let snap: ContextSnapshot;
+  try { snap = await session.bridge.snapshot(); } catch { return; }
+  const msgs = snap.messages as Array<{ role?: string; content?: unknown }>;
+  const used = new Set<number>();
+  const tags: Array<{ idx: number; query: string; entryId: string }> = [];
+  for (const p of pending) {
+    // Newest available matching kernel message: both sequences are
+    // chronological, so newest-frame ↔ newest-message keeps duplicate
+    // queries paired in order.
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (used.has(i)) continue;
+      const m = msgs[i]!;
+      if (m.role !== "user" || isSystemNoteMessage(m)) continue;
+      const entryId = session.capture.getEntryIdAt(i);
+      if (!entryId) continue;
+      // Normalize before comparing: kernel user messages may carry a
+      // <query_context> wrapper (shell_events injection) or arrive as a
+      // multimodal content array (image parts join as empty strings,
+      // leaving stray spaces) — strict equality would never match those
+      // turns, silently keeping them on the legacy turn-number rewind.
+      if (stripContextWrappers(extractText(m.content)).trim() !== p.query.trim()) continue;
+      used.add(i);
+      tags.push({ ...p, entryId });
+      break;
+    }
+  }
+  // Process oldest first so clients pairing tags to boxes in stream order
+  // stay consistent for identical consecutive queries.
+  for (const { idx, query, entryId } of tags.reverse()) {
+    // Patch the in-memory frame (same SSE id, entryId added to payload).
+    const f = session.replay[idx]!;
+    const dataLine = f.split("\n").find((l) => l.startsWith("data: "));
+    if (dataLine) {
+      try {
+        const inner = JSON.parse(dataLine.slice("data: ".length));
+        inner.payload = { ...inner.payload, entryId };
+        const idLine = f.split("\n").find((l) => l.startsWith("id: "));
+        session.replay[idx] = `${idLine ?? ""}\ndata: ${JSON.stringify(inner)}\n\n`;
+      } catch { /* leave frame as-is; the tag frame below still covers it */ }
+    }
+    pushFrame(session, "agent:query-tagged", sseFrame({
+      source: session.id,
+      ts: Date.now(),
+      id: `hub:${session.id}:agent:query-tagged`,
+      name: "agent:query-tagged",
+    }, { query, entryId }));
+  }
+}
+
 function synthesizeBranchFrames(
   session: Session,
   messages: unknown[],
@@ -2852,6 +2955,9 @@ function synthesizeBranchFrames(
       const images = extractImages(m.content);
       const payload: Record<string, unknown> = { query: extractText(m.content) };
       if (images.length > 0) payload.images = images;
+      // Stable rewind address: the tree entry this message is persisted
+      // under.  Clients prefer it over the volatile client-counted turn.
+      if (entryIds[idx]) payload.entryId = entryIds[idx];
       frames.push(sseFrame(meta("agent:query"), payload));
       frames.push(sseFrame(meta("agent:processing-start"), {}));
       turnStarted = true;
@@ -2924,11 +3030,10 @@ async function rebuildReplay(
   // Session closed (e.g. compaction hook fired after close): skip —
   // persisting rebuilt frames would recreate the deleted replay file.
   if (session._closed) return;
-  let frames = synthesizeBranchFrames(session, messages, entryIds);
-  // Rebuilt replays obey the same cap as pushFrame. Keep the tail but pin
-  // the leading hub:branch-switched marker: without it live clients never
-  // reset/enter replay mode and render the batch on top of stale content.
-  if (frames.length > REPLAY_LIMIT) frames = [frames[0]!, ...frames.slice(-(REPLAY_LIMIT - 1))];
+  // No frame cap here either (see pushFrame): the rebuilt replay is the
+  // complete current branch, and truncating it would re-introduce the
+  // history loss this rebuild is meant to avoid.
+  const frames = synthesizeBranchFrames(session, messages, entryIds);
   session.replay = frames;
   session.segmentText = "";
   session.segmentSeq = 0;
@@ -3043,16 +3148,60 @@ async function rewindContext(req: http.IncomingMessage, res: http.ServerResponse
 }
 
 /**
+ * Rewind by stable tree entry id (preferred over client-counted turn
+ * numbers, which drift whenever the replay window is truncated).
+ * Semantically "drop this message and everything after it": the context
+ * becomes the branch ending at the entry's parent — the same branch-apply
+ * fork uses, so it stays correct even if the entry sits on another branch.
+ */
+async function rewindToEntry(res: http.ServerResponse, session: Session, entryId: string): Promise<void> {
+  if (!session.store || !session.capture) { res.statusCode = 409; res.end("session has no tree store"); return; }
+  const resolved = resolveEntryId(session, entryId);
+  if (!resolved) { res.statusCode = 404; res.end("entry not found"); return; }
+  const entry = session.store.getEntry(resolved)!;
+  if (entry.type !== "message") { res.statusCode = 400; res.end("entry is not a message"); return; }
+  const leafId = entry.parentId;
+  // The context already ends right before this message — nothing would move.
+  if (session.store.getActiveLeaf() === leafId) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, stats: null }));
+    return;
+  }
+  try {
+    await withContextLock(session, async () => {
+      // Converge persistence state first (same rationale as rewindToTurn).
+      if (session.capture) { try { await session.capture!.flush(); } catch {} }
+      // Apply the target branch BEFORE moving the active leaf: if the kernel
+      // replace fails, the leaf must still point at the branch the kernel
+      // and capture actually contain (same ordering rationale as fork).
+      await applyBranchMessages(session, leafId);
+      session.store!.setActiveLeaf(leafId);
+    });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, stats: { leafId } }));
+  } catch (err) {
+    res.statusCode = 500;
+    res.end(`rewind failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/**
  * Atomically find a user message by its turn number and rewind the context
  * to drop everything from that message onward.  This avoids the TOCTOU race
  * where the client fetches context then rewinds in two separate requests.
+ *
+ * Accepts { entryId } (preferred — stable across replay truncation) or
+ * { turn } (legacy fallback for frames rendered before entryId tagging).
  */
 async function rewindToTurn(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   if (session.isProcessing) { res.statusCode = 409; res.end("cannot switch branches while a turn is in progress"); return; }
   const body = await readBody(req);
   let turn: number;
   try {
-    const parsed = JSON.parse(body) as { turn?: number };
+    const parsed = JSON.parse(body) as { turn?: number; entryId?: string };
+    if (typeof parsed.entryId === "string" && parsed.entryId) {
+      return await rewindToEntry(res, session, parsed.entryId);
+    }
     turn = Number(parsed.turn);
   } catch {
     res.statusCode = 400; res.end("invalid body"); return;

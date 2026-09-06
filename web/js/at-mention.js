@@ -47,16 +47,31 @@ export const attachAtMentionAutocomplete = (inputEl) => {
       const subdir = lastSlash === -1 ? "" : tok.query.slice(0, lastSlash);
       const prefix = (lastSlash === -1 ? tok.query : tok.query.slice(lastSlash + 1)).toLowerCase();
       const files = await fetchEntries(subdir);
+      const toItem = (f) => ({
+        name: f.name + (f.kind === "dir" ? "/" : ""),
+        description: f.kind === "dir" ? "dir" : "",
+        kind: f.kind,
+        rawName: f.name,
+        subdir,
+      });
+      if (!prefix) return files.slice(0, 50).map(toItem);
+      // Partial (substring) match so a query like "成绩" surfaces
+      // "张三的成绩单.xlsx".  Rank prefix matches first, then by earliest
+      // match position, then alphabetically for a stable order.
       return files
-        .filter((f) => f.name.toLowerCase().startsWith(prefix))
+        .map((f) => ({ f, lower: f.name.toLowerCase() }))
+        .filter((x) => x.lower.includes(prefix))
+        .sort((a, b) => {
+          const sa = a.lower.startsWith(prefix) ? 0 : 1;
+          const sb = b.lower.startsWith(prefix) ? 0 : 1;
+          if (sa !== sb) return sa - sb;
+          const pa = a.lower.indexOf(prefix);
+          const pb = b.lower.indexOf(prefix);
+          if (pa !== pb) return pa - pb;
+          return a.lower.localeCompare(b.lower);
+        })
         .slice(0, 50)
-        .map((f) => ({
-          name: f.name + (f.kind === "dir" ? "/" : ""),
-          description: f.kind === "dir" ? "dir" : "",
-          kind: f.kind,
-          rawName: f.name,
-          subdir,
-        }));
+        .map((x) => toItem(x.f));
     },
     accept: (it) => {
       const tok = getActiveAtToken(inputEl);

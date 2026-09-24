@@ -14,8 +14,9 @@
 name: Build and Release
 
 on:
-  push:
-    tags: ["v*"]
+  # workflow_dispatch only.  release.yml creates and pushes the version tag as
+  # part of its own flow, so a tag trigger here would start a second release
+  # job for the same tag and race it for the same GitHub Release assets.
   workflow_dispatch:
 
 permissions:
@@ -48,6 +49,13 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      # --ignore-scripts skips postinstall, which is what applies
+      # patches/*.patch. Apply them explicitly, or CI artifacts ship an
+      # unpatched agent-sh (degraded/tokensUsed reporting and the skipTokens
+      # fast path all go missing).
+      - name: Apply dependency patches
+        run: npx patch-package
+
       - name: Sync version from git tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -62,31 +70,19 @@ jobs:
       - name: TypeScript build
         run: npm run build
 
-      - name: Build Electron app (macOS ARM64)
-        run: npx electron-builder --mac --arm64 --publish never
+      # One run for both architectures: electron-builder merges every built
+      # target into a single latest-mac.yml, so building arm64 and x64 in two
+      # separate runs leaves only the second run's file (one arch) and breaks
+      # per-arch auto-update selection.
+      - name: Build Electron app (macOS arm64 + x64)
+        run: npx electron-builder --mac --publish never
         env:
           CI: true
 
-      - name: Upload macOS ARM64 artifacts
+      - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: asHub-mac-arm64-${{ github.sha }}
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/*.blockmap
-            release/latest-mac.yml
-          if-no-files-found: error
-
-      - name: Build Electron app (macOS x64)
-        run: npx electron-builder --mac --x64 --publish never
-        env:
-          CI: true
-
-      - name: Upload macOS x64 artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: asHub-mac-x64-${{ github.sha }}
+          name: asHub-mac-${{ github.sha }}
           path: |
             release/*.dmg
             release/*.zip
@@ -119,6 +115,13 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
+
+      # --ignore-scripts skips postinstall, which is what applies
+      # patches/*.patch. Apply them explicitly, or CI artifacts ship an
+      # unpatched agent-sh (degraded/tokensUsed reporting and the skipTokens
+      # fast path all go missing).
+      - name: Apply dependency patches
+        run: npx patch-package
 
       - name: Sync version from git tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -179,6 +182,13 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      # --ignore-scripts skips postinstall, which is what applies
+      # patches/*.patch. Apply them explicitly, or CI artifacts ship an
+      # unpatched agent-sh (degraded/tokensUsed reporting and the skipTokens
+      # fast path all go missing).
+      - name: Apply dependency patches
+        run: npx patch-package
+
       - name: Sync version from git tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -215,16 +225,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download macOS ARM64 artifacts
+      - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
-          name: asHub-mac-arm64-${{ github.sha }}
-          path: release/
-
-      - name: Download macOS x64 artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: asHub-mac-x64-${{ github.sha }}
+          name: asHub-mac-${{ github.sha }}
           path: release/
 
       - name: Download Windows artifacts

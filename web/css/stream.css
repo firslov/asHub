@@ -1,0 +1,813 @@
+/* ────────────────────────────────────────────────────────────────────
+   stream.css — 会话流阅读区美化层（加载在 live.css 之后，同优先级后者胜）
+
+   Scope: .terminal 外壳、.agent-box 用户消息、.agent-reply Markdown 排版、
+   代码块（语言徽章/复制按钮）、流式光标、thinking 点与折叠块、
+   tool-row/tool-group/tool-detail/tool-body、diff 块、shell-block、
+   turn 分隔线/时间戳、usage 行与 cache ring、消息操作按钮、错误卡片、
+   stream-loading 进度条、reasoning-phase、compaction-marker、ui-info。
+
+   Discipline: 只用 styles.css token；rest 态用 border 不用阴影；
+   单一 accent（cyan 仅语义）；动效只动 transform/opacity；
+   data-ui-* 开关行为全部保留（开关规则带属性选择器，优先级更高，
+   本文件不覆盖开关语义，仅在两种状态下分别美化）。
+   ──────────────────────────────────────────────────────────────────── */
+
+/* ── Terminal shell: 圆角卡片 + 分层阴影 + 顶部 accent 发丝线 ─────── */
+.live-wrap .terminal {
+  margin: var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel-md), inset 0 1px 0 var(--edge-highlight);
+}
+
+[data-theme="dark"] .live-wrap .terminal {
+  border-color: var(--border-mid);
+  box-shadow: var(--shadow-panel-md), inset 0 1px 0 var(--edge-highlight);
+}
+
+.live-wrap .terminal::before {
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 8%,
+    var(--accent-border) 38%,
+    var(--accent) 50%,
+    var(--accent-border) 62%,
+    transparent 92%);
+  opacity: 0.35;
+}
+
+/* ── Stream loading bar ──────────────────────────────────────────── */
+.live-wrap .load-bar-track {
+  height: 2px;
+  background: transparent;
+}
+
+.live-wrap .load-bar-fill {
+  width: 32%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg,
+    rgba(var(--accent-rgb), 0.05),
+    rgba(var(--accent-rgb), 0.55) 60%,
+    var(--accent));
+}
+
+/* ── Turn separator / compaction marker ──────────────────────────── */
+.live-wrap .turn-sep {
+  gap: 0.75rem;
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label-sm);
+}
+
+.live-wrap .turn-line {
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--border-mid) 22%,
+    var(--border-mid) 78%,
+    transparent 100%);
+  opacity: 0.55;
+}
+
+.live-wrap .turn-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.live-wrap .compaction-marker .cm-line {
+  background: var(--border);
+  opacity: 1;
+}
+
+.live-wrap .compaction-marker .cm-pill {
+  background: transparent;
+  border: 1px solid var(--border-mid);
+  color: var(--text-dim);
+  letter-spacing: var(--tracking-label-sm);
+  padding: 0.14rem 0.6rem;
+}
+
+/* ── Agent box (用户消息) ────────────────────────────────────────── */
+.live-wrap .agent-box {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  padding: 0.55rem 0.95rem 0.6rem 1rem;
+  margin-top: 1.4rem;
+  background: linear-gradient(90deg, var(--accent-glow) 0%, transparent 65%);
+  box-shadow: none;
+  transition: border-color var(--dur-quick) var(--ease-out-expo),
+              box-shadow var(--dur-quick) var(--ease-out-expo),
+              transform var(--dur-quick) var(--ease-out-expo);
+}
+
+/* styles.css 的 ::before accent 条与 border-left 重复，去掉 */
+.live-wrap .agent-box::before { content: none; }
+
+.live-wrap .agent-box:hover {
+  border-color: var(--border-mid);
+  border-left-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+/* 开关关闭（纯色）状态下保持同样的克制质感 */
+.live-wrap[data-ui-message-gradient="false"] .agent-box {
+  background: var(--ui-message-bg-color, var(--accent-glow));
+}
+
+/* ── Message actions (rewind / time) ─────────────────────────────── */
+.live-wrap .msg-actions {
+  opacity: 0;
+  transition: opacity var(--dur-quick) var(--ease-out-expo);
+}
+
+.live-wrap .msg-time {
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+
+.live-wrap .agent-box:hover .msg-actions {
+  opacity: 1;
+}
+
+.live-wrap .msg-action-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-mid);
+  padding: 2px 7px;
+  transition: color var(--dur-fast) var(--ease-out-expo),
+              border-color var(--dur-fast) var(--ease-out-expo),
+              background var(--dur-fast) var(--ease-out-expo),
+              transform var(--dur-fast) var(--ease-out-expo);
+}
+
+.live-wrap .msg-action-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-glow);
+}
+
+.live-wrap .msg-action-btn:active { transform: scale(0.92); }
+
+/* ── Agent reply 容器 ────────────────────────────────────────────── */
+.live-wrap .agent-reply {
+  border: none;
+  border-left: 2px solid;
+  border-image: linear-gradient(180deg,
+    var(--accent-border) 0%,
+    rgba(var(--accent-rgb), 0.10) 55%,
+    transparent 100%) 1;
+  border-radius: 0;
+  padding: 0.4rem 0 0.4rem 1.15rem;
+  line-height: 1.78;
+  transition: background var(--dur-quick) var(--ease-out-expo);
+}
+
+/* 阅读区不做位移 hover——静止文本 + 极淡底色暗示即可 */
+.live-wrap .agent-reply:hover {
+  transform: none;
+  box-shadow: none;
+  background: rgba(var(--accent-rgb), 0.025);
+}
+
+/* 开关：hover 反馈关闭 */
+.live-wrap[data-ui-reply-hover="false"] .agent-reply:hover {
+  background: transparent;
+}
+
+/* 开关：渐变左边框关闭 → 纯色 accent */
+.live-wrap[data-ui-reply-border-gradient="false"] .agent-reply {
+  border-image: none;
+  border-left-color: var(--ui-reply-border-color, var(--accent-border));
+}
+
+/* 开关：左边框整体关闭 */
+.live-wrap[data-ui-reply-border-show="false"] .agent-reply {
+  border-left: none;
+  padding-left: 0;
+}
+
+/* ── Markdown 排版节奏 ───────────────────────────────────────────── */
+.live-wrap .agent-reply p { line-height: 1.78; }
+.live-wrap .agent-reply p + p { margin-top: 0.9rem; }
+
+.live-wrap .agent-reply ul,
+.live-wrap .agent-reply ol { margin: 0.6rem 0 0.6rem 1.5rem; }
+
+.live-wrap .agent-reply li { margin: 0.22rem 0; line-height: 1.72; }
+
+.live-wrap .agent-reply li::marker { color: var(--accent-dim); }
+
+.live-wrap .agent-reply h1,
+.live-wrap .agent-reply h2,
+.live-wrap .agent-reply h3,
+.live-wrap .agent-reply h4 {
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+}
+
+.live-wrap .agent-reply h1 { font-size: 1.3em;  margin: 1.35rem 0 0.55rem; }
+.live-wrap .agent-reply h2 { font-size: 1.16em; margin: 1.25rem 0 0.5rem; }
+.live-wrap .agent-reply h3 { font-size: 1.06em; margin: 1.1rem 0 0.45rem; }
+.live-wrap .agent-reply h4 { font-size: 1em;    margin: 1rem 0 0.4rem; color: var(--text-dim); }
+
+.live-wrap .agent-reply hr {
+  border: none;
+  height: 1px;
+  margin: 1.1rem 0;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--border-mid) 25%,
+    var(--border-mid) 75%,
+    transparent 100%);
+  opacity: 0.7;
+}
+
+/* 单一 accent：链接 hover 不再跳 cyan */
+.live-wrap .agent-reply a {
+  color: var(--accent-dim);
+  text-decoration-color: var(--accent-border);
+  transition: color var(--dur-quick) var(--ease-out-expo),
+              text-decoration-color var(--dur-quick) var(--ease-out-expo);
+}
+
+.live-wrap .agent-reply a:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+/* ── Inline code ─────────────────────────────────────────────────── */
+.live-wrap .agent-reply :not(pre) > code,
+.live-wrap .agent-reply .md-inline {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  font-weight: 500;
+  color: var(--accent-dim);
+  background: color-mix(in srgb, var(--bg3) 65%, transparent);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xs);
+  padding: 0.08em 0.4em;
+}
+
+/* 开关：inline code 边框关闭（优先级需盖过上面的 :not(pre) 选择器） */
+.live-wrap[data-ui-reply-code-border="false"] .agent-reply :not(pre) > code,
+.live-wrap[data-ui-reply-code-border="false"] .agent-reply .md-inline {
+  border-color: transparent;
+}
+
+/* ── Code blocks ─────────────────────────────────────────────────── */
+.live-wrap .agent-reply pre {
+  background: var(--bg3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 0.95rem 1.15rem;
+  margin: 0.9rem 0;
+  box-shadow: none;
+}
+
+/* 去掉 live.css 的顶部渐变条与左侧 accent 边——层次交给底色与徽章 */
+.live-wrap .agent-reply pre::before { content: none; }
+
+/* 深色主题：比页面底色更深的专用代码底 */
+[data-theme="dark"] .live-wrap .agent-reply pre {
+  background: color-mix(in srgb, var(--bg) 55%, #000);
+  border-color: var(--border);
+}
+
+/* Academic 主题补偿。live.css 里的 academic 覆盖规则与上面对应元素的基础规则
+   特异性相同（多为 0,2,x,个别如 .tool-row:hover 是 0,3,0），而 stream.css 在
+   index.html 里后加载，平局时取胜——academic 的纸色代码底、衬线标题、diff
+   配色、thinking-block 的蓝色左边框与 tool-row 悬停底都会静默失效。深色主题
+   上面已按同样方式补偿，这里补齐 academic：多一层 [data-theme] 后特异性高一
+   级（0,3,x 压 0,2,x、0,4,0 压 0,3,0），稳定取胜。 */
+[data-theme="academic"] .live-wrap .agent-reply pre {
+  background: #f0ece3;
+  border-color: rgba(30, 59, 92, 0.12);
+  box-shadow: inset 0 1px 4px rgba(30, 35, 45, 0.04);
+}
+
+[data-theme="academic"] .live-wrap .agent-reply h1,
+[data-theme="academic"] .live-wrap .agent-reply h2,
+[data-theme="academic"] .live-wrap .agent-reply h3,
+[data-theme="academic"] .live-wrap .agent-reply h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+[data-theme="academic"] .live-wrap .diff-added {
+  background: rgba(92, 124, 92, 0.10);
+  border-left-color: #5c7c5c;
+}
+
+[data-theme="academic"] .live-wrap .diff-removed {
+  background: rgba(155, 100, 90, 0.09);
+  border-left-color: #9b645a;
+}
+
+[data-theme="academic"] .live-wrap .diff-head {
+  background: #ebe6db;
+  color: var(--text-dim);
+}
+
+[data-theme="academic"] .live-wrap .diff-sep {
+  background: #f0ece3;
+  color: #8a8275;
+}
+
+[data-theme="academic"] .live-wrap .tool-row:hover {
+  background: #ebe7de;
+}
+
+/* .live-wrap .thinking-block 用 border-left 简写，会连 border-left-color 一起
+   改写，所以 academic 的蓝色左边框同样会被压掉（基础规则见上方 458 行）。 */
+[data-theme="academic"] .live-wrap .thinking-block {
+  border-left-color: rgba(30, 59, 92, 0.20);
+}
+
+.live-wrap .agent-reply pre code,
+.live-wrap .agent-reply pre code.hljs {
+  font-size: var(--fs-sm);
+  line-height: 1.65;
+}
+
+/* 语言徽章：左上角精致角标，hover 浮现 */
+.live-wrap .agent-reply pre code[class*="language-"]::before {
+  top: 0;
+  left: 0;
+  padding: 0.16rem 0.5rem 0.2rem;
+  background: var(--bg2);
+  border: 1px solid var(--border-light);
+  border-top: none;
+  border-left: none;
+  border-radius: 0 0 var(--radius-xs) 0;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label-sm);
+  color: var(--text-faint);
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity var(--dur-quick) var(--ease-out-expo),
+              transform var(--dur-quick) var(--ease-out-expo);
+}
+
+[data-theme="dark"] .live-wrap .agent-reply pre code[class*="language-"]::before {
+  background: var(--bg-elevated);
+}
+
+.live-wrap .agent-reply pre:hover code[class*="language-"]::before {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── 复制按钮（code / reply / tool-body 共享）────────────────────── */
+.live-wrap .code-copy-btn,
+.live-wrap .reply-copy-btn,
+.live-wrap .tool-body-btn.copy-btn {
+  background: var(--bg-elevated);
+  border-color: var(--border-light);
+  color: var(--text-mid);
+}
+
+.live-wrap .code-copy-btn,
+.live-wrap .reply-copy-btn {
+  width: 1.7rem;
+  height: 1.7rem;
+  opacity: 0;
+}
+
+.live-wrap .tool-body-btn.copy-btn { opacity: 0; }
+
+.live-wrap .code-copy-btn:hover,
+.live-wrap .reply-copy-btn:hover,
+.live-wrap .tool-body-btn.copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-glow);
+}
+
+/* ── Tables ──────────────────────────────────────────────────────── */
+.live-wrap .agent-reply table {
+  font-size: var(--fs-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  margin: 0.95rem 0;
+}
+
+.live-wrap .agent-reply th,
+.live-wrap .agent-reply td {
+  padding: 0.5rem 0.85rem;
+  border-color: var(--border-light);
+}
+
+.live-wrap .agent-reply th {
+  background: var(--bg2);
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  letter-spacing: var(--tracking-label-sm);
+}
+
+.live-wrap .agent-reply tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg3) 40%, transparent);
+}
+
+[data-theme="dark"] .live-wrap .agent-reply tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+/* ── Blockquote ──────────────────────────────────────────────────── */
+.live-wrap .agent-reply blockquote {
+  border-left: 2px solid var(--accent-border);
+  margin: 0.85rem 0;
+  padding: 0.4rem 0.95rem;
+  background: var(--accent-glow);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-dim);
+}
+
+/* ── 流式光标 ────────────────────────────────────────────────────── */
+.live-wrap .agent-reply.streaming::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 0.95em;
+  margin-left: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  vertical-align: -0.1em;
+  opacity: 0.85;
+  animation: stream-caret 1.1s var(--ease-in-out) infinite;
+}
+
+@keyframes stream-caret {
+  0%, 100% { opacity: 0.15; }
+  50%      { opacity: 0.9; }
+}
+
+/* ── Thinking 指示点 ─────────────────────────────────────────────── */
+.live-wrap .thinking {
+  gap: 0.4rem;
+  opacity: 0.7;
+  letter-spacing: var(--tracking-label-sm);
+}
+
+.live-wrap .thinking-dot {
+  width: 4px;
+  height: 4px;
+  box-shadow: none;
+}
+
+/* ── Thinking 折叠块 / tool-group 统一卡片 ──────────────────────── */
+.live-wrap .thinking-block,
+.live-wrap .tool-group {
+  border-left: 1px solid var(--border-light);
+  padding-left: 0.9rem;
+  margin: 0.35rem 0;
+  transition: border-color var(--dur-quick) var(--ease-out-expo);
+}
+
+.live-wrap .thinking-block:hover,
+.live-wrap .tool-group:hover {
+  border-left-color: var(--accent-border);
+}
+
+.live-wrap .thinking-block-head,
+.live-wrap .tool-group-head {
+  color: var(--text-mid);
+  transition: color var(--dur-fast) var(--ease-out-expo);
+}
+
+.live-wrap .thinking-block-head:hover,
+.live-wrap .tool-group-head:hover {
+  color: var(--text);
+}
+
+.live-wrap .thinking-block-inner {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.68;
+  padding: 0.5rem 0.85rem;
+}
+
+.live-wrap .thinking-preview,
+.live-wrap .tool-group-names {
+  color: var(--text-faint);
+}
+
+/* ── Reasoning phase ─────────────────────────────────────────────── */
+.live-wrap .reasoning-phase {
+  border-left: 1px solid var(--accent-border);
+  padding-left: 0.9rem;
+  margin: 0.35rem 0;
+}
+
+.live-wrap .reasoning-phase-head { color: var(--text-mid); }
+.live-wrap .reasoning-phase-head:hover { color: var(--text); }
+
+.live-wrap .reasoning-phase .rp-stat {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  padding: 0.08rem 0.5rem;
+  border-radius: var(--radius-pill);
+}
+
+.live-wrap .reasoning-phase-body {
+  border-top-color: var(--border-light);
+  padding: 0.35rem 0.35rem;
+}
+
+/* ── Tool rows：默认安静，hover 浮现 ────────────────────────────── */
+.live-wrap .tool-row {
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  padding: 0.18rem 0.45rem;
+  border-radius: var(--radius-xs);
+  letter-spacing: 0;
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+
+.live-wrap .tool-row:hover {
+  background: color-mix(in srgb, var(--bg2) 80%, transparent);
+  color: var(--text-mid);
+}
+
+.live-wrap .tool-row.ok { color: var(--green-dim); }
+.live-wrap .tool-row.err { color: var(--red-dim); }
+.live-wrap .tool-row.ok:hover { color: var(--green); }
+.live-wrap .tool-row.err:hover { color: var(--red); }
+
+.live-wrap .tool-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  background: transparent;
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.live-wrap .tool-detail {
+  color: var(--text-dim);
+  transition: color var(--dur-fast) var(--ease-out-expo);
+}
+
+.live-wrap .tool-row:hover .tool-detail { color: var(--text); }
+
+.live-wrap .tool-mark {
+  opacity: 0.55;
+  transition: opacity var(--dur-fast) var(--ease-out-expo);
+}
+
+.live-wrap .tool-row:hover .tool-mark { opacity: 1; }
+
+/* ── Tool detail chip (tool-cmd) ─────────────────────────────────── */
+.live-wrap .tool-detail.tool-cmd {
+  background: color-mix(in srgb, var(--bg3) 70%, transparent);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xs);
+  font-size: var(--fs-sm);
+  padding: 0.08rem 0.55rem;
+}
+
+.live-wrap .tool-cmd-collapsed:hover {
+  color: var(--accent-dim);
+  background: var(--bg3);
+}
+
+/* ── Tool body ───────────────────────────────────────────────────── */
+.live-wrap .tool-body {
+  border-left: 1px solid var(--border-light);
+  border-radius: 0;
+  margin-left: 0.55rem;
+  padding: 0.3rem 0.9rem 0.45rem 1.1rem;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.live-wrap .tool-body-btn {
+  border-color: var(--border-light);
+  color: var(--text-faint);
+  background: var(--bg-elevated);
+}
+
+.live-wrap .tool-body-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+/* Live tool output */
+.live-wrap .tool-body-live {
+  background: color-mix(in srgb, var(--bg2) 85%, transparent);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+}
+
+.live-wrap .tool-body-live:not(.final) {
+  background: var(--cyan-glow);
+  border-color: var(--cyan-soft);
+}
+
+.live-wrap .tool-body-live .tool-body-btn:not(.copy-btn) {
+  background: var(--bg-elevated);
+  border-color: var(--border-light);
+}
+
+/* ── Diff blocks：低饱和语义 tint ────────────────────────────────── */
+.live-wrap .diff-block {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+.live-wrap .diff-head {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border-light);
+  padding: 0.45rem 0.85rem;
+}
+
+.live-wrap .diff-stat { color: var(--text-faint); }
+
+.live-wrap .diff-btn {
+  border-color: var(--border-light);
+  color: var(--text-faint);
+  background: var(--bg-elevated);
+}
+
+.live-wrap .diff-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.live-wrap .diff-sep {
+  background: var(--bg2);
+  color: var(--text-faint);
+}
+
+.live-wrap .diff-added {
+  background: rgba(var(--green-rgb), 0.07);
+  border-left: 2px solid rgba(var(--green-rgb), 0.45);
+}
+
+.live-wrap .diff-removed {
+  background: rgba(var(--red-rgb), 0.06);
+  border-left: 2px solid rgba(var(--red-rgb), 0.4);
+}
+
+[data-theme="dark"] .live-wrap .diff-added {
+  background: rgba(var(--green-rgb), 0.11);
+  border-left-color: rgba(var(--green-rgb), 0.55);
+}
+
+[data-theme="dark"] .live-wrap .diff-removed {
+  background: rgba(var(--red-rgb), 0.11);
+  border-left-color: rgba(var(--red-rgb), 0.5);
+}
+
+/* ── Shell block（live.css 全部 !important → 同级更高优先级 + !important）*/
+.live-wrap .shell-block {
+  margin: 1rem 0 0 !important;
+  border: 1px solid var(--info-border) !important;
+  border-left: 2px solid var(--cyan-dim) !important;
+  border-radius: var(--radius-md) !important;
+  background: color-mix(in srgb, var(--info) 4%, transparent) !important;
+}
+
+.live-wrap .shell-block-head {
+  padding: var(--space-1) var(--space-3) !important;
+  background: color-mix(in srgb, var(--info) 6%, transparent) !important;
+  border-bottom: 1px solid var(--info-border) !important;
+}
+
+.live-wrap .shell-block-head::after {
+  font-size: var(--fs-xs) !important;
+  letter-spacing: var(--tracking-label-sm) !important;
+  font-weight: 500 !important;
+  background: var(--cyan-soft) !important;
+  padding: 0.1rem 0.45rem !important;
+  border-radius: var(--radius-xs) !important;
+}
+
+.live-wrap .shell-block-output {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+/* ── Error card ──────────────────────────────────────────────────── */
+.live-wrap .err-card {
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-md);
+  background: var(--error-bg);
+  box-shadow: none;
+}
+
+.live-wrap .err-card-head {
+  background: rgba(var(--red-rgb), 0.07);
+  color: var(--red);
+}
+
+.live-wrap .err-card-icon {
+  width: 1rem;
+  height: 1rem;
+  box-shadow: none;
+}
+
+.live-wrap .err-card-toggle {
+  border-color: var(--border-light);
+  background: var(--bg-elevated);
+  color: var(--text-mid);
+}
+
+.live-wrap .err-card-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-mid);
+}
+
+.live-wrap .err-card-body {
+  border-top: 1px solid var(--error-border);
+  color: var(--text-dim);
+}
+
+/* ── Cancelled stamp / ui-info ───────────────────────────────────── */
+.live-wrap .cancelled-stamp {
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  color: var(--red);
+  letter-spacing: var(--tracking-label-sm);
+}
+
+.live-wrap .ui-info {
+  border-left: 2px solid var(--border-mid);
+  color: var(--text-mid);
+}
+
+/* ── Usage strip / chips / cache ring ────────────────────────────── */
+.live-wrap .usage-strip {
+  background: var(--bg2);
+  border-top: 1px solid var(--border-light);
+  padding: 0.4rem 1.25rem;
+}
+
+.live-wrap .usage-chip {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-dim);
+  padding: 0.12rem 0.6rem;
+  transition: border-color var(--dur-quick) var(--ease-out-expo),
+              color var(--dur-quick) var(--ease-out-expo);
+}
+
+.live-wrap .usage-chip:hover {
+  border-color: var(--border-mid);
+  color: var(--text);
+}
+
+.live-wrap .usage-strip .usage-chip {
+  background: transparent;
+}
+
+.live-wrap .usage-bar {
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--bg4);
+}
+
+.live-wrap .usage-bar > span { border-radius: var(--radius-pill); }
+
+.live-wrap .usage-cache .cache-ring-track { stroke: var(--bg4); }
+
+.live-wrap .usage-cache .cache-ring-fill { stroke-width: 2.5; }
+
+.live-wrap .usage-cache .cache-pct { letter-spacing: 0.02em; }
+
+/* usage warm/hot 状态保持语义色，仅让边框更柔 */
+.live-wrap .terminal-usage.warm .usage-ctx {
+  border-color: var(--warning-border);
+}
+
+.live-wrap .terminal-usage.hot .usage-ctx {
+  border-color: var(--error-border);
+}
+
+/* ── 触屏设备：无 hover，复制按钮保持可点 ────────────────────────── */
+@media (hover: none) {
+  .live-wrap .code-copy-btn,
+  .live-wrap .reply-copy-btn,
+  .live-wrap .tool-body-btn.copy-btn {
+    opacity: 0.55;
+    pointer-events: auto;
+  }
+}
+
+/* ── 窄屏：卡片收紧 ──────────────────────────────────────────────── */
+@media (max-width: 700px) {
+  .live-wrap .terminal {
+    margin: var(--space-2);
+    border-radius: var(--radius-md);
+  }
+}

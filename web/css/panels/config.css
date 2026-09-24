@@ -1,0 +1,217 @@
+/* config.css — Settings panel (right drawer, unified --panel-w width).
+   Shared primitives (.p-*) live in ../panels.css. The legacy .config-overlay /
+   .config-modal / .config-input / ... rules in ../live.css are dead for this
+   panel (markup no longer carries those classes); the equivalences that are
+   still needed are rewritten below, scoped to #config-overlay. */
+
+/* ── Shell equivalences (previously keyed off the .config-overlay class) ── */
+/* Shift the terminal left while the drawer is open so content stays visible
+   (was .app:has(.config-overlay.open) in live.css). */
+.app:has(#config-overlay:not([hidden])) .live-wrap .terminal {
+  margin-right: calc(var(--space-3) + var(--drawer-w));
+}
+/* Academic theme keeps UI chrome sans-serif
+   (was [data-theme="academic"] .config-overlay). */
+[data-theme="academic"] #config-overlay { font-family: var(--font-sans); }
+
+/* ── Bodies (flex column on top of .p-body; [hidden] must win over flex) ── */
+#config-body-simple,
+#config-body-advanced {
+  display: flex;
+  flex-direction: column;
+}
+#config-body-simple { gap: var(--space-2); }
+#config-body-advanced { gap: var(--space-2); }
+#config-body-simple[hidden],
+#config-body-advanced[hidden] { display: none; }
+
+/* ── Form fields ────────────────────────────────────────────────────── */
+#config-overlay .config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#config-overlay .config-field[hidden] { display: none; }
+
+/* Labels: sentence case, normal tracking — no all-caps boilerplate. */
+#config-overlay .config-label {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-dim);
+}
+
+#config-overlay .config-hint {
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+/* Inputs fill the field */
+#config-overlay .config-field .p-input,
+#config-overlay .config-field .p-select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ── Select with chevron ────────────────────────────────────────────── */
+#config-overlay .config-select-wrap { position: relative; }
+#config-overlay .config-select-wrap .p-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 24px;
+  cursor: pointer;
+}
+#config-overlay .config-select-wrap .p-select option {
+  background: var(--bg2);
+  color: var(--text);
+}
+#config-overlay .config-select-chevron {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+/* ── API key input + reveal button ──────────────────────────────────── */
+#config-overlay .config-apikey-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+#config-overlay .config-apikey-wrap .p-input { padding-right: 30px; }
+#config-overlay .config-apikey-toggle {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+#config-overlay .config-apikey-toggle:hover { background: var(--bg3); color: var(--text); }
+#config-overlay .config-apikey-toggle.showing { color: var(--accent); }
+
+/* ── Model / cwd rows (input + trailing icon button) ────────────────── */
+#config-overlay .config-model-wrap,
+#config-overlay .config-cwd-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#config-overlay .config-model-wrap .p-input,
+#config-overlay .config-cwd-wrap .p-input { flex: 1; min-width: 0; }
+/* Keep refresh/browse buttons at p-icon-btn size inside the input rows. */
+#config-overlay #config-model-refresh { width: 26px; height: 26px; flex-shrink: 0; }
+#config-overlay #config-cwd-pick { flex-shrink: 0; }
+
+/* ── Switch (auto-approve / notifications) ──────────────────────────── */
+#config-overlay .config-toggle-wrap { padding: 2px 0; }
+#config-overlay .config-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  user-select: none;
+}
+#config-overlay .config-toggle input { display: none; }
+#config-overlay .config-toggle-slider {
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  background: var(--bg4);
+  border-radius: var(--radius-pill);
+  transition: background var(--dur-fast) var(--ease-out-expo);
+}
+#config-overlay .config-toggle-slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--dur-fast) var(--ease-out-expo);
+}
+#config-overlay .config-toggle input:checked + .config-toggle-slider {
+  background: var(--accent);
+}
+#config-overlay .config-toggle input:checked + .config-toggle-slider::after {
+  transform: translateX(16px);
+}
+#config-overlay .config-toggle-label {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+/* Armed two-step confirm state (auto-approve): danger coloring. */
+#config-overlay .config-toggle-label.armed { color: var(--error); }
+
+/* ── Actions row ────────────────────────────────────────────────────── */
+#config-overlay .config-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+/* ── Advanced JSON editor ───────────────────────────────────────────── */
+#config-overlay .cfg-editor-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#config-editor {
+  flex: 1;
+  min-height: 320px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-3);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  tab-size: 2;
+  resize: vertical;
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+              box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+#config-editor:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+#config-editor.config-error { border-color: var(--red-dim); }
+#config-editor.config-error:focus { box-shadow: 0 0 0 3px var(--error-bg); }
+
+/* Inline validation status text (no big color blocks). */
+#config-overlay .cfg-status-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 2px 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+#config-valid { color: var(--success); }
+#config-invalid { color: var(--error); }

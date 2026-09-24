@@ -1,0 +1,138 @@
+/* skills.css — panel-specific styles for the skills panel. Shared primitives live in ../panels.css. */
+
+/* ── Shell replacements for legacy .config-overlay rules that the
+   skills drawer used to inherit (terminal shift, Windows title-bar
+   offset, narrow-viewport width, academic-theme font). ────────────── */
+.app:has(#skills-overlay:not([hidden])) .live-wrap .terminal {
+  margin-right: calc(var(--space-3) + var(--drawer-w));
+}
+.os-win32 #skills-overlay { top: 78px; }
+[data-theme="academic"] #skills-overlay { font-family: var(--font-sans); }
+
+/* ── Top segmented control (Marketplace / Installed) ──────────────── */
+.sk-controls {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border-light);
+}
+.sk-controls .p-seg { display: flex; width: 100%; box-sizing: border-box; }
+.sk-controls .p-seg-item { flex: 1; }
+
+/* Smaller seg variant for the GitHub/Gitee source switch */
+.p-seg--sm .p-seg-item {
+  height: 20px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+/* ── Tab panels ───────────────────────────────────────────────────── */
+.sk-tab-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sk-tab-panel[hidden] { display: none; }
+
+/* ── Market toolbar (search + count + source) ─────────────────────── */
+.sk-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+}
+.sk-search { position: relative; flex: 1; min-width: 0; }
+.sk-search svg {
+  position: absolute;
+  left: var(--space-2);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-faint);
+  pointer-events: none;
+  display: block;
+}
+.sk-search .p-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding-left: calc(var(--space-2) + 17px);
+}
+.sk-count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.sk-count:empty { display: none; }
+
+/* ── Marketplace card list ────────────────────────────────────────── */
+.sk-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.sk-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.sk-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.sk-badge {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  background: var(--bg3);
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  user-select: none;
+}
+.sk-name {
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sk-install { margin-left: auto; flex-shrink: 0; }
+.sk-install.installed {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+.sk-desc {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sk-desc:empty { display: none; }
+.sk-meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sk-meta:empty { display: none; }
+.sk-error { color: var(--error); }
+
+/* ── Installed list ───────────────────────────────────────────────── */
+#skills-installed-list .p-row { cursor: default; }
+.sk-remove { margin-left: auto; }
+.sk-remove:disabled { opacity: 0.45; pointer-events: none; }

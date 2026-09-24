@@ -1,0 +1,639 @@
+/* ────────────────────────────────────────────────────────────────────
+   chrome.css — application shell & empty-state beautification layer
+
+   Scope: .title-bar (topic / cwd / live status / version / spinner),
+   .toolbar rail (panel + action buttons, separator, active indicator),
+   #session-tabs strip, .page-loader, #no-session-empty + templates,
+   .stream-empty + hint chips, .quick-create-overlay, the onboarding
+   form rendered by js/no-session.js (scoped to #no-session-empty), and
+   the Windows frameless title bar.
+
+   Loaded after live.css — equal-specificity rules here win by order.
+   Tokens only (styles.css); rest state carries depth via borders,
+   shadows appear on hover/active only; single accent; transform/opacity
+   animations with --dur-fast/--dur-quick + --ease-out-expo.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* ══ Title bar — quiet chrome ═══════════════════════════════════════ */
+
+.title-bar {
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--border-light);
+}
+
+/* Retire the decorative accent edge bar — the hairline border is enough */
+.title-bar::before { display: none; }
+
+.session-topic {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.session-topic:empty::before {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+/* cwd pill: meta/data voice — mono, faint, hairline border, no fill */
+.session-cwd-meta {
+  color: var(--text-faint);
+  background: transparent;
+  border: 1px solid var(--border-light);
+  box-shadow: none;
+  padding: 0.18rem 0.55rem;
+  letter-spacing: 0.02em;
+}
+
+.session-cwd-meta:not(:empty)::before { opacity: 0.6; }
+
+/* Model label (#instance): data voice, mono micro label.
+   text-transform / display stay with styles.css so the
+   data-ui-model-uppercase / data-ui-model-show switches keep working. */
+.terminal-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label-sm);
+}
+
+/* Connection dot: semantic color, glow收敛 to a fine ring */
+.live-dot {
+  width: 7px;
+  height: 7px;
+  margin-left: 0;
+  box-shadow: 0 0 0 1px rgba(var(--green-rgb), 0.30),
+              0 0 0 3px rgba(var(--green-rgb), 0.08);
+}
+
+.live-dot.stale {
+  background: var(--text-faint);
+  box-shadow: none;
+}
+
+/* (Re)connecting: amber with a quiet breathing pulse — the JS hook
+   (.reconnecting toggle) lives in sse.js next to the .stale toggle. */
+.live-dot.reconnecting {
+  background: var(--amber);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 40%, transparent);
+  animation: chrome-conn-pulse 1.6s var(--ease-in-out) infinite;
+}
+
+/* Failed: warm warning tone, static — the label invites the retry click */
+.live-dot.failed {
+  background: var(--warning);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warning) 40%, transparent);
+  animation: none;
+}
+
+@keyframes chrome-conn-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+
+/* Status text carries the same semantics as the dot */
+.live-dot.reconnecting + .live-status { color: var(--amber); }
+.live-dot.failed + .live-status { color: var(--warning); }
+
+.live-status {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+}
+
+/* Version pill: hairline chip, transparent at rest */
+.version-label {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 0.6rem;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-faint);
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              border-color var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+
+.version-label:hover {
+  background: var(--bg3);
+  border-color: var(--border-mid);
+  color: var(--text-dim);
+}
+
+.version-label.has-update {
+  color: var(--accent-dim);
+  background: var(--accent-glow);
+  border-color: var(--accent-border);
+}
+
+.version-label.has-update:hover {
+  background: var(--accent-soft);
+  color: var(--accent-dim);
+}
+
+.version-label.up-to-date { color: var(--text-faint); }
+
+.version-label.checking {
+  color: var(--text-faint);
+  background: transparent;
+}
+
+/* Spinner: thinner, calmer, no glow */
+.spinner {
+  width: 0.7rem;
+  height: 0.7rem;
+  margin-left: 0;
+  border-color: var(--border-mid);
+  border-top-color: var(--accent);
+  box-shadow: none;
+  opacity: 1;
+}
+
+/* Sidebar collapse button lives in the title bar — match the quiet
+   icon-button language instead of the legacy accent-glow hover. */
+.title-bar .sidebar-btn:hover {
+  color: var(--text);
+  background: var(--bg3);
+  border-color: transparent;
+}
+
+/* ══ Right toolbar — quiet rail ═════════════════════════════════════ */
+
+.toolbar {
+  gap: 4px;
+  padding: var(--space-2) 0;
+  justify-content: flex-start;
+  border-left: 1px solid var(--border-light);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.toolbar::-webkit-scrollbar { display: none; }
+
+/* Center the group vertically without justify-content, so an overflowing
+   rail stays scrollable from its top edge instead of clipping it. */
+.toolbar > :first-child { margin-top: auto; }
+.toolbar > :last-child { margin-bottom: auto; }
+
+/* Retire the decorative accent gradient edge — the hairline border
+   (matching the drawers' separators) is the whole story. */
+.toolbar::before { display: none; }
+
+.toolbar-btn {
+  color: var(--text-mid);
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo),
+              border-color var(--dur-fast) var(--ease-out-expo),
+              transform var(--dur-fast) var(--ease-out-expo);
+}
+
+/* 30px hit area with 16px glyphs — the p-icon-btn density */
+.toolbar-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Hover: neutral bg3 + full text color — no glow, no lift, no shadow */
+.toolbar-btn:hover {
+  color: var(--text);
+  background: var(--bg3);
+  border-color: transparent;
+  transform: none;
+  box-shadow: none;
+}
+
+.toolbar-btn:active {
+  transform: scale(0.92);
+  box-shadow: none;
+}
+
+/* Panel-open state (panel-manager.js toggles .active): a 2px accent tick
+   on the rail's edge + accent-dim glyph — no fill, editor-rail style. */
+.toolbar-btn.active {
+  color: var(--accent-dim);
+  background: transparent;
+  border-color: transparent;
+}
+
+.toolbar-btn.active::before {
+  content: '';
+  position: absolute;
+  left: -6px; /* button is 30px centered in the 42px rail → rail edge */
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.toolbar-btn.active:hover {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+/* Keep the global accent outline, drop the 4px halo on the small buttons */
+.toolbar-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+/* Separator between the panel group and the action group (export/lang/
+   theme): slimmer, one shade quieter, with real breathing room. */
+.toolbar-sep {
+  width: 14px;
+  background: var(--border);
+  margin: var(--space-2) 0;
+}
+
+/* ══ Session tabs — segmented capsules (p-seg language) ═════════════ */
+
+.title-bar .session-tabs {
+  gap: 2px;
+  padding: 2px;
+  margin: 0 var(--space-2);
+  background: color-mix(in srgb, var(--bg3) 65%, transparent);
+  border-radius: var(--radius-pill);
+}
+
+.session-tab {
+  margin: 0;
+  padding: 0.24rem 0.85rem;
+  min-width: 72px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo),
+              box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+
+.session-tab:hover {
+  background: color-mix(in srgb, var(--bg-elevated) 55%, transparent);
+  color: var(--text);
+}
+
+.session-tab.active {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-color: transparent;
+  box-shadow: var(--shadow-sm);
+}
+
+.session-tab.dragging { opacity: 0.45; }
+
+.session-tab.session-tab-ghost {
+  background: var(--accent-glow);
+  border: 1px dashed var(--accent-border);
+  color: var(--accent-dim);
+  opacity: 1;
+}
+
+.session-tab-close {
+  color: var(--text-mid);
+  font-size: var(--fs-md);
+}
+
+.session-tab:hover .session-tab-close { opacity: 0.55; }
+
+.session-tab-close:hover {
+  opacity: 1 !important; /* live.css sets opacity with !important */
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--text);
+}
+
+/* Inline rename (double-click): keep the capsule quiet, accent caret */
+.session-tab-rename { caret-color: var(--accent); }
+
+/* Drop-target indicators: 2px accent tick centered in the 2px inter-tab gap */
+.session-tab.drop-before::after,
+.session-tab.drop-after::after {
+  top: 20%;
+  height: 60%;
+  width: 2px;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+.session-tab.drop-before::after { left: -2px; }
+.session-tab.drop-after::after { right: -2px; }
+
+.tab-drag-preview {
+  background: var(--bg-elevated);
+  border-color: var(--border-mid);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Overflow: contain horizontal scroll so it never bubbles to the page */
+.title-bar .session-tabs {
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: var(--space-2);
+}
+
+/* ══ Page loader — minimal, smooth ══════════════════════════════════ */
+
+.page-loader-inner { gap: var(--space-4); }
+
+.page-loader-logo {
+  animation: chrome-loader-pulse 2.4s var(--ease-out-expo) infinite;
+}
+
+@keyframes chrome-loader-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.05); }
+}
+
+.page-loader-text {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.page-loader-bar {
+  width: 132px;
+  height: 2px;
+  background: var(--bg3);
+  border-radius: var(--radius-pill);
+}
+
+.page-loader-bar-fill {
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+/* ══ Empty states — the storefront ══════════════════════════════════ */
+
+.no-session-empty {
+  font-family: var(--font-sans);
+  padding: var(--space-5) var(--space-4);
+  background:
+    radial-gradient(ellipse 70% 45% at 50% 16%, var(--accent-glow) 0%, transparent 60%),
+    radial-gradient(ellipse at 50% 100%, var(--bg2) 0%, transparent 55%);
+}
+
+.stream-empty {
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(ellipse 70% 45% at 50% 16%, var(--accent-glow) 0%, transparent 60%),
+    radial-gradient(ellipse at 50% 100%, var(--bg2) 0%, transparent 55%);
+}
+
+.stream-empty-mini .stream-empty-logo { opacity: 0.5; }
+
+/* Primary CTA: hairline pill at rest, lift + accent border on hover */
+.stream-empty-prompt {
+  margin-top: 2rem;
+  padding: 0.6rem 1.5rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-pill);
+  color: var(--text-mid);
+  box-shadow: none;
+  transition: transform var(--dur-quick) var(--ease-out-expo),
+              border-color var(--dur-quick) var(--ease-out-expo),
+              background var(--dur-quick) var(--ease-out-expo),
+              color var(--dur-quick) var(--ease-out-expo),
+              box-shadow var(--dur-quick) var(--ease-out-expo);
+}
+
+/* Drop the decorative gradient sweep — single accent, border-led */
+.stream-empty-prompt::before { display: none; }
+
+.stream-empty-prompt:hover {
+  border-color: var(--accent-border);
+  color: var(--text);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.stream-empty-prompt:active {
+  transform: translateY(0);
+  transition-duration: var(--dur-fast);
+}
+
+.stream-empty-prompt .c-arrow { font-size: var(--fs-lg); }
+
+/* Template chips: quiet capsules, neutral hover */
+.stream-empty-templates {
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.stream-empty-prompt.template {
+  margin-top: 0;
+  padding: 0.35rem 0.8rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  opacity: 1;
+  box-shadow: none;
+}
+
+.stream-empty-prompt.template:hover {
+  background: var(--bg3);
+  border-color: var(--border-mid);
+  color: var(--text);
+  transform: none;
+  box-shadow: none;
+}
+
+/* Hint chips inside a session's empty stream */
+.stream-empty-hints {
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.hint-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label-sm);
+  text-transform: uppercase;
+}
+
+.hint-chip {
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  transition: transform var(--dur-fast) var(--ease-out-expo),
+              border-color var(--dur-fast) var(--ease-out-expo),
+              background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+
+.hint-chip:hover {
+  border-color: var(--accent-border);
+  color: var(--accent-dim);
+  background: var(--accent-glow);
+  transform: translateY(-1px);
+}
+
+.hint-chip:active {
+  transform: translateY(0);
+  transition-duration: var(--dur-fast);
+}
+
+/* ══ Onboarding form (js/no-session.js) — scoped to the empty page ══ */
+
+#no-session-empty .config-label {
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label-sm);
+}
+
+#no-session-empty .config-hint { color: var(--text-dim); }
+
+#no-session-empty .config-select,
+#no-session-empty .config-input {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-md);
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+              box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+
+#no-session-empty .config-select:hover,
+#no-session-empty .config-input:hover { border-color: var(--border-mid); }
+
+#no-session-empty .config-select:focus,
+#no-session-empty .config-input:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+#no-session-empty .config-btn-save {
+  border-radius: var(--radius-md);
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              transform var(--dur-fast) var(--ease-out-expo);
+}
+
+#no-session-empty .config-btn-save:hover { box-shadow: none; }
+
+#no-session-empty .config-btn-save:active { transform: scale(0.98); }
+
+/* ══ Quick-create overlay ═══════════════════════════════════════════ */
+
+.quick-create-overlay {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.quick-create-modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel-lg);
+  padding: var(--space-5) var(--space-4) var(--space-4);
+  gap: var(--space-3);
+}
+
+.quick-create-close {
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+
+.quick-create-close:hover {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+.quick-create-icon {
+  width: 44px;
+  height: 44px;
+  background: var(--accent-glow);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+}
+
+.quick-create-msg {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.quick-create-cwd-row {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+              box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+
+.quick-create-cwd-row:hover { border-color: var(--border-mid); }
+
+.quick-create-cwd-row:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.quick-create-pick {
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+
+.quick-create-pick:hover {
+  background: var(--bg3);
+  color: var(--accent-dim);
+}
+
+.quick-create-go {
+  border-radius: var(--radius-md);
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              transform var(--dur-fast) var(--ease-out-expo);
+}
+
+.quick-create-go:hover { background: var(--accent-hover); }
+
+.quick-create-go:active { transform: scale(0.98); }
+
+/* ══ Windows frameless title bar ════════════════════════════════════ */
+
+.os-win32 .win-title-bar {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border-light);
+}
+
+/* Academic 主题在 live.css 里给标题栏指定了 var(--bg) 与蓝色下边框，特异性同
+   为 0,2,0,而本文件后加载，那条会被静默压掉。补一层 [data-theme] 拿回来。 */
+[data-theme="academic"] .os-win32 .win-title-bar {
+  background: var(--bg);
+  border-bottom-color: rgba(30, 59, 92, 0.10);
+}
+
+.win-title-bar-drag {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+
+.win-title-bar-controls button {
+  color: var(--text-dim);
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+
+.win-title-bar-controls button:hover {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+.win-title-bar-controls button.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}

@@ -1,0 +1,348 @@
+/* ────────────────────────────────────────────────────────────────────
+   panels.css — unified panel design system (shared primitives only)
+
+   Scope: the 7 toolbar panels (Context / Tree / Files / Subagents /
+   Skills / Settings / Quick Prompts — all right-side drawers). This
+   file holds ONLY shared primitives (`.p-*`). Panel-specific styles
+   live in css/panels/<panel>.css. Legacy rules in live.css are being
+   phased out per-panel; do not add panel-specific rules here.
+
+   Design discipline:
+   - No gradient buttons, no emoji icons (inline SVG only).
+   - Rest state carries depth via borders, not shadows; shadows appear
+     on hover/elevated states only.
+   - Single accent color (--accent and its derived tokens). Cyan is
+     semantic-only, never decorative.
+   - Radius scale: controls --radius-sm, cards --radius-md,
+     floating shells --radius-lg (drawers themselves are square-edged).
+   - Use existing tokens from styles.css only — no new colors or fonts.
+   - Type ramp (do not invent new combos):
+       primary label/text   sans  --fs-md  --text      (row/item names)
+       secondary/desc       sans  --fs-sm  --text-dim  (descriptions, previews)
+       meta/data            mono  --fs-xs  --text-faint (timestamps, counts,
+                            paths, token numbers, tool lists)
+       panel title          mono  --fs-sm  uppercase --tracking-label --text-dim
+       badge                mono  --fs-xs  (p-badge)
+     Mono is reserved for DATA, never for UI labels or names.
+   - Animations move transform/opacity only, --dur-quick/--dur-fast with
+     --ease-out-expo.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* ── Panel head (shared by side drawers and overlays) ─────────────── */
+.p-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 44px;
+  padding: 0 var(--space-3) 0 var(--space-4);
+  border-bottom: 1px solid var(--border-light);
+  background: transparent;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.p-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.p-meta {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 26px ghost icon button for head/toolbar actions */
+.p-icon-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-mid);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+.p-icon-btn svg { display: block; }
+.p-icon-btn:hover { background: var(--bg3); color: var(--text); }
+.p-icon-btn:active { background: var(--bg4); }
+.p-icon-btn:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+.p-icon-btn.danger:hover { background: var(--error-bg); color: var(--error); }
+
+/* ── Buttons ──────────────────────────────────────────────────────── */
+.p-btn,
+.p-btn-primary,
+.p-btn-danger {
+  height: 26px;
+  padding: 0 var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo),
+              border-color var(--dur-fast) var(--ease-out-expo);
+}
+.p-btn {
+  background: transparent;
+  border: 1px solid var(--border-mid);
+  color: var(--text-dim);
+}
+.p-btn:hover { color: var(--text); border-color: var(--text-faint); }
+.p-btn:disabled,
+.p-btn-primary:disabled,
+.p-btn-danger:disabled { opacity: 0.45; cursor: default; }
+
+.p-btn-primary {
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+}
+.p-btn-primary:hover { background: var(--accent-hover); }
+
+.p-btn-danger {
+  background: var(--error);
+  border: none;
+  color: #fff;
+}
+.p-btn-danger:hover { background: var(--red-dim); }
+
+/* ── Inputs ───────────────────────────────────────────────────────── */
+.p-input,
+.p-select {
+  height: 28px;
+  padding: 0 var(--space-2);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+              box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+.p-input:focus,
+.p-select:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* ── Segmented control (replaces tabs/chips toggles) ──────────────── */
+.p-seg {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  gap: 2px;
+  background: var(--bg3);
+  border-radius: var(--radius-md);
+}
+.p-seg-item {
+  appearance: none;
+  height: 24px;
+  padding: 0 var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  white-space: nowrap;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+.p-seg-item:hover { color: var(--text); }
+.p-seg-item.active {
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Badge (count / meta) — use sparingly ─────────────────────────── */
+.p-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  color: var(--text-mid);
+  background: var(--bg3);
+  border-radius: var(--radius-pill);
+}
+
+/* ── Section label inside a panel body ────────────────────────────── */
+.p-section {
+  margin: var(--space-4) 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label-sm);
+  color: var(--text-faint);
+}
+.p-section:first-child { margin-top: 0; }
+
+/* CJK labels: mono + wide tracking reads poorly for Chinese — mirror the
+   legacy :lang(zh) head overrides from live.css. */
+:lang(zh) .p-title,
+:lang(zh) .p-section {
+  font-family: var(--font-sans);
+  letter-spacing: normal;
+}
+
+/* ── List rows (edge-to-edge, 2px gap, no separators) ─────────────── */
+.p-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.p-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+.p-row:hover { background: var(--bg3); }
+.p-row.selected,
+.p-row.active {
+  background: var(--accent-soft);
+  color: var(--accent-dim);
+}
+.p-row-main {
+  font-size: var(--fs-md);
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.p-row-meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ── Card (discrete content blocks only, e.g. marketplace entries) ── */
+.p-card {
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+              box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+.p-card:hover {
+  border-color: var(--border-mid);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Empty state ──────────────────────────────────────────────────── */
+.p-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-4);
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+.p-empty svg { width: 14px; height: 14px; }
+
+/* ── Keyboard key ─────────────────────────────────────────────────── */
+kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 1px 5px;
+  background: var(--bg3);
+  border: 1px solid var(--border-mid);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+/* ── Scroll body ──────────────────────────────────────────────────── */
+.p-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+}
+/* List-style panels: drop horizontal padding so rows run edge-to-edge */
+.p-body.flush { padding-left: 0; padding-right: 0; }
+
+/* ── Drawer (right-side slide-out shell — the ONE panel form) ─────── */
+/* All 7 panels are right-side drawers. Geometry mirrors the legacy
+   .config-overlay/.ctx-panel blocks in live.css (same top/right/z-index
+   and surface) so shells can carry old + new classes during migration.
+   Visibility is driven by the [hidden] attribute; entry motion is a
+   keyframe animation (not a transition) because display:none → flex
+   restarts animations but not transitions. */
+.p-drawer {
+  position: fixed;
+  top: var(--ui-title-bar-height, 40px);
+  bottom: 0;
+  right: var(--toolbar-w);
+  width: var(--drawer-w);
+  z-index: 16; /* matches legacy .config-overlay stacking */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-panel);
+  border-left: 1px solid var(--border-light);
+  box-shadow: var(--shadow-panel-md);
+  animation: p-side-in var(--dur-quick) var(--ease-out-expo);
+}
+.p-drawer[hidden] { display: none !important; }
+/* .p-empty and other primitives set display, which would otherwise defeat the
+   UA [hidden] rule — re-assert it for everything inside a drawer. */
+.p-drawer [hidden] { display: none !important; }
+
+/* ── Entry motion (transform/opacity only) ────────────────────────── */
+@keyframes p-side-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.p-anim-side  { animation: p-side-in var(--dur-quick) var(--ease-out-expo); }

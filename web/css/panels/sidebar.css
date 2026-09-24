@@ -1,0 +1,741 @@
+/* ────────────────────────────────────────────────────────────────────
+   panels/sidebar.css — left sidebar (Sessions / Workspaces / Archive /
+   Terminals), aligned with the panel design system in panels.css.
+
+   Type ramp and interaction language follow the panels.css discipline:
+   item titles sans --fs-md, meta mono --fs-xs --text-faint, group
+   labels mono --fs-xs uppercase --tracking-label-sm, hover --bg3,
+   current item --accent-soft + --accent-dim (mirrors .p-row.selected).
+   Legacy rules for these views were removed from live.css.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* ── Sidebar head: segmented view switcher (reuses .p-seg) ────────── */
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  background: transparent;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+  height: var(--ui-title-bar-height, 40px);
+  box-sizing: border-box;
+}
+.sidebar-head .p-seg { width: 100%; }
+.sidebar-head .p-seg-item { flex: 1; padding: 0; }
+.sidebar-head .p-seg-item svg { display: block; }
+.sidebar-head .p-seg-item.active { color: var(--accent-dim); }
+
+/* ── "New" action rows (top of sessions / terminals views) ────────── */
+.sidebar-action {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-3) 0;
+}
+
+.sidebar-new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 28px;
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: 1px dashed var(--border-mid);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    background var(--dur-fast) var(--ease-out-expo),
+    border-color var(--dur-fast) var(--ease-out-expo);
+}
+.sidebar-new-btn svg { flex-shrink: 0; }
+.sidebar-new-btn:hover {
+  color: var(--accent-dim);
+  background: var(--accent-glow);
+  border-color: var(--accent-border);
+  border-style: solid;
+}
+.sidebar-new-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── Filter input (aligns with .p-input) ──────────────────────────── */
+.sidebar-filter {
+  flex-shrink: 0;
+  height: 28px;
+  margin: var(--space-2) var(--space-3) var(--space-2);
+  padding: 0 var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+    box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+.sidebar-filter:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.sidebar-filter::placeholder { color: var(--text-faint); }
+
+/* ── List shells ──────────────────────────────────────────────────── */
+.session-list,
+.workspace-list,
+.terminal-list,
+.archive-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text);
+}
+.session-list { contain: layout style paint; }
+.archive-list[hidden] { display: none; }
+
+/* ── Items: unified anatomy ─────────────────────────────────────────
+   All four views share: [icon slot (.side-icon)] [title + meta
+   (.side-body)] [hover actions (.side-btn / .session-actions)].
+   Session items carry an absolutely-positioned status dot
+   (.session-status) in their left gutter instead of an inline icon. */
+.session-list li,
+.terminal-list li,
+.workspace-children li,
+.archive-list li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  transition: background var(--dur-fast) var(--ease-out-expo);
+}
+.session-list li:hover,
+.terminal-list li:hover,
+.workspace-children li:hover,
+.archive-list li:hover { background: var(--bg3); }
+/* Current item: accent-soft wash (mirrors .p-row.selected, which also
+   wins over hover). No left border, no layout shift. */
+.session-list li.current,
+.terminal-list li.current,
+.workspace-children li.current,
+.session-list li.current:hover,
+.terminal-list li.current:hover,
+.workspace-children li.current:hover { background: var(--accent-soft); }
+
+.session-list li a {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-5);
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    padding-right var(--dur-fast) var(--ease-out-expo);
+}
+/* Reserve room for the hover action cluster so title text never runs
+   underneath the buttons (replaces the old gradient backdrop). */
+.session-list li:hover a,
+.session-list li:focus-within a { padding-right: 5.5rem; }
+
+.terminal-list li a,
+.workspace-children li a,
+.archive-list li a {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out-expo);
+}
+
+/* Icon slot — fixed 1em, centered; glyph varies per view. */
+.side-icon {
+  flex-shrink: 0;
+  width: 1em;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.side-icon svg { width: 12px; height: 12px; }
+.terminal-kind { color: var(--cyan, var(--accent)); font-weight: 600; }
+.workspace-child-kind { color: var(--accent); font-size: var(--fs-xs); opacity: 0.6; }
+.archive-icon { color: var(--text-faint); }
+
+/* Title + meta column. */
+.side-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+/* Single-line variant: title + inline trailing time (no cwd meta). */
+.side-body-row {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+.side-body-row .side-title {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Item titles: sans fs-md 500 — dim at rest, full on hover, accent-dim
+   when current. */
+.session-title,
+.side-title {
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: var(--fs-md);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-title { display: block; }
+.session-list li:hover .session-title,
+.terminal-list li:hover .side-title,
+.workspace-children li:hover .side-title,
+.archive-list li:hover .side-title { color: var(--text); }
+.session-list li.current .session-title,
+.terminal-list li.current .side-title,
+.workspace-children li.current .side-title { color: var(--accent-dim); }
+
+/* Meta rows: mono fs-xs text-faint, tabular numerals for times. */
+.session-meta,
+.side-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+.session-meta { margin-top: 2px; }
+.session-cwd,
+.side-cwd {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-time,
+.side-time {
+  flex-shrink: 0;
+  font-weight: 400;
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
+}
+.side-time { margin-left: auto; }
+/* The time sits where the action cluster appears — fade it out. */
+.session-list li:hover .session-time,
+.session-list li:focus-within .session-time {
+  opacity: 0;
+  transition: opacity var(--dur-fast);
+}
+
+/* ── Hover action buttons ─────────────────────────────────────────── */
+/* 24px ghost buttons (aligns with .p-icon-btn, twopx smaller to fit
+   the compact rows); destructive actions get the danger hover. */
+.side-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  margin-right: var(--space-2);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--fs-md);
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out-expo),
+    color var(--dur-fast) var(--ease-out-expo),
+    background var(--dur-fast) var(--ease-out-expo);
+}
+.terminal-list li:hover .side-btn,
+.terminal-list li:focus-within .side-btn,
+.archive-list li:hover .side-btn,
+.archive-list li:focus-within .side-btn,
+.workspace-head:hover .side-btn,
+.workspace-head:focus-within .side-btn { opacity: 1; pointer-events: auto; }
+.side-btn:hover { background: var(--bg3); color: var(--text); }
+.side-btn svg { width: 13px; height: 13px; }
+.terminal-close:hover { background: var(--error-bg); color: var(--error); }
+
+/* Session items overlay a 3×2 action grid (cwd/archive/pin over
+   edit/close) instead of inline flow — rows are two lines tall. */
+.session-actions {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  display: grid;
+  grid-template-columns: repeat(3, 24px);
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out-expo);
+}
+.session-list li:hover .session-actions,
+.session-list li:focus-within .session-actions,
+.session-list li:has(.confirming) .session-actions { opacity: 1; pointer-events: auto; }
+.session-actions > button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--fs-md);
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    background var(--dur-fast) var(--ease-out-expo);
+}
+.session-actions > button:hover { background: var(--bg3); color: var(--text); }
+.session-actions > button svg { width: 13px; height: 13px; }
+.session-close:hover { background: var(--error-bg); color: var(--error); }
+
+/* Two-click confirm states (pinned visible via :has(.confirming) above). */
+.session-close.confirming,
+.terminal-close.confirming {
+  color: #fff;
+  background: var(--red);
+  opacity: 1;
+  pointer-events: auto;
+  font-weight: 600;
+  animation: pulse-delete 0.6s ease-in-out infinite alternate;
+}
+@keyframes pulse-delete {
+  from { opacity: 0.8; }
+  to   { opacity: 1; }
+}
+.session-archive-btn.confirming {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  opacity: 1;
+  pointer-events: auto;
+  font-weight: 600;
+  animation: pulse-archive 0.6s ease-in-out infinite alternate;
+}
+.session-archive-btn.confirming svg { display: none; }
+@keyframes pulse-archive {
+  from { opacity: 0.7; }
+  to   { opacity: 1; }
+}
+
+/* ── Group heads (time buckets + workspace groups) — .p-section spec ─ */
+.session-group-head,
+.workspace-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label-sm);
+  color: var(--text-faint);
+  user-select: none;
+}
+.session-group-head { pointer-events: none; }
+.session-group-head:first-child { padding-top: var(--space-1); }
+.session-list li.session-group-head:hover { background: transparent; }
+.workspace-head {
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out-expo);
+}
+.workspace-head:hover { background: var(--bg3); }
+/* CJK labels: mono + wide tracking reads poorly for Chinese. */
+:lang(zh) .session-group-head,
+:lang(zh) .workspace-head {
+  font-family: var(--font-sans);
+  letter-spacing: normal;
+}
+
+/* Count badges — .p-badge style. */
+.bucket-count,
+.workspace-count {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  letter-spacing: 0;
+  color: var(--text-mid);
+  background: var(--bg3);
+  border-radius: var(--radius-pill);
+}
+
+.workspace-group { margin: var(--space-1) 0 var(--space-2); }
+.workspace-caret {
+  flex-shrink: 0;
+  width: 1em;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  transition: transform var(--dur-normal) var(--ease-out-expo);
+}
+.workspace-group.collapsed .workspace-caret { transform: rotate(-90deg); }
+.workspace-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-actions { display: flex; }
+.workspace-actions .side-btn { margin-right: 0; }
+
+/* Child items indent one step under the group head, with a 1px guide
+   line at the caret axis (same technique as the Files panel). */
+.workspace-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background-image: linear-gradient(var(--border-light), var(--border-light));
+  background-size: 1px 100%;
+  background-repeat: no-repeat;
+  /* Guide line on the caret axis: head padding-left + half caret width
+     (caret is 1em at --fs-xs = 0.68rem). */
+  background-position: calc(var(--space-3) + 0.34rem) 0;
+}
+.workspace-group.collapsed .workspace-children { display: none; }
+.workspace-children li a { padding-left: 1.75rem; }
+
+/* ── Empty state (aligns with .p-empty) ───────────────────────────── */
+.side-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-4);
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+}
+.session-list li.side-empty:hover,
+.terminal-list li.side-empty:hover,
+.workspace-list li.side-empty:hover,
+.archive-list li.side-empty:hover { background: transparent; }
+.side-empty-icon {
+  opacity: 0.5;
+  line-height: 1;
+  display: inline-flex;
+}
+.side-empty-icon svg { width: 14px; height: 14px; }
+
+/* ── Session status indicator (streaming / unread) ────────────────── */
+/* Per-session dot in the left gutter: streaming (cyan pulse), unread
+   (amber), or idle (faint). Semantic colors — not part of the accent
+   system. */
+.session-status {
+  position: absolute;
+  top: 50%;
+  left: 0.62rem;
+  transform: translateY(-50%);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-mid);
+  opacity: 0.35;
+  pointer-events: none;
+  transition: all var(--dur-slow) var(--ease-out-expo);
+}
+.session-streaming .session-status {
+  opacity: 1;
+  background: var(--cyan);
+  box-shadow: 0 0 5px var(--cyan-glow);
+  animation: session-pulse 1.2s ease-in-out infinite;
+}
+@keyframes session-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 3px var(--cyan-glow); }
+  50% { opacity: 0.5; box-shadow: 0 0 10px var(--cyan-glow); }
+}
+.session-unread .session-status {
+  opacity: 1;
+  background: var(--warning);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.session-list li.current.session-streaming .session-status {
+  width: 6px;
+  height: 6px;
+  left: 0.57rem;
+  box-shadow: 0 0 8px var(--cyan-soft);
+}
+.session-list li.current.session-unread .session-status {
+  width: 6px;
+  height: 6px;
+  left: 0.57rem;
+}
+
+/* ── Session title edit (inline input, p-input language) ──────────── */
+.session-title-edit {
+  display: block;
+  box-sizing: border-box;
+  /* Keep the edited text glued to the title's resting position: pull the
+     input left by its own padding + border and extend width to match. */
+  width: calc(100% + 0.5rem + 1px);
+  margin: 0 0 0 calc(-0.5rem - 1px);
+  background: var(--bg);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  caret-color: var(--accent);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: 1.3;
+  padding: 1px 0.5rem;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+    box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+.session-title-edit:focus { border-color: var(--accent); }
+.session-title-edit::selection { background: var(--accent-soft); }
+
+/* ── First-render stagger (suppressed on incremental re-renders) ──── */
+.session-list li {
+  animation: session-item-in var(--dur-medium) var(--ease-out-expo) both;
+}
+.session-list.no-anim li { animation: none; }
+@keyframes session-item-in {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ── Touch devices: keep hover-only actions tappable ──────────────── */
+@media (hover: none) {
+  .session-actions,
+  .side-btn {
+    opacity: 0.5;
+    pointer-events: auto;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Round 2 — depth polish
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Sidebar shell: separation + collapse motion ──────────────────── */
+/* Overrides live.css .sidebar::after (accent gradient edge, opacity
+   .08): a flat full-height hairline reads cleaner in all three themes
+   and matches the panel system (border-light separators, no decorative
+   gradients). Same specificity, this file loads later. */
+.sidebar::after {
+  right: 0;
+  background: var(--border);
+  opacity: 1;
+}
+/* Container context for the narrow-width rules below. Inline size is
+   owned by the .app grid track, so containment changes nothing else. */
+.sidebar { container-type: inline-size; }
+
+/* live.css hides the collapsed sidebar with display:none, which snaps
+   it shut while the grid column is still animating. Swap to a quick
+   opacity fade + delayed visibility so the column transition stays
+   smooth in both directions (visibility keeps it out of tab order and
+   hit-testing once hidden). */
+.sidebar {
+  transition: opacity var(--dur-normal) var(--ease-out-expo),
+    visibility 0s;
+}
+.app.sidebar-collapsed .sidebar {
+  display: flex;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-fast) var(--ease-in-out),
+    visibility 0s var(--dur-fast);
+}
+
+/* ── View switcher (p-seg): icon micro-motion ─────────────────────── */
+.sidebar-head .p-seg-item svg {
+  transition: transform var(--dur-fast) var(--ease-out-expo);
+}
+.sidebar-head .p-seg-item.active svg { transform: scale(1.08); }
+.sidebar-head .p-seg-item:active svg { transform: scale(0.9); }
+.sidebar-head .p-seg-item.active:active svg { transform: scale(0.98); }
+
+/* ── View-switch fade + scroll fade masks ─────────────────────────── */
+/* Lists are shown/hidden via the [hidden] attribute; display none→block
+   restarts this animation, giving each view switch a light entrance.
+   (The per-item stagger above is suppressed on re-renders by .no-anim;
+   this one only fires on actual view changes.) */
+@keyframes side-view-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.session-list:not([hidden]),
+.workspace-list:not([hidden]),
+.terminal-list:not([hidden]),
+.archive-list:not([hidden]) {
+  animation: side-view-in var(--dur-quick) var(--ease-out-expo);
+}
+
+/* Scroll-position fade masks (scroll-driven animations, Chromium /
+   Safari 26+; unsupported engines simply get no mask). Top fade only
+   appears once scrolled, bottom fade disappears at the end. Masking is
+   paint-only — hover and hit-testing are unaffected. All keyframes
+   share the same 4-stop shape so the mask interpolates smoothly. */
+@keyframes side-scroll-mask {
+  0% {
+    mask-image: linear-gradient(to bottom,
+      transparent 0, #000 0,
+      #000 calc(100% - 20px), transparent 100%);
+  }
+  10%, 90% {
+    mask-image: linear-gradient(to bottom,
+      transparent 0, #000 20px,
+      #000 calc(100% - 20px), transparent 100%);
+  }
+  100% {
+    mask-image: linear-gradient(to bottom,
+      transparent 0, #000 20px,
+      #000 100%, transparent 100%);
+  }
+}
+@supports (animation-timeline: scroll(self block)) {
+  .session-list:not([hidden]),
+  .workspace-list:not([hidden]),
+  .terminal-list:not([hidden]),
+  .archive-list:not([hidden]) {
+    animation: side-view-in var(--dur-quick) var(--ease-out-expo),
+      side-scroll-mask linear;
+    animation-timeline: auto, scroll(self block);
+  }
+}
+/* The global reduced-motion rule cannot cancel a scroll-timeline
+   animation (duration is ignored there) — disable the mask explicitly. */
+@media (prefers-reduced-motion: reduce) {
+  .session-list,
+  .workspace-list,
+  .terminal-list,
+  .archive-list {
+    animation: none !important;
+    mask-image: none !important;
+  }
+}
+
+/* ── Current item: accent edge strip ──────────────────────────────── */
+/* A 2px accent-dim strip at the row's left edge (flat background-image
+   technique, same as the workspace guide line) disambiguates the
+   current row from hover, and keeps the status dot + accent-soft wash
+   combination legible. Overrides the plain accent-soft wash above. */
+.session-list li.current,
+.terminal-list li.current,
+.workspace-children li.current,
+.session-list li.current:hover,
+.terminal-list li.current:hover,
+.workspace-children li.current:hover {
+  background:
+    linear-gradient(var(--accent-dim), var(--accent-dim)) 0 0 / 2px 100% no-repeat,
+    var(--accent-soft);
+}
+
+/* ── Time buckets: vertical rhythm ────────────────────────────────── */
+/* More air before each subsequent bucket head; the first bucket stays
+   snug under the filter (overrides the shared space-2 padding above;
+   the :first-child rule still wins for the first head). */
+.session-group-head { padding-top: var(--space-3); }
+.session-group-head:first-child { padding-top: var(--space-1); }
+
+/* ── Workspace children: streaming / unread tint on the kind glyph ── */
+/* Sessions show a status dot; workspace children carry the same state
+   classes but no dot element — tint the ◆ glyph instead (semantic
+   cyan / warning only, mirrors the dot colors). */
+.workspace-children li.session-streaming .workspace-child-kind {
+  color: var(--cyan);
+  opacity: 1;
+}
+.workspace-children li.session-unread .workspace-child-kind {
+  color: var(--warning);
+  opacity: 1;
+}
+
+/* ── Pin button: pinned state ─────────────────────────────────────── */
+/* JS toggles .pinned on .session-pin-btn; until now unstyled. The
+   cluster is still hover-revealed, but on reveal the pinned session's
+   pin reads as engaged (accent-dim) instead of a dead ghost. */
+.session-actions > button.session-pin-btn.pinned { color: var(--accent-dim); }
+.session-actions > button.session-pin-btn.pinned:hover {
+  color: var(--accent);
+  background: var(--bg3);
+}
+
+/* ── Resize handle: center indicator line ─────────────────────────── */
+/* Keep the accent-glow wash from live.css, add a crisp 2px accent line
+   on the sidebar/main boundary while hovering or dragging. */
+.sidebar-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: var(--accent-border);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out-expo);
+}
+.sidebar-resize:hover::after,
+.app.sidebar-resizing .sidebar-resize::after { opacity: 1; }
+
+/* ── Narrow widths (container-driven; floor is 145px) ─────────────── */
+/* Below 200px the New button text clips — drop to icon-only, keep the
+   accessible title tooltip. */
+@container (max-width: 200px) {
+  .sidebar-new-btn span { display: none; }
+}
+/* Below 185px the meta row can't fit cwd + time: keep the time (more
+   scannable), hide the path. Tighten the session row's left gutter and
+   the head/filter side padding to give titles a few more pixels. */
+@container (max-width: 185px) {
+  .session-cwd,
+  .side-cwd { display: none; }
+  .session-list li a { padding-left: var(--space-4); }
+  .session-status { left: 0.45rem; }
+  .session-list li.current.session-streaming .session-status,
+  .session-list li.current.session-unread .session-status { left: 0.4rem; }
+  .sidebar-head { padding: 0 var(--space-2); }
+  .sidebar-filter { margin-left: var(--space-2); margin-right: var(--space-2); }
+  .sidebar-action { padding-left: var(--space-2); padding-right: var(--space-2); }
+}

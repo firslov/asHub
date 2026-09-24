@@ -284,10 +284,12 @@
    配色、thinking-block 的蓝色左边框与 tool-row 悬停底都会静默失效。深色主题
    上面已按同样方式补偿，这里补齐 academic：多一层 [data-theme] 后特异性高一
    级（0,3,x 压 0,2,x、0,4,0 压 0,3,0），稳定取胜。 */
+/* 注意：这里不恢复 live.css academic 规则里的 inset 内阴影。新版基础规则
+   .live-wrap .agent-reply pre 用 box-shadow: none 刻意把内阴影拉平（层次交给
+   底色与徽章），深色主题也没有恢复它；两套主题保持一致。 */
 [data-theme="academic"] .live-wrap .agent-reply pre {
   background: #f0ece3;
   border-color: rgba(30, 59, 92, 0.12);
-  box-shadow: inset 0 1px 4px rgba(30, 35, 45, 0.04);
 }
 
 [data-theme="academic"] .live-wrap .agent-reply h1,

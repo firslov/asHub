@@ -46,3 +46,230 @@ index 5c8b21c..33ce21d 100644
  ];
  
  /** Built-ins + settings + keys.json. Sync, no extension load. */
+diff --git a/node_modules/agent-sh/dist/agent/agent-loop.js b/node_modules/agent-sh/dist/agent/agent-loop.js
+--- a/node_modules/agent-sh/dist/agent/agent-loop.js
++++ b/node_modules/agent-sh/dist/agent/agent-loop.js
+@@ -241,7 +241,7 @@
+         onPipe("context:snapshot", (payload) => {
+             payload.messages = this.conversation.get();
+             payload.contextWindow = this.activeModel.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+-            payload.activeTokens = this.conversation.estimateTokens();
++            payload.activeTokens = payload.skipTokens ? 0 : this.conversation.estimateTokens();
+             return payload;
+         });
+         onPipeAsync("context:compact", async (payload) => {
+diff --git a/node_modules/agent-sh/src/agent/agent-loop.ts b/node_modules/agent-sh/src/agent/agent-loop.ts
+--- a/node_modules/agent-sh/src/agent/agent-loop.ts
++++ b/node_modules/agent-sh/src/agent/agent-loop.ts
+@@ -293,7 +293,7 @@
+     onPipe("context:snapshot", (payload) => {
+       payload.messages = this.conversation.get();
+       payload.contextWindow = this.activeModel.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+-      payload.activeTokens = this.conversation.estimateTokens();
++      payload.activeTokens = payload.skipTokens ? 0 : this.conversation.estimateTokens();
+       return payload;
+     });
+ 
+diff --git a/node_modules/agent-sh/dist/agent/subagent.d.ts b/node_modules/agent-sh/dist/agent/subagent.d.ts
+--- a/node_modules/agent-sh/dist/agent/subagent.d.ts
++++ b/node_modules/agent-sh/dist/agent/subagent.d.ts
+@@ -56,7 +56,29 @@
+         completion_tokens: number;
+         total_tokens: number;
+     }) => void;
++    /**
++     * Extra request params merged into every LLM stream call (e.g.
++     * reasoning/thinking controls built by the provider's
++     * buildReasoningParams hook). Forwarded verbatim, same as the main
++     * loop's reasoningParams(). Omitted = provider default, identical to
++     * pre-patch behavior.
++     */
++    reasoningParams?: Record<string, unknown>;
++    /**
++     * Optional out-object the runner fills in as it goes. Lets the caller
++     * tell a budget/iteration-truncated result apart from a clean finish
++     * (the return value stays a plain string for compatibility).
++     */
++    outMeta?: SubagentRunMeta;
+ }
++export interface SubagentRunMeta {
++    /** Why the run ended early: token budget or iteration cap; null/undefined = clean finish. */
++    degraded?: "budget" | "iterations" | null;
++    /** Total completion tokens consumed across all iterations. */
++    tokensUsed?: number;
++    /** True once any tool with modifiesFiles=true has been executed (retry-safety signal). */
++    mutatingToolExecuted?: boolean;
++}
+ /**
+  * Run a subagent to completion.
+  * Returns the final response text.
+diff --git a/node_modules/agent-sh/dist/agent/subagent.js b/node_modules/agent-sh/dist/agent/subagent.js
+--- a/node_modules/agent-sh/dist/agent/subagent.js
++++ b/node_modules/agent-sh/dist/agent/subagent.js
+@@ -7,7 +7,12 @@
+  * Returns the final response text.
+  */
+ export async function runSubagent(opts) {
+-    const { llmClient, tools, systemPrompt, task, model, bus, signal, maxIterations = 20, dynamicContext, budgetTokens, onUsage, } = opts;
++    const { llmClient, tools, systemPrompt, task, model, bus, signal, maxIterations = 20, dynamicContext, budgetTokens, onUsage, reasoningParams, outMeta, } = opts;
++    if (outMeta) {
++        outMeta.degraded = null;
++        outMeta.tokensUsed = 0;
++        outMeta.mutatingToolExecuted = false;
++    }
+     const toolMap = new Map(tools.map(t => [t.name, t]));
+     const apiTools = tools.map(t => ({
+         type: "function",
+@@ -31,7 +36,7 @@
+             break;
+         }
+         // Stream LLM response
+-        const { text, toolCalls, assistantContent, assistantToolCalls, extras, usage } = await streamOnce(llmClient, systemPrompt, conversation, apiTools, model, signal, dynamicContext);
++        const { text, toolCalls, assistantContent, assistantToolCalls, extras, usage } = await streamOnce(llmClient, systemPrompt, conversation, apiTools, model, signal, dynamicContext, reasoningParams);
+         if (usage) {
+             tokensConsumed += usage.completion_tokens || 0;
+             onUsage?.(usage);
+@@ -76,6 +81,8 @@
+                 ? (chunk) => { bus.emit("agent:tool-output-chunk", { chunk, toolCallId: tc.id }); }
+                 : undefined;
+             const result = await tool.execute(args, onChunk);
++            if (outMeta && tool.modifiesFiles === true)
++                outMeta.mutatingToolExecuted = true;
+             if (bus) {
+                 const display = tool.getDisplayInfo?.(args) ?? { kind: "execute" };
+                 const resultDisplay = tool.formatResult?.(args, result);
+@@ -93,14 +100,24 @@
+             conversation.addToolResult(tc.id, content, !!result.isError);
+         }
+     }
++    if (outMeta)
++        outMeta.tokensUsed = tokensConsumed;
+     if (budgetExhausted) {
++        if (outMeta)
++            outMeta.degraded = "budget";
+         const note = `\n\n[Subagent terminated: completion-token budget (${budgetTokens}) exhausted after ${tokensConsumed} completion tokens. Returning partial progress.]`;
+         return lastResponseText + note;
+     }
++    if (iterations > maxIterations && !signal?.aborted) {
++        if (outMeta)
++            outMeta.degraded = "iterations";
++        const note = `\n\n[Subagent terminated: max iterations (${maxIterations}) reached. Returning partial progress.]`;
++        return lastResponseText + note;
++    }
+     return lastResponseText;
+ }
+ /** Stream a single LLM response. */
+-async function streamOnce(llmClient, systemPrompt, conversation, apiTools, model, signal, dynamicContext) {
++async function streamOnce(llmClient, systemPrompt, conversation, apiTools, model, signal, dynamicContext, reasoningParams) {
+     let text = "";
+     let reasoning = "";
+     let reasoningField = null;
+@@ -115,6 +132,7 @@
+         tools: apiTools.length > 0 ? apiTools : undefined,
+         model,
+         signal,
++        ...(reasoningParams ?? {}),
+     });
+     for await (const chunk of stream) {
+         if (signal?.aborted)
+diff --git a/node_modules/agent-sh/src/agent/subagent.ts b/node_modules/agent-sh/src/agent/subagent.ts
+--- a/node_modules/agent-sh/src/agent/subagent.ts
++++ b/node_modules/agent-sh/src/agent/subagent.ts
+@@ -62,6 +62,29 @@
+    * tracking stays accurate.
+    */
+   onUsage?: (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void;
++  /**
++   * Extra request params merged into every LLM stream call (e.g.
++   * reasoning/thinking controls built by the provider's
++   * buildReasoningParams hook). Forwarded verbatim, same as the main
++   * loop's reasoningParams(). Omitted = provider default, identical to
++   * pre-patch behavior.
++   */
++  reasoningParams?: Record<string, unknown>;
++  /**
++   * Optional out-object the runner fills in as it goes. Lets the caller
++   * tell a budget/iteration-truncated result apart from a clean finish
++   * (the return value stays a plain string for compatibility).
++   */
++  outMeta?: SubagentRunMeta;
++}
++
++export interface SubagentRunMeta {
++  /** Why the run ended early: token budget or iteration cap; null/undefined = clean finish. */
++  degraded?: "budget" | "iterations" | null;
++  /** Total completion tokens consumed across all iterations. */
++  tokensUsed?: number;
++  /** True once any tool with modifiesFiles=true has been executed (retry-safety signal). */
++  mutatingToolExecuted?: boolean;
+ }
+ 
+ /**
+@@ -81,7 +104,14 @@
+     dynamicContext,
+     budgetTokens,
+     onUsage,
++    reasoningParams,
++    outMeta,
+   } = opts;
++  if (outMeta) {
++    outMeta.degraded = null;
++    outMeta.tokensUsed = 0;
++    outMeta.mutatingToolExecuted = false;
++  }
+ 
+   const toolMap = new Map(tools.map(t => [t.name, t]));
+   const apiTools = tools.map(t => ({
+@@ -110,7 +140,7 @@
+ 
+     // Stream LLM response
+     const { text, toolCalls, assistantContent, assistantToolCalls, extras, usage } =
+-      await streamOnce(llmClient, systemPrompt, conversation, apiTools, model, signal, dynamicContext);
++      await streamOnce(llmClient, systemPrompt, conversation, apiTools, model, signal, dynamicContext, reasoningParams);
+ 
+     if (usage) {
+       tokensConsumed += usage.completion_tokens || 0;
+@@ -161,6 +191,7 @@
+         : undefined;
+ 
+       const result = await tool.execute(args, onChunk);
++      if (outMeta && tool.modifiesFiles === true) outMeta.mutatingToolExecuted = true;
+ 
+       if (bus) {
+         const display = tool.getDisplayInfo?.(args) ?? { kind: "execute" };
+@@ -181,10 +212,19 @@
+     }
+   }
+ 
++  if (outMeta) outMeta.tokensUsed = tokensConsumed;
+   if (budgetExhausted) {
++    if (outMeta) outMeta.degraded = "budget";
+     const note = `\n\n[Subagent terminated: completion-token budget (${budgetTokens}) exhausted after ${tokensConsumed} completion tokens. Returning partial progress.]`;
+     return lastResponseText + note;
+   }
++  // Loop ran out of iterations without a natural finish — same first-class
++  // note as the budget path so callers can surface it as degraded, not done.
++  if (iterations > maxIterations && !signal?.aborted) {
++    if (outMeta) outMeta.degraded = "iterations";
++    const note = `\n\n[Subagent terminated: max iterations (${maxIterations}) reached. Returning partial progress.]`;
++    return lastResponseText + note;
++  }
+ 
+   return lastResponseText;
+ }
+@@ -198,6 +238,7 @@
+   model: string | undefined,
+   signal: AbortSignal | undefined,
+   dynamicContext?: string,
++  reasoningParams?: Record<string, unknown>,
+ ): Promise<{
+   text: string;
+   toolCalls: PendingToolCall[];
+@@ -221,6 +262,7 @@
+     tools: apiTools.length > 0 ? apiTools : undefined,
+     model,
+     signal,
++    ...(reasoningParams ?? {}),
+   });
+ 
+   for await (const chunk of stream) {

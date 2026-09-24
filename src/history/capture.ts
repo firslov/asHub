@@ -58,7 +58,9 @@ export function createCapture(
     if (!store || desynced) return;
     let snap;
     try {
-      snap = await bridge.snapshot();
+      // Only the message list is needed — skip the kernel's full-conversation
+      // token estimate (a JSON.stringify of every message, once per turn).
+      snap = await bridge.snapshot({ skipTokens: true });
     } catch (err) {
       // Backends without snapshot support (ACP) can never be captured:
       // disable permanently and stay quiet — turn-end flushes would

@@ -109,6 +109,9 @@ interface SubagentType {
   maxIterations: number;
   /** Completion-token budget. */
   budgetTokens?: number;
+  /** Reasoning effort passed to the provider's reasoning params hook
+   *  (off/low/medium/high/xhigh). undefined = provider default. */
+  reasoning?: string;
   /** Model override. `undefined` = inherit from parent. */
   model?: string;
   /** Short description shown in tool schema. */
@@ -133,6 +136,7 @@ You start with zero context beyond this prompt and the task — if critical info
     tools: [],
     maxIterations: 1,
     budgetTokens: 6000,
+    reasoning: "low",
   },
   explore: {
     description: "Explore and search the codebase to answer a question. Use when asked to 'explore', 'search', 'find', 'locate', or 'look up' code. Read-only.",
@@ -146,8 +150,9 @@ You start with zero context beyond this prompt and the task.
 - Be thorough but concise
 - Return a self-contained answer: the caller sees nothing but your final message — give conclusions and key evidence, not a log of your search steps`,
     tools: ["glob", "grep", "read_file", "ls"],
-    maxIterations: 15,
-    budgetTokens: 12000,
+    maxIterations: 25,
+    budgetTokens: 30000,
+    reasoning: "low",
   },
   review: {
     description: "Review code for bugs, style issues, and improvement opportunities. Use when user asks to 'review', 'check', 'audit', or 'inspect' code. Read-only.",
@@ -163,8 +168,9 @@ You start with zero context beyond this prompt and the task.
 - Be constructive — suggest concrete fixes, not just problems
 - Return a self-contained report: the caller sees nothing but your final message`,
     tools: ["glob", "grep", "read_file", "ls"],
-    maxIterations: 40,
-    budgetTokens: 32000,
+    maxIterations: 60,
+    budgetTokens: 64000,
+    reasoning: "medium",
   },
   research: {
     description: "Deep investigation of code structure and dependencies. Use when asked to 'research', 'investigate', 'trace', 'analyze' or 'understand how' code works. Read-only.",
@@ -180,8 +186,9 @@ You start with zero context beyond this prompt and the task.
 - Cite every file path and line number
 - Return a self-contained report: the caller sees nothing but your final message`,
     tools: ["glob", "grep", "read_file", "ls"],
-    maxIterations: 20,
-    budgetTokens: 20000,
+    maxIterations: 30,
+    budgetTokens: 40000,
+    reasoning: "medium",
   },
   implement: {
     description: "Implement a feature or change end-to-end. Use when asked to 'implement', 'build', 'create', 'add', 'write code for', or 'develop' something. Can read, write, and edit files.",
@@ -197,20 +204,62 @@ You start with zero context beyond this prompt and the task.
 - File-modifying tool calls may trigger a user approval prompt — that is expected, wait for it
 - Return a self-contained summary of what you changed and why: the caller sees nothing but your final message`,
     tools: ["*"],
-    maxIterations: 25,
-    budgetTokens: 20000,
+    maxIterations: 40,
+    budgetTokens: 40000,
+    reasoning: "low",
   },
 };
 
+/** Per-type budget overrides persisted in settings.json under
+ *  `subagentBudgets` (written by the subagent:set-budget handler). Every
+ *  field is optional — unset fields fall through to the SUBAGENT_TYPES
+ *  preset. */
+interface SubagentBudgetOverride {
+  budgetTokens?: number;
+  maxIterations?: number;
+  reasoning?: string;
+}
+const getSubagentBudgetOverrides = (): Record<string, SubagentBudgetOverride> =>
+  ((getSettings() as { subagentBudgets?: Record<string, SubagentBudgetOverride> }).subagentBudgets ?? {});
+
+/** Valid reasoning levels for the `reasoning` override (mirrors the main
+ *  loop's thinking levels). */
+const REASONING_LEVELS = new Set(["off", "low", "medium", "high", "xhigh"]);
+
+/** The kernel's termination notes mark early exits in the returned text.
+ *  The patched kernel also reports this via outMeta.degraded; this sniff
+ *  is the fallback for an unpatched kernel (and costs nothing). */
+function sniffDegraded(text: string): "budget" | "iterations" | null {
+  if (/\[Subagent terminated: completion-token budget/.test(text)) return "budget";
+  if (/\[Subagent terminated: max iterations/.test(text)) return "iterations";
+  return null;
+}
+
+/** Head+tail clip: keeps the opening context AND the trailing
+ *  termination note (a plain head-slice would cut the
+ *  "[Subagent terminated: ...]" line off degraded results). */
+function clipHeadTail(s: string, head: number, tail: number): string {
+  if (s.length <= head + tail) return s;
+  return `${s.slice(0, head)}\n[... ${s.length - head - tail} chars truncated ...]\n${s.slice(-tail)}`;
+}
+
 /** Names of the five subagent preset tools (plus the swarm/resume tools) —
  *  stripped from subagent tool lists so a subagent can never spawn another
- *  subagent (unbounded nesting). */
-const SUBAGENT_TOOL_NAMES = new Set([...Object.keys(SUBAGENT_TYPES), "agentswarm", "subagent_resume"]);
+ *  subagent (unbounded nesting). "todolist" is stripped too: it does a full
+ *  replacement of the session-scoped bridge state (this._todos) backing the
+ *  main agent's TODO card, so a subagent holding it (implement's ["*"], or
+ *  swarm type=implement) would clobber that card — and concurrent swarm
+ *  members would clobber each other. */
+const SUBAGENT_TOOL_NAMES = new Set([...Object.keys(SUBAGENT_TYPES), "agentswarm", "subagent_resume", "todolist"]);
 /** Max subagents running at once.  Synchronous launches (incl. resume) wait
  *  briefly for a free slot; async launches reject immediately with a hint. */
 const MAX_CONCURRENT_SUBAGENTS = 10;
 /** Wall-clock cap per subagent run, merged with any caller/cancel signal. */
 const SUBAGENT_TIMEOUT_MS = 20 * 60 * 1000;
+/** Bounded retention for the subagent registry: at most this many finished
+ *  entries are kept for subagent:resume; older injected ones are evicted so
+ *  long sessions don't accumulate full result texts in memory. */
+const MAX_SUBAGENT_ENTRIES = 20;
 
 // Guard to ensure the Electron tsx-worker/Chromium init race is
 // yielded only once — on the first bridge — not on every session.
@@ -226,8 +275,14 @@ let _firstBridge = true;
       controller?: AbortController;
       result?: string;
       error?: string;
-      /** Result already surfaced to the main agent — entry is kept so
-       *  subagent:resume can continue the run later. */
+      /** Early-exit reason reported by the (patched) kernel: the completion
+       *  token budget or the iteration cap was hit, so the result is partial. */
+      degraded?: "budget" | "iterations" | null;
+      /** Completion tokens consumed by the run (0 when unknown). */
+      tokensUsed?: number;
+      /** Result already surfaced to the main agent — entry is kept (within
+       *  the MAX_SUBAGENT_ENTRIES window) so subagent:resume can continue
+       *  the run later. */
       injected?: boolean;
     }
 
@@ -439,11 +494,14 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     // direct tool.execute(). This makes the permission gate (file-write
     // approval) and the image gate apply to subagents too. The wrapper
     // re-emits output chunks itself since runSubagent's bus is muted.
-    const wrapSubagentTools = (tools: ToolDefinition[], signal: AbortSignal, prefix: string): ToolDefinition[] => {
+    const wrapSubagentTools = (tools: ToolDefinition[], signal: AbortSignal, prefix: string, onMutatingExecute?: () => void): ToolDefinition[] => {
       let toolCallSeq = 0;
       return tools.map((tool) => ({
         ...tool,
         execute: (args: Record<string, unknown>) => {
+          // Track file-modifying executions so the retry wrapper can tell a
+          // safe-to-retry early stream failure apart from a mid-run one.
+          if (tool.modifiesFiles === true) onMutatingExecute?.();
           // Prefix with the launch's subagentId (matches subagent:started) so
           // concurrent subagents can't emit colliding toolCallIds — the
           // frontend pairs tool events by data-call-id.
@@ -476,6 +534,30 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
         `and start your final report well before the budget runs out — a truncated report loses its tail sections.]`;
     };
 
+    // Build the reasoning/thinking request params for a subagent run.
+    // Reuses the provider's buildReasoningParams hook (via the resolved
+    // endpoint) so DeepSeek's thinking.type / GLM's enabled-only shapes and
+    // OpenRouter's reasoning_effort all come out right; falls back to a
+    // plain reasoning_effort when the endpoint has no hook. Returns
+    // undefined when nothing should be sent — an unpatched kernel then
+    // behaves exactly as before.
+    const resolveSubagentReasoningParams = (level: string | undefined, modelId: string | undefined): Record<string, unknown> | undefined => {
+      if (!level) return undefined;
+      try {
+        const current = core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+        const targetModel = modelId ?? current?.model;
+        if (!current?.provider || !targetModel) return undefined;
+        const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; reasoning?: boolean }>;
+        if (modes.find((m) => m.id === targetModel)?.reasoning === false) return undefined;
+        const endpoint = core.handlers.call("agent:resolve-endpoint", { provider: current.provider, id: targetModel }) as
+          { buildReasoningParams?: (level: string) => Record<string, unknown> } | undefined;
+        const built = endpoint?.buildReasoningParams?.(level);
+        if (built && Object.keys(built).length > 0) return built;
+        if (level === "off") return undefined;
+        return { reasoning_effort: level === "xhigh" ? "high" : level };
+      } catch { return undefined; }
+    };
+
     const launchSubagent = (
       task: string,
       type: string,
@@ -485,6 +567,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       maxIterations: number,
       budgetTokens: number | undefined,
       swarmId?: string,
+      reasoningParams?: Record<string, unknown>,
     ) => {
       const id = `sa${++_subagentSeq}`;
       const llmClient = core.handlers.call("llm:get-client");
@@ -501,37 +584,50 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       (core.bus.emit as (name: string, payload: unknown) => void)(
         "subagent:started", { task, subagentId: id, type, ...(swarmId ? { swarmId } : {}) });
 
-      // Retry is only safe when the run is side-effect-free.  A subagent
-      // whose toolset includes file-modifying tools (implement preset has
-      // ["*"]) may have already executed tools when a later LLM stream
-      // fails — re-running would repeat writes/commands.  Read-only presets
-      // (plan/explore/review/research) are safe to retry whole.
-      const retryable = !tools.some((t) => t?.modifiesFiles === true);
-      const runOnce = () => runSubagent({
-        llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
-        tools: wrapSubagentTools(tools, signal, id),
-        systemPrompt,
-        task: withBudgetNote(task, budgetTokens),
-        model,
-        bus: mutedSubagentBus,
-        maxIterations,
-        budgetTokens,
-        onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
-          "subagent:usage", { ...(u as Record<string, unknown>), type }),
-        signal,
+      // Retry is only safe when the run is side-effect-free SO FAR.  The
+      // patched kernel reports mutating tool executions via outMeta; the
+      // wrapper callback below tracks the same thing kernel-independently.
+      // A subagent whose toolset includes file-modifying tools (implement
+      // preset has ["*"]) may have already executed tools when a later LLM
+      // stream fails — re-running would repeat writes/commands, so retry is
+      // gated per-attempt on "no modifiesFiles tool has run yet".  Read-only
+      // presets never trip the flag and retry as before.
+      const attemptState = { mutatingExecuted: false };
+      const meta: { degraded?: "budget" | "iterations" | null; tokensUsed?: number } = {};
+      const runOnce = () => {
+        attemptState.mutatingExecuted = false;
+        return runSubagent({
+          llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
+          tools: wrapSubagentTools(tools, signal, id, () => { attemptState.mutatingExecuted = true; }),
+          systemPrompt,
+          task: withBudgetNote(task, budgetTokens),
+          model,
+          bus: mutedSubagentBus,
+          maxIterations,
+          budgetTokens,
+          reasoningParams,
+          outMeta: meta,
+          onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
+            "subagent:usage", { ...(u as Record<string, unknown>), type }),
+          signal,
+        });
+      };
+      const promise = runSubagentWithRetry(runOnce, {
+        canRetry: () => !attemptState.mutatingExecuted,
+        onRetry: (info) => {
+          (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {
+            message: `(subagent ${id} hit transient LLM error: ${info.err.message} — retrying in ${info.delayMs / 1000}s, attempt ${info.attempt + 1}/3)`,
+          });
+        },
       });
-      const promise = retryable
-        ? runSubagentWithRetry(runOnce, (info) => {
-            (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {
-              message: `(subagent ${id} hit transient LLM error: ${info.err.message} — retrying in ${info.delayMs / 1000}s, attempt ${info.attempt + 1}/3)`,
-            });
-          })
-        : runOnce();
 
       const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise, controller: abortController };
       _subagents.set(id, entry);
+      evictSubagentEntries();
 
       promise.then((result) => {
+        entry.degraded = meta.degraded ?? sniffDegraded(result);
+        entry.tokensUsed = meta.tokensUsed ?? 0;
         if (isTimeoutSignal(signal)) {
           // Wall-clock timeout: runSubagent broke out silently and returned
           // partial text — mark it so it isn't presented as a success.
@@ -543,10 +639,16 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
         }
       }).catch((err) => {
         entry.error = String(err);
+        entry.tokensUsed = meta.tokensUsed ?? 0;
       }).finally(() => {
         _runningSubagents--;
         (core.bus.emit as (name: string, payload: unknown) => void)(
-          "subagent:done", { task, subagentId: id, ...(entry.error ? { error: entry.error } : {}) });
+          "subagent:done", {
+            task, subagentId: id,
+            degraded: entry.error ? null : (entry.degraded ?? null),
+            tokensUsed: entry.tokensUsed ?? 0,
+            ...(entry.error ? { error: entry.error } : {}),
+          });
       });
 
       // Register context producer once (idempotent) to surface completed
@@ -564,12 +666,19 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
               if (e.result || e.error) {
                 // Prefer the error narrative: a timeout/error entry may also
                 // carry partial result text — don't label it "Completed".
+                // Head+tail clip keeps the trailing "[Subagent terminated: ...]"
+                // note that marks a budget/iteration-degraded result.
                 const body = e.error
-                  ? `Error: ${e.error}${e.result ? `\nPartial: ${e.result.slice(0, 2000)}` : ""}`
-                  : (e.result ?? "").slice(0, 2000);
+                  ? `Error: ${e.error}${e.result ? `\nPartial: ${clipHeadTail(e.result, 1500, 500)}` : ""}`
+                  : clipHeadTail(e.result ?? "", 1500, 500);
+                const status = e.error
+                  ? "Failed"
+                  : e.degraded
+                    ? `Completed (partial: ${e.degraded} exhausted)`
+                    : "Completed";
                 completed.push(
                   `<subagent_result id="${eid}" type="${e.type}">\n` +
-                  `${e.error ? "Failed" : "Completed"}: "${e.task.slice(0, 80)}"\n` +
+                  `${status}: "${e.task.slice(0, 80)}"\n` +
                   body +
                   `\n</subagent_result>`
                 );
@@ -595,16 +704,19 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     // error." kills the whole subagent run.  We can't reach inside
     // runSubagent, so retry the WHOLE run instead.
     //
-    // SAFETY: only wrap side-effect-free (read-only) runs.  A failed run
-    // produced no final text, so re-running duplicates nothing — but tool
-    // side effects (file writes/commands) WOULD be repeated if a later
-    // stream failed after earlier tools had executed.  The call sites
-    // therefore guard on `tools.some(t => t.modifiesFiles)` and skip retry
-    // for file-modifying toolsets; this helper itself is side-effect
-    // agnostic and must not be called with a mutating toolset.
+    // SAFETY: retry is gated per-attempt by canRetry() — the call sites
+    // pass a check that no modifiesFiles tool has executed in the failed
+    // attempt (tracked by wrapSubagentTools' onMutatingExecute callback,
+    // kernel-independent).  A run that died on the FIRST stream (before
+    // any tool ran) is side-effect-free even for the implement preset, so
+    // transient LLM errors no longer kill it; a run that died mid-way
+    // after writes/commands is never retried.
     const runSubagentWithRetry = async <R,>(
       launch: () => Promise<R>,
-      onRetry?: (info: { attempt: number; delayMs: number; err: Error }) => void,
+      opts?: {
+        canRetry?: () => boolean;
+        onRetry?: (info: { attempt: number; delayMs: number; err: Error }) => void;
+      },
     ): Promise<R> => {
       const RETRIES = 2; // 1 initial + 2 retries
       const DELAYS = [2_000, 4_000];
@@ -621,9 +733,9 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
           return await launch();
         } catch (err) {
           lastErr = err;
-          if (attempt >= RETRIES || !isRetryable(err)) throw err;
+          if (attempt >= RETRIES || !isRetryable(err) || opts?.canRetry?.() === false) throw err;
           const delayMs = DELAYS[attempt] ?? 4_000;
-          onRetry?.({ attempt: attempt + 1, delayMs, err: err instanceof Error ? err : new Error(String(err)) });
+          opts?.onRetry?.({ attempt: attempt + 1, delayMs, err: err instanceof Error ? err : new Error(String(err)) });
           await new Promise((r) => setTimeout(r, delayMs));
         }
       }
@@ -660,19 +772,82 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       }
     });
 
+    // ── Subagent budget overrides ───────────────────────────────
+    // Persisted globally in settings.json under `subagentBudgets[type]`
+    // ({budgetTokens?, maxIterations?, reasoning?}) — same read-modify-write
+    // pattern as subagent:set-model above, for the same deepMerge reason.
+
+    core.handlers.define("subagent:set-budget", (opts: {
+      type: string;
+      budgetTokens?: number | null;
+      maxIterations?: number | null;
+      reasoning?: string | null;
+    }) => {
+      if (!SUBAGENT_TYPES[opts.type]) return;
+      const settingsPath = path.join(CONFIG_DIR, "settings.json");
+      let data: Record<string, unknown> = {};
+      try { data = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as Record<string, unknown>; } catch {}
+      const current = { ...((data.subagentBudgets as Record<string, SubagentBudgetOverride> | undefined) ?? {}) };
+      const entry: SubagentBudgetOverride = { ...(current[opts.type] ?? {}) };
+      // null clears a field back to the preset; undefined leaves it unchanged.
+      if (opts.budgetTokens === null) delete entry.budgetTokens;
+      else if (typeof opts.budgetTokens === "number" && Number.isFinite(opts.budgetTokens) && opts.budgetTokens > 0) {
+        entry.budgetTokens = Math.floor(opts.budgetTokens);
+      }
+      if (opts.maxIterations === null) delete entry.maxIterations;
+      else if (typeof opts.maxIterations === "number" && Number.isFinite(opts.maxIterations) && opts.maxIterations > 0) {
+        entry.maxIterations = Math.floor(opts.maxIterations);
+      }
+      if (opts.reasoning === null || opts.reasoning === "inherit") delete entry.reasoning;
+      else if (typeof opts.reasoning === "string" && REASONING_LEVELS.has(opts.reasoning)) {
+        entry.reasoning = opts.reasoning;
+      }
+      if (Object.keys(entry).length === 0) delete current[opts.type];
+      else current[opts.type] = entry;
+      data.subagentBudgets = current;
+      try {
+        fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+        reloadSettings();
+      } catch (err) {
+        process.stderr.write(`[ash-bridge] failed to persist subagent budget override: ${err instanceof Error ? err.message : err}\n`);
+      }
+    });
+
     // Type metadata for the frontend subagent panel (contract C3).
-    core.handlers.define("subagent:get-types", () =>
-      Object.entries(SUBAGENT_TYPES).map(([type, cfg]) => ({
-        type,
-        description: cfg.description,
-        tools: cfg.tools,
-        maxIterations: cfg.maxIterations,
-        budgetTokens: cfg.budgetTokens,
-        async: cfg.async === true,
-      })),
-    );
+    // budgetTokens/maxIterations/reasoning are the EFFECTIVE values —
+    // settings.json overrides already merged over the presets.
+    core.handlers.define("subagent:get-types", () => {
+      const overrides = getSubagentBudgetOverrides();
+      return Object.entries(SUBAGENT_TYPES).map(([type, cfg]) => {
+        const o = overrides[type] ?? {};
+        return {
+          type,
+          description: cfg.description,
+          tools: cfg.tools,
+          maxIterations: o.maxIterations ?? cfg.maxIterations,
+          budgetTokens: o.budgetTokens ?? cfg.budgetTokens,
+          reasoning: o.reasoning ?? cfg.reasoning ?? null,
+          async: cfg.async === true,
+        };
+      });
+    });
 
     const _subagents = this._subagents;
+    // Evict the oldest already-injected entries once the registry grows past
+    // MAX_SUBAGENT_ENTRIES.  Map iteration is insertion order and ids are
+    // monotonic, so the first evictable entry found is the oldest.  Entries
+    // that have NOT been injected are never evicted — their results still
+    // have to reach the main context via the subagent-results producer.
+    // Deleting the map entry also drops the bridge's only strong reference
+    // to the entry's Promise and full result text.
+    const evictSubagentEntries = () => {
+      if (_subagents.size <= MAX_SUBAGENT_ENTRIES) return;
+      for (const [eid, e] of _subagents) {
+        if (_subagents.size <= MAX_SUBAGENT_ENTRIES) break;
+        if (!e.injected) continue;
+        _subagents.delete(eid);
+      }
+    };
     let _subagentSeq = 0;
     let _runningSubagents = 0;
     // Bounded wait for a free subagent slot.  The model often calls
@@ -716,11 +891,14 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
           return { concurrencyLimited: true as const, message: `Error: subagent concurrency limit reached (${MAX_CONCURRENT_SUBAGENTS} running, still busy after waiting 90s). Wait for a running subagent to finish, then retry.` };
         }
       }
-      // Resolve type preset
+      // Resolve type preset.  Budget chain: explicit caller opts →
+      // settings.json subagentBudgets[type] override → SUBAGENT_TYPES preset.
       const preset = opts.type ? SUBAGENT_TYPES[opts.type] : null;
+      const override = (opts.type ? getSubagentBudgetOverrides()[opts.type] : undefined) ?? {};
       const systemPrompt = opts.systemPrompt ?? preset?.systemPrompt ?? "";
-      const maxIterations = opts.maxIterations ?? preset?.maxIterations ?? 20;
-      const budgetTokens = opts.budgetTokens ?? preset?.budgetTokens;
+      const maxIterations = opts.maxIterations ?? override.maxIterations ?? preset?.maxIterations ?? 20;
+      const budgetTokens = opts.budgetTokens ?? override.budgetTokens ?? preset?.budgetTokens;
+      const reasoning = override.reasoning ?? preset?.reasoning;
       const rawModel = opts.model ?? (opts.type ? (getSettings() as any).subagentModels?.[opts.type] : undefined) ?? preset?.model;
       // Strip @provider suffix — subagent reuses the main session's provider.
       const stripped = typeof rawModel === "string" ? rawModel.replace(/@.+$/, "") : rawModel;
@@ -737,6 +915,10 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
         const valid = modes.some((m) => m.id === stripped && (!prov || (m.provider ?? "") === prov));
         if (!valid && current?.model) model = current.model;
       }
+
+      // Reasoning effort for the subagent's streams (settings override or
+      // preset); undefined = send nothing, same as before this change.
+      const reasoningParams = resolveSubagentReasoningParams(reasoning, model);
 
       // Tool filtering
       let tools: ToolDefinition[];
@@ -763,7 +945,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       // background subagent must outlive the turn that launched it.
       if (opts.async) {
         const type = opts.type ?? "generic";
-        const id = launchSubagent(opts.task, type, systemPrompt, tools, model, maxIterations, budgetTokens);
+        const id = launchSubagent(opts.task, type, systemPrompt, tools, model, maxIterations, budgetTokens, undefined, reasoningParams);
         return `subagent:${id}`;
       }
 
@@ -777,49 +959,61 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
 
       (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt, type: opts.type, subagentId: syncId });
 
+      // Declared outside the try so the catch can still report tokensUsed.
+      const attemptState = { mutatingExecuted: false };
+      const meta: { degraded?: "budget" | "iterations" | null; tokensUsed?: number } = {};
       try {
         // Increment inside the try so an emit/launch failure above can't leak
         // the concurrency counter (finally always decrements).
         _runningSubagents++;
-        // Same side-effect guard as the async path: only retry read-only
-        // subagents — file-modifying toolsets may have already run tools
-        // when a later stream fails, so a whole-run retry would repeat them.
-        const retryable = !tools.some((t) => t?.modifiesFiles === true);
-        const runOnce = () => runSubagent({
-          llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
-          tools: wrapSubagentTools(tools, signal, syncId),
-          systemPrompt,
-          task: withBudgetNote(opts.task, budgetTokens),
-          model,
-          bus: mutedSubagentBus,
-          signal,
-          maxIterations,
-          budgetTokens,
-          onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
-            "subagent:usage", { ...(u as Record<string, unknown>), type: opts.type }),
+        // Same per-attempt side-effect guard as the async path: retry only
+        // while no modifiesFiles tool has executed in the failed attempt —
+        // this now also covers implement-type runs that died on their first
+        // LLM stream, while mid-run failures after writes never retry.
+        const runOnce = () => {
+          attemptState.mutatingExecuted = false;
+          return runSubagent({
+            llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
+            tools: wrapSubagentTools(tools, signal, syncId, () => { attemptState.mutatingExecuted = true; }),
+            systemPrompt,
+            task: withBudgetNote(opts.task, budgetTokens),
+            model,
+            bus: mutedSubagentBus,
+            signal,
+            maxIterations,
+            budgetTokens,
+            reasoningParams,
+            outMeta: meta,
+            onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
+              "subagent:usage", { ...(u as Record<string, unknown>), type: opts.type }),
+          });
+        };
+        const result = await runSubagentWithRetry(runOnce, {
+          canRetry: () => !attemptState.mutatingExecuted,
+          onRetry: (info) => {
+            (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {
+              message: `(subagent ${syncId} hit transient LLM error: ${info.err.message} — retrying in ${info.delayMs / 1000}s, attempt ${info.attempt + 1}/3)`,
+            });
+          },
         });
-        const result = retryable
-          ? await runSubagentWithRetry(runOnce, (info) => {
-              (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {
-                message: `(subagent ${syncId} hit transient LLM error: ${info.err.message} — retrying in ${info.delayMs / 1000}s, attempt ${info.attempt + 1}/3)`,
-              });
-            })
-          : await runOnce();
+        const degraded = meta.degraded ?? sniffDegraded(result);
+        const tokensUsed = meta.tokensUsed ?? 0;
         if (isTimeoutSignal(signal)) {
           // Wall-clock timeout: runSubagent broke out silently and returned
           // partial text — surface as an error so neither the model nor the
           // UI treats truncated output as success.
           const minutes = SUBAGENT_TIMEOUT_MS / 60000;
-          (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId, error: `timeout after ${minutes}min` });
+          (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId, error: `timeout after ${minutes}min`, degraded: null, tokensUsed });
           return { subagentTimedOut: true as const, message: `${result}\n\n[subagent terminated: timeout after ${minutes}min]` };
         }
-        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId });
+        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId, degraded, tokensUsed });
         // Keep the result addressable (marked injected so the context
         // producer ignores it) so subagent:resume can continue this run.
-        _subagents.set(syncId, { id: syncId, type: opts.type ?? "generic", task: opts.task, startedAt: Date.now(), promise: Promise.resolve(result), result, injected: true });
+        _subagents.set(syncId, { id: syncId, type: opts.type ?? "generic", task: opts.task, startedAt: Date.now(), promise: Promise.resolve(result), result, degraded, tokensUsed, injected: true });
+        evictSubagentEntries();
         return `${result}\n\nSubagent id: ${syncId} — call subagent_resume with this id and a follow-up task to continue this work.`;
       } catch (err) {
-        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, error: String(err), subagentId: syncId });
+        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, error: String(err), subagentId: syncId, degraded: null, tokensUsed: meta.tokensUsed ?? 0 });
         throw err;
       } finally {
         _runningSubagents--;
@@ -837,7 +1031,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     }) => {
       const entry = _subagents.get(opts.id);
       if (!entry || (!entry.result && !entry.error)) {
-        return `Error: no completed subagent run with id '${opts.id}' — only runs that already returned a result can be resumed.`;
+        return `Error: no completed subagent run with id '${opts.id}' — only runs that already returned a result can be resumed, and results are only kept for the ${MAX_SUBAGENT_ENTRIES} most recent runs.`;
       }
       const prev = (entry.result ?? `Error: ${entry.error}`).slice(0, 2000);
       const task =
@@ -1014,13 +1208,18 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
           const valid = modes.some((m) => m.id === stripped && (!prov || (m.provider ?? "") === prov));
           if (!valid && current?.model) model = current.model;
         }
+        // Same budget/reasoning override chain as subagent:run.
+        const override = getSubagentBudgetOverrides()[type] ?? {};
+        const maxIterations = override.maxIterations ?? preset.maxIterations;
+        const budgetTokens = override.budgetTokens ?? preset.budgetTokens;
+        const reasoningParams = resolveSubagentReasoningParams(override.reasoning ?? preset.reasoning, model);
 
         const swarmId = `swarm-${++_swarmSeq}`;
         const total = items.length;
         (core.bus.emit as (name: string, payload: unknown) => void)(
           "subagent:swarm-started", { swarmId, total, type });
 
-        const results: Array<{ ok: boolean; text: string } | null> = new Array(total).fill(null);
+        const results: Array<{ ok: boolean; text: string; degraded?: "budget" | "iterations" | null } | null> = new Array(total).fill(null);
         let next = 0;
         let done = 0;
         let failed = 0;
@@ -1038,7 +1237,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
                   // Bypass subagent:run's reject-on-cap: queue semantics are
                   // the whole point of a swarm, so launch directly and wait
                   // for slots instead of erroring out.
-                  const id = launchSubagent(prompts[i]!, type, preset.systemPrompt, tools, model, preset.maxIterations, preset.budgetTokens, swarmId);
+                  const id = launchSubagent(prompts[i]!, type, preset.systemPrompt, tools, model, maxIterations, budgetTokens, swarmId, reasoningParams);
                   const entry = _subagents.get(id)!;
                   // launchSubagent's own .then was attached first, so
                   // entry.result/entry.error are already set when ours runs.
@@ -1048,7 +1247,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
                       results[i] = { ok: false, text: entry.result ? `${entry.result}\n[${entry.error}]` : entry.error };
                     } else {
                       done++;
-                      results[i] = { ok: true, text: entry.result ?? "" };
+                      results[i] = { ok: true, text: entry.result ?? "", degraded: entry.degraded ?? null };
                     }
                   }).catch((err) => {
                     failed++;
@@ -1082,16 +1281,18 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
               }
               if (done + failed >= total) {
                 clearInterval(timer);
+                const degraded = results.filter((r) => r?.ok && r.degraded).length;
                 (core.bus.emit as (name: string, payload: unknown) => void)(
-                  "subagent:swarm-done", { swarmId, done, failed });
+                  "subagent:swarm-done", { swarmId, done, failed, degraded });
                 resolveSwarm();
               }
             } catch (err) {
               // A throw inside pump must not leak the interval (it would
               // re-fire every second and produce unhandled rejections).
               clearInterval(timer);
+              const degraded = results.filter((r) => r?.ok && r.degraded).length;
               (core.bus.emit as (name: string, payload: unknown) => void)(
-                "subagent:swarm-done", { swarmId, done, failed });
+                "subagent:swarm-done", { swarmId, done, failed, degraded });
               resolveSwarm();
             }
           };
@@ -1107,8 +1308,11 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
           const flat = item.replace(/\s+/g, " ").trim();
           const short = flat.length > 60 ? `${flat.slice(0, 60)}…` : flat;
           const conclusion = (r?.text ?? "no result").trim();
-          const clipped = conclusion.length > 500 ? `${conclusion.slice(0, 500)}…` : conclusion;
-          return `[${i + 1}/${total}] ${short} → ${r?.ok ? "✓" : "✗"} ${clipped}`;
+          // Head+tail clip keeps the trailing "[Subagent terminated: ...]"
+          // note on budget/iteration-degraded results.
+          const clipped = clipHeadTail(conclusion, 300, 200);
+          const mark = r?.ok ? (r.degraded ? "~" : "✓") : "✗";
+          return `[${i + 1}/${total}] ${short} → ${mark} ${clipped}`;
         });
         const header = `Swarm ${swarmId} (${type}) finished: ${done} succeeded, ${failed} failed, ${total} total.`;
         return { exitCode: 0, content: `${header}\n${lines.join("\n")}`, isError: false };
@@ -1791,6 +1995,13 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       } catch { /* ignore parse error */ }
       return;
     }
+    if (name === "/sa-budget" && args) {
+      try {
+        const parsed = JSON.parse(args) as { type: string; budgetTokens?: number | null; maxIterations?: number | null; reasoning?: string | null };
+        this.core?.handlers.call("subagent:set-budget", parsed);
+      } catch { /* ignore parse error */ }
+      return;
+    }
     this.core?.bus.emit("command:execute", { name, args });
   }
 
@@ -1898,15 +2109,21 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     return Array.isArray(r.items) ? r.items : [];
   }
 
-  async snapshot(): Promise<ContextSnapshot> {
+  async snapshot(opts?: { skipTokens?: boolean }): Promise<ContextSnapshot> {
     await this.initPromise;
     if (!this.core) throw new Error("core not initialized");
 
     const emitPipe = this.core.bus.emitPipe.bind(this.core.bus) as unknown as (
       name: string,
-      payload: ContextSnapshot,
+      payload: ContextSnapshot & { skipTokens?: boolean },
     ) => ContextSnapshot;
-    const snap = emitPipe("context:snapshot", { messages: [], contextWindow: 0, activeTokens: 0 });
+    // skipTokens is honored by the patched agent-sh context:snapshot pipe
+    // (patches/agent-sh+*.patch); an unpatched kernel ignores the flag and
+    // still computes the estimate — harmless, just slower.
+    const snap = emitPipe("context:snapshot", {
+      messages: [], contextWindow: 0, activeTokens: 0,
+      skipTokens: opts?.skipTokens === true,
+    });
 
     // Filter system notes from the live conversation — they are
     // internal metadata that shouldn't appear in the context panel

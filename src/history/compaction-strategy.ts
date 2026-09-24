@@ -42,14 +42,22 @@ export function createCompactionStrategy(
     const cutIdx = findCutPoint(messages, keepRecentBudget);
     if (cutIdx < 2) return await next(opts);
 
-    const firstKeptId = capture.getEntryIdAt(cutIdx);
+    // The capture's null slots (system-note and drop placeholders) have no
+    // tree entry to anchor a compaction to. Scan forward from the ideal cut
+    // to the first slot backed by a real entry instead of giving up.
+    let anchorIdx = cutIdx;
+    let firstKeptId: string | null = null;
+    for (; anchorIdx < messages.length; anchorIdx++) {
+      firstKeptId = capture.getEntryIdAt(anchorIdx);
+      if (firstKeptId) break;
+    }
     if (!firstKeptId) {
-      onWarn?.(`compaction: no tree entry at cutIdx ${cutIdx} (live view longer than tree); falling through to kernel default strategy`);
+      onWarn?.(`compaction: no persisted tree entry at or after cutIdx ${cutIdx} (messages ${messages.length}, capture length ${capture.length()}) — capture may be desynced; skipping compaction`);
       return await next(opts);
     }
 
     const tokensBefore = helpers.estimatePromptTokens();
-    const evictedCount = cutIdx;
+    const evictedCount = anchorIdx;
 
     const applied = await locked(async () => {
       try {

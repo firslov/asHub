@@ -62,13 +62,50 @@ export function newEntryId(): string {
   return crypto.randomBytes(4).toString("hex");
 }
 
+// Cap the compaction summary: an unbounded per-message line list turns into
+// tens of KB (≈10k+ tokens) that every subsequent LLM request carries.
+// Within the budget, lock in the earliest lines first — they carry the
+// original task definition and are unrecoverable once elided — then fill the
+// remainder with the lines closest to the cut point; the middle collapses
+// into a count line.  The header format is load-bearing — hub's
+// parseEvictedCount regex reads the total from it.
+const EVICTED_SUMMARY_MAX_CHARS = 6000;
+const EVICTED_SUMMARY_HEAD_CHARS = Math.floor(EVICTED_SUMMARY_MAX_CHARS / 2);
+
 function renderEvictedSummary(branch: SessionEntry[], firstKeptIdx: number): string {
   const lines: string[] = [];
   for (let i = 0; i < firstKeptIdx; i++) {
     const e = branch[i]!;
     if (e.type === "message") lines.push(`- ${summarizeMessage(e.message)}`);
   }
-  return `[Compacted conversation — ${lines.length} message(s) elided]\n${lines.join("\n")}`;
+  const header = `[Compacted conversation — ${lines.length} message(s) elided]`;
+  if (lines.length === 0) return header;
+
+  // The head gets at most half the budget so the lines closest to the cut
+  // point always fit in the other half; any head slack flows to the tail.
+  const head: string[] = [];
+  let used = 0;
+  let hi = 0;
+  for (; hi < lines.length; hi++) {
+    const len = lines[hi]!.length + 1;
+    // Always keep at least the first line (the original task), even if it
+    // alone exceeds the budget.
+    if (head.length > 0 && used + len > EVICTED_SUMMARY_HEAD_CHARS) break;
+    used += len;
+    head.push(lines[hi]!);
+  }
+  const tail: string[] = [];
+  for (let ti = lines.length - 1; ti >= hi; ti--) {
+    const len = lines[ti]!.length + 1;
+    if (used + len > EVICTED_SUMMARY_MAX_CHARS) break;
+    used += len;
+    tail.unshift(lines[ti]!);
+  }
+  const omitted = lines.length - head.length - tail.length;
+  const kept = [...head];
+  if (omitted > 0) kept.push(`- … (${omitted} message(s) in between omitted)`);
+  kept.push(...tail);
+  return `${header}\n${kept.join("\n")}`;
 }
 
 export interface SessionStoreOpts {

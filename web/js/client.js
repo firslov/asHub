@@ -1,8 +1,10 @@
 import "./i18n.js";
 
-// Platform detection (data-platform is set by the inline script in index.html)
-const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
-const isWin = document.documentElement.dataset.platform === "win32";
+// Platform detection (data-platform is set by the inline script in index.html,
+// which prefers the main process's process.platform over navigator.platform)
+const platform = document.documentElement.dataset.platform;
+const isMac = platform === "darwin";
+const isWin = platform === "win32";
 document.documentElement.classList.add(isMac ? "os-mac" : "os-other");
 if (isWin) document.documentElement.classList.add("os-win32");
 

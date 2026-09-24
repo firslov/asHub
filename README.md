@@ -32,11 +32,11 @@ Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — runs agent
 - **Hot reload** — apiKey and provider config changes take effect immediately, no restart needed
 - **Streaming perf** — block-level incremental rendering, debounced highlighting, SPA DOM cache
 - **Sleep resilience** — auto-pauses SSE on system sleep to prevent wake-up freezes
-- **Cross-platform** — packaged for macOS (Apple Silicon), Windows (x64), and Linux (AppImage)
+- **Cross-platform** — packaged for macOS (Apple Silicon and Intel), Windows (x64), and Linux (AppImage)
 
 ## Install
 
-### macOS (Apple Silicon)
+### macOS (Apple Silicon and Intel)
 
 One-line install, no Gatekeeper prompt:
 

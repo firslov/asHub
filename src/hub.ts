@@ -629,7 +629,9 @@ const MIME: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
+  ".woff": "font/woff",
   ".ttf": "font/ttf",
+  ".otf": "font/otf",
 };
 
 /**
@@ -2155,7 +2157,9 @@ async function spawnSession(
 }
 
 function expandHome(input: string): string {
-  if (input === "~" || input.startsWith("~/")) return os.homedir() + input.slice(1);
+  // Windows produces "~\..." as well as the POSIX "~/..." form — accept both.
+  if (input === "~") return os.homedir();
+  if (input.startsWith("~/") || input.startsWith("~\\")) return os.homedir() + input.slice(1);
   return input;
 }
 
@@ -2219,7 +2223,7 @@ function pickDir(res: http.ServerResponse): void {
 
 async function listDirs(res: http.ServerResponse, prefix: string): Promise<void> {
   const home = os.homedir();
-  const usedTilde = prefix === "~" || prefix.startsWith("~/");
+  const usedTilde = prefix === "~" || prefix.startsWith("~/") || prefix.startsWith("~\\");
   let raw = prefix ? expandHome(prefix) : process.cwd() + path.sep;
 
   let parent: string, partial: string;

@@ -16,18 +16,23 @@ bold()  { printf '\033[1m%s\033[0m\n' "$1"; }
 fail() { red "error: $1" >&2; exit 1; }
 
 [ "$(uname -s)" = "Darwin" ] || fail "this installer is for macOS only."
-[ "$(uname -m)" = "arm64" ] || fail "only Apple Silicon (arm64) builds are published. Intel Macs are not supported."
+# Apple Silicon ships -arm64, Intel ships -x64 (see electron-builder.yml mac.target).
+case "$(uname -m)" in
+  arm64)  ARCH="arm64" ;;
+  x86_64) ARCH="x64" ;;
+  *)      fail "unsupported CPU architecture: $(uname -m)" ;;
+esac
 command -v curl >/dev/null || fail "curl is required."
 command -v unzip >/dev/null || fail "unzip is required."
 
 bold "Looking up the latest asHub release..."
 url=$(
   curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep -o '"browser_download_url"[^,]*-arm64\.zip"' \
+    | grep -o "\"browser_download_url\"[^,]*-${ARCH}\.zip\"" \
     | head -1 \
-    | sed 's/.*": *"//; s/"$//'
+    | sed 's/.*": *"//; s/"$//' || true
 )
-[ -n "$url" ] || fail "could not find an arm64 .zip asset in the latest release."
+[ -n "$url" ] || fail "no ${ARCH} .zip asset found in the latest release."
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

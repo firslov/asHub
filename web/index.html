@@ -1,7 +1,13 @@
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <script>
-  document.documentElement.dataset.platform = /Win/.test(navigator.platform) ? "win32" : navigator.platform === "MacIntel" ? "darwin" : "linux";
+  // Prefer the main process's process.platform (exposed by preload.cjs).
+  // navigator.platform is deprecated, and on Windows this value decides
+  // whether the custom title bar is shown at all — a wrong guess leaves a
+  // frameless window with no controls, so fall back only if it is absent.
+  document.documentElement.dataset.platform =
+    window.electronAPI?.platform ??
+    (/Win/.test(navigator.platform) ? "win32" : navigator.platform === "MacIntel" ? "darwin" : "linux");
 </script>
 <head>
   <meta charset="UTF-8" />

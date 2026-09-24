@@ -1,15 +1,3 @@
-diff --git a/node_modules/agent-sh/dist/agent/index.js b/node_modules/agent-sh/dist/agent/index.js
-index 436e17a..20da226 100644
---- a/node_modules/agent-sh/dist/agent/index.js
-+++ b/node_modules/agent-sh/dist/agent/index.js
-@@ -61,6 +61,7 @@ function mergeCaps(settingsCaps, payloadCaps, modelIds) {
-             contextWindow: s?.contextWindow ?? p?.contextWindow,
-             maxTokens: s?.maxTokens ?? p?.maxTokens,
-             echoReasoning: s?.echoReasoning ?? p?.echoReasoning,
-+            modalities: s?.modalities ?? p?.modalities,
-         });
-     }
-     return out.size > 0 ? out : undefined;
 diff --git a/node_modules/agent-sh/dist/cli/auth/keys.js b/node_modules/agent-sh/dist/cli/auth/keys.js
 index 62c4c94..6b2052b 100644
 --- a/node_modules/agent-sh/dist/cli/auth/keys.js
@@ -22,18 +10,6 @@ index 62c4c94..6b2052b 100644
  ];
  /** Built-ins + settings + keys.json. Sync, no extension load. */
  export function listAllProviders() {
-diff --git a/node_modules/agent-sh/src/agent/index.ts b/node_modules/agent-sh/src/agent/index.ts
-index 83e749e..55c3aea 100644
---- a/node_modules/agent-sh/src/agent/index.ts
-+++ b/node_modules/agent-sh/src/agent/index.ts
-@@ -80,6 +80,7 @@ function mergeCaps(
-       contextWindow: s?.contextWindow ?? p?.contextWindow,
-       maxTokens: s?.maxTokens ?? p?.maxTokens,
-       echoReasoning: s?.echoReasoning ?? p?.echoReasoning,
-+      modalities: s?.modalities ?? p?.modalities,
-     });
-   }
-   return out.size > 0 ? out : undefined;
 diff --git a/node_modules/agent-sh/src/cli/auth/keys.ts b/node_modules/agent-sh/src/cli/auth/keys.ts
 index 5c8b21c..33ce21d 100644
 --- a/node_modules/agent-sh/src/cli/auth/keys.ts

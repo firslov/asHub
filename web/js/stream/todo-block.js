@@ -26,16 +26,27 @@ const setTodoCollapsed = (block, collapsed) => {
     block.classList.add("collapsed");
     body.style.maxHeight = "0";
   } else {
-    body.style.maxHeight = "0";
-    block.classList.remove("collapsed");
-    body.offsetHeight;
-    body.style.maxHeight = body.scrollHeight + "px";
-    const onEnd = (ev) => {
-      if (ev.propertyName !== "max-height") return;
+    // Detached (replay fragment): the node has no layout, so scrollHeight
+    // reads 0 and the choreography below would pin an inline max-height:"0px"
+    // that no transitionend ever clears (no transition runs while detached) —
+    // the body would stay zero-height after the fragment is attached.  Just
+    // drop the class and clear the inline value so the natural height applies
+    // once connected.
+    if (!body.isConnected) {
       body.style.maxHeight = "";
-      body.removeEventListener("transitionend", onEnd);
-    };
-    body.addEventListener("transitionend", onEnd);
+      block.classList.remove("collapsed");
+    } else {
+      body.style.maxHeight = "0";
+      block.classList.remove("collapsed");
+      body.offsetHeight;
+      body.style.maxHeight = body.scrollHeight + "px";
+      const onEnd = (ev) => {
+        if (ev.propertyName !== "max-height") return;
+        body.style.maxHeight = "";
+        body.removeEventListener("transitionend", onEnd);
+      };
+      body.addEventListener("transitionend", onEnd);
+    }
   }
   if (head) {
     head.setAttribute("aria-expanded", String(!collapsed));
@@ -144,7 +155,8 @@ export const updateTodoBlock = (session, todos) => {
 
   // A fully-completed (or cleared) list has no reason to stay pinned —
   // settle immediately even mid-turn instead of waiting for turn end.
-  if (total === 0 || done === total) settleTodoBlock(session);
+  const settledNow = total === 0 || done === total;
+  if (settledNow) settleTodoBlock(session);
 
   // Cleared list: keep the card as a quiet "all clear" note rather than
   // removing it — no layout jump, position stays at the first call.
@@ -162,6 +174,16 @@ export const updateTodoBlock = (session, todos) => {
       `<span class="todo-text">${escape(it.title)}</span>` +
     `</div>`;
   }).join("");
+
+  // Work is underway again, but a turn boundary settled this card collapsed
+  // (settleTodoBlock) and nothing ever expanded it back — the re-render above
+  // would land behind .todo-body's max-height: 0, leaving only the head's N/M
+  // moving.  Expand after the re-render so the max-height transition measures
+  // the new content instead of the old, and leave a manual collapse
+  // (userToggled) alone: that is the user's choice, not staleness.
+  if (!settledNow && block.classList.contains("collapsed") && !block.dataset.userToggled) {
+    setTodoCollapsed(block, false);
+  }
   maybeScroll(session);
 };
 

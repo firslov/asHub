@@ -1167,7 +1167,7 @@ newBtn?.addEventListener("click", () => {
 newTerminalBtn?.addEventListener("click", async (ev) => {
   const kind = (ev.metaKey || ev.ctrlKey) ? "ash-terminal" : "terminal";
   // agent-sh Shell has no Windows backend — the session would be a dead terminal.
-  if (kind === "ash-terminal" && /win/i.test(navigator.platform || "")) {
+  if (kind === "ash-terminal" && document.documentElement.dataset.platform === "win32") {
     toast(t("terminal.not.supported.win"), { type: "error" });
     return;
   }

@@ -237,7 +237,7 @@ input?.addEventListener("keydown", (ev) => {
   }).catch(() => {});
 });
 
-const shellSupported = !/win/i.test(navigator.platform || "");
+const shellSupported = document.documentElement.dataset.platform !== "win32";
 
 // No shell mode without a shell backend — advertise the placeholder variant
 // without "! shell". scanI18n re-reads the attribute on langchange.
@@ -491,7 +491,7 @@ form?.addEventListener("submit", async (ev) => {
   await doSubmit(query);
 });
 
-const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+const isMac = document.documentElement.dataset.platform === "darwin";
 
 const killRange = (start, end) => {
   if (start === end) return;

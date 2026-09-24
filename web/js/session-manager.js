@@ -80,7 +80,11 @@ effect(() => {
     if (prev) prev.hidden = true;
   }
   const next = sessions.get(active);
-  if (next) next.hidden = false;
+  if (next) {
+    // Deferred restored tabs subscribe + replay on first activation only.
+    next.activateDeferred?.();
+    next.hidden = false;
+  }
   _prevActive = active;
 
   const kind = active ? sessionKinds.get(active) : null;
@@ -249,7 +253,7 @@ export const resumeSSE = () => {
   scheduleReopen();
 };
 
-export const preloadSession = (id, kind) => {
+export const preloadSession = (id, kind, { defer = false } = {}) => {
   if (!id) throw new Error("preloadSession: id required");
   if (sessions.has(id)) return sessions.get(id);
   const resolvedKind = kind ?? sessionKinds.get(id) ?? "agent";
@@ -260,6 +264,11 @@ export const preloadSession = (id, kind) => {
   const el = document.createElement(tag);
   el.setAttribute("session-id", id);
   el.hidden = true;
+  // Startup-restore only: register the view shell without subscribing, so
+  // background tabs don't replay their full history at launch.  First
+  // activation runs the deferred subscribe (see SessionView.activateDeferred).
+  // Terminals ignore the flag and replay their small PTY scrollback eagerly.
+  if (defer) el._deferSubscribe = true;
   parent.insertBefore(el, form ?? null);
   return el;
 };
@@ -315,7 +324,9 @@ Promise.all([
       if (Array.isArray(ids)) {
         const restored = ids.filter(isValidId);
         for (const id of restored) {
-          if (!sessions.has(id)) preloadSession(id);
+          // Defer subscription for restored tabs that are not (or not yet)
+          // the active view — only the active one replays at startup.
+          if (!sessions.has(id)) preloadSession(id, undefined, { defer: id !== activeSessionId.peek() });
         }
         const current = openTabs.peek();
         const merged = [...restored];

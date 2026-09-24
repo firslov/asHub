@@ -40,6 +40,11 @@ export const state = new Proxy(/** @type {any} */ ({}), {
 
 const HIST_KEY = "ashub_history";
 const MAX_HISTORY = 100;
+// Bound the session dimension: histories of deleted sessions are never
+// pushed again, so evicting everything beyond the N most-recently-used
+// session keys ages them out on their own.  (The sidebar's delete path
+// dispatches no event we could hook for targeted cleanup.)
+const MAX_SESSION_HISTORIES = 30;
 
 const loadAll = () => {
   try {
@@ -51,7 +56,11 @@ const loadAll = () => {
 };
 const saveAll = (all) => {
   try {
-    localStorage.setItem(HIST_KEY, JSON.stringify(all));
+    const next = JSON.stringify(all);
+    // Skip the write when the stored history is already identical — a
+    // synchronous localStorage write serializes the whole object.
+    if (localStorage.getItem(HIST_KEY) === next) return;
+    localStorage.setItem(HIST_KEY, next);
   } catch {}
 };
 const sidKey = () => activeSessionId.peek() || "_global";
@@ -70,11 +79,24 @@ export const queryHistory = {
   },
 
   push(query) {
-    if (this._items.length && this._items[this._items.length - 1] === query) return;
-    this._items.push(query);
     const all = loadAll();
-    all[sidKey()] = this._items.slice(-MAX_HISTORY);
+    const key = sidKey();
+    // Merge on top of the freshest stored array, not this window's in-memory
+    // copy: other windows share this localStorage and may have pushed entries
+    // since this window last loaded.  Dedupe the query (it moves to the end)
+    // and keep the 100-entry cap and LRU key-order semantics.
+    const items = (all[key] || []).filter((q) => q !== query);
+    items.push(query);
+    const merged = items.slice(-MAX_HISTORY);
+    // Re-insert at the end so object key order tracks recency of use.
+    delete all[key];
+    all[key] = merged;
+    const keys = Object.keys(all);
+    if (keys.length > MAX_SESSION_HISTORIES) {
+      for (const k of keys.slice(0, keys.length - MAX_SESSION_HISTORIES)) delete all[k];
+    }
     saveAll(all);
+    this._items = merged;
     this.reset();
   },
 

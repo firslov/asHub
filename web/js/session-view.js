@@ -24,17 +24,40 @@ class SessionView extends HTMLElement {
     };
     this.initStreamShell();
 
+    // Restored background tab (preloadSession defer flag): convert to the
+    // pending flag BEFORE registerSession — registration may synchronously
+    // make this view active (fresh page load auto-activate), which fires
+    // the activation effect and activateDeferred() below.
+    if (this.id && this._deferSubscribe) this._pendingSubscribe = true;
+
     registerSession(this);
     // Show usage strip immediately to avoid layout flash when async
     // data (model, balance, branch) arrives later via SSE events.
     if (this.usageStripEl) this.usageStripEl.hidden = false;
     if (this.id) {
-      this.enterReplayMode();
-      subscribeSession(this.id);
+      // Deferred restored tabs skip subscribe + fresh replay until first
+      // activation (activateDeferred), so N restored tabs don't all replay
+      // their full history at startup.
+      if (!this._pendingSubscribe) {
+        this.enterReplayMode();
+        subscribeSession(this.id);
+      }
       this.seedStaticInfo();
     } else {
       hidePageLoader();
     }
+  }
+
+  // First activation of a deferred restored tab: run the subscribe + fresh
+  // replay that connectedCallback skipped.  Idempotent — later activations
+  // no-op.  enterReplayMode shows the stream-loading skeleton until replay
+  // frames arrive, so the first switch never shows a blank view.
+  activateDeferred() {
+    if (!this._pendingSubscribe) return;
+    this._pendingSubscribe = false;
+    if (!this.id) return;
+    this.enterReplayMode();
+    subscribeSession(this.id);
   }
 
   async seedStaticInfo() {
@@ -64,7 +87,6 @@ class SessionView extends HTMLElement {
     this.modelEl = this.querySelector(".usage-model-balance");
     this.balanceEl = this.querySelector(".usage-model-balance");
     this.modelPickerEl = this.querySelector(".model-picker");
-    this.modelDropdownEl = this.querySelector(".model-dropdown");
     this.cwdEl = this.querySelector(".usage-location");
 
     this.state = { ...STATE_DEFAULTS };
@@ -163,6 +185,13 @@ class SessionView extends HTMLElement {
   disconnectedCallback() {
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
     this.controller?.abort();
+    // Permission-card countdown/confirm timers would keep firing on detached
+    // nodes for up to 30s after the view is torn down — disarm them first
+    // (same treatment as resetForBranchSwitch).
+    for (const card of this.querySelectorAll(".permission-card")) {
+      clearInterval(card._timer);
+      card._disarm?.();
+    }
     this._todoBlock = null; // let any pending sticky watcher exit
     if (this.id) unsubscribeSession(this.id);
     unregisterSession(this);

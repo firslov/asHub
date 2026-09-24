@@ -220,7 +220,7 @@ const validateJson = () => {
 const switchConfigMode = (mode) => {
   configMode = mode;
 
-  configModeTabs.querySelectorAll(".config-mode-tab").forEach((tab) => {
+  configModeTabs.querySelectorAll(".p-seg-item").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.mode === mode);
   });
 
@@ -323,7 +323,6 @@ configProvider?.addEventListener("change", () => {
 export const setConfigOpen = async (on) => {
   if (on) {
     configOverlay.removeAttribute("hidden");
-    configOverlay.classList.add("open");
     configToggle?.classList.add("active");
 
     await loadProviderCatalog();
@@ -364,13 +363,12 @@ export const setConfigOpen = async (on) => {
     }
   } else {
     configOverlay.setAttribute("hidden", "");
-    configOverlay.classList.remove("open");
     configToggle?.classList.remove("active");
   }
 };
 
 configModeTabs?.addEventListener("click", (ev) => {
-  const tab = ev.target.closest(".config-mode-tab");
+  const tab = ev.target.closest(".p-seg-item");
   if (!tab) return;
   switchConfigMode(tab.dataset.mode);
 });
@@ -401,6 +399,9 @@ let doSave = async (jsonStr) => {
     if (!r.ok) throw new Error(await r.text());
     originalConfig = jsonStr;
     invalidateModelCache();
+    // Broadcast so other model-catalog consumers (subagent-panel.js keeps
+    // its own copy — sse.js exposes no getter) can drop their caches too.
+    document.dispatchEvent(new CustomEvent("ash:models-changed"));
     // OpenRouter fetches models asynchronously after re-registration.
     // Poll for up to 12 seconds, then cache whatever is available.
     let attempts = 0;
@@ -555,15 +556,12 @@ document.getElementById("config-cwd-pick")?.addEventListener("click", async () =
   } catch {}
 });
 
-// Display scale — apply on startup and on settings save
+// Display scale — applied at boot by client.js (this module is lazy-loaded)
+// and re-applied here on settings save.
 const applyScale = (val) => {
   const scale = parseFloat(val) || 1;
   document.documentElement.style.fontSize = `${scale * 100}%`;
 };
-// Apply saved scale on load
-try {
-  applyScale(localStorage.getItem("ash.scale") ?? "1");
-} catch {}
 
 import { registerPanel } from './panel-manager.js';
 // Auto-approve toggle — load when config panel opens
@@ -634,6 +632,7 @@ const disarmAutoApprove = () => {
   }
   if (autoApproveToggleLabel) {
     autoApproveToggleLabel.textContent = t("permission.auto_approve_desc");
+    autoApproveToggleLabel.classList.remove("armed");
   }
   if (autoApproveRiskEl) autoApproveRiskEl.hidden = true;
 };
@@ -650,6 +649,7 @@ autoApproveToggle?.addEventListener("change", async () => {
     autoApproveArmed = true;
     if (autoApproveToggleLabel) {
       autoApproveToggleLabel.textContent = t("permission.auto_approve.confirm");
+      autoApproveToggleLabel.classList.add("armed");
     }
     const risk = ensureAutoApproveRisk();
     if (risk) {

@@ -3,8 +3,8 @@ import { escape, toBlobUrl } from "./utils.js";
 import { appendAfterPending } from "./stream/tool-group.js";
 import { createUserBox } from "./actions.js";
 import { attachAutocomplete } from "./autocomplete.js";
-import { attachPromptAutocomplete } from "./prompt-manager.js";
 import { attachAtMentionAutocomplete } from "./at-mention.js";
+import { closeOtherPanels } from "./panel-manager.js";
 import { activeSession } from "./session-manager.js";
 import { toast } from "./toast.js";
 import { t } from "./i18n.js";
@@ -268,6 +268,13 @@ const doShellSubmit = async (raw) => {
     });
   } catch (e) {
     console.error("pty-input failed", e);
+    // Restore the command so a transient failure doesn't lose it.  When not
+    // in shell mode the restored "!" prefix re-enters shell mode via the
+    // input listener (which strips the prefix), preserving the original
+    // shell semantics either way.
+    input.value = shellMode ? raw : "!" + raw;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.setSelectionRange(input.value.length, input.value.length);
   }
 };
 
@@ -304,7 +311,63 @@ const slashAc = attachAutocomplete({
   },
 });
 
-const promptAc = attachPromptAutocomplete(input);
+// ── Lazy "#" quick-prompt autocomplete ─────────────────────────────
+// prompt-manager.js (prompt list panel + "#" autocomplete) stays out of
+// the first-screen module graph: it loads on the first "#" typed into the
+// composer or on the first click of the prompts toolbar toggle.
+let promptAcImpl = null;
+let promptManagerMod = null;
+let promptManagerPromise = null;
+
+const loadPromptManager = () => {
+  if (promptManagerMod) return Promise.resolve();
+  if (!promptManagerPromise) {
+    // Cache the in-flight promise (not a boolean flag) so concurrent
+    // triggers — typing "#" while the toolbar toggle click is awaiting —
+    // share the same import instead of the later one returning early with
+    // nothing ever wired up.
+    promptManagerPromise = import("./prompt-manager.js")
+      .then((mod) => {
+        promptManagerMod = mod;
+        if (input) promptAcImpl = mod.attachPromptAutocomplete(input);
+      })
+      .catch(() => {
+        // Prompt autocomplete stays unavailable; allow a later retry.
+        promptManagerPromise = null;
+      });
+  }
+  return promptManagerPromise;
+};
+
+input?.addEventListener("input", () => {
+  if (promptManagerMod || promptManagerPromise) return;
+  if (!input.value.trimStart().startsWith("#")) return;
+  loadPromptManager().then(() => {
+    if (!promptAcImpl) return;
+    // Replay the trigger so the freshly attached autocomplete evaluates
+    // the current buffer and opens on this first "#" already.
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+});
+
+// Prompts panel toggle: the module wires its own toggle listener on load,
+// which misses the very click that loaded it — open the panel explicitly
+// afterwards (mirrors its toggleCommands: close others, open prompts tab).
+document.getElementById("prompt-toggle")?.addEventListener("click", async () => {
+  if (promptManagerMod) return; // loaded — the module's own listener toggles
+  await loadPromptManager();
+  if (!promptManagerMod) return;
+  closeOtherPanels("prompts");
+  promptManagerMod.setPromptOpen(true, "prompts");
+});
+
+// Stub delegating to the real autocomplete once prompt-manager.js loads;
+// inert (never opens) until then.
+const promptAc = {
+  hasSelection: () => promptAcImpl?.hasSelection() ?? false,
+  acceptCurrent: () => promptAcImpl?.acceptCurrent(),
+  close: () => promptAcImpl?.close(),
+};
 const atAc = attachAtMentionAutocomplete(input);
 
 const hasAcSelection = () => slashAc.hasSelection() || promptAc.hasSelection() || atAc.hasSelection();
@@ -405,6 +468,15 @@ const doSubmit = async (query) => {
     optimisticBox?.remove();
     optimisticSep?.remove();
     toast(t("submit.failed"), { type: "error", detail: String(e?.message || e) });
+    // Restore the submitted text so a failed submit doesn't lose it.  The
+    // input stayed enabled during the submit, so keep anything typed since;
+    // the history push above is intentionally not repeated.
+    if (input) {
+      const typed = input.value;
+      input.value = typed ? query + "\n" + typed : query;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
   } finally {
     sv.state.isSubmitting = false;
     updateSendBtn();

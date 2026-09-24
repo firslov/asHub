@@ -1,6 +1,6 @@
 import { effect } from "../vendor/signals-core.js";
 import { activeSessionId, openTabs, openTab, closeTab } from "./session-manager.js";
-import { getSession, setSessions, allSessions } from "./store.js";
+import { getSession, setSessions, allSessions, pinnedIds } from "./store.js";
 import { t } from "./i18n.js";
 import { escape } from "./utils.js";
 
@@ -60,7 +60,7 @@ const startRename = (btn, id) => {
       const meta = getSession(id);
       if (meta) meta.title = val;
     }
-    render();
+    render(true);
     if (shouldSave) {
       try {
         await fetch(`/${id}/title`, {
@@ -97,12 +97,25 @@ const reorder = (sourceId, targetId, side) => {
   openTabs.value = order;
 };
 
-const render = () => {
+// Signature of everything user-visible in the strip. The store Map identity
+// changes on every /sessions refresh, so signal notifications alone fire far
+// more often than the tabs actually change — skip the DOM rebuild then.
+let lastRenderSig = null;
+
+const render = (force = false) => {
   if (!strip) return;
   const tabs = openTabs.value;
   const active = activeSessionId.value;
   allSessions.value; // signal subscription — re-render on title/cwd updates
+  const pins = pinnedIds.value;
   if (editingId) return;  // don't clobber an in-progress rename
+
+  const sig = JSON.stringify([
+    tabs, active, externalDragLabel, app?.dataset.uiTabsEnabled === "true",
+    tabs.map((id) => [labelFor(id), pins.has(id)]),
+  ]);
+  if (!force && sig === lastRenderSig) return;
+  lastRenderSig = sig;
 
   strip.hidden = (tabs.length === 0 && !externalDragLabel) || app?.dataset.uiTabsEnabled !== "true";
   strip.innerHTML = "";

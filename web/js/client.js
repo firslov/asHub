@@ -23,7 +23,6 @@ if (isWin) {
 }
 
 import { cancelTurn } from "./composer.js";
-import { setConfigOpen } from "./config-panel.js";
 import { switchTo, openTabs, activeSessionId, closeTab } from "./session-manager.js";
 import "./prefs.js";
 import { registerPanel } from "./panel-manager.js";
@@ -32,10 +31,21 @@ import "./version.js";
 import "./updater.js";
 import "./sidebar.js";
 import "./tabs.js";
-import "./no-session.js";
 import "./sse.js";
 
+// Display scale is stored by the (lazy-loaded) config panel — apply the
+// saved value at boot so the setting doesn't wait for the panel's import.
+try {
+  const scale = parseFloat(localStorage.getItem("ash.scale") ?? "1") || 1;
+  document.documentElement.style.fontSize = `${scale * 100}%`;
+} catch {}
+
+// Landing page / first-run onboarding.  Loaded dynamically so its static
+// import of config-panel.js stays out of the first-screen module graph.
+import("./no-session.js");
+
 // Lazy-loaded panels — loaded on first click
+registerPanel("config",    { toggleBtnId: "config-toggle",     panelId: "config-overlay",    load: () => import("./config-panel.js") });
 registerPanel("skills",    { toggleBtnId: "skills-toggle",    panelId: "skills-overlay",    load: () => import("./skills-panel.js") });
 registerPanel("ctx",       { toggleBtnId: "ctx-toggle",       panelId: "ctx-panel",        load: () => import("./context-panel.js") });
 registerPanel("files",     { toggleBtnId: "files-toggle",     panelId: "files-panel",      load: () => import("./files-panel.js") });

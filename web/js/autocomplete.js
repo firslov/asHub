@@ -1,8 +1,28 @@
 import { escape } from "./utils.js";
 
+// Instances sharing one listEl (slash "/", prompt "#", at-mention "@" all
+// render into #autocomplete) must never be open at the same time: they would
+// overwrite each other's <li>s and every keydown handler would consume the
+// same Tab/arrows.  When one instance opens it closes its peers.
+const peersByList = new WeakMap();
+
 export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpen }) => {
   const state = { open: false, items: [], index: 0, token: 0, timer: null };
   let lastSig = null;
+
+  let peers = peersByList.get(listEl);
+  if (!peers) {
+    peers = new Set();
+    peersByList.set(listEl, peers);
+  }
+  const record = { close: () => close() };
+  peers.add(record);
+
+  const closePeers = () => {
+    for (const peer of peers) {
+      if (peer !== record) peer.close();
+    }
+  };
 
   const sigOf = (items) =>
     items.map((it) => (it.name || "") + "\x1f" + (it.description || "")).join("\x1e");
@@ -50,6 +70,15 @@ export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpe
   };
 
   const close = () => {
+    // Make close terminal.  A debounced or in-flight fetch that lands after
+    // this would still pass its own `my === state.token` check and reopen the
+    // list.  That matters more now that closePeers() closes an instance from a
+    // peer's fetch callback: without invalidating, the closed peer reopens
+    // itself and the two keep closing each other.
+    state.token++;
+    clearTimeout(state.timer);
+    state.timer = null;
+    if (state.abort) { state.abort.abort(); state.abort = null; }
     state.open = false;
     state.items = [];
     state.index = 0;
@@ -83,6 +112,7 @@ export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpe
         state.items = Array.isArray(items) ? items : [];
         state.index = 0;
         state.open = state.items.length > 0;
+        if (state.open) closePeers();
         render();
       } catch {}
     }, 60);

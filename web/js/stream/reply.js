@@ -44,12 +44,26 @@ const throttleFor = (textLen) => {
   return 500;
 };
 
+// marked emits <pre><code class="language-x"> — the language class lives on
+// the <code>, the <pre> itself never carries one.
+const _blockClass = (b) =>
+  b.tagName === "PRE" ? (b.querySelector("code")?.className ?? "") : b.className;
+
+// Just the language token ("language-x"), ignoring extra classes hljs adds
+// to already-highlighted live blocks.
+const _blockLang = (b) => _blockClass(b).match(/language-[\w+-]+/)?.[0] ?? "";
+
+// Structural class identity between a live and a freshly parsed block.
+const _sameBlockClass = (live, fresh) =>
+  live.tagName === "PRE" ? _blockLang(live) === _blockLang(fresh) : live.className === fresh.className;
+
 const _structKey = (blocks) => {
   let s = String(blocks.length);
   for (const b of blocks) {
     s += "|" + b.tagName;
     // Distinguish code-block languages so Python→JavaScript IS structural.
-    if (b.className && b.className.includes("language-")) s += ":" + b.className;
+    const lang = _blockLang(b);
+    if (lang) s += ":" + lang;
   }
   return s;
 };
@@ -74,6 +88,65 @@ const _blockContentEqual = (live, fresh) => {
     delete m.dataset.rendered;
   }
   return clone.innerHTML === fresh.innerHTML;
+};
+
+/**
+ * Whether the last fenced code block in `text` is still open.
+ * Follows CommonMark: an opener is a line starting (after ≤3 spaces) with
+ * ≥3 backticks or tildes plus an optional info string (a backtick fence's
+ * info string may not contain backticks).  A closer is a line of the SAME
+ * fence character, at LEAST as long as the opener, with no info string —
+ * so a ``` line inside a ```` fence, or a ```js line inside a ``` fence,
+ * is content, not a closer.
+ */
+const _tailFenceOpen = (text) => {
+  let fence = null; // { ch, len } of the open fence
+  for (const line of text.split("\n")) {
+    const m = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (!m) continue;
+    const rest = m[2];
+    if (!fence) {
+      // ```foo`bar — backtick in the info string → not an opener (CommonMark).
+      if (m[1][0] === "`" && rest.includes("`")) continue;
+      fence = { ch: m[1][0], len: m[1].length };
+    } else if (m[1][0] === fence.ch && m[1].length >= fence.len && rest.trim() === "") {
+      fence = null;
+    }
+  }
+  return fence !== null;
+};
+
+/**
+ * highlightWithin wrapper for live streaming.
+ *
+ * Re-highlighting a still-growing <pre> on every flush is O(block size) per
+ * pass — and O(languages × size) for an unannotated fence, where hljs falls
+ * back to highlightAuto (measured ~300ms for a single ~100KB block).  Since
+ * only the tail block whose fence is still open ever changes (the content
+ * fingerprint protects closed blocks), defer exactly that one: it streams in
+ * as plain text and is highlighted exactly once its fence closes, or by the
+ * final closeReply / onReplayDone pass.  Everything else is highlighted
+ * immediately as before.  During replay the behavior is unchanged — replayed
+ * blocks are batch-processed async in onReplayDone.
+ *
+ * The deferral works by temporarily marking the tail <code> as highlighted
+ * so highlightWithin (and hljs itself) skips it; the marker is removed right
+ * after the synchronous pass so the block stays eligible for later passes.
+ */
+const highlightStreaming = (session) => {
+  const r = session.reply;
+  if (session.state.replaying) { highlightWithin(r.current); return; }
+  const tail = r.current?.lastElementChild;
+  const tailCode = tail?.tagName === "PRE" ? tail.querySelector("code") : null;
+  const defer = tailCode && !tailCode.dataset.highlighted && _tailFenceOpen(r.text)
+    ? tailCode : null;
+  if (!defer) { highlightWithin(r.current); return; }
+  defer.dataset.highlighted = "pending";
+  try {
+    highlightWithin(r.current);
+  } finally {
+    delete defer.dataset.highlighted;
+  }
 };
 
 const flushReply = (session) => {
@@ -125,22 +198,31 @@ const flushReply = (session) => {
           if (existing[i].tagName === "PRE") codeChanged = true;
         }
         // When a code block's language is finally resolved by the parser
-        // (e.g. ```python), propagate the class to the live block.
-        if (newBlocks[i].className && newBlocks[i].className !== existing[i].className) {
-          existing[i].className = newBlocks[i].className;
+        // (e.g. ```python), propagate the class to the live block.  For a
+        // <pre> the class belongs to its <code>, not the <pre> itself.
+        const newLang = _blockLang(newBlocks[i]);
+        if (newLang && newLang !== _blockLang(existing[i])) {
+          const liveCode = newBlocks[i].tagName === "PRE" ? existing[i].querySelector("code") : null;
+          if (liveCode) liveCode.className = _blockClass(newBlocks[i]);
+          else existing[i].className = newBlocks[i].className;
         }
       } else {
         r.current.appendChild(newBlocks[i]);
       }
     }
     // Setting innerHTML on a <pre> wipes hljs spans and the copy button.
-    // Re-highlight immediately (via highlightWithin, which re-injects the
-    // button) so the user never sees plain text during streaming.
+    // Re-highlight via highlightStreaming, which skips the still-growing
+    // tail block (open fence) so hljs never re-processes it per flush —
+    // it is highlighted once its fence closes.  Closed blocks changed here
+    // are highlighted immediately (highlightWithin re-injects the button).
     // NOTE: do NOT touch r._lastHighlightAt here — the debounced pass below
     // also renders math, and highlightWithin is idempotent (it skips blocks
     // with data-highlighted), so a same-flush re-run is a cheap no-op while
     // starving the debounce would leave KaTeX placeholders unrendered.
-    if (codeChanged) highlightWithin(r.current);
+    // During REPLAY, skip like the debounced pass below — a growing fenced
+    // block would otherwise get a full sync highlight per flush; replayed
+    // sessions are batch-processed async in onReplayDone.
+    if (codeChanged && !session.state.replaying) highlightStreaming(session);
   } else {
     // ── Slow path: structure changed / first render ────────────────
     r._lastStructKey = newStructKey;
@@ -165,7 +247,7 @@ const flushReply = (session) => {
       let keepCount = 0;
       while (keepCount < limit &&
              existing[keepCount].tagName === newBlocks[keepCount].tagName &&
-             existing[keepCount].className === newBlocks[keepCount].className &&
+             _sameBlockClass(existing[keepCount], newBlocks[keepCount]) &&
              _blockContentEqual(existing[keepCount], newBlocks[keepCount])) {
         keepCount++;
       }
@@ -184,14 +266,16 @@ const flushReply = (session) => {
   // Debounce syntax highlighting & math rendering during live streaming.
   // Blocks rebuilt by the slow path are highlighted synchronously instead —
   // highlightWithin skips already-highlighted blocks, so only the fresh
-  // ones are processed and never hit the screen un-highlighted.  During
-  // REPLAY, skip the forced sync pass: every reply's closeReply lands here,
-  // and per-reply sync highlight would block the main thread — replayed
-  // sessions are batch-processed async in onReplayDone anyway.
+  // ones are processed and never hit the screen un-highlighted.  The one
+  // exception is the still-growing tail block (open fence), which
+  // highlightStreaming defers until its fence closes.  During REPLAY, skip
+  // the forced sync pass: every reply's closeReply lands here, and per-reply
+  // sync highlight would block the main thread — replayed sessions are
+  // batch-processed async in onReplayDone anyway.
   const now = Date.now();
-  if ((rebuilt && !session.state.replaying) || !r._lastHighlightAt || now - r._lastHighlightAt >= HIGHLIGHT_DEBOUNCE_MS) {
+  if (!session.state.replaying && (rebuilt || !r._lastHighlightAt || now - r._lastHighlightAt >= HIGHLIGHT_DEBOUNCE_MS)) {
     renderMathIn(r.current);
-    highlightWithin(r.current);
+    highlightStreaming(session);
     r._lastHighlightAt = now;
   }
 
@@ -266,13 +350,17 @@ export const closeReply = (session) => {
 };
 
 export const cancelReply = (session) => {
-  const r = session?.reply;
-  if (r?.current) {
-    r.current.classList.add("cancelled");
+  const el = session?.reply?.current;
+  // Stamp AFTER closeReply: it forces a final flushReply whose slow path
+  // (trim-to-keepCount / replaceChildren) would remove a stamp appended
+  // beforehand whenever unflushed chunks are pending.
+  closeReply(session);
+  // closeReply removes the bubble entirely when the reply text was empty.
+  if (el && el.isConnected) {
+    el.classList.add("cancelled");
     const stamp = document.createElement("span");
     stamp.className = "cancelled-stamp";
     stamp.textContent = t("cancelled");
-    r.current.appendChild(stamp);
+    el.appendChild(stamp);
   }
-  closeReply(session);
 };

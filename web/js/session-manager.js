@@ -24,6 +24,9 @@ export const openTab = (id) => {
 
 export const closeTab = (id) => {
   if (!id) return;
+  // Let the tab strip cancel an in-progress rename of this tab before the
+  // editingId guard blocks its next render.
+  document.dispatchEvent(new CustomEvent("ash:tab-closing", { detail: { id } }));
   // Dedup openTabs in case duplicates crept in (signals batching edge case).
   const seen = new Set();
   const list = openTabs.value.filter((x) => (seen.has(x) ? false : seen.add(x)));

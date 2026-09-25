@@ -39,7 +39,14 @@ const hidePreview = () => { previewEl?.remove(); previewEl = null; };
 
 const startRename = (btn, id) => {
   const labelEl = btn.querySelector(".session-tab-label");
-  if (!labelEl || editingId) return;
+  if (!labelEl) return;
+  if (editingId) {
+    // A previous rename whose input is no longer in the DOM (its tab was
+    // closed or the strip rebuilt) leaves editingId stuck — recover instead
+    // of blocking every future rename and render.
+    if (strip.querySelector(".session-tab-rename")) return;
+    editingId = null;
+  }
   editingId = id;
   const current = labelEl.textContent ?? "";
   const input = document.createElement("input");
@@ -79,6 +86,17 @@ const startRename = (btn, id) => {
   });
 };
 
+// Closing the tab being renamed must cancel the rename: the editingId guard
+// blocks ALL renders while set, and clicks inside the draggable strip never
+// blur the input, so a renamed closed tab would freeze the strip forever
+// (draggable elements don't take focus on mousedown in Chromium).
+document.addEventListener("ash:tab-closing", (e) => {
+  if (editingId && e.detail?.id === editingId) {
+    editingId = null;
+    render(true);  // the guard blocked every render since the rename started
+  }
+});
+
 const clearDropMarks = () => {
   for (const el of strip?.querySelectorAll(".session-tab") ?? []) {
     el.classList.remove("drop-before", "drop-after");
@@ -108,7 +126,13 @@ const render = (force = false) => {
   const active = activeSessionId.value;
   allSessions.value; // signal subscription — re-render on title/cwd updates
   const pins = pinnedIds.value;
-  if (editingId) return;  // don't clobber an in-progress rename
+  if (editingId) {
+    // Don't clobber an in-progress rename — but only while its input is
+    // genuinely live. A stale editingId (input destroyed without finish(),
+    // e.g. its tab was closed) would freeze the strip forever.
+    if (strip.querySelector(".session-tab-rename")) return;
+    editingId = null;
+  }
 
   const sig = JSON.stringify([
     tabs, active, externalDragLabel, app?.dataset.uiTabsEnabled === "true",
@@ -150,17 +174,35 @@ const render = (force = false) => {
     btn.addEventListener("click", () => openTab(id));
     btn.addEventListener("dblclick", (ev) => {
       ev.preventDefault();
+      // Double-clicking the × is a frustrated "close" — renaming there opens
+      // an invisible trap: the input hides in the tab, the editingId guard
+      // freezes the strip, and clicks on the draggable strip never blur it.
+      if (ev.target.closest?.(".session-tab-close")) return;
       startRename(btn, id);
     });
+    // Track where the primary-button press landed: a press on the × that
+    // wobbles ≥ a few px would otherwise start an HTML5 drag of the tab
+    // (the whole button is draggable), swallowing the click — and a larger
+    // drift silently reorders tabs instead of closing. The drag source
+    // element alone can't tell us this (dragstart targets the button), so
+    // remember the mousedown target.
+    let pressOnClose = false;
     btn.addEventListener("mousedown", (ev) => {
       if (ev.button === 1) {
         ev.preventDefault();
         closeTab(id);
+        return;
       }
+      pressOnClose = ev.button === 0 && !!ev.target.closest?.(".session-tab-close");
     });
 
     btn.draggable = true;
     btn.addEventListener("dragstart", (ev) => {
+      if (pressOnClose) {
+        pressOnClose = false;
+        ev.preventDefault();  // let the press finish as a normal click
+        return;
+      }
       dragId = id;
       dragDropped = false;
       ev.dataTransfer.effectAllowed = "move";
@@ -297,7 +339,7 @@ window.electronAPI?.onAcceptTab?.((sessionId) => {
 });
 
 // The pref attr lands after the /api/config fetch resolves, post-render.
-new MutationObserver(render).observe(app, {
+new MutationObserver(() => render()).observe(app, {
   attributes: true,
   attributeFilter: ["data-ui-tabs-enabled"],
 });

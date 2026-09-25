@@ -13,6 +13,9 @@
   },
   "scripts": {
     "start": "tsx src/cli.ts",
+    "prestart": "patch-package",
+    "prebuild": "patch-package",
+    "pretypecheck": "patch-package",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc --noEmit -p web/jsconfig.json",

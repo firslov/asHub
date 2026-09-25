@@ -3,6 +3,9 @@
    ../panels.css; this file holds only subagent-specific layout. */
 
 /* Card stack */
+/* UI chrome stays sans in academic (mirrors skills/config/prompt). */
+[data-theme="academic"] #subagent-panel { font-family: var(--font-sans); }
+
 #sa-types {
   display: flex;
   flex-direction: column;

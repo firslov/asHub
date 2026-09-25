@@ -728,6 +728,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (req.method === "POST" && url === "/api/sessions/unpin") return unpinSession(req, res);
     if (req.method === "POST" && url === "/api/permission/decide") return decidePermission(req, res, sessions);
     if (req.method === "POST" && url === "/api/upload") return uploadImage(req, res);
+    if (req.method === "GET" && url.startsWith("/api/uploads/")) return serveUpload(res, decodeURIComponent(url.slice("/api/uploads/".length)));
     if (req.method === "GET" && url === "/api/sessions/pinned") return listPinnedSessions(res);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -1174,6 +1175,11 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
       if (old.subagentModels !== undefined) {
         parsed.subagentModels = old.subagentModels;
       }
+      // subagentBudgets is likewise written straight to disk by the subagent
+      // panel — same snapshot race, same on-disk-wins guard.
+      if (old.subagentBudgets !== undefined) {
+        parsed.subagentBudgets = old.subagentBudgets;
+      }
       // Masked apiKeys in the submitted config come from the GET round-trip —
       // restore the real values before persisting.
       unmaskApiKeys(parsed, old);
@@ -1371,6 +1377,22 @@ async function createSession(
                 // (openSseMulti), so truncating here only loses old turns.
                 session.replay = replayFrames;
                 loadedReplay = true;
+                // SSE control frames (hub:replay-starting/done, ui:error,
+                // reemit agent:info) are written straight to clients without
+                // touching meta lastFrameSeq, and an idle session has no 2s
+                // flush timer — so the persisted counters can lag the ids a
+                // client has already seen.  Raise frameSeq past the max id in
+                // the restored file (ids are monotonic, so the last frame's
+                // id is the max; the file was just fully read, so this is
+                // free) — otherwise a restart could reissue old ids and a
+                // since=N incremental reconnect would filter new frames
+                // permanently.  Monotonicity is preserved: the raised
+                // counter keeps every new frame id larger than replayed ones.
+                const lastId = replayFrameId(replayFrames[replayFrames.length - 1]!);
+                if (lastId !== null) {
+                  if (lastId > frameSeq) { frameSeq = lastId; _frameSeqDirty = true; }
+                  if (lastId > session.lastFrameSeq) session.lastFrameSeq = lastId;
+                }
               }
             } catch {}
 
@@ -1412,10 +1434,17 @@ async function createSession(
                 if (name === "agent:processing-start") { hasDangling = true; break; }
               }
               if (hasDangling) {
-                session.replay.push(sseFrame(
+                const frame = sseFrame(
                   { source: id, ts: Date.now(), id: `hub:${id}:recovery`, name: "agent:cancelled" },
                   {},
-                ));
+                );
+                // Deliberately NOT persisted (recovery marker, rebuilt on the
+                // next restore) — but like pushFrame it must still track the
+                // per-session high-water mark so meta lastFrameSeq never lags
+                // an id a client may have seen.
+                session.replay.push(frame);
+                const m = frame.match(frameIdRe);
+                if (m) session.lastFrameSeq = Math.max(session.lastFrameSeq, Number(m[1]));
               }
             }
 
@@ -2544,16 +2573,28 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   }
 
   query = parsed.query ?? "";
+  // Image refs carried by the agent:query/agent:queued frames — replay after
+  // restart rebuilds the user box from these, so they must reference the
+  // persisted uploads/ files by id, not transient base64 data.
+  let imageRefs: Array<{ id?: string; data?: string; mimeType: string }> | undefined;
   if (Array.isArray(parsed.images) && parsed.images.length > 0) {
     try {
+      imageRefs = [];
       const resolved = await Promise.all(parsed.images.map(async (img) => {
-        if (img.data) return { data: img.data, mimeType: img.mimeType };
+        if (img.data) {
+          // Raw-data fallback (client upload failed): persist now so replay
+          // frames can reference the file by id.
+          const id = await persistImageData(session.id, img.data, img.mimeType);
+          imageRefs!.push({ id, mimeType: img.mimeType });
+          return { data: img.data, mimeType: img.mimeType };
+        }
         if (img.id) {
           const uploadsDir = path.join(SESSIONS_DIR, "uploads");
           const files = await fs.promises.readdir(uploadsDir);
           const match = files.find((f) => f.startsWith(img.id!));
           if (match) {
             const buf = await fs.promises.readFile(path.join(uploadsDir, match));
+            imageRefs!.push({ id: img.id, mimeType: img.mimeType });
             return { data: buf.toString("base64"), mimeType: img.mimeType };
           }
         }
@@ -2592,7 +2633,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     // segmentText (see submit()'s catch). Reset here so a fresh turn can
     // never inherit it.
     session.segmentText = "";
-    pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query }));
+    pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
     pushFrame(session, "agent:processing-start", sseFrame(meta("agent:processing-start"), {}));
   }
 
@@ -2634,7 +2675,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     .then((result) => {
       cleanup();
       if (result.stopReason === "queued") {
-        pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query }));
+        pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
         return;
       }
       flushSegment(session);
@@ -4165,6 +4206,50 @@ async function uploadImage(req: http.IncomingMessage, res: http.ServerResponse):
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }
+}
+
+// Persist a base64 image into uploads/ with a session-prefixed id (same
+// naming as uploadImage, so cleanup on session delete covers it). Used by
+// submit() when the client sends raw data instead of an uploaded id.
+async function persistImageData(sessionId: string, data: string, mimeType: string): Promise<string> {
+  if (!/^image\/(png|jpe?g|gif|webp)$/i.test(mimeType)) throw new Error("unsupported image type");
+  const uploadsDir = path.join(SESSIONS_DIR, "uploads");
+  await fs.promises.mkdir(uploadsDir, { recursive: true });
+  const baseId = `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = `${sessionId}_${baseId}`;
+  const ext = mimeType.split("/")[1]!.toLowerCase().replace("jpeg", "jpg");
+  await fs.promises.writeFile(path.join(uploadsDir, `${id}.${ext}`), Buffer.from(data, "base64"));
+  return id;
+}
+
+// Serve an uploaded image by id (prefix match, same lookup as submit()).
+// Ids carry an unguessable random component; the id charset is validated so
+// the read cannot escape uploadsDir.
+async function serveUpload(res: http.ServerResponse, id: string): Promise<void> {
+  if (!/^[0-9a-z_]+$/i.test(id)) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "invalid image id" }));
+    return;
+  }
+  const uploadsDir = path.join(SESSIONS_DIR, "uploads");
+  let match: string | undefined;
+  try {
+    match = (await fs.promises.readdir(uploadsDir)).find((f) => f.startsWith(id));
+  } catch { /* dir missing */ }
+  if (!match) {
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+    return;
+  }
+  const ext = match.split(".").pop()?.toLowerCase() ?? "png";
+  const types: Record<string, string> = { png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+  const buf = await fs.promises.readFile(path.join(uploadsDir, match));
+  res.writeHead(200, {
+    "Content-Type": types[ext] ?? "application/octet-stream",
+    // Ids are unique per upload — the content at this URL never changes.
+    "Cache-Control": "public, max-age=31536000, immutable",
+  });
+  res.end(buf);
 }
 
 async function listPinnedSessions(res: http.ServerResponse): Promise<void> {

@@ -1438,11 +1438,18 @@ export const modelSupportsImages = (model, provider) => {
 // the session tab closed; a singleton cannot leak and survives resync().
 let _sharedDropdown = null;
 let _dropdownOwner = null;    // session the open dropdown is anchored to
+let _dropdownAnchor = null;   // chip node the open dropdown was positioned on
+let _dropdownObserver = null; // MutationObserver watching for anchor removal
 let _dropdownBuiltFor = null; // _allModelsCache reference the DOM was built from
 
 const hideModelDropdown = () => {
   const dd = _sharedDropdown;
   _dropdownOwner = null;
+  _dropdownAnchor = null;
+  if (_dropdownObserver) {
+    _dropdownObserver.disconnect();
+    _dropdownObserver = null;
+  }
   if (!dd) return;
   dd.hidden = true;
   if (dd._closeHandler) {
@@ -1602,6 +1609,18 @@ const toggleModelDropdown = async (session) => {
 
   dropdown.hidden = false;
   _dropdownOwner = session;
+  _dropdownAnchor = session.modelEl;
+
+  // resync() (rewind, session-view refresh) rebuilds the shell and swaps
+  // the chip node without changing activeSessionId, so the effect above
+  // never fires and the dropdown would stay open over a detached anchor.
+  // Watch for the anchor leaving the DOM and hide when it does — the
+  // observer only lives while the dropdown is open, and each callback is
+  // a single isConnected check.
+  _dropdownObserver = new MutationObserver(() => {
+    if (_dropdownAnchor && !_dropdownAnchor.isConnected) hideModelDropdown();
+  });
+  _dropdownObserver.observe(document.body, { childList: true, subtree: true });
 
   const close = (e) => {
     if (!dropdown.contains(e.target) && e.target !== session.modelEl) {

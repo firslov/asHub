@@ -125,7 +125,7 @@
 .update-btn:active { transform: translateY(1px); }
 
 .update-btn.primary {
-  color: #fff;
+  color: var(--on-accent);
   background: linear-gradient(135deg, var(--accent), var(--cyan));
   box-shadow: 0 2px 8px var(--accent-glow);
 }

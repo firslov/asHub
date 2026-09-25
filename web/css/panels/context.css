@@ -5,6 +5,8 @@
 
 /* ── Shell offsets that used to live in live.css (.ctx-panel rules) ── */
 .os-win32 #ctx-panel { top: 78px; }
+/* UI chrome stays sans in academic (mirrors skills/config/prompt). */
+[data-theme="academic"] #ctx-panel { font-family: var(--font-sans); }
 
 /* ── Toolbar: role segment + destructive action ───────────────────── */
 .ctx-toolbar {

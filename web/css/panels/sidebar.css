@@ -327,6 +327,8 @@
 /* Two-click confirm states (pinned visible via :has(.confirming) above). */
 .session-close.confirming,
 .terminal-close.confirming {
+  /* White on --red: mirrors the .p-btn-danger primitive (panels.css),
+     which also uses #fff on --error regardless of theme. */
   color: #fff;
   background: var(--red);
   opacity: 1;
@@ -616,7 +618,8 @@
    Safari 26+; unsupported engines simply get no mask). Top fade only
    appears once scrolled, bottom fade disappears at the end. Masking is
    paint-only — hover and hit-testing are unaffected. All keyframes
-   share the same 4-stop shape so the mask interpolates smoothly. */
+   share the same 4-stop shape so the mask interpolates smoothly.
+   The #000 stops are mask alpha values (opaque), not visible colors. */
 @keyframes side-scroll-mask {
   0% {
     mask-image: linear-gradient(to bottom,

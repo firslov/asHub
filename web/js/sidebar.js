@@ -669,7 +669,17 @@ const renderSessions = async (force = false, opts = null) => {
       sessionList.replaceChildren(...newChildren);
     } else {
       // Remove stale session items and any previous empty-state row.
-      for (const [, stale] of existingItems) stale.remove();
+      for (const [, stale] of existingItems) {
+        // A row being renamed is leaving the list (deleted from another
+        // window, filtered out, 5-min poll). Removing a focused input does
+        // not reliably fire blur on every engine, which would strand
+        // editingId forever and pin reconcile to the incremental branch —
+        // cancel the edit first (before remove(), so a blur that does fire
+        // takes commit()'s superseded path and never POSTs a half-typed
+        // title to a session that may already be gone).
+        if (stale.dataset.sessionId === editingId) editingId = null;
+        stale.remove();
+      }
       sessionList.querySelectorAll(".side-empty").forEach((el) => el.remove());
 
     // Reconcile group headers: reuse existing DOM nodes, only

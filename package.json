@@ -13,6 +13,7 @@
   },
   "scripts": {
     "start": "tsx src/cli.ts",
+    "prebuild": "node scripts/check-deps.cjs",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc --noEmit -p web/jsconfig.json",

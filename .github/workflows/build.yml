@@ -49,13 +49,6 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      # --ignore-scripts skips postinstall, which is what applies
-      # patches/*.patch. Apply them explicitly, or CI artifacts ship an
-      # unpatched agent-sh (degraded/tokensUsed reporting and the skipTokens
-      # fast path all go missing).
-      - name: Apply dependency patches
-        run: npx patch-package
-
       - name: Sync version from git tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -116,13 +109,6 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      # --ignore-scripts skips postinstall, which is what applies
-      # patches/*.patch. Apply them explicitly, or CI artifacts ship an
-      # unpatched agent-sh (degraded/tokensUsed reporting and the skipTokens
-      # fast path all go missing).
-      - name: Apply dependency patches
-        run: npx patch-package
-
       - name: Sync version from git tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -181,13 +167,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
-
-      # --ignore-scripts skips postinstall, which is what applies
-      # patches/*.patch. Apply them explicitly, or CI artifacts ship an
-      # unpatched agent-sh (degraded/tokensUsed reporting and the skipTokens
-      # fast path all go missing).
-      - name: Apply dependency patches
-        run: npx patch-package
 
       - name: Sync version from git tag
         if: startsWith(github.ref, 'refs/tags/v')

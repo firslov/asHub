@@ -18,9 +18,9 @@ let currentSource = "gitee";
 // ── Source switching ──
 
 skillsSourceTabs?.addEventListener("click", (e) => {
-  const tab = e.target.closest(".skills-source-tab");
+  const tab = e.target.closest(".p-seg-item");
   if (!tab || tab.classList.contains("active")) return;
-  skillsSourceTabs.querySelectorAll(".skills-source-tab").forEach((t) => t.classList.toggle("active", t === tab));
+  skillsSourceTabs.querySelectorAll(".p-seg-item").forEach((t) => t.classList.toggle("active", t === tab));
   currentSource = tab.dataset.source;
   refreshSkills();
 });
@@ -28,10 +28,10 @@ skillsSourceTabs?.addEventListener("click", (e) => {
 // ── Tab switching ──
 
 skillsTabs?.addEventListener("click", (e) => {
-  const tab = e.target.closest(".skills-tab");
+  const tab = e.target.closest(".p-seg-item");
   if (!tab) return;
   const panel = tab.dataset.tab;
-  skillsTabs.querySelectorAll(".skills-tab").forEach((t) => t.classList.toggle("active", t === tab));
+  skillsTabs.querySelectorAll(".p-seg-item").forEach((t) => t.classList.toggle("active", t === tab));
   document.getElementById("skills-panel-market")?.toggleAttribute("hidden", panel !== "market");
   document.getElementById("skills-panel-installed")?.toggleAttribute("hidden", panel !== "installed");
   if (panel === "installed") refreshInstalled();
@@ -43,12 +43,10 @@ export const setSkillsOpen = (on) => {
   if (!skillsOverlay) return;
   if (on) {
     skillsOverlay.removeAttribute("hidden");
-    skillsOverlay.classList.add("open");
     skillsToggle?.classList.add("active");
     initSkillsPanel();
   } else {
     skillsOverlay.setAttribute("hidden", "");
-    skillsOverlay.classList.remove("open");
     skillsToggle?.classList.remove("active");
   }
 };
@@ -79,7 +77,7 @@ export const initSkillsPanel = () => {
 };
 
 const refreshSkills = async () => {
-  if (skillsList) skillsList.innerHTML = `<div class="skills-loading">${t("skills.loading")}</div>`;
+  if (skillsList) skillsList.innerHTML = `<div class="p-empty">${t("skills.loading")}</div>`;
   const cwd = activeSession.peek()?.state?.cwd || "";
   try {
     const [markerRes, instRes] = await Promise.all([
@@ -93,7 +91,7 @@ const refreshSkills = async () => {
     renderSkills(skillsSearch?.value || "");
     refreshInstalled();
   } catch (err) {
-    if (skillsList) skillsList.innerHTML = `<div class="skills-error">${err.message}</div>`;
+    if (skillsList) skillsList.innerHTML = `<div class="p-empty sk-error">${esc(err.message)}</div>`;
   }
 };
 
@@ -108,27 +106,23 @@ const renderSkills = (query) => {
 
   skillsList.innerHTML = list.map((s) => {
     const isInstalled = installed.has(s.name);
-    return `<div class="skill-card">
-      <div class="skill-card-main">
-        <div class="skill-card-header">
-          <img class="skill-avatar" src="${esc(s.avatar)}&s=40" alt="" width="20" height="20" loading="lazy" />
-          <span class="skill-name">${esc(s.displayName || s.name)}</span>
-          ${s.topics?.slice(0, 3).map((tag) => `<span class="skill-tag">${esc(tag)}</span>`).join("") || ""}
-        </div>
-        <div class="skill-desc">${esc(s.description || "")}</div>
-        <div class="skill-meta">
-          <span class="skill-author">${esc(s.author)}</span>
-          <span class="skill-updated">${esc(s.updated || "")}</span>
-        </div>
+    const label = s.displayName || s.name;
+    const meta = [s.author, s.updated, ...(s.topics || [])].filter(Boolean).map(esc).join(" · ");
+    return `<div class="p-card sk-card">
+      <div class="sk-card-head">
+        <span class="sk-badge">${esc(label.trim().charAt(0) || "?")}</span>
+        <span class="sk-name" title="${esc(label)}">${esc(label)}</span>
+        <button class="p-btn sk-install ${isInstalled ? "installed" : ""}" data-id="${esc(s.id)}" data-name="${esc(s.name)}">
+          ${isInstalled ? t("skills.installed") : t("skills.install")}
+        </button>
       </div>
-      <button class="skill-install-btn ${isInstalled ? "installed" : ""}" data-id="${esc(s.id)}" data-name="${esc(s.name)}">
-        ${isInstalled ? t("skills.installed") : t("skills.install")}
-      </button>
+      <div class="sk-desc">${esc(s.description || "")}</div>
+      <div class="sk-meta">${meta}</div>
     </div>`;
-  }).join("") || `<div class="skills-empty">${query ? t("skills.noresults") : t("skills.empty")}</div>`;
+  }).join("") || `<div class="p-empty">${query ? t("skills.noresults") : t("skills.empty")}</div>`;
 
   // Attach install handlers
-  skillsList.querySelectorAll(".skill-install-btn").forEach((btn) => {
+  skillsList.querySelectorAll(".sk-install").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.id;
       const name = btn.dataset.name;
@@ -155,13 +149,13 @@ const renderSkills = (query) => {
             btn.classList.add("installed");
             refreshInstalled();
           } else {
-            btn.textContent = "❌";
+            btn.textContent = "✕";
             btn.title = d?.error || "Install failed";
             setTimeout(() => { btn.textContent = t("skills.install"); btn.title = ""; }, 4000);
             toast(t("skills.install.failed"), { type: "error", detail: d?.error || undefined });
           }
         } catch {
-          btn.textContent = "❌";
+          btn.textContent = "✕";
           btn.title = "Network error";
           setTimeout(() => { btn.textContent = t("skills.install"); btn.title = ""; }, 4000);
           toast(t("skills.install.failed"), { type: "error", detail: "Network error" });
@@ -180,17 +174,17 @@ const refreshInstalled = async () => {
     const list = d.installed || [];
     installed = new Set(list.map((s) => s.name));
     installedList.innerHTML = list.length
-      ? list.map((s) => `<div class="skill-installed-item">
-          <span class="skill-installed-name">${esc(s.name)}</span>
-          <button class="skill-remove-btn" data-name="${esc(s.name)}" title="${t("skills.uninstall")}">
+      ? list.map((s) => `<div class="p-row sk-installed-row">
+          <span class="p-row-main">${esc(s.name)}</span>
+          <button class="p-icon-btn danger sk-remove" data-name="${esc(s.name)}" title="${t("skills.uninstall")}">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
               <line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/>
             </svg>
           </button>
         </div>`).join("")
-      : `<div class="skills-empty">${t("skills.none")}</div>`;
+      : `<div class="p-empty">${t("skills.none")}</div>`;
     // Attach remove handlers
-    installedList.querySelectorAll(".skill-remove-btn").forEach((btn) => {
+    installedList.querySelectorAll(".sk-remove").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const name = btn.dataset.name;
         if (!name) return;

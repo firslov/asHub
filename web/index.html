@@ -1,7 +1,13 @@
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <script>
-  document.documentElement.dataset.platform = /Win/.test(navigator.platform) ? "win32" : navigator.platform === "MacIntel" ? "darwin" : "linux";
+  // Prefer the main process's process.platform (exposed by preload.cjs).
+  // navigator.platform is deprecated, and on Windows this value decides
+  // whether the custom title bar is shown at all — a wrong guess leaves a
+  // frameless window with no controls, so fall back only if it is absent.
+  document.documentElement.dataset.platform =
+    window.electronAPI?.platform ??
+    (/Win/.test(navigator.platform) ? "win32" : navigator.platform === "MacIntel" ? "darwin" : "linux");
 </script>
 <head>
   <meta charset="UTF-8" />
@@ -49,27 +55,34 @@
       apply();
     })();
   </script>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500&family=JetBrains+Mono:wght@300;400;500&family=Geist:wght@300;400;500;600&family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/vendor/fonts/fonts.css" />
   <link rel="stylesheet" href="/css/styles.css" />
   <link rel="stylesheet" href="/css/live.css" />
   <link rel="stylesheet" href="/css/toast.css" />
   <link rel="stylesheet" href="/css/updater.css" />
+  <link rel="stylesheet" href="/css/panels.css" />
+  <link rel="stylesheet" href="/css/panels/files.css" />
+  <link rel="stylesheet" href="/css/panels/context.css" />
+  <link rel="stylesheet" href="/css/panels/tree.css" />
+  <link rel="stylesheet" href="/css/panels/prompt.css" />
+  <link rel="stylesheet" href="/css/panels/skills.css" />
+  <link rel="stylesheet" href="/css/panels/subagent.css" />
+  <link rel="stylesheet" href="/css/panels/config.css" />
+  <link rel="stylesheet" href="/css/panels/sidebar.css" />
+  <link rel="stylesheet" href="/css/stream.css" />
+  <link rel="stylesheet" href="/css/composer.css" />
+  <link rel="stylesheet" href="/css/chrome.css" />
+  <link rel="stylesheet" href="/css/feedback.css" />
   <link rel="stylesheet" id="hljs-dark" href="/vendor/hljs-github-dark.min.css" disabled />
   <link rel="stylesheet" id="hljs-light" href="/vendor/hljs-github.min.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.17.0/dist/katex.min.css" />
+  <link rel="stylesheet" href="/vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
-  <script src="/vendor/xterm/xterm.js"></script>
-  <script src="/vendor/marked.min.js"></script>
-  <script src="/vendor/dompurify.min.js"></script>
-  <script src="/vendor/highlight.min.js"></script>
-  <script src="/vendor/highlight-scheme.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/katex@0.17.0/dist/katex.min.js"></script>
-  <style>
-    /* Hide rows marked os-not-win on Windows (data-platform is set on <html> above). */
-    [data-platform="win32"] .shortcuts-row.os-not-win { display: none; }
-  </style>
+  <script defer src="/vendor/xterm/xterm.js"></script>
+  <script defer src="/vendor/marked.min.js"></script>
+  <script defer src="/vendor/dompurify.min.js"></script>
+  <script defer src="/vendor/highlight.min.js"></script>
+  <script defer src="/vendor/highlight-scheme.min.js"></script>
+  <script defer src="/vendor/katex/katex.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -107,35 +120,37 @@
     </header>
     <aside class="sidebar">
       <div class="sidebar-head">
-        <button id="sidebar-view-sessions" class="sidebar-btn sidebar-view-btn" data-view="sessions" data-i18n-title="sidebar.view.sessions" title="Sessions">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="4" y1="7" x2="20" y2="7"/>
-            <line x1="4" y1="12" x2="20" y2="12"/>
-            <line x1="4" y1="17" x2="20" y2="17"/>
-          </svg>
-        </button>
-        <button id="sidebar-view-workspaces" class="sidebar-btn sidebar-view-btn" data-view="workspaces" data-i18n-title="sidebar.view.workspaces" title="Workspaces">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="3" width="7" height="7" rx="1.5"/>
-            <rect x="14" y="3" width="7" height="7" rx="1.5"/>
-            <rect x="3" y="14" width="7" height="7" rx="1.5"/>
-            <rect x="14" y="14" width="7" height="7" rx="1.5"/>
-          </svg>
-        </button>
-        <button id="sidebar-view-archive" class="sidebar-btn sidebar-view-btn" data-view="archive" data-i18n-title="sidebar.view.archive" title="Archive">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="21 8 21 21 3 21 3 8"/>
-            <rect x="1" y="3" width="22" height="5"/>
-            <line x1="10" y1="12" x2="14" y2="12"/>
-          </svg>
-        </button>
-        <button id="sidebar-view-terminals" class="sidebar-btn sidebar-view-btn" data-view="terminals" data-i18n-title="sidebar.view.terminals" title="Terminals">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="4" width="18" height="16" rx="2"/>
-            <polyline points="7,9 10,12 7,15"/>
-            <line x1="12" y1="16" x2="16" y2="16"/>
-          </svg>
-        </button>
+        <div class="p-seg">
+          <button id="sidebar-view-sessions" class="sidebar-view-btn p-seg-item" data-view="sessions" data-i18n-title="sidebar.view.sessions" title="Sessions">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="4" y1="7" x2="20" y2="7"/>
+              <line x1="4" y1="12" x2="20" y2="12"/>
+              <line x1="4" y1="17" x2="20" y2="17"/>
+            </svg>
+          </button>
+          <button id="sidebar-view-workspaces" class="sidebar-view-btn p-seg-item" data-view="workspaces" data-i18n-title="sidebar.view.workspaces" title="Workspaces">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+              <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+              <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+              <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+            </svg>
+          </button>
+          <button id="sidebar-view-archive" class="sidebar-view-btn p-seg-item" data-view="archive" data-i18n-title="sidebar.view.archive" title="Archive">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="21 8 21 21 3 21 3 8"/>
+              <rect x="1" y="3" width="22" height="5"/>
+              <line x1="10" y1="12" x2="14" y2="12"/>
+            </svg>
+          </button>
+          <button id="sidebar-view-terminals" class="sidebar-view-btn p-seg-item" data-view="terminals" data-i18n-title="sidebar.view.terminals" title="Terminals">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2"/>
+              <polyline points="7,9 10,12 7,15"/>
+              <line x1="12" y1="16" x2="16" y2="16"/>
+            </svg>
+          </button>
+        </div>
       </div>
       <div class="sidebar-action" id="sidebar-action-sessions">
         <button id="new-session" class="sidebar-new-btn" data-i18n-title="new.session" title="New session">
@@ -289,100 +304,98 @@
       <div class="usage-strip" hidden>
         <span class="model-picker">
           <span class="usage-chip usage-model-balance" hidden></span>
-          <div class="model-dropdown" hidden></div>
         </span>
         <span class="usage-chip usage-location" hidden></span>
         <span class="terminal-usage"></span>
       </div>
     </template>
 
-    <aside class="ctx-panel" id="ctx-panel" hidden>
-      <div class="ctx-head">
-        <span class="ctx-title" data-i18n="context">Context</span>
-        <span class="ctx-meta" id="ctx-meta"></span>
-        <button class="bar-btn icon" id="ctx-refresh" data-i18n-title="refresh" title="Refresh">
+    <aside class="p-drawer" id="ctx-panel" hidden>
+      <div class="p-head">
+        <span class="p-title" data-i18n="context">Context</span>
+        <span class="p-meta" id="ctx-meta"></span>
+        <button class="p-icon-btn" id="ctx-refresh" data-i18n-title="refresh" title="Refresh">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
             <polyline points="9.5 1 12 1 12 3.5"></polyline>
           </svg>
         </button>
-        <button class="bar-btn icon" id="ctx-close" data-i18n-title="close" title="Close">
+        <button class="p-icon-btn" id="ctx-close" data-i18n-title="close" title="Close">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
             <line x1="2" y1="2" x2="10" y2="10"></line>
             <line x1="10" y1="2" x2="2" y2="10"></line>
           </svg>
         </button>
       </div>
-      <div class="ctx-filters" id="ctx-filters">
-        <button class="ctx-chip" data-role="all" data-active="1" data-i18n="ctx.all">all</button>
-        <button class="ctx-chip" data-role="system"><span class="ctx-dot system"></span><span data-i18n="ctx.system">system</span></button>
-        <button class="ctx-chip" data-role="user"><span class="ctx-dot user"></span><span data-i18n="ctx.user">user</span></button>
-        <button class="ctx-chip" data-role="assistant"><span class="ctx-dot assistant"></span><span data-i18n="ctx.assistant">assistant</span></button>
-        <button class="ctx-chip" data-role="tool"><span class="ctx-dot tool"></span><span data-i18n="ctx.tool">tool</span></button>
-      </div>
-      <div class="ctx-actions">
-        <button class="bar-btn" id="ctx-drop" title="Drop selected messages" disabled>drop</button>
-      </div>
-      <div class="ctx-body panel-content" id="ctx-body"></div>
-    </aside>
-
-    <aside class="tree-panel" id="tree-panel" hidden>
-      <div class="tree-head">
-        <span class="tree-title" data-i18n="tree">Tree</span>
-        <button class="bar-btn icon" id="tree-refresh" title="Refresh">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-            <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
-            <polyline points="9.5 1 12 1 12 3.5"></polyline>
-          </svg>
-        </button>
-        <button class="bar-btn icon" id="tree-close" title="Close">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <line x1="2" y1="2" x2="10" y2="10"></line>
-            <line x1="10" y1="2" x2="2" y2="10"></line>
-          </svg>
-        </button>
-      </div>
-      <div class="tree-body panel-content panel-content-mono" id="tree-body">
-        <div class="tree-empty panel-empty">loading…</div>
-      </div>
-    </aside>
-
-    <aside class="files-panel" id="files-panel" hidden>
-      <div class="files-head">
-        <span class="files-title" data-i18n="files">Files</span>
-        <span class="files-cwd" id="files-cwd" title=""></span>
-        <button class="bar-btn icon" id="files-refresh" data-i18n-title="refresh" title="Refresh">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-            <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
-            <polyline points="9.5 1 12 1 12 3.5"></polyline>
-          </svg>
-        </button>
-        <button class="bar-btn icon" id="files-close" data-i18n-title="close" title="Close">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <line x1="2" y1="2" x2="10" y2="10"></line>
-            <line x1="10" y1="2" x2="2" y2="10"></line>
-          </svg>
-        </button>
-      </div>
-      <div class="files-body panel-content" id="files-body">
-        <div class="files-empty panel-empty" id="files-empty">loading…</div>
-      </div>
-    </aside>
-
-    <aside class="subagent-panel" id="subagent-panel" hidden>
-      <div class="config-head">
-        <span class="config-title" data-i18n="subagents">Subagents</span>
-        <span class="config-path" id="sa-meta"></span>
-        <div class="config-head-actions">
-          <button class="bar-btn icon" id="sa-close" data-i18n-title="close" title="Close">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-              <line x1="2" y1="2" x2="10" y2="10"/>
-              <line x1="10" y1="2" x2="2" y2="10"/>
-            </svg>
-          </button>
+      <div class="ctx-toolbar">
+        <div class="p-seg" id="ctx-filters">
+          <button class="p-seg-item active" data-role="all" data-i18n="ctx.all">all</button>
+          <button class="p-seg-item" data-role="system"><span class="ctx-dot system"></span><span data-i18n="ctx.system">system</span></button>
+          <button class="p-seg-item" data-role="user"><span class="ctx-dot user"></span><span data-i18n="ctx.user">user</span></button>
+          <button class="p-seg-item" data-role="assistant"><span class="ctx-dot assistant"></span><span data-i18n="ctx.assistant">assistant</span></button>
+          <button class="p-seg-item" data-role="tool"><span class="ctx-dot tool"></span><span data-i18n="ctx.tool">tool</span></button>
         </div>
+        <button class="p-btn-danger" id="ctx-drop" title="Drop selected messages" disabled>drop</button>
       </div>
-      <div class="config-body panel-content" id="sa-body">
+      <div class="p-body flush ctx-list" id="ctx-body"></div>
+    </aside>
+
+    <aside class="p-drawer" id="tree-panel" hidden>
+      <div class="p-head">
+        <span class="p-title" data-i18n="tree">Tree</span>
+        <span class="p-meta"></span>
+        <button class="p-icon-btn" id="tree-refresh" data-i18n-title="refresh" title="Refresh">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
+            <polyline points="9.5 1 12 1 12 3.5"></polyline>
+          </svg>
+        </button>
+        <button class="p-icon-btn" id="tree-close" data-i18n-title="close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="2" y1="2" x2="10" y2="10"></line>
+            <line x1="10" y1="2" x2="2" y2="10"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="p-body flush" id="tree-body">
+        <div class="p-empty">loading…</div>
+      </div>
+    </aside>
+
+    <aside class="p-drawer" id="files-panel" hidden>
+      <div class="p-head">
+        <span class="p-title" data-i18n="files">Files</span>
+        <span class="p-meta" id="files-cwd" title=""></span>
+        <button class="p-icon-btn" id="files-refresh" data-i18n-title="refresh" title="Refresh">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
+            <polyline points="9.5 1 12 1 12 3.5"></polyline>
+          </svg>
+        </button>
+        <button class="p-icon-btn" id="files-close" data-i18n-title="close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="2" y1="2" x2="10" y2="10"></line>
+            <line x1="10" y1="2" x2="2" y2="10"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="p-body flush" id="files-body">
+        <div class="p-empty" id="files-empty">loading…</div>
+      </div>
+    </aside>
+
+    <aside class="p-drawer" id="subagent-panel" hidden>
+      <div class="p-head">
+        <span class="p-title" data-i18n="subagents">Subagents</span>
+        <span class="p-meta" id="sa-meta"></span>
+        <button class="p-icon-btn" id="sa-close" data-i18n-title="close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="2" y1="2" x2="10" y2="10"/>
+            <line x1="10" y1="2" x2="2" y2="10"/>
+          </svg>
+        </button>
+      </div>
+      <div class="p-body" id="sa-body">
         <div id="sa-types"></div>
       </div>
     </aside>
@@ -466,272 +479,249 @@
       </button>
     </nav>
 
-    <div class="config-overlay" id="skills-overlay" hidden>
-      <div class="config-modal">
-        <div class="config-head">
-          <span class="config-title" data-i18n="skills">Skills</span>
-          <span class="config-path">~/.agent-sh/skills/</span>
-          <div class="config-head-actions">
-            <button class="bar-btn icon" id="skills-close" data-i18n-title="close" title="Close">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                <line x1="2" y1="2" x2="10" y2="10"></line>
-                <line x1="10" y1="2" x2="2" y2="10"></line>
-              </svg>
-            </button>
+    <div class="p-drawer" id="skills-overlay" hidden>
+      <div class="p-head">
+        <span class="p-title" data-i18n="skills">Skills</span>
+        <span class="p-meta">~/.agent-sh/skills/</span>
+        <button class="p-icon-btn" id="skills-close" data-i18n-title="close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="2" y1="2" x2="10" y2="10"></line>
+            <line x1="10" y1="2" x2="2" y2="10"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="sk-controls">
+        <div class="p-seg" id="skills-tabs">
+          <button class="p-seg-item active" data-tab="market" data-i18n="skills.market">Marketplace</button>
+          <button class="p-seg-item" data-tab="installed" data-i18n="skills.installed">Installed</button>
+        </div>
+      </div>
+      <div class="sk-tab-panel" id="skills-panel-market">
+        <div class="sk-toolbar">
+          <div class="sk-search">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <circle cx="6" cy="6" r="4.5"/><line x1="9.5" y1="9.5" x2="13" y2="13"/>
+            </svg>
+            <input id="skills-search" class="p-input" type="text" data-i18n-placeholder="search.skills" placeholder="Search skills..." autocomplete="off" spellcheck="false" />
+          </div>
+          <span class="sk-count" id="skills-count"></span>
+          <div class="p-seg p-seg--sm" id="skills-source-tabs">
+            <button class="p-seg-item" data-source="github">GitHub</button>
+            <button class="p-seg-item active" data-source="gitee">Gitee</button>
           </div>
         </div>
-        <div class="config-body panel-content">
-          <div class="skills-tabs" id="skills-tabs">
-            <button class="skills-tab active" data-tab="market" data-i18n="skills.market">Marketplace</button>
-            <button class="skills-tab" data-tab="installed" data-i18n="skills.installed">Installed</button>
-          </div>
-          <div class="skills-tab-panel" id="skills-panel-market">
-            <div class="skills-toolbar">
-              <div class="skills-search-wrap">
-                <svg class="skills-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                  <circle cx="6" cy="6" r="4.5"/><line x1="9.5" y1="9.5" x2="13" y2="13"/>
-                </svg>
-                <input id="skills-search" class="config-input skills-search-input" type="text" data-i18n-placeholder="search.skills" placeholder="Search skills..." autocomplete="off" spellcheck="false" />
-              </div>
-              <div class="skills-header-count" id="skills-count"></div>
-            </div>
-            <div class="skills-source-tabs" id="skills-source-tabs">
-              <button class="skills-source-tab" data-source="github">GitHub</button>
-              <button class="skills-source-tab active" data-source="gitee">Gitee</button>
-            </div>
-            <div class="skills-list" id="skills-list">
-              <div class="skills-loading" data-i18n="skills.loading">Loading skills…</div>
-            </div>
-          </div>
-          <div class="skills-tab-panel" id="skills-panel-installed" hidden>
-            <div class="skills-installed-list" id="skills-installed-list">
-              <div class="skills-empty" data-i18n="skills.none">No skills installed</div>
-            </div>
-          </div>
+        <div class="p-body sk-list" id="skills-list">
+          <div class="p-empty" data-i18n="skills.loading">Loading skills…</div>
+        </div>
+      </div>
+      <div class="sk-tab-panel" id="skills-panel-installed" hidden>
+        <div class="p-body flush p-list" id="skills-installed-list">
+          <div class="p-empty" data-i18n="skills.none">No skills installed</div>
         </div>
       </div>
     </div>
 
-    <div class="config-overlay" id="config-overlay" hidden>
-      <div class="config-modal">
-        <div class="config-head">
-          <span class="config-title" data-i18n="settings">Settings</span>
-          <div class="config-mode-tabs" id="config-mode-tabs">
-            <button class="config-mode-tab active" data-mode="simple" data-i18n="simple">Simple</button>
-            <button class="config-mode-tab" data-mode="advanced" data-i18n="advanced">Advanced</button>
+    <div class="p-drawer" id="config-overlay" hidden>
+      <div class="p-head">
+        <span class="p-title" data-i18n="settings">Settings</span>
+        <div class="p-seg" id="config-mode-tabs">
+          <button class="p-seg-item active" data-mode="simple" data-i18n="simple">Simple</button>
+          <button class="p-seg-item" data-mode="advanced" data-i18n="advanced">Advanced</button>
+        </div>
+        <span class="p-meta" id="config-path">~/.agent-sh/settings.json</span>
+        <button class="p-icon-btn" id="config-reset" data-i18n-title="reset.defaults" title="Reset to defaults">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
+            <polyline points="9.5 1 12 1 12 3.5"></polyline>
+          </svg>
+        </button>
+        <button class="p-icon-btn" id="config-close" data-i18n-title="close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="2" y1="2" x2="10" y2="10"></line>
+            <line x1="10" y1="2" x2="2" y2="10"></line>
+          </svg>
+        </button>
+      </div>
+      <!-- Simple config mode -->
+      <div class="p-body" id="config-body-simple">
+        <div class="p-section" data-i18n="config.section.provider">Provider</div>
+        <div class="config-field">
+          <label class="config-label" for="config-provider" data-i18n="provider">Provider</label>
+          <div class="config-select-wrap">
+            <select id="config-provider" class="p-select"></select>
+            <svg class="config-select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 1 5 5 9 1"></polyline>
+            </svg>
           </div>
-          <span class="config-path" id="config-path">~/.agent-sh/settings.json</span>
-          <div class="config-head-actions">
-            <button class="bar-btn icon" id="config-reset" data-i18n-title="reset.defaults" title="Reset to defaults">
+          <span class="config-hint" id="config-provider-desc">DeepSeek V4 models with 1M context window</span>
+        </div>
+        <div class="config-field" id="config-model-field" hidden>
+          <label class="config-label" for="config-model" data-i18n="model">Model</label>
+          <div class="config-model-wrap">
+            <input id="config-model" class="p-input" type="text" list="config-model-list" placeholder="anthropic/claude-3.5-sonnet" autocomplete="off" spellcheck="false" />
+            <datalist id="config-model-list"></datalist>
+            <button class="p-icon-btn" id="config-model-refresh" type="button" data-i18n-title="refresh" title="Refresh model list">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
                 <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
                 <polyline points="9.5 1 12 1 12 3.5"></polyline>
               </svg>
             </button>
-            <button class="bar-btn icon" id="config-close" data-i18n-title="close" title="Close">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                <line x1="2" y1="2" x2="10" y2="10"></line>
-                <line x1="10" y1="2" x2="2" y2="10"></line>
+          </div>
+          <span class="config-hint" id="config-model-hint" data-i18n="model.hint">Type to search the OpenRouter catalog</span>
+        </div>
+        <div class="config-field">
+          <label class="config-label" for="config-apikey" data-i18n="api.key">API Key</label>
+          <div class="config-apikey-wrap">
+            <input id="config-apikey" class="p-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+            <button class="config-apikey-toggle" id="config-apikey-toggle" type="button" data-i18n-title="show.hide.apikey" title="Show/hide API key">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/>
+                <circle cx="8" cy="8" r="2"/>
               </svg>
             </button>
           </div>
+          <span class="config-hint" data-i18n="apikey.hint">Your API key is stored locally in ~/.agent-sh/settings.json</span>
         </div>
-        <!-- Simple config mode -->
-        <div class="config-body panel-content" id="config-body-simple">
-          <div class="config-section">
-            <div class="config-section-title" data-i18n="config.section.provider">Provider</div>
-            <div class="config-field">
-              <label class="config-label" for="config-provider" data-i18n="provider">Provider</label>
-              <div class="config-select-wrap">
-                <select id="config-provider" class="config-select"></select>
-                <svg class="config-select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="1 1 5 5 9 1"></polyline>
-                </svg>
-              </div>
-              <span class="config-hint" id="config-provider-desc">DeepSeek V4 models with 1M context window</span>
-            </div>
-            <div class="config-field" id="config-model-field" hidden>
-              <label class="config-label" for="config-model" data-i18n="model">Model</label>
-              <div class="config-model-wrap">
-                <input id="config-model" class="config-input" type="text" list="config-model-list" placeholder="anthropic/claude-3.5-sonnet" autocomplete="off" spellcheck="false" />
-                <datalist id="config-model-list"></datalist>
-                <button class="bar-btn icon" id="config-model-refresh" type="button" data-i18n-title="refresh" title="Refresh model list">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-                    <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
-                    <polyline points="9.5 1 12 1 12 3.5"></polyline>
-                  </svg>
-                </button>
-              </div>
-              <span class="config-hint" id="config-model-hint" data-i18n="model.hint">Type to search the OpenRouter catalog</span>
-            </div>
-            <div class="config-field">
-              <label class="config-label" for="config-apikey" data-i18n="api.key">API Key</label>
-              <div class="config-apikey-wrap">
-                <input id="config-apikey" class="config-input" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
-                <button class="config-apikey-toggle" id="config-apikey-toggle" type="button" data-i18n-title="show.hide.apikey" title="Show/hide API key">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M2 8s2.5-5 6-5 6 5 6 5-2.5 5-6 5-6-5-6-5z"/>
-                    <circle cx="8" cy="8" r="2"/>
-                  </svg>
-                </button>
-              </div>
-              <span class="config-hint" data-i18n="apikey.hint">Your API key is stored locally in ~/.agent-sh/settings.json</span>
-            </div>
-            <div class="config-field" id="config-cwd-field">
-              <label class="config-label" for="config-default-cwd" data-i18n="default.cwd">Default Directory</label>
-              <div class="config-cwd-wrap">
-                <input id="config-default-cwd" class="config-input" type="text" spellcheck="false" data-i18n-placeholder="default.cwd.placeholder" placeholder="Home directory" autocomplete="off" />
-                <button class="bar-btn icon" id="config-cwd-pick" type="button" data-i18n-title="browse" title="Browse…">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                </button>
-              </div>
-              <span class="config-hint">~ = home directory</span>
-            </div>
-            <div class="config-field">
-              <label class="config-label" for="config-scale" data-i18n="display.scale">Display Scale</label>
-              <div class="config-select-wrap">
-                <select id="config-scale" class="config-select">
-                  <option value="0.8">80%</option>
-                  <option value="0.9">90%</option>
-                  <option value="1" selected>100%</option>
-                  <option value="1.1">110%</option>
-                  <option value="1.2">120%</option>
-                </select>
-                <svg class="config-select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 1 5 5 9 1"/></svg>
-              </div>
-            </div>
-          </div>
 
-          <div class="config-field">
-            <label class="config-label" for="config-auto-approve" data-i18n="permission.auto_approve">Auto-Approve File Operations</label>
-            <div class="config-toggle-wrap">
-              <label class="config-toggle">
-                <input type="checkbox" id="config-auto-approve" />
-                <span class="config-toggle-slider"></span>
-                <span class="config-toggle-label" data-i18n="permission.auto_approve_desc">Skip all permission prompts</span>
-              </label>
-            </div>
+        <div class="p-section" data-i18n="config.section.interface">Interface</div>
+        <div class="config-field" id="config-cwd-field">
+          <label class="config-label" for="config-default-cwd" data-i18n="default.cwd">Default Directory</label>
+          <div class="config-cwd-wrap">
+            <input id="config-default-cwd" class="p-input" type="text" spellcheck="false" data-i18n-placeholder="default.cwd.placeholder" placeholder="Home directory" autocomplete="off" />
+            <button class="p-icon-btn" id="config-cwd-pick" type="button" data-i18n-title="browse" title="Browse…">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </button>
           </div>
-          <div class="config-actions">
-            <button class="bar-btn config-btn-save" id="config-save-simple" data-i18n="save.reload">save & reload</button>
+          <span class="config-hint">~ = home directory</span>
+        </div>
+        <div class="config-field">
+          <label class="config-label" for="config-scale" data-i18n="display.scale">Display Scale</label>
+          <div class="config-select-wrap">
+            <select id="config-scale" class="p-select">
+              <option value="0.8">80%</option>
+              <option value="0.9">90%</option>
+              <option value="1" selected>100%</option>
+              <option value="1.1">110%</option>
+              <option value="1.2">120%</option>
+            </select>
+            <svg class="config-select-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 1 5 5 9 1"/></svg>
           </div>
         </div>
-        <!-- Advanced config mode (JSON editor) -->
-        <div class="config-body panel-content" id="config-body-advanced" hidden>
-          <div class="config-editor">
-            <textarea id="config-editor" class="config-textarea" spellcheck="false"></textarea>
-            <div class="config-editor-status">
-              <span class="config-status-valid" id="config-valid" hidden data-i18n="valid.json">✓ valid json</span>
-              <span class="config-status-invalid" id="config-invalid" hidden data-i18n="invalid.json">✗ invalid json</span>
-            </div>
+
+        <div class="p-section" data-i18n="config.section.permissions">Permissions</div>
+        <div class="config-field">
+          <label class="config-label" for="config-auto-approve" data-i18n="permission.auto_approve">Auto-Approve File Operations</label>
+          <div class="config-toggle-wrap">
+            <label class="config-toggle">
+              <input type="checkbox" id="config-auto-approve" />
+              <span class="config-toggle-slider"></span>
+              <span class="config-toggle-label" data-i18n="permission.auto_approve_desc">Skip all permission prompts</span>
+            </label>
           </div>
-          <div class="config-actions">
-            <button class="bar-btn config-btn-save" id="config-save" data-i18n="save.reload">save & reload</button>
-            <button class="bar-btn" id="config-format" data-i18n="format">format</button>
+        </div>
+        <div class="config-actions">
+          <button class="p-btn-primary" id="config-save-simple" data-i18n="save.reload">save & reload</button>
+        </div>
+      </div>
+      <!-- Advanced config mode (JSON editor) -->
+      <div class="p-body" id="config-body-advanced" hidden>
+        <div class="cfg-editor-wrap">
+          <textarea id="config-editor" spellcheck="false"></textarea>
+          <div class="cfg-status-row">
+            <span id="config-valid" hidden data-i18n="valid.json">✓ valid json</span>
+            <span id="config-invalid" hidden data-i18n="invalid.json">✗ invalid json</span>
           </div>
+        </div>
+        <div class="config-actions">
+          <button class="p-btn" id="config-format" data-i18n="format">format</button>
+          <button class="p-btn-primary" id="config-save" data-i18n="save.reload">save & reload</button>
         </div>
       </div>
     </div>
 
-    <div class="prompt-overlay" id="prompt-overlay" hidden>
-      <div class="prompt-modal">
-        <div class="prompt-head">
-          <div class="commands-tabs" role="tablist">
-            <button class="commands-tab active" id="tab-prompts" data-tab="prompts" role="tab" data-i18n="quick.prompts">Quick Prompts</button>
-            <button class="commands-tab" id="tab-shortcuts" data-tab="shortcuts" role="tab" data-i18n="shortcuts.title">Keyboard Shortcuts</button>
-          </div>
-          <div class="prompt-head-actions">
-            <button class="bar-btn icon" id="prompt-close" data-i18n-title="close" title="Close">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                <line x1="2" y1="2" x2="10" y2="10"></line>
-                <line x1="10" y1="2" x2="2" y2="10"></line>
-              </svg>
-            </button>
+    <div class="p-drawer" id="prompt-overlay" hidden>
+      <div class="p-head">
+        <span class="p-title" data-i18n="commands.title">Commands</span>
+        <span class="p-meta"></span>
+        <button class="p-icon-btn" id="prompt-add-btn" data-i18n-title="prompts.add.prompt" title="add prompt">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <line x1="7" y1="2" x2="7" y2="12"></line>
+            <line x1="2" y1="7" x2="12" y2="7"></line>
+          </svg>
+        </button>
+        <button class="p-icon-btn" id="prompt-close" data-i18n-title="close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="2" y1="2" x2="10" y2="10"></line>
+            <line x1="10" y1="2" x2="2" y2="10"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="prompt-seg-wrap">
+        <div class="p-seg prompt-seg" role="tablist">
+          <button class="p-seg-item active" id="tab-prompts" data-tab="prompts" role="tab" data-i18n="quick.prompts">Quick Prompts</button>
+          <button class="p-seg-item" id="tab-shortcuts" data-tab="shortcuts" role="tab" data-i18n="shortcuts.title">Keyboard Shortcuts</button>
+        </div>
+      </div>
+      <div class="prompt-body" id="prompt-body" data-panel="prompts">
+        <div class="p-body flush">
+          <ul class="p-list" id="prompt-list">
+            <li class="p-empty" id="prompt-empty" data-i18n="prompts.empty">No quick prompts yet.</li>
+          </ul>
+        </div>
+        <div class="prompt-editor" id="prompt-editor" hidden>
+          <input id="prompt-editor-name" class="p-input" type="text" data-i18n-placeholder="prompts.name.placeholder" placeholder="Prompt name (shown in list)" autocomplete="off" spellcheck="false" />
+          <textarea id="prompt-editor-content" class="prompt-textarea" data-i18n-placeholder="prompts.content.placeholder" placeholder="Prompt content (inserted on #Tab)" rows="3" autocomplete="off" spellcheck="false"></textarea>
+          <div class="prompt-editor-actions">
+            <button class="p-btn-primary" id="prompt-editor-save" data-i18n="prompts.add">add</button>
+            <button class="p-btn" id="prompt-editor-cancel" data-i18n="cancel">cancel</button>
           </div>
         </div>
-        <div class="prompt-body commands-panel" id="prompt-body" data-panel="prompts">
-          <div class="prompt-list-wrap">
-            <ul class="prompt-list" id="prompt-list">
-              <li class="prompt-empty" id="prompt-empty" data-i18n="prompts.empty">No quick prompts yet — add one below.</li>
-            </ul>
-          </div>
-          <div class="prompt-editor" id="prompt-editor" hidden>
-            <input id="prompt-editor-name" class="prompt-editor-input" type="text" data-i18n-placeholder="prompts.name.placeholder" placeholder="Prompt name (shown in list)" autocomplete="off" spellcheck="false" />
-            <textarea id="prompt-editor-content" class="prompt-editor-textarea" data-i18n-placeholder="prompts.content.placeholder" placeholder="Prompt content (inserted on #Tab)" rows="3" autocomplete="off" spellcheck="false"></textarea>
-            <div class="prompt-editor-actions">
-              <button class="bar-btn prompt-editor-save" id="prompt-editor-save" data-i18n="prompts.add">add</button>
-              <button class="bar-btn" id="prompt-editor-cancel" data-i18n="cancel">cancel</button>
-            </div>
-          </div>
+      </div>
+      <div class="p-body" id="shortcuts-body" data-panel="shortcuts" hidden>
+        <div class="p-section" data-i18n="shortcuts.global">Global</div>
+        <div class="sc-group">
+          <div class="sc-row os-mac"><kbd>⌘N</kbd><span data-i18n="shortcuts.new_session">New session</span></div>
+          <div class="sc-row os-other"><kbd>Ctrl+N</kbd><span data-i18n="shortcuts.new_session">New session</span></div>
+          <div class="sc-row os-mac"><kbd>⌘T</kbd><span data-i18n="shortcuts.new_terminal">New terminal</span></div>
+          <div class="sc-row os-other"><kbd>Ctrl+T</kbd><span data-i18n="shortcuts.new_terminal">New terminal</span></div>
+          <div class="sc-row os-mac"><kbd>⌘W</kbd><span data-i18n="shortcuts.close_tab">Close tab</span></div>
+          <div class="sc-row os-other"><kbd>Ctrl+W</kbd><span data-i18n="shortcuts.close_tab">Close tab</span></div>
         </div>
-        <div class="shortcuts-body commands-panel" id="shortcuts-body" data-panel="shortcuts" hidden>
-        <div class="shortcuts-section">
-          <div class="shortcuts-section-head">
-            <span class="shortcuts-section-icon">⌘</span>
-            <span class="shortcuts-section-title" data-i18n="shortcuts.global">Global</span>
-          </div>
-          <div class="shortcuts-group">
-            <div class="shortcuts-row os-mac"><kbd>⌘N</kbd><span data-i18n="shortcuts.new_session">New session</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+N</kbd><span data-i18n="shortcuts.new_session">New session</span></div>
-            <div class="shortcuts-row os-mac"><kbd>⌘T</kbd><span data-i18n="shortcuts.new_terminal">New terminal</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+T</kbd><span data-i18n="shortcuts.new_terminal">New terminal</span></div>
-            <div class="shortcuts-row os-mac"><kbd>⌘W</kbd><span data-i18n="shortcuts.close_tab">Close tab</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+W</kbd><span data-i18n="shortcuts.close_tab">Close tab</span></div>
-          </div>
-          <div class="shortcuts-sep"></div>
-          <div class="shortcuts-subtitle" data-i18n="shortcuts.navigation">Navigation</div>
-          <div class="shortcuts-group">
-            <div class="shortcuts-row os-mac"><kbd>⌘⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
-            <div class="shortcuts-row os-mac"><kbd>⌘Tab</kbd><span data-i18n="shortcuts.next_tab">Next tab</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+Tab</kbd><span data-i18n="shortcuts.next_tab">Next tab</span></div>
-            <div class="shortcuts-row os-mac"><kbd>⌘1</kbd><span class="shortcuts-range">–</span><kbd>9</kbd><span data-i18n="shortcuts.switch_tab">Switch to tab N</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+1</kbd><span class="shortcuts-range">–</span><kbd>9</kbd><span data-i18n="shortcuts.switch_tab">Switch to tab N</span></div>
-          </div>
-          <div class="shortcuts-sep"></div>
-          <div class="shortcuts-subtitle" data-i18n="shortcuts.panels">Panels</div>
-          <div class="shortcuts-group">
-            <div class="shortcuts-row os-mac"><kbd>⌘`</kbd><span data-i18n="shortcuts.toggle_sidebar">Toggle sidebar</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+`</kbd><span data-i18n="shortcuts.toggle_sidebar">Toggle sidebar</span></div>
-            <div class="shortcuts-row os-mac"><kbd>⌘K</kbd><span data-i18n="shortcuts.focus_input">Focus input</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+K</kbd><span data-i18n="shortcuts.focus_input">Focus input</span></div>
-            <div class="shortcuts-row os-mac"><kbd>⌘\</kbd><span data-i18n="shortcuts.context_panel">Context panel</span></div>
-            <div class="shortcuts-row os-other"><kbd>Ctrl+\</kbd><span data-i18n="shortcuts.context_panel">Context panel</span></div>
-            <div class="shortcuts-row"><kbd>Esc</kbd><span data-i18n="shortcuts.cancel">Cancel / Close panel</span></div>
-          </div>
+        <div class="p-section" data-i18n="shortcuts.navigation">Navigation</div>
+        <div class="sc-group">
+          <div class="sc-row os-mac"><kbd>⌘⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
+          <div class="sc-row os-other"><kbd>Ctrl+⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
+          <div class="sc-row os-mac"><kbd>⌘Tab</kbd><span data-i18n="shortcuts.next_tab">Next tab</span></div>
+          <div class="sc-row os-other"><kbd>Ctrl+Tab</kbd><span data-i18n="shortcuts.next_tab">Next tab</span></div>
+          <div class="sc-row os-mac"><kbd>⌘1</kbd><span class="sc-range">–</span><kbd>9</kbd><span data-i18n="shortcuts.switch_tab">Switch to tab N</span></div>
+          <div class="sc-row os-other"><kbd>Ctrl+1</kbd><span class="sc-range">–</span><kbd>9</kbd><span data-i18n="shortcuts.switch_tab">Switch to tab N</span></div>
         </div>
-        <div class="shortcuts-section">
-          <div class="shortcuts-section-head">
-            <span class="shortcuts-section-icon">↵</span>
-            <span class="shortcuts-section-title" data-i18n="shortcuts.input">Input</span>
-          </div>
-          <div class="shortcuts-group">
-            <div class="shortcuts-row"><kbd>Enter</kbd><span data-i18n="shortcuts.submit">Submit</span></div>
-            <div class="shortcuts-row"><kbd>⇧Enter</kbd><span data-i18n="shortcuts.new_line">New line</span></div>
-            <div class="shortcuts-row"><kbd>↑</kbd><span data-i18n="shortcuts.recall_up">Recall previous query</span></div>
-            <div class="shortcuts-row"><kbd>↓</kbd><span data-i18n="shortcuts.recall_down">Next query</span></div>
-            <div class="shortcuts-row"><kbd>⇧Tab</kbd><span data-i18n="shortcuts.cycle_thinking">Cycle thinking level</span></div>
-            <div class="shortcuts-row os-mac"><kbd>⌥B</kbd><span class="shortcuts-range"> / </span><kbd>⌥F</kbd><span data-i18n="shortcuts.move_word">Move cursor by word</span></div>
-            <div class="shortcuts-row os-mac"><kbd>Ctrl+B</kbd><span class="shortcuts-range"> / </span><kbd>Ctrl+F</kbd><span data-i18n="shortcuts.move_word">Move cursor by word</span></div>
-          </div>
-          <div class="shortcuts-sep"></div>
-          <div class="shortcuts-subtitle" data-i18n="shortcuts.syntax">Input syntax</div>
-          <div class="shortcuts-group">
-            <div class="shortcuts-row os-not-win"><kbd>!</kbd><span data-i18n="shortcuts.shell">Run shell command</span></div>
-            <div class="shortcuts-row"><kbd>/</kbd><span data-i18n="shortcuts.slash_command">Slash command</span></div>
-            <div class="shortcuts-row"><kbd>@</kbd><span data-i18n="shortcuts.mention">Mention file</span></div>
-            <div class="shortcuts-row"><kbd>#</kbd><span data-i18n="shortcuts.prompt_pick">Insert saved prompt</span></div>
-          </div>
+        <div class="p-section" data-i18n="shortcuts.panels">Panels</div>
+        <div class="sc-group">
+          <div class="sc-row os-mac"><kbd>⌘`</kbd><span data-i18n="shortcuts.toggle_sidebar">Toggle sidebar</span></div>
+          <div class="sc-row os-other"><kbd>Ctrl+`</kbd><span data-i18n="shortcuts.toggle_sidebar">Toggle sidebar</span></div>
+          <div class="sc-row os-mac"><kbd>⌘K</kbd><span data-i18n="shortcuts.focus_input">Focus input</span></div>
+          <div class="sc-row os-other"><kbd>Ctrl+K</kbd><span data-i18n="shortcuts.focus_input">Focus input</span></div>
+          <div class="sc-row os-mac"><kbd>⌘\</kbd><span data-i18n="shortcuts.context_panel">Context panel</span></div>
+          <div class="sc-row os-other"><kbd>Ctrl+\</kbd><span data-i18n="shortcuts.context_panel">Context panel</span></div>
+          <div class="sc-row"><kbd>Esc</kbd><span data-i18n="shortcuts.cancel">Cancel / Close panel</span></div>
         </div>
+        <div class="p-section" data-i18n="shortcuts.input">Input</div>
+        <div class="sc-group">
+          <div class="sc-row"><kbd>Enter</kbd><span data-i18n="shortcuts.submit">Submit</span></div>
+          <div class="sc-row"><kbd>⇧Enter</kbd><span data-i18n="shortcuts.new_line">New line</span></div>
+          <div class="sc-row"><kbd>↑</kbd><span data-i18n="shortcuts.recall_up">Recall previous query</span></div>
+          <div class="sc-row"><kbd>↓</kbd><span data-i18n="shortcuts.recall_down">Next query</span></div>
+          <div class="sc-row"><kbd>⇧Tab</kbd><span data-i18n="shortcuts.cycle_thinking">Cycle thinking level</span></div>
+          <div class="sc-row os-mac"><kbd>⌥B</kbd><span class="sc-range">/</span><kbd>⌥F</kbd><span data-i18n="shortcuts.move_word">Move cursor by word</span></div>
+          <div class="sc-row os-mac"><kbd>Ctrl+B</kbd><span class="sc-range">/</span><kbd>Ctrl+F</kbd><span data-i18n="shortcuts.move_word">Move cursor by word</span></div>
         </div>
-        <div class="prompt-footer commands-panel" data-panel="prompts">
-          <button class="bar-btn prompt-add-btn" id="prompt-add-btn">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-              <line x1="6" y1="1" x2="6" y2="11"></line>
-              <line x1="1" y1="6" x2="11" y2="6"></line>
-            </svg>
-            <span data-i18n="prompts.add.prompt">add prompt</span>
-          </button>
+        <div class="p-section" data-i18n="shortcuts.syntax">Input syntax</div>
+        <div class="sc-group">
+          <div class="sc-row os-not-win"><kbd>!</kbd><span data-i18n="shortcuts.shell">Run shell command</span></div>
+          <div class="sc-row"><kbd>/</kbd><span data-i18n="shortcuts.slash_command">Slash command</span></div>
+          <div class="sc-row"><kbd>@</kbd><span data-i18n="shortcuts.mention">Mention file</span></div>
+          <div class="sc-row"><kbd>#</kbd><span data-i18n="shortcuts.prompt_pick">Insert saved prompt</span></div>
         </div>
       </div>
     </div>

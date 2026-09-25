@@ -1,0 +1,104 @@
+/* tree.css — Branch tree drawer (300px). Shared primitives: ../panels.css. */
+
+/* Windows custom title bar offset — replaces the dead live.css rule
+   `.os-win32 .tree-panel` (shell is now .p-drawer). */
+.os-win32 #tree-panel { top: 78px; }
+
+/* Rows share the global type ramp: preview = sans fs-md (.p-row-main),
+   timestamp = mono fs-xs (.p-row-meta). Guides are CSS-drawn hairlines,
+   so no monospace alignment is needed. */
+.tree-rows { display: flex; flex-direction: column; }
+
+/* Rows: neutral by default; only forkable leaf rows react to hover.
+   The current leaf carries .selected (accent-soft, from panels.css). */
+.tree-row { cursor: default; }
+.tree-row:hover { background: transparent; }
+.tree-row[data-switchable="1"] { cursor: pointer; }
+.tree-row[data-switchable="1"]:hover { background: var(--bg3); color: var(--text); }
+
+#tree-panel.busy .tree-row[data-switchable="1"] {
+  cursor: not-allowed;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+/* ── Guide lines (│ ├ ╰ as 1px hairlines) ─────────────────────────── */
+.tree-prefix { display: flex; align-self: stretch; flex: 0 0 auto; }
+.tp-col {
+  position: relative;
+  width: 0.875rem;
+  align-self: stretch;
+  flex: 0 0 auto;
+}
+.tp-col[data-line="vert"]::before,
+.tp-col[data-line="branch-mid"]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border-mid);
+}
+.tp-col[data-line="branch-end"]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 50%;
+  border-left: 1px solid var(--border-mid);
+}
+.tp-col[data-line="branch-mid"]::after,
+.tp-col[data-line="branch-end"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  right: calc(-1 * var(--space-2)); /* reach across the row gap to the glyph */
+  border-top: 1px solid var(--border-mid);
+}
+
+/* ── Node glyph (geometric chars only, no emoji) ────────────────────── */
+.tree-icon {
+  width: 14px;
+  flex: 0 0 auto;
+  text-align: center;
+  color: var(--text-faint);
+}
+.tree-icon[data-kind="session"] { color: var(--accent); }
+.tree-icon[data-kind="user"] { color: var(--text-mid); }
+
+/* ── Preview + timestamp ────────────────────────────────────────────── */
+.tree-preview {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Badges ─────────────────────────────────────────────────────────── */
+.tree-active-badge,
+.tree-leaf-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  border-radius: var(--radius-pill);
+}
+.tree-active-badge { background: var(--accent); color: var(--on-accent); }
+.tree-leaf-badge {
+  background: var(--bg3);
+  color: var(--text-mid);
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+/* Fork affordance: leaf badge lights up on row hover. */
+.tree-row[data-switchable="1"]:hover .tree-leaf-badge {
+  background: var(--accent-soft);
+  color: var(--accent-dim);
+}
+
+/* Two-step fork confirm: inline danger state (mirrors .p-btn-danger). */
+.tree-row.confirming { background: var(--error-bg); color: var(--text); }
+.tree-row.confirming .tree-leaf-badge { background: var(--error); color: #fff; }

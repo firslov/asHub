@@ -119,7 +119,11 @@ export function compactReasoning(stream) {
     });
   }
 
-  stream._compactedUntil = children.length;
+  // children is a PRE-compaction snapshot; moving run elements into
+  // reasoning-phase containers shrank stream.children by (moved - 1) per
+  // compacted run.  Resume from the POST-compaction length, otherwise the
+  // cursor drifts ahead and unscanned nodes fall behind the window forever.
+  stream._compactedUntil = stream.children.length;
 }
 
 // Refresh translated labels on language change

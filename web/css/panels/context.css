@@ -1,0 +1,189 @@
+/* context.css — Context inspector drawer (#ctx-panel).
+   Shared primitives (.p-drawer/.p-head/.p-seg/.p-badge/.p-empty …) live in
+   ../panels.css; this file holds only panel-specific layout and the
+   message-list anatomy. Tokens come from styles.css — no new colors. */
+
+/* ── Shell offsets that used to live in live.css (.ctx-panel rules) ── */
+.os-win32 #ctx-panel { top: 78px; }
+
+/* ── Toolbar: role segment + destructive action ───────────────────── */
+.ctx-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+/* The 5-role segment can't share a row with the drop button at drawer
+   width — give it the full first row; the drop button wraps to a
+   right-aligned second row. */
+.ctx-toolbar .p-seg { flex: 1 1 100%; display: flex; }
+.ctx-toolbar .p-seg-item {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 4px;
+  gap: 3px;
+  font-size: var(--fs-xs);
+  overflow: hidden;
+}
+.ctx-toolbar .p-seg-item > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#ctx-drop { margin-left: auto; flex-shrink: 0; }
+
+/* 5px semantic role dots inside the segment items */
+.ctx-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-faint);
+}
+.ctx-dot.user      { background: var(--accent); }
+.ctx-dot.assistant { background: var(--green); }
+.ctx-dot.tool      { background: var(--purple); }
+
+/* ── Message list ─────────────────────────────────────────────────── */
+.ctx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ctx-msg {
+  position: relative;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  transition: background var(--dur-fast) var(--ease-out-expo);
+}
+.ctx-msg:hover { background: var(--bg3); }
+.ctx-msg.selected { background: var(--accent-soft); }
+
+/* Paired tool_call/result groups: 2px vertical rail connecting members.
+   The rail bridges the 2px row gap (-2px overshoot); pair-start/pair-end
+   trim it to the checkbox column of the first/last member. */
+.ctx-msg.paired::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--space-3) + 7px); /* centered on the 16px checkbox */
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--border-mid);
+}
+.ctx-msg.paired.pair-start::before { top: calc(var(--space-2) + 18px); }
+.ctx-msg.paired.pair-end::before { bottom: calc(100% - var(--space-2) - 8px); }
+
+.ctx-msg-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: 2px;
+}
+
+/* Custom 16px checkbox (native input hidden, .ctx-box is the visual) */
+.ctx-check {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.ctx-check input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.ctx-box {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-xs);
+  transition: background var(--dur-fast) var(--ease-out-expo),
+              border-color var(--dur-fast) var(--ease-out-expo);
+}
+.ctx-check:hover .ctx-box { border-color: var(--text-faint); }
+.ctx-check input:checked + .ctx-box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.ctx-check input:checked + .ctx-box::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--on-accent);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  box-sizing: border-box;
+}
+.ctx-check input:focus-visible + .ctx-box {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+/* Role badge — restrained p-badge with per-role semantic text color */
+.ctx-role {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label-sm);
+}
+.ctx-role.system    { color: var(--text-faint); }
+.ctx-role.user      { color: var(--accent); }
+.ctx-role.assistant { color: var(--green); }
+.ctx-role.tool      { color: var(--purple); }
+
+.ctx-tokens,
+.ctx-idx {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.ctx-idx { margin-left: auto; }
+
+/* Content preview: two-line cut, expand toggle below. Indented to align
+   with the head content after the 16px checkbox. */
+.ctx-text {
+  position: relative;
+  margin-left: calc(16px + var(--space-2));
+}
+.ctx-text-inner {
+  color: var(--text-dim);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ctx-text:not(.expanded) .ctx-text-inner {
+  max-height: 3em; /* 2 lines @ line-height 1.5 */
+  overflow: hidden;
+}
+
+/* 截断省略标记：DOM 只注入前 N 字符时的视觉提示，配合 chevron 展开全文 */
+.ctx-ellipsis {
+  color: var(--text-faint);
+}
+
+.ctx-chevron {
+  margin-top: 2px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out-expo);
+}
+.ctx-chevron:hover { color: var(--accent); }
+.ctx-chevron[hidden] { display: none; }

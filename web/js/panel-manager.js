@@ -2,11 +2,8 @@
 // Each panel registers: name, toggleBtnId, panelId, open(), close().
 // Optional `load` for lazy-loaded panels — called on first toggle click.
 
-import { trapFocus } from './focus-trap.js';
-
 const panels = {};
 const _hasListener = new Set();
-const _traps = new Map();
 
 const isPanelOpen = (panelId) => {
   const el = document.getElementById(panelId);
@@ -57,7 +54,12 @@ export const registerPanel = (name, { toggleBtnId, panelId, load, open, close })
   });
 };
 
-// ESC closes any open panel (capture phase — runs before client.js ESC)
+// ESC closes any open panel.  Bubble phase (not capture) so a target-phase
+// Escape handler that consumes the event — e.g. autocomplete.js closing the
+// completion list with stopPropagation — runs first and keeps the panel
+// open.  This module evaluates before client.js's body (module imports
+// hoist), so this handler is registered ahead of client.js's Esc-to-cancel
+// and stopImmediatePropagation below still suppresses it.
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   for (const [name, p] of Object.entries(panels)) {
@@ -71,4 +73,4 @@ document.addEventListener("keydown", (ev) => {
       return; // only close one
     }
   }
-}, true);
+});

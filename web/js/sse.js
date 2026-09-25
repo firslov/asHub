@@ -1,4 +1,4 @@
-import { escape, stripAnsi, mdToHtml, highlightWithin, renderMathIn, blockToText } from "./utils.js";
+import { escape, stripAnsi, mdToHtml, highlightWithin, renderMathIn, blockToText, fmtNum } from "./utils.js";
 import { setBusy } from "./state.js";
 import { effect } from "../vendor/signals-core.js";
 import { t } from "./i18n.js";
@@ -124,7 +124,7 @@ const saIdFromToolId = (id) => {
   return i > 0 ? id.slice(0, i) : "";
 };
 import { compactReasoning } from "./stream/compact.js";
-import { activeSession, globalConnState, sessions, forceReconnect } from "./session-manager.js";
+import { activeSession, activeSessionId, globalConnState, sessions, forceReconnect } from "./session-manager.js";
 
 // Shared page chrome — reflects the active session, not whatever frame just arrived.
 const conn = document.getElementById("conn");
@@ -242,7 +242,14 @@ effect(() => {
       hidePageLoader();
       break;
   }
-  if (dot) dot.classList.toggle("stale", cs !== "connected");
+  if (dot) {
+    dot.classList.toggle("stale", cs !== "connected");
+    // Semantic hooks for chrome.css: amber pulse while (re)connecting,
+    // warning tone on failure (live.css's .reconnecting rule was dead CSS
+    // until these toggles landed).
+    dot.classList.toggle("reconnecting", cs === "connecting" || cs === "reconnecting");
+    dot.classList.toggle("failed", cs === "failed");
+  }
   if (conn) conn.style.cursor = cs === "failed" ? "pointer" : "";
 });
 
@@ -503,6 +510,12 @@ export const handlers = {
 
   // A queued message was cancelled and dropped before it ran — remove its
   // optimistic pending box (same two-level match as agent:query above).
+  // Each queued message was rendered as a pair (.turn-sep + pending box) by
+  // composer.js or agent:queued, so the separator immediately preceding the
+  // box belongs to it and must go too — otherwise an orphaned separator
+  // survives in the stream (and in replay, since both frames are replayed).
+  // Guard on the sibling actually being a .turn-sep: the box may directly
+  // follow another element when no separator was paired with it.
   "agent:queued-done"(p) {
     if (!p?.dropped) return;
     const queryText = p?.query ?? "";
@@ -514,7 +527,10 @@ export const handlers = {
         if (pb._queryText === queryText) { matched = pb; break; }
       }
     }
-    if (matched) matched.remove();
+    if (!matched) return;
+    const prev = matched.previousElementSibling;
+    matched.remove();
+    if (prev?.classList?.contains("turn-sep")) prev.remove();
   },
 
   "agent:processing-start"() {
@@ -1017,6 +1033,9 @@ export const handlers = {
     const countText = card.querySelector(".perm-count-text");
     let remaining = 30;
     const tick = () => {
+      // Session tab closed or stream rebuilt (resync / branch switch) —
+      // stop the countdown instead of idling on a detached card.
+      if (!card.isConnected) { clearInterval(timer); return; }
       remaining--;
       if (countText) countText.textContent = String(remaining);
       if (ringCircle) {
@@ -1180,11 +1199,28 @@ export const handlers = {
     if (spinner) spinner.remove();
     const icon = head?.querySelector(".subagent-icon");
     const err = typeof p?.error === "string" && p.error ? p.error : null;
+    // Ran to a limit instead of finishing: render a warning "partial" state
+    // distinct from the success ✓ and the failure ✗.
+    const degraded = !err && (p?.degraded === "budget" || p?.degraded === "iterations") ? p.degraded : null;
     if (icon) {
-      icon.textContent = err ? "✗" : "✓";
+      icon.textContent = err ? "✗" : degraded ? "◐" : "✓";
       if (err) icon.style.color = "var(--error)";
+      else if (degraded) icon.style.color = "var(--warning)";
     }
     head?.classList.add("subagent-done");
+    if (degraded && head) {
+      const badge = document.createElement("span");
+      badge.className = "subagent-degraded";
+      badge.textContent = t(degraded === "budget" ? "subagent.partial.budget" : "subagent.partial.iterations");
+      head.appendChild(badge);
+      const used = Number(p?.tokensUsed);
+      if (Number.isFinite(used) && used > 0) {
+        const tk = document.createElement("span");
+        tk.className = "subagent-tokens-used";
+        tk.textContent = `↯ ${fmtNum(used)} tk`;
+        head.appendChild(tk);
+      }
+    }
     // Id badge for resume reference (e.g. #sa1).  Falls back to the id the
     // block was linked with when the done frame carries none.
     const badgeId = saId || block._saId || "";
@@ -1276,6 +1312,13 @@ export const handlers = {
     if (status) {
       status.textContent = failed > 0 ? t("swarm.failed", { n: failed }) : t("swarm.done");
       if (failed > 0) status.classList.add("swarm-failed");
+      // Items that hit a budget/iteration limit still finish the swarm —
+      // surface their count as a warning alongside the done/failed label.
+      const degraded = Number(p?.degraded ?? 0);
+      if (degraded > 0) {
+        status.textContent += ` · ${t("swarm.degraded", { n: degraded })}`;
+        status.classList.add("swarm-degraded");
+      }
     }
     // Collapse the per-item body on completion (unless the user toggled it).
     if (!block.dataset.userToggled) {
@@ -1307,9 +1350,13 @@ export const onReplayDone = (session) => {
   // no layout — measure their clipped state now that they're mounted.
   for (const card of session.streamEl.querySelectorAll(".permission-card")) measureDiffClip(card);
   // compactReasoning is already done on the fragment before appending
-  // (see SessionView.exitReplayMode).  Schedule the heavy async work.
-  highlightWithin(session.streamEl, { async: true });
-  renderMathIn(session.streamEl, { async: true });
+  // (see SessionView.exitReplayMode).  Schedule the heavy async work —
+  // unless the view was torn down right after replay (tab closed /
+  // resync), in which case the idle batches would run on detached DOM.
+  if (session.streamEl.isConnected) {
+    highlightWithin(session.streamEl, { async: true });
+    renderMathIn(session.streamEl, { async: true });
+  }
   forceScrollBottom(session);
   refreshGitBranch(session);
   refreshModelChip(session);
@@ -1346,8 +1393,11 @@ const refreshModelChip = (session) => {
   if (text) { session.modelEl.textContent = text; session.modelEl.hidden = false; }
   else { session.modelEl.hidden = true; }
 
-  if (session.modelPickerEl && !session._modelPickerAttached) {
-    session._modelPickerAttached = true;
+  // Guard on the chip element itself, not the session: resync() rebuilds
+  // the shell, so the chip is a fresh node that must be re-bound, while
+  // re-running refreshModelChip on the same chip stays a no-op.
+  if (session.modelPickerEl && !session.modelEl._pickerBound) {
+    session.modelEl._pickerBound = true;
     session.modelEl.addEventListener("click", (ev) => {
       ev.stopPropagation();
       toggleModelDropdown(session);
@@ -1382,29 +1432,124 @@ export const modelSupportsImages = (model, provider) => {
   return caps.get(`${provider}:${model}`)?.includes("image") ?? false;
 };
 
-const toggleModelDropdown = async (session) => {
-  const dropdown = session.modelDropdownEl;
-  if (!dropdown) return;
+// One shared dropdown for all sessions, owned by this module and living on
+// document.body for the app's lifetime.  Per-session dropdowns were moved
+// to body on first open and leaked there (300+ nodes plus listeners) when
+// the session tab closed; a singleton cannot leak and survives resync().
+let _sharedDropdown = null;
+let _dropdownOwner = null;    // session the open dropdown is anchored to
+let _dropdownBuiltFor = null; // _allModelsCache reference the DOM was built from
 
-  // Close if already open
-  if (!dropdown.hidden) {
-    dropdown.hidden = true;
-    // Clean up the stale document click handler
-    if (dropdown._closeHandler) {
-      document.removeEventListener("click", dropdown._closeHandler);
-      dropdown._closeHandler = null;
+const hideModelDropdown = () => {
+  const dd = _sharedDropdown;
+  _dropdownOwner = null;
+  if (!dd) return;
+  dd.hidden = true;
+  if (dd._closeHandler) {
+    document.removeEventListener("click", dd._closeHandler);
+    dd._closeHandler = null;
+  }
+};
+
+const getSharedDropdown = () => {
+  if (_sharedDropdown) return _sharedDropdown;
+  const dd = document.createElement("div");
+  dd.className = "model-dropdown";
+  dd.hidden = true;
+  // Event delegation: a single click listener for every .model-option,
+  // bound once — no per-option listeners to re-attach on rebuild.
+  dd.addEventListener("click", (ev) => {
+    const opt = ev.target.closest(".model-option");
+    if (!opt || !_dropdownOwner) return;
+    const modelId = opt.dataset.model;
+    const provider = opt.dataset.provider;
+    if (modelId) selectModel(_dropdownOwner, modelId, provider);
+    hideModelDropdown();
+  });
+  document.body.appendChild(dd);
+  _sharedDropdown = dd;
+  return dd;
+};
+
+// Hide the dropdown when the active session changes or its tab closes —
+// the chip it is anchored to is gone, so the menu would float orphaned.
+effect(() => {
+  const sid = activeSessionId.value;
+  if (_dropdownOwner && _dropdownOwner.id !== sid) hideModelDropdown();
+});
+
+// Full DOM build — runs once per _allModelsCache version, not per open.
+const buildModelDropdown = (dropdown) => {
+  const providers = _allModelsCache.providers || [];
+  dropdown.innerHTML =
+    `<div class="model-dropdown-search">` +
+      `<div class="model-search-wrap">` +
+        `<svg class="model-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6" cy="6" r="4.5"/><line x1="9.5" y1="9.5" x2="13" y2="13"/></svg>` +
+        `<input type="text" class="model-search-input" placeholder="${t("search.models") || "Search models…"}" autocomplete="off">` +
+      `</div>` +
+    `</div>` +
+    `<div class="model-dropdown-list">` +
+      providers.map((p) => {
+        const models = p.models || [];
+        if (!models.length) return "";
+        return `<div class="model-group" data-provider="${escapeAttr(p.name)}">` +
+          `<div class="model-group-head">${escapeAttr(p.name)}</div>` +
+          models.map((m) =>
+            `<div class="model-option" data-model="${escapeAttr(m.id)}" data-provider="${escapeAttr(p.name)}">${escapeAttr(m.id)}</div>`
+          ).join("") +
+        `</div>`;
+      }).join("") +
+    `</div>`;
+
+  const searchInput = dropdown.querySelector(".model-search-input");
+  searchInput.addEventListener("input", () => {
+    const q = searchInput.value.toLowerCase().trim();
+    dropdown.querySelectorAll(".model-group").forEach((group) => {
+      let visible = false;
+      group.querySelectorAll(".model-option").forEach((opt) => {
+        const match = !q || opt.dataset.model.toLowerCase().includes(q);
+        opt.hidden = !match;
+        if (match) visible = true;
+      });
+      group.hidden = !visible;
+    });
+  });
+  _dropdownBuiltFor = _allModelsCache;
+};
+
+// Selection state (current-provider badge + selected option) updates in
+// place on every open — no rebuild.
+const updateModelDropdownSelection = (dropdown, session) => {
+  const currentModel = session.agentInfo?.model;
+  const currentProvider = session.agentInfo?.provider;
+  dropdown.querySelectorAll(".model-group").forEach((group) => {
+    const isCurrent = group.dataset.provider === currentProvider;
+    const head = group.querySelector(".model-group-head");
+    const badge = head?.querySelector(".model-group-badge");
+    if (isCurrent && head && !badge) {
+      const span = document.createElement("span");
+      span.className = "model-group-badge";
+      span.textContent = "current";
+      head.append(" ", span);
+    } else if (!isCurrent && badge) {
+      badge.remove();
     }
+    group.querySelectorAll(".model-option").forEach((opt) => {
+      opt.classList.toggle("selected", isCurrent && opt.dataset.model === currentModel);
+    });
+  });
+};
+
+const toggleModelDropdown = async (session) => {
+  const dropdown = getSharedDropdown();
+
+  // Close if already open for this chip
+  if (!dropdown.hidden && _dropdownOwner === session) {
+    hideModelDropdown();
     return;
   }
-
-  // Close any other open dropdowns
-  document.querySelectorAll(".model-dropdown").forEach((d) => {
-    d.hidden = true;
-    if (d._closeHandler) {
-      document.removeEventListener("click", d._closeHandler);
-      d._closeHandler = null;
-    }
-  });
+  // Open for another session (or a stale anchor) — close it first
+  hideModelDropdown();
 
   // Fetch all models if not cached, or if cache seems stale (OpenRouter
   // only has 1 model — its async catalog fetch likely completed since
@@ -1421,89 +1566,46 @@ const toggleModelDropdown = async (session) => {
     }
   }
 
+  // The fetch above yields — the user may have switched sessions (or closed
+  // this tab) while it was in flight.  Bail out instead of opening the
+  // dropdown anchored to a detached/off-viewport chip and stealing focus.
+  if (activeSession.peek() !== session || !session.modelEl?.isConnected) return;
+
   const providers = _allModelsCache.providers || [];
   if (!providers.length) return;
 
-  const currentModel = session.agentInfo?.model;
-  const currentProvider = session.agentInfo?.provider;
+  if (_dropdownBuiltFor !== _allModelsCache) buildModelDropdown(dropdown);
+  updateModelDropdownSelection(dropdown, session);
 
-  // Build dropdown HTML with search and provider groups
-  dropdown.innerHTML =
-    `<div class="model-dropdown-search">` +
-      `<div class="model-search-wrap">` +
-        `<svg class="model-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6" cy="6" r="4.5"/><line x1="9.5" y1="9.5" x2="13" y2="13"/></svg>` +
-        `<input type="text" class="model-search-input" placeholder="${t("search.models") || "Search models…"}" autocomplete="off">` +
-      `</div>` +
-    `</div>` +
-    `<div class="model-dropdown-list">` +
-      providers.map((p) => {
-        const models = p.models || [];
-        if (!models.length) return "";
-        const isCurrent = p.name === currentProvider;
-        return `<div class="model-group" data-provider="${escapeAttr(p.name)}">` +
-          `<div class="model-group-head">${escapeAttr(p.name)}${isCurrent ? ` <span class="model-group-badge">current</span>` : ""}</div>` +
-          models.map((m) => {
-            const id = m.id;
-            const sel = (id === currentModel && isCurrent) ? " selected" : "";
-            return `<div class="model-option${sel}" data-model="${escapeAttr(id)}" data-provider="${escapeAttr(p.name)}">${escapeAttr(id)}</div>`;
-          }).join("") +
-        `</div>`;
-      }).join("") +
-    `</div>`;
-
-  // Click handlers
-  dropdown.querySelectorAll(".model-option").forEach((opt) => {
-    opt.addEventListener("click", () => {
-      const modelId = opt.dataset.model;
-      const provider = opt.dataset.provider;
-      if (modelId) selectModel(session, modelId, provider);
-      dropdown.hidden = true;
-      if (dropdown._closeHandler) {
-        document.removeEventListener("click", dropdown._closeHandler);
-        dropdown._closeHandler = null;
-      }
-    });
-  });
-
-  // Search filter
+  // Reset any leftover search filter from the previous open
   const searchInput = dropdown.querySelector(".model-search-input");
   if (searchInput) {
-    searchInput.addEventListener("input", () => {
-      const q = searchInput.value.toLowerCase().trim();
-      dropdown.querySelectorAll(".model-group").forEach((group) => {
-        let visible = false;
-        group.querySelectorAll(".model-option").forEach((opt) => {
-          const match = !q || opt.dataset.model.toLowerCase().includes(q);
-          opt.hidden = !match;
-          if (match) visible = true;
-        });
-        group.hidden = !visible;
-      });
-    });
-    // Focus the search input after a tick
-    setTimeout(() => searchInput.focus(), 50);
+    searchInput.value = "";
+    dropdown.querySelectorAll(".model-option").forEach((opt) => { opt.hidden = false; });
+    dropdown.querySelectorAll(".model-group").forEach((group) => { group.hidden = false; });
+    // Focus the search input after a tick — but only if this open wasn't
+    // superseded meanwhile (session switch closed/hid the dropdown).
+    setTimeout(() => {
+      if (dropdown.hidden || _dropdownOwner !== session) return;
+      if (activeSession.peek() !== session) return;
+      searchInput.focus();
+    }, 50);
   }
 
-  // Position dropdown above the model chip — append to body to escape overflow:hidden
-  if (dropdown.parentNode !== document.body) {
-    document.body.appendChild(dropdown);
-  }
+  // Position dropdown above the model chip — the chip may have been
+  // replaced by resync() while the dropdown was closed.
+  if (!session.modelEl?.isConnected) return;
   const chipRect = session.modelEl.getBoundingClientRect();
   dropdown.style.left = `${chipRect.left}px`;
   dropdown.style.top = `${chipRect.top}px`;
   dropdown.style.transform = "translateY(-100%) translateY(-6px)";
 
   dropdown.hidden = false;
+  _dropdownOwner = session;
 
-  // Remove stale handler before adding new one
-  if (dropdown._closeHandler) {
-    document.removeEventListener("click", dropdown._closeHandler);
-  }
   const close = (e) => {
     if (!dropdown.contains(e.target) && e.target !== session.modelEl) {
-      dropdown.hidden = true;
-      document.removeEventListener("click", close);
-      dropdown._closeHandler = null;
+      hideModelDropdown();
     }
   };
   dropdown._closeHandler = close;
@@ -1546,16 +1648,50 @@ const refreshCwdChip = (session) => {
   refreshLocationChip(session);
 };
 
-const refreshGitBranch = async (session) => {
+// Per-session git-branch cache.  seedSessionInfo and onReplayDone both fire
+// on the same open, and agent:processing-done re-fetches every turn — each
+// fetch spawns a git subprocess on the hub, so reuse one result per TTL
+// window and dedupe concurrent fetches for the same session.
+const GIT_BRANCH_TTL_MS = 30_000;
+const GIT_BRANCH_CACHE_MAX = 50;
+const _gitBranchCache = new Map(); // sessionId -> { text, ts, inflight }
+
+const refreshGitBranch = async (session, { force = false } = {}) => {
   if (!session?.branchEl || !session.id) return;
   const wrap = session.branchEl.closest(".terminal-wrap");
   if (wrap?.dataset.uiUsageGitBranch === "false") { session._branchText = ""; refreshLocationChip(session); return; }
-  try {
-    const r = await fetch(`/${session.id}/git-branch`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const { branch } = await r.json();
-    session._branchText = branch || "";
-  } catch { session._branchText = ""; }
+  const cached = _gitBranchCache.get(session.id);
+  if (cached?.inflight) {
+    // A fetch for this session is already in flight (seed + replay-done
+    // racing on the same open) — reuse it instead of a second request.
+    await cached.inflight;
+    session._branchText = cached.text;
+    refreshLocationChip(session);
+    return;
+  }
+  if (!force && cached && Date.now() - cached.ts < GIT_BRANCH_TTL_MS) {
+    session._branchText = cached.text;
+    refreshLocationChip(session);
+    return;
+  }
+  const inflight = (async () => {
+    try {
+      const r = await fetch(`/${session.id}/git-branch`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const { branch } = await r.json();
+      return branch || "";
+    } catch { return ""; }
+  })();
+  const entry = { text: "", ts: Date.now(), inflight };
+  if (_gitBranchCache.size >= GIT_BRANCH_CACHE_MAX) {
+    _gitBranchCache.delete(_gitBranchCache.keys().next().value);
+  }
+  _gitBranchCache.set(session.id, entry);
+  const text = await inflight;
+  entry.text = text;
+  entry.ts = Date.now();
+  entry.inflight = null;
+  session._branchText = text;
   refreshLocationChip(session);
 };
 

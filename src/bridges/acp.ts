@@ -21,6 +21,7 @@ interface JsonRpcMessage {
 interface AcpPermissionOption {
   id: string;
   label: string;
+  kind?: string;
 }
 
 /** Parsed ACP session/request_permission params. */
@@ -48,6 +49,59 @@ const ACP_KIND_MAP: Record<string, string> = {
 function mapAcpKind(raw: string | undefined): string {
   if (!raw) return "file-write";
   return ACP_KIND_MAP[raw] ?? raw.replace(/_/g, "-");
+}
+
+// ── Permission option classification ──
+// The ACP spec vocabulary is allow_once / allow_always / reject_once /
+// reject_always, and ids usually mirror the kind (no "deny" substring).
+// Classify by option.kind first, then by id prefix, and only then fall back
+// to the legacy "deny"-substring heuristic.
+
+type OptionClass = "allow" | "reject" | "unknown";
+
+function classifyOption(o: AcpPermissionOption): OptionClass {
+  const kind = o.kind ?? "";
+  if (kind.startsWith("allow_")) return "allow";
+  if (kind.startsWith("reject_")) return "reject";
+  if (/^allow([_-]|$)/.test(o.id)) return "allow";
+  if (/^reject([_-]|$)/.test(o.id)) return "reject";
+  if (o.id.includes("deny")) return "reject";
+  return "unknown";
+}
+
+function isAlwaysOption(o: AcpPermissionOption): boolean {
+  return o.kind?.endsWith("_always") === true || o.id.includes("always");
+}
+
+/** Option id to answer a denial with: reject_once, else any reject variant. */
+function pickRejectOption(options: AcpPermissionOption[]): string {
+  const rejects = options.filter((o) => classifyOption(o) === "reject");
+  return rejects.find((o) => !isAlwaysOption(o))?.id ?? rejects[0]?.id ?? "reject_once";
+}
+
+/** Option id to answer an approval with. */
+function pickAllowOption(options: AcpPermissionOption[], sessionWide?: boolean): string {
+  const allows = options.filter((o) => classifyOption(o) === "allow");
+  if (sessionWide) {
+    const always = allows.find((o) => isAlwaysOption(o));
+    if (always) return always.id;
+  }
+  const once = allows.find((o) => !isAlwaysOption(o));
+  if (once) return once.id;
+  if (allows[0]) return allows[0].id;
+  // Legacy fallback: first option that doesn't look like a denial.
+  return options.find((o) => classifyOption(o) !== "reject")?.id
+    ?? (sessionWide ? "allow_always" : "allow_once");
+}
+
+const INIT_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms — the child process is not speaking ACP`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 export interface AcpBridgeExtra {
@@ -90,7 +144,13 @@ export class AcpBridge extends EventEmitter implements Bridge {
     });
     this.child.on("error", (err) => this.emit("error", err));
 
-    this.initPromise = this.initialize(opts.cwd);
+    this.initPromise = withTimeout(this.initialize(opts.cwd), INIT_TIMEOUT_MS, "ACP initialize/session/new")
+      .catch((err) => {
+        // A child that never answers initialize is not an ACP server; don't
+        // leave it running after the hub gives up on the bridge.
+        try { this.child.kill(); } catch {}
+        throw err;
+      });
   }
 
   private async initialize(cwd?: string): Promise<void> {
@@ -135,7 +195,7 @@ export class AcpBridge extends EventEmitter implements Bridge {
 
   close(): void {
     for (const p of this.pendingAcpPermissions.values()) {
-      p.resolve(p.options.find((o) => o.id.includes("deny"))?.id ?? "deny");
+      p.resolve(pickRejectOption(p.options));
     }
     this.pendingAcpPermissions.clear();
     try { this.child.stdin?.end(); } catch {}
@@ -215,10 +275,14 @@ export class AcpBridge extends EventEmitter implements Bridge {
         || "ACP permission request";
       const description = params.description?.trim() || "";
 
+      // Public id the hub round-trips back to decidePermission. The raw ACP
+      // id may itself contain ":", so the pending map is keyed by this exact
+      // string — no delimiter-based decoding on the way back.
+      const publicRequestId = `${this.sessionId}:${requestId}`;
       this.emit("event", {
         name: "permission:request",
         payload: {
-          requestId: `${this.sessionId}:${requestId}`,
+          requestId: publicRequestId,
           kind,
           title,
           description,
@@ -227,22 +291,23 @@ export class AcpBridge extends EventEmitter implements Bridge {
 
       // 30-second timeout: auto-deny if no response from the hub.
       const timer = setTimeout(() => {
-        const p = this.pendingAcpPermissions.get(requestId);
+        const p = this.pendingAcpPermissions.get(publicRequestId);
         if (p) {
-          p.resolve(options.find((o) => o.id.includes("deny"))?.id ?? "deny");
-          this.pendingAcpPermissions.delete(requestId);
+          p.resolve(pickRejectOption(options));
+          this.pendingAcpPermissions.delete(publicRequestId);
         }
       }, 30_000);
 
-      this.pendingAcpPermissions.set(requestId, {
+      this.pendingAcpPermissions.set(publicRequestId, {
         resolve: (optionId) => {
           clearTimeout(timer);
+          const chosen = options.find((o) => o.id === optionId);
           this.send({
             jsonrpc: "2.0",
             id: requestId,
             result: {
               outcome: {
-                outcome: optionId.includes("deny") ? "denied" : "selected",
+                outcome: chosen && classifyOption(chosen) === "reject" ? "denied" : "selected",
                 optionId,
               },
             },
@@ -256,21 +321,22 @@ export class AcpBridge extends EventEmitter implements Bridge {
   }
 
   decidePermission(requestId: string, outcome: string, sessionWide?: boolean): void {
-    const acpId = requestId.includes(":") ? requestId.split(":").pop()! : requestId;
-    const key = Number.isNaN(Number(acpId)) ? acpId : Number(acpId);
-    const pending = this.pendingAcpPermissions.get(key);
+    // Keyed by the exact public id emitted in permission:request — the raw
+    // ACP id may contain ":", so delimiter-based decoding would rebuild the
+    // wrong key.
+    let key: number | string = requestId;
+    let pending = this.pendingAcpPermissions.get(key);
+    if (!pending) {
+      // Tolerate callers that pass the raw ACP id.
+      const raw: number | string = Number.isNaN(Number(requestId)) ? requestId : Number(requestId);
+      pending = this.pendingAcpPermissions.get(raw);
+      if (pending) key = raw;
+    }
     if (!pending) return;
 
-    if (outcome === "approved") {
-      // Pick the first non-deny option, preferring session-wide ("always") variants.
-      const always = sessionWide
-        ? pending.options.find((o) => o.id.includes("always"))
-        : undefined;
-      const allow = pending.options.find((o) => !o.id.includes("deny"));
-      pending.resolve(always?.id ?? allow?.id ?? "allow_once");
-    } else {
-      pending.resolve(pending.options.find((o) => o.id.includes("deny"))?.id ?? "deny");
-    }
+    pending.resolve(outcome === "approved"
+      ? pickAllowOption(pending.options, sessionWide)
+      : pickRejectOption(pending.options));
     this.pendingAcpPermissions.delete(key);
   }
 

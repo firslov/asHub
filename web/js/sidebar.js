@@ -2,7 +2,7 @@ import { escape } from "./utils.js";
 import { state, homeDir, headerTopic, headerCwd } from "./state.js";
 import { signal, effect } from "../vendor/signals-core.js";
 import { activeSessionId, switchTo, spaEnabled, sessions, openTabs, closeTab, setSessionKind } from "./session-manager.js";
-import { agents, getSession, setSessions, updateSession, pinnedIds, allSessions } from "./store.js";
+import { agents, getSession, setSessions, updateSession, pinnedIds, allSessions, bump } from "./store.js";
 import { t } from "./i18n.js";
 import { toast } from "./toast.js";
 
@@ -51,8 +51,18 @@ let sessionsHash = "";
 let workspacesHash = "";
 let terminalsHash = "";
 let fullHashCache = "";
+// Content-level hash of the last list pushed into the store (excludes
+// volatile timestamps). Gates store Map replacement so downstream
+// allSessions subscribers are not woken by turn-end lastModified bumps.
+let storeContentHash = "";
+// Last list fetched from /sessions — lets the filter re-render client-side.
+let lastSessionsList = null;
 // Sidebar filter text — applies to the sessions and archive views.
 let filterText = "";
+let filterDebounce = null;
+// Session currently being renamed inline — reconcile skips its row so a
+// background turn's refresh can't destroy the input mid-edit.
+let editingId = null;
 
 const filterQuery = () => filterText.trim().toLowerCase();
 const matchesFilter = (title, cwd) =>
@@ -198,8 +208,16 @@ const startTitleEdit = (li, instanceId, currentTitle) => {
   titleSpan.insertAdjacentElement("afterend", input);
   input.focus();
   input.select();
+  editingId = instanceId;
 
   const commit = async () => {
+    // A newer edit superseded this one — restore the row and bail.
+    if (editingId !== instanceId) {
+      input.remove();
+      titleSpan.style.display = "";
+      return;
+    }
+    editingId = null;
     const val = input.value.trim();
     input.remove();
     titleSpan.style.display = "";
@@ -213,6 +231,8 @@ const startTitleEdit = (li, instanceId, currentTitle) => {
         });
       } catch {}
     }
+    // Editing over — resume normal refreshes, pick up skipped updates.
+    renderSessions();
   };
 
   input.addEventListener("blur", commit);
@@ -265,7 +285,6 @@ const renderSessionItem = (s, isPinned = false) => {
     ev.stopPropagation();
     startTitleEdit(li, s.instanceId, s.title || "");
   });
-  li.appendChild(editBtn);
 
   const close = document.createElement("button");
   close.className = "session-close";
@@ -325,7 +344,6 @@ const renderSessionItem = (s, isPinned = false) => {
       renderSessions();
     }
   });
-  li.appendChild(close);
 
   // Archive button — moves a session to the archive list.
   const archiveBtn = document.createElement("button");
@@ -382,7 +400,6 @@ const renderSessionItem = (s, isPinned = false) => {
     }
     renderSessions();
   });
-  li.appendChild(archiveBtn);
 
   // Pin button — keeps session at top of list.
   const pinBtn = document.createElement("button");
@@ -403,7 +420,6 @@ const renderSessionItem = (s, isPinned = false) => {
     pinBtn.classList.add("pinned");
     pinBtn.title = t("unpin");
   }
-  li.appendChild(pinBtn);
 
   // Change directory button
   const cwdBtn = document.createElement("button");
@@ -436,7 +452,13 @@ const renderSessionItem = (s, isPinned = false) => {
       } catch {}
     }
   });
-  li.appendChild(cwdBtn);
+
+  // Hover action cluster — .session-actions lays these out as a 3×2 grid
+  // (cwd / archive / pin over edit / close) overlaying the row's right edge.
+  const actions = document.createElement("span");
+  actions.className = "session-actions";
+  actions.append(cwdBtn, archiveBtn, pinBtn, editBtn, close);
+  li.appendChild(actions);
 
   sessionList.appendChild(li);
   return li;
@@ -444,7 +466,9 @@ const renderSessionItem = (s, isPinned = false) => {
 
   const updateSessionItemInPlace = (li, s, isPinned) => {
     const a = li.querySelector("a");
-    if (a) {
+    // Never rewrite a row being renamed — replacing the innerHTML would
+    // destroy the edit input and blur-commit a half-typed title.
+    if (a && li.dataset.sessionId !== editingId) {
       const hasTitle = s.title && s.title !== s.instanceId;
       const title = escape(hasTitle ? s.title : t("untitled"));
       const cwdText = s.cwd ? '<span class="session-cwd" title="' + escape(s.cwd) + '">' + escape(shortenCwd(s.cwd)) + '</span>' : "";
@@ -467,9 +491,36 @@ const renderSessionItem = (s, isPinned = false) => {
     }
   };
 
-const renderSessions = async (force = false) => {
+// Fetch the pinned set and update the store signal only when it actually
+// changed. Returns true on change so callers can trigger a rebuild.
+const refreshPinned = async () => {
   try {
-    const list = await (await fetch("/sessions")).json();
+    const pinnedRes = await fetch("/api/sessions/pinned");
+    if (!pinnedRes.ok) return false;
+    const data = await pinnedRes.json();
+    if (!Array.isArray(data.pinned)) return false;
+    const next = new Set(data.pinned);
+    const cur = pinnedIds.peek();
+    if (next.size === cur.size && [...next].every((id) => cur.has(id))) return false;
+    pinnedIds.value = next;
+    return true;
+  } catch { return false; }
+};
+
+const renderSessions = async (force = false, opts = null) => {
+  try {
+    // fromCache re-renders from the last fetched list (filter typing) with
+    // no network request; fresh data still arrives via event-driven refreshes.
+    let list;
+    if (opts?.fromCache && lastSessionsList) {
+      list = lastSessionsList;
+    } else {
+      list = await (await fetch("/sessions")).json();
+      lastSessionsList = list;
+    }
+    // Explicit pinned refresh (fallback poll): pin state lives outside the
+    // content hash, so a change made in another window must force a rebuild.
+    if (opts?.refreshPinned && await refreshPinned()) force = true;
     // Include the filter query in the hash so typing/clearing the filter
     // invalidates this early return even when the session list is unchanged.
     const fullHash = JSON.stringify([filterQuery(), list.map((s) => [
@@ -478,17 +529,39 @@ const renderSessions = async (force = false) => {
     if (!force && fullHash === fullHashCache) return;
     fullHashCache = fullHash;
 
-    // Update store with fresh data
-    for (const s of list) setSessionKind(s.instanceId, s.kind ?? "agent");
-    setSessions(list);
-    // Refresh pinned after sessions update
-    try {
-      const pinnedRes = await fetch("/api/sessions/pinned");
-      if (pinnedRes.ok) {
-        const data = await pinnedRes.json();
-        if (Array.isArray(data.pinned)) pinnedIds.value = new Set(data.pinned);
+    // Content-level gate for the store: replacing the Map wakes every
+    // allSessions subscriber (tab strip, workspace/terminal views), so only
+    // do it when UI-substantive fields change. lastModified bumps on every
+    // turn end; those are synced into the cached objects in place instead.
+    const contentHash = JSON.stringify(list.map((s) => [
+      s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.kind ?? "agent",
+    ]));
+    let storeInSync = !force && contentHash === storeContentHash;
+    if (storeInSync) {
+      for (const s of list) {
+        if (!getSession(s.instanceId)) { storeInSync = false; break; }
       }
-    } catch {}
+    }
+    if (!storeInSync) {
+      storeContentHash = contentHash;
+      // Update store with fresh data
+      for (const s of list) setSessionKind(s.instanceId, s.kind ?? "agent");
+      setSessions(list);
+      // Refresh pinned only alongside substantive list changes (or forced
+      // refreshes such as pin toggles) — not on every turn-end/title frame.
+      await refreshPinned();
+    } else {
+      // Sync volatile timestamps into the cached objects without a signal
+      // tick. Workspace/terminal views read lastModified live, so bump the
+      // store only while one of those views is active; the tab strip's own
+      // render guard absorbs the resulting Map replacement.
+      for (const s of list) {
+        const cur = getSession(s.instanceId);
+        if (cur) { cur.lastModified = s.lastModified; cur.startedAt = s.startedAt; }
+      }
+      const v = sidebarView.peek();
+      if (v === "workspaces" || v === "terminals") bump();
+    }
 
     const agentList = list.filter((s) => (s.kind ?? "agent") === "agent");
     const pinIds = pinnedIds.peek();
@@ -590,8 +663,9 @@ const renderSessions = async (force = false) => {
       }
     }
 
-    // Pin toggle needs full rebuild — items change position.
-    if (force) {
+    // Pin toggle needs full rebuild — items change position. Skip while a
+    // rename is in progress: replaceChildren would destroy the edit input.
+    if (force && !editingId) {
       sessionList.replaceChildren(...newChildren);
     } else {
       // Remove stale session items and any previous empty-state row.
@@ -941,18 +1015,25 @@ effect(() => {
   if (newSessionAction) newSessionAction.hidden = view !== "sessions";
   if (newTerminalAction) newTerminalAction.hidden = view !== "terminals";
   for (const btn of viewButtons) {
-    btn.classList.toggle("current", btn.dataset.view === view);
+    const on = btn.dataset.view === view;
+    btn.classList.toggle("current", on);
+    btn.classList.toggle("active", on);
   }
 });
 
 // Sidebar filter: substring match on title + cwd for sessions, workspaces
-// and archive.
+// and archive. Debounced; the sessions view re-filters the last fetched
+// list client-side instead of re-fetching on every keystroke.
 sessionFilter?.addEventListener("input", () => {
   filterText = sessionFilter.value;
-  const v = sidebarView.peek();
-  if (v === "archive") renderArchive();
-  else if (v === "workspaces") renderWorkspaces();
-  else renderSessions();
+  if (filterDebounce) clearTimeout(filterDebounce);
+  filterDebounce = setTimeout(() => {
+    filterDebounce = null;
+    const v = sidebarView.peek();
+    if (v === "archive") renderArchive();
+    else if (v === "workspaces") renderWorkspaces();
+    else renderSessions(false, { fromCache: true });
+  }, 150);
 });
 
 effect(() => {
@@ -989,8 +1070,10 @@ const queueRefresh = () => {
 // Trigger on title changes, processing start/end via SSE events.
 document.addEventListener("sse:title", queueRefresh);
 document.addEventListener("sse:processing-change", queueRefresh);
-// Fallback: poll every 5 minutes in case SSE events were missed
-setInterval(() => renderSessions(), 5 * 60 * 1000);
+// Fallback: poll every 5 minutes in case SSE events were missed. Also
+// re-reads the pinned set, which no event carries — without this, pin
+// toggles from another window never reach this one.
+setInterval(() => renderSessions(false, { refreshPinned: true }), 5 * 60 * 1000);
 
 // Toggle the .current class and sync header info on active-session change.
 effect(() => {
@@ -1084,7 +1167,7 @@ newBtn?.addEventListener("click", () => {
 newTerminalBtn?.addEventListener("click", async (ev) => {
   const kind = (ev.metaKey || ev.ctrlKey) ? "ash-terminal" : "terminal";
   // agent-sh Shell has no Windows backend — the session would be a dead terminal.
-  if (kind === "ash-terminal" && /win/i.test(navigator.platform || "")) {
+  if (kind === "ash-terminal" && document.documentElement.dataset.platform === "win32") {
     toast(t("terminal.not.supported.win"), { type: "error" });
     return;
   }

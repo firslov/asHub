@@ -96,8 +96,10 @@ export interface Bridge {
    *  changes made by the hub UI. */
   relayEvent?(name: string, payload: unknown): void;
 
-  /** Snapshot the current message array. May throw if backend doesn't support it. */
-  snapshot(): Promise<ContextSnapshot>;
+  /** Snapshot the current message array. May throw if backend doesn't support it.
+   *  `skipTokens` skips the full-conversation token estimate (activeTokens = 0)
+   *  for callers that only need the message list. */
+  snapshot(opts?: { skipTokens?: boolean }): Promise<ContextSnapshot>;
 
   /** Mutate the context. May throw if backend doesn't support it. */
   compact(strategy: ContextStrategy): Promise<{ before: number; after: number; evictedCount: number } | null>;

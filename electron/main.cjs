@@ -7,70 +7,19 @@ process.env.ASHUB_UNDER = "1";
 process.env.AGENT_SH_UNDER_HUB = "1";
 
 // =============================================================================
-// CRITICAL FIX: Pre-load tsx and patch module system before ANY imports
+// Pre-load tsx before ANY extension imports
 // =============================================================================
-// tsx's ESM loader (registered by agent-sh/extension-loader) runs TypeScript
-// through esbuild which transpiles `import.meta.dirname` to
-// `import_meta.dirname` where `import_meta` is an empty object. This causes
-// extensions using `import.meta.dirname` to get `undefined`, leading to
-// `path.join(undefined, ...)` → `TypeError: The "path" argument must be of type string`.
-//
-// Additionally, tsx's CJS extension handler (`createExtensions` in
-// tsx/dist/register-*.cjs) intercepts `Module._extensions['.js']` and calls
-// `module._compile(transformedCode, filename)`. Our patch below hooks
-// `_compile` AFTER tsx's hook, so we see the already-transformed code and
-// can fix the `import_meta.dirname` reference.
+// Register tsx CJS support so require() can load .ts/.tsx extension files.
+// tsx 4.22.4's CJS transform already emits
+// `define_import_meta_default = { dirname, filename, url }`, so
+// `import.meta.dirname` works out of the box — a former _compile monkey
+// patch that regex-replaced `import_meta.dirname` was removed: it never
+// matched real transformed output but corrupted extension source whose
+// string literals/comments contained the literal text `import_meta.dirname`.
 // =============================================================================
-
-// Step 1: Register tsx CJS support so require() can load .ts/.tsx files.
-// This must happen BEFORE we patch Module.prototype._compile because tsx
-// installs its own _compile wrapper via Module._extensions['.js'].
 require("tsx/cjs/api").register();
 
-// Step 2: Patch Module.prototype._compile to fix tsx's broken import.meta.dirname
 const Module = require("module");
-const originalCompile = Module.prototype._compile;
-
-Module.prototype._compile = function (content, filename) {
-  // Handle data: URLs from tsx's ESM loader
-  if (filename.startsWith("data:text/javascript,")) {
-    const filePathMatch = filename.match(/\?filePath=([^&]+)/);
-    if (filePathMatch) {
-      const realPath = decodeURIComponent(filePathMatch[1]);
-      const dirname = path.dirname(realPath);
-      // Fix import_meta.url references
-      if (content.includes("import_meta.url")) {
-        content = content.replace(
-          /import_meta\.url/g,
-          JSON.stringify(pathToFileURL(realPath).href)
-        );
-      }
-      // Also fix dirname if present
-      if (content.includes("import_meta.dirname")) {
-        content = content.replace(/import_meta\.dirname/g, JSON.stringify(dirname));
-      }
-    }
-    return originalCompile.call(this, content, filename);
-  }
-
-  // Only patch files that tsx processes (TypeScript files or .js files
-  // that tsx has transformed)
-  const isTsFile = filename.endsWith(".ts") ||
-    filename.endsWith(".tsx") ||
-    filename.endsWith(".mts") ||
-    filename.endsWith(".cts");
-
-  // tsx transforms `import.meta.dirname` to `import_meta.dirname`
-  // where `import_meta = { url: ... }` (no dirname property)
-  if ((isTsFile || content.includes("import_meta")) &&
-    content.includes("import_meta.dirname")) {
-    const dirname = path.dirname(filename);
-    // Replace all occurrences of `import_meta.dirname` with the actual dirname string
-    content = content.replace(/import_meta\.dirname/g, JSON.stringify(dirname));
-  }
-
-  return originalCompile.call(this, content, filename);
-};
 
 // =============================================================================
 // CRITICAL FIX: Patch require.resolve to fix broken symlinks in extension node_modules
@@ -90,8 +39,9 @@ const hubNodeModules = path.join(__dirname, "..", "node_modules");
 const originalResolveFilename = Module._resolveFilename;
 
 Module._resolveFilename = function (request, parent, isMain, options) {
-  // Check if this is a request for agent-sh from an extension's node_modules
-  if (request.startsWith("agent-sh") && parent && parent.filename) {
+  // Check if this is a request for agent-sh from an extension's node_modules.
+  // Exact match or subpath only: "agent-sh-xxx" package names must not match.
+  if ((request === "agent-sh" || request.startsWith("agent-sh/")) && parent && parent.filename) {
     const parentDir = path.dirname(parent.filename);
     // Check if the parent is inside ~/.agent-sh/extensions/
     if (parentDir.includes(path.join(".agent-sh", "extensions"))) {
@@ -250,8 +200,13 @@ function createTearOutWindow(loadPath, screenPos) {
   };
   if (screenPos && Number.isFinite(screenPos.x) && Number.isFinite(screenPos.y)) {
     // Offset so the title-bar lands roughly under the cursor where the drop happened.
-    opts.x = Math.round(screenPos.x - 80);
-    opts.y = Math.round(screenPos.y - 20);
+    // Clamp into the nearest display's work area so the window can't spawn
+    // off-screen (negative coordinates or past the right/bottom edge).
+    const wa = screen.getDisplayNearestPoint(screenPos).workArea;
+    const maxX = Math.max(wa.x, wa.x + wa.width - opts.width);
+    const maxY = Math.max(wa.y, wa.y + wa.height - opts.height);
+    opts.x = Math.min(Math.max(Math.round(screenPos.x - 80), wa.x), maxX);
+    opts.y = Math.min(Math.max(Math.round(screenPos.y - 20), wa.y), maxY);
   }
   const win = new BrowserWindow(opts);
   trackWindow(win);
@@ -423,7 +378,23 @@ function setupIPC() {
     }
   });
 
+  // Single source of truth for "an update archive is downloaded and ready
+  // to install": the path recorded on update-downloaded, or electron-updater's
+  // own downloadedUpdateHelper as a fallback.
+  const hasDownloadedUpdate = () => {
+    if (cachedUpdateFile) return true;
+    try { return !!autoUpdater.downloadedUpdateHelper?.file; } catch { return false; }
+  };
+
   ipcMain.handle("quit-and-install", async () => {
+    // Without a downloaded update, electron-updater's quitAndInstall silently
+    // returns false and never quits — the user gets no feedback, and a stale
+    // _installOnQuit flag would make the next normal Cmd+Q skip the graceful
+    // hub shutdown.  Refuse early instead.
+    if (!hasDownloadedUpdate()) {
+      console.warn("[updater] quit-and-install requested but no update is downloaded");
+      return { ok: false, error: "No downloaded update to install" };
+    }
     // Ad-hoc signed builds can never pass Squirrel's designated-requirement
     // check across versions (CDHash differs per build), so quitAndInstall
     // would silently do nothing.  Redirect to the manual-install flow
@@ -501,6 +472,7 @@ function setupIPC() {
   let dragHoverWin = null;
   let dragPoll = null;
   let dragSender = null;
+  let dragWatchdog = null;
   let dragLabel = "";
   let lastSentX = NaN, lastSentY = NaN;
   const findWinAt = (sender, x, y) => {
@@ -521,16 +493,32 @@ function setupIPC() {
   };
   const stopDragPoll = () => {
     if (dragPoll) { clearInterval(dragPoll); dragPoll = null; }
+    if (dragWatchdog) { clearTimeout(dragWatchdog); dragWatchdog = null; }
+    if (dragSender) {
+      dragSender.removeListener("destroyed", stopDragPoll);
+      dragSender = null;
+    }
     if (dragHoverWin) { sendHover(dragHoverWin, { hovering: false }); dragHoverWin = null; }
-    dragSender = null;
     lastSentX = lastSentY = NaN;
+  };
+  // Safety net: if the renderer reloads/crashes or its window closes mid-drag,
+  // the "end" phase never arrives.  The sender's destroyed event covers that;
+  // the watchdog additionally stops a drag with no sign of life for 60s.
+  const armDragWatchdog = () => {
+    if (dragWatchdog) clearTimeout(dragWatchdog);
+    dragWatchdog = setTimeout(() => {
+      console.warn("[tab-drag] no update for 60s, stopping poll");
+      stopDragPoll();
+    }, 60000);
   };
   ipcMain.on("tab-drag-update", (event, payload, phase) => {
     if (phase === "end") { stopDragPoll(); dragLabel = ""; return; }
     if (phase === "start") {
       stopDragPoll();
       dragSender = event.sender;
+      dragSender.once("destroyed", stopDragPoll);
       dragLabel = typeof payload?.label === "string" ? payload.label : "";
+      armDragWatchdog();
       dragPoll = setInterval(() => {
         try {
           const pt = screen.getCursorScreenPoint();
@@ -549,6 +537,9 @@ function setupIPC() {
           stopDragPoll();
         }
       }, 50);
+    } else if (dragPoll) {
+      // Intermediate move/update message: signs of life — re-arm the watchdog.
+      armDragWatchdog();
     }
   });
 
@@ -675,6 +666,8 @@ async function startServer() {
   });
 
   server.on("listening", () => {
+    // The 10s fallback below may have already created the window.
+    if (mainWindow) return;
     createWindow();
   });
 
@@ -772,6 +765,12 @@ if (!gotTheLock) {
     app.quit();
   });
 
+  // macOS: clicking the Dock icon while the main window is closed (but
+  // tear-out windows keep the app alive) recreates the main window.
+  app.on("activate", () => {
+    if (!mainWindow) createWindow();
+  });
+
   app.on("before-quit", (event) => {
     if (mainWindow) mainWindow.removeAllListeners("closed");
     if (_shuttingDown || !shutdownHubRef) return;
@@ -779,9 +778,12 @@ if (!gotTheLock) {
     // Installing an update: quit immediately.  The ShipIt installer on
     // macOS (and the NSIS/AppImage installer elsewhere) is already
     // waiting for termination — a graceful hub shutdown here delays it
-    // and can make the install silently fail.  Best-effort shutdown in
-    // the background, then let the quit proceed without preventDefault.
-    if (_installOnQuit) {
+    // and can make the install silently fail.  This also covers a plain
+    // Cmd+Q with an update already downloaded (autoInstallOnAppQuit =
+    // true): cachedUpdateFile != null means the quit will run the
+    // installer, so take the same fast path.  Best-effort shutdown in the
+    // background, then let the quit proceed without preventDefault.
+    if (_installOnQuit || cachedUpdateFile != null) {
       _shuttingDown = true;
       shutdownHubRef().catch(() => {});
       return;

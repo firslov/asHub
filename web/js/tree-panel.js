@@ -44,7 +44,7 @@ const refresh = async () => {
     if (!res.ok) {
       // 409 = session has no tree store (e.g. terminal sessions)
       if (res.status === 409 || res.status === 404) {
-        body.innerHTML = `<div class="tree-empty">${escape(t("tree.unsupported"))}</div>`;
+        body.innerHTML = `<div class="p-empty">${escape(t("tree.unsupported"))}</div>`;
         return;
       }
       throw new Error(`HTTP ${res.status}`);
@@ -54,7 +54,7 @@ const refresh = async () => {
     render(data);
   } catch (err) {
     if (err?.name === "AbortError" || mySeq !== treeFetchSeq) return;
-    body.innerHTML = `<div class="tree-empty">failed: ${escape(String(err))}</div>`;
+    body.innerHTML = `<div class="p-empty">failed: ${escape(String(err))}</div>`;
   }
 };
 
@@ -72,7 +72,7 @@ const render = ({ leafId, rootId, entries }) => {
   if (!body) return;
   const byId = new Map((entries ?? []).map((e) => [e.id, e]));
   if (byId.size === 0 || !byId.get(rootId)) {
-    body.innerHTML = `<div class="tree-empty">${escape(t("tree.empty"))}</div>`;
+    body.innerHTML = `<div class="p-empty">${escape(t("tree.empty"))}</div>`;
     return;
   }
   const rawChildren = new Map();
@@ -168,11 +168,12 @@ const relTime = (ts) => {
 };
 
 const renderRow = (entry, cols, isActive, isLeaf) => {
-  const icon = entry.type === "session" ? "◉"
-    : entry.type === "compaction" ? "📦"
-    : entry.role === "user" ? "▸"
-    : entry.role === "assistant" ? "◂"
-    : "·";
+  const kind = entry.type === "session" ? "session"
+    : entry.type === "compaction" ? "compaction"
+    : entry.role === "user" ? "user"
+    : entry.role === "assistant" ? "assistant"
+    : "other";
+  const icon = { session: "◉", compaction: "≡", user: "▸", assistant: "◂", other: "·" }[kind];
   const preview = entry.type === "compaction"
     ? t("tree.compacted")
     : (entry.preview ?? entry.type);
@@ -184,11 +185,11 @@ const renderRow = (entry, cols, isActive, isLeaf) => {
     ? t("tree.switch.hint", { id: entry.id })
     : isActive ? t("tree.current.hint", { id: entry.id }) : entry.id;
   const prefixHtml = cols.map((c) => `<span class="tp-col" data-line="${c}"></span>`).join("");
-  return `<div class="tree-row" data-entry-id="${escape(entry.id)}" data-switchable="${switchable}" title="${escape(titleHint)}">
+  return `<div class="p-row tree-row${isActive ? " selected" : ""}" data-entry-id="${escape(entry.id)}" data-switchable="${switchable}" title="${escape(titleHint)}">
     <span class="tree-prefix">${prefixHtml}</span>
-    <span class="tree-icon">${icon}</span>
-    <span class="tree-preview">${escape(preview)}</span>
-    ${time ? `<span class="tree-time">${escape(time)}</span>` : ""}
+    <span class="tree-icon" data-kind="${kind}">${icon}</span>
+    <span class="p-row-main tree-preview">${escape(preview)}</span>
+    ${time ? `<span class="p-row-meta tree-time">${escape(time)}</span>` : ""}
     ${activeBadge}${leafBadge}
   </div>`;
 };

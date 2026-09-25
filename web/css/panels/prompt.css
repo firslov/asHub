@@ -1,0 +1,133 @@
+/* prompt.css — Quick Prompts + Shortcuts drawer (#prompt-overlay).
+   Shared primitives (.p-drawer/.p-head/.p-seg/.p-row/kbd…) live in ../panels.css. */
+
+/* [hidden] descendants (tab bodies, editor, empty state) must actually hide —
+   class display values would otherwise beat the UA [hidden] rule. */
+#prompt-overlay [hidden] { display: none !important; }
+
+/* Academic theme: legacy .prompt-overlay rule carried the sans override. */
+[data-theme="academic"] #prompt-overlay { font-family: var(--font-sans); }
+
+/* ── Segmented tab bar under the head ─────────────────────────────── */
+.prompt-seg-wrap {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.prompt-seg { display: flex; width: 100%; }
+.prompt-seg .p-seg-item { flex: 1; }
+
+/* ── Prompts tab: scrollable list + pinned editor ─────────────────── */
+.prompt-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#prompt-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+}
+#prompt-list .p-row { cursor: default; }
+
+.prompt-name { flex-shrink: 0; max-width: 40%; }
+
+.prompt-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.prompt-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out-expo);
+}
+#prompt-list .p-row:hover .prompt-actions,
+#prompt-list .p-row:focus-within .prompt-actions { opacity: 1; }
+
+/* ── Inline editor ────────────────────────────────────────────────── */
+.prompt-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.prompt-editor .p-input { width: 100%; box-sizing: border-box; }
+
+/* textarea aligned with .p-input (panels.css styles inputs only) */
+.prompt-textarea {
+  padding: var(--space-2);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+  min-height: 56px;
+  box-sizing: border-box;
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+              box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+.prompt-textarea:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.prompt-editor .p-input::placeholder,
+.prompt-textarea::placeholder { color: var(--text-faint); }
+
+.prompt-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* ── Shortcuts tab ────────────────────────────────────────────────── */
+.sc-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.sc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 28px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.sc-row:hover { background: var(--bg3); }
+
+.sc-row > span:last-child {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.sc-range {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+/* Platform visibility (legacy .shortcuts-row rules died with the old markup) */
+.os-mac #prompt-overlay .sc-row.os-other { display: none; }
+.os-other #prompt-overlay .sc-row.os-mac { display: none; }
+/* os-not-win rows hidden on Windows (replaces the inline head style) */
+[data-platform="win32"] #prompt-overlay .sc-row.os-not-win { display: none; }
+
+/* ── Main-area linkage (replaces .app:has(.prompt-overlay.open)) ──── */
+.app:has(#prompt-overlay:not([hidden])) .live-wrap .terminal {
+  margin-right: calc(var(--space-3) + var(--drawer-w));
+}

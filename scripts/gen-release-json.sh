@@ -90,9 +90,11 @@ parse_file() {
     return
   fi
 
-  # Fallback: try to guess from extension
+  # Fallback: the extension names the target OS but not the architecture.
+  # Deliberately does not guess arm64 — an unsuffixed dmg/zip is reported as
+  # unknown so the download page can flag it instead of mislabelling it.
   case "$ext" in
-    dmg|zip)  echo "mac arm64 $ext"; return ;;
+    dmg|zip)  echo "mac unknown $ext"; return ;;
     exe)      echo "win x64 $ext"; return ;;
     AppImage|deb|rpm) echo "linux x64 $ext"; return ;;
   esac

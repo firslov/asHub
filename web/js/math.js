@@ -104,17 +104,40 @@ const skipFencedCode = (src, i) => {
 
 // Cache key: "D|<tex>" or "I|<tex>".  Value: rendered HTML string, or null
 // (KaTeX rejected the input — treat as not-math).
+// Bounded LRU: Map preserves insertion order, so the first key is always
+// the least-recently-used entry.  Without a cap a long session full of
+// unique formulas (or `$`-heavy prose candidates) would grow this forever.
+const RENDER_CACHE_MAX = 500;
 const renderCache = new Map();
 
 const cacheKey = (tex, display) => (display ? "D|" : "I|") + tex;
 
+// Same tri-state semantics as a raw Map.get: string | null | undefined.
+const cacheGet = (key) => {
+  if (!renderCache.has(key)) return undefined;
+  const value = renderCache.get(key);
+  // Re-insert to mark as most-recently-used.
+  renderCache.delete(key);
+  renderCache.set(key, value);
+  return value;
+};
+
+const cacheSet = (key, value) => {
+  renderCache.delete(key);
+  renderCache.set(key, value);
+  while (renderCache.size > RENDER_CACHE_MAX) {
+    renderCache.delete(renderCache.keys().next().value);
+  }
+};
+
 // Returns: html string on success, null on KaTeX rejection, undefined if
-// KaTeX is not available (caller may decide whether to accept without
-// validation — used by unit tests in node).
+// KaTeX is not available (validateCandidate then rejects the candidate so
+// the raw delimiters stay visible as plain text).
 const tryRender = (tex, display) => {
   if (typeof window === "undefined" || !window.katex) return undefined;
   const key = cacheKey(tex, display);
-  if (renderCache.has(key)) return renderCache.get(key);
+  const hit = cacheGet(key);
+  if (hit !== undefined) return hit;
   let html;
   try {
     html = window.katex.renderToString(tex, {
@@ -127,7 +150,7 @@ const tryRender = (tex, display) => {
   } catch {
     html = null;
   }
-  renderCache.set(key, html);
+  cacheSet(key, html);
   return html;
 };
 
@@ -135,7 +158,10 @@ const validateCandidate = (tex, display) => {
   const maxLen = display ? MAX_DISPLAY_LEN : MAX_INLINE_LEN;
   if (tex.length === 0 || tex.length > maxLen) return false;
   const result = tryRender(tex, display);
-  if (result === undefined) return true;  // no validator available — accept
+  // No KaTeX available (offline / script failed to load): reject the
+  // candidate so extractMath leaves the original $...$ text untouched
+  // instead of emitting an empty placeholder that would never render.
+  if (result === undefined) return false;
   return result !== null;
 };
 
@@ -230,7 +256,7 @@ const renderMathNode = (node) => {
   if (node.dataset.rendered === "1") return;
   const tex = node.dataset.tex || "";
   const display = node.dataset.display === "1";
-  const cached = renderCache.get(cacheKey(tex, display));
+  const cached = cacheGet(cacheKey(tex, display));
   if (typeof cached === "string") {
     node.innerHTML = cached;
     node.dataset.rendered = "1";
@@ -249,7 +275,7 @@ const renderMathNode = (node) => {
       trust: false,
       output: "htmlAndMathml",
     });
-    renderCache.set(cacheKey(tex, display), html);
+    cacheSet(cacheKey(tex, display), html);
     node.innerHTML = html;
     node.dataset.rendered = "1";
   } catch {

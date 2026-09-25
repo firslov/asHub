@@ -1,0 +1,86 @@
+/* files.css — Files panel (directory browser drawer).
+   Shared primitives (.p-drawer, .p-head, .p-row, .p-body, .p-empty) live in
+   ../panels.css; this file holds only the tree-row specifics.
+   The shell markup carries no legacy classes, so the old .files-panel rules
+   in live.css no longer match — the layout-relevant ones are re-expressed
+   below against #files-panel. */
+
+/* Windows custom title bar: drawers sit below it */
+.os-win32 #files-panel { top: 78px; }
+
+/* ── Tree rows (built on .p-row) ─────────────────────────────────── */
+/* Depth indent: base padding + 16px per level; files (no chevron) get an
+   extra 18px so their icon/name align with directory rows. */
+#files-panel .files-row {
+  padding-left: calc(var(--space-2) + var(--depth, 0) * 16px);
+  user-select: none;
+}
+#files-panel .files-row.file {
+  padding-left: calc(var(--space-2) + var(--depth, 0) * 16px + 18px);
+}
+#files-panel .files-row:active { background: var(--bg4); }
+#files-panel .files-row.loading { opacity: 0.6; pointer-events: none; }
+
+#files-panel .files-row .p-row-main { flex: 1; min-width: 0; }
+#files-panel .files-row.dir .p-row-main { font-weight: 500; }
+
+/* 14px outline icons, same stroke set for files and folders */
+.files-row-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  transition: color var(--dur-fast) var(--ease-out-expo);
+}
+.files-row-icon.dir { color: var(--text-mid); }
+.files-row:hover .files-row-icon { color: var(--text-mid); }
+.files-row:hover .files-row-icon.dir { color: var(--text-dim); }
+.files-row.expanded .files-row-icon.dir { color: var(--accent-dim); }
+
+/* Expand/collapse chevron — rotation animates via transform only */
+.files-row-chevron {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  transition: transform var(--dur-quick) var(--ease-out-expo),
+              color var(--dur-fast) var(--ease-out-expo);
+}
+.files-row.dir:hover .files-row-chevron { color: var(--text-dim); }
+.files-row-chevron.expanded { transform: rotate(90deg); }
+.files-row-chevron.loading { animation: files-spin 0.8s linear infinite; }
+@keyframes files-spin { to { transform: rotate(360deg); } }
+
+/* Insert-@path hint, revealed on hover only */
+.files-row-kb {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out-expo);
+}
+.files-row:hover .files-row-kb { opacity: 1; }
+
+/* Expanded dir children: 1px indent guide at the parent's chevron axis
+   (--guide-x set inline by files-panel.js; off-screen by default) */
+.files-children {
+  overflow: hidden;
+  background-image: linear-gradient(var(--border-light), var(--border-light));
+  background-size: 1px 100%;
+  background-repeat: no-repeat;
+  background-position: var(--guide-x, -10px) 0;
+}
+
+/* Secondary line inside the .p-empty block (injected by files-panel.js) */
+#files-panel .files-empty-sub {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--text-mid);
+}

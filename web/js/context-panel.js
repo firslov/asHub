@@ -61,6 +61,10 @@ const tokensOf = (m) => {
 };
 const fmtTok = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
+// DOM 注入截断阈值：完整文本常驻 currentMsgs 内存，DOM 只放前 N 字符的
+// 预览，避免长会话里 MB 级文本节点造成的布局阻塞与内存占用。
+const CTX_TEXT_MAX = 2048;
+
 const stripContextWrappers = (s) => {
   let out = String(s ?? "");
   for (;;) {
@@ -128,13 +132,48 @@ const setGroupSelected = (group, on) => {
   updateDropButton();
 };
 
+// Hide the expand chevron on rows whose text already fits the two-line clamp.
+// Two-phase on purpose: every layout read happens before any write, so N rows
+// cost one reflow instead of N interleaved ones.
+//
+// Rows without layout are skipped.  A row the role filter has hidden reports
+// scrollHeight and clientHeight as 0, which reads as "fits in two lines" — the
+// chevron would be hidden permanently while the text stays clamped to 3em
+// (css/panels/context.css), leaving the content unreadable once the filter
+// shows the row again.  A truncated preview always overflows the clamp, and an
+// expanded row must keep its collapse button.
+const measureChevrons = (rows) => {
+  requestAnimationFrame(() => {
+    const targets = rows
+      .map((el) => [
+        el.querySelector(".ctx-text-inner"),
+        el.querySelector(".ctx-chevron"),
+        el.querySelector(".ctx-text"),
+      ])
+      .filter(([tn, chev, body]) =>
+        !!tn && !!chev && !!body &&
+        !chev.hidden &&
+        !body.classList.contains("expanded") &&
+        !tn.querySelector(".ctx-ellipsis") &&
+        tn.offsetParent !== null);
+    const fit = targets.map(([tn]) => tn.scrollHeight <= tn.clientHeight + 4);
+    targets.forEach(([, chev], i) => { if (fit[i]) chev.hidden = true; });
+  });
+};
+
 const applyCtxFilter = () => {
   const roles = activeRolesSet();
   const all = roles.has("all");
+  const revealed = [];
   ctxBody.querySelectorAll(".ctx-msg").forEach((el) => {
     const role = el.dataset.role ?? "";
-    el.hidden = !all && !roles.has(role);
+    const hide = !all && !roles.has(role);
+    // A row coming back had no layout while hidden, so render-time
+    // measurement skipped it — measure just the ones revealed here.
+    if (!hide && el.hidden) revealed.push(el);
+    el.hidden = hide;
   });
+  if (revealed.length) measureChevrons(revealed);
 };
 
 let ctxFetchSeq = 0;
@@ -144,12 +183,12 @@ const renderContext = async () => {
   const c = ctx();
   if (c) c.selected.clear();
   const sid = currentSessionId();
-  if (!sid) { ctxBody.innerHTML = `<div class="ctx-empty">${t("ctx.no.session")}</div>`; updateDropButton(); return; }
+  if (!sid) { ctxBody.innerHTML = `<div class="p-empty">${t("ctx.no.session")}</div>`; updateDropButton(); return; }
   ctxFetchAbort?.abort();
   const ac = new AbortController();
   ctxFetchAbort = ac;
   const mySeq = ++ctxFetchSeq;
-  ctxBody.innerHTML = `<div class="ctx-empty">${t("ctx.loading")}</div>`;
+  ctxBody.innerHTML = `<div class="p-empty">${t("ctx.loading")}</div>`;
   let data;
   try {
     const res = await fetch(`/${sid}/context`, { signal: ac.signal });
@@ -158,7 +197,7 @@ const renderContext = async () => {
     if (mySeq !== ctxFetchSeq) return;
   } catch (e) {
     if (e?.name === "AbortError" || mySeq !== ctxFetchSeq) return;
-    ctxBody.innerHTML = `<div class="ctx-empty">${escape(String(e.message ?? e))}</div>`;
+    ctxBody.innerHTML = `<div class="p-empty">${escape(String(e.message ?? e))}</div>`;
     updateDropButton();
     return;
   }
@@ -172,13 +211,20 @@ const renderContext = async () => {
 
   ctxBody.innerHTML = "";
   if (msgs.length === 0) {
-    ctxBody.innerHTML = `<div class="ctx-empty">${t("ctx.empty")}</div>`;
+    ctxBody.innerHTML = `<div class="p-empty">${t("ctx.empty")}</div>`;
     updateDropButton();
     return;
   }
   const groupSizes = new Map();
-  for (const g of groups) groupSizes.set(g, (groupSizes.get(g) ?? 0) + 1);
+  const groupFirst = new Map();
+  const groupLast = new Map();
+  groups.forEach((g, i) => {
+    groupSizes.set(g, (groupSizes.get(g) ?? 0) + 1);
+    if (!groupFirst.has(g)) groupFirst.set(g, i);
+    groupLast.set(g, i);
+  });
 
+  const chevMeasure = [];
   msgs.forEach((m, i) => {
     // System notes (project-skills discovery) are invisible to the UI — skip
     // rendering them. The forEach index stays the true kernel index, so the
@@ -187,7 +233,12 @@ const renderContext = async () => {
     const wrap = document.createElement("div");
     wrap.className = "ctx-msg";
     wrap.dataset.idx = String(i);
-    if ((groupSizes.get(groups[i]) ?? 1) > 1) wrap.classList.add("paired");
+    const g = groups[i];
+    if ((groupSizes.get(g) ?? 1) > 1) {
+      wrap.classList.add("paired");
+      if (groupFirst.get(g) === i) wrap.classList.add("pair-start");
+      if (groupLast.get(g) === i) wrap.classList.add("pair-end");
+    }
     const role = String(m?.role ?? "?");
     const text = messageText(m);
     const tok = tokensOf(m);
@@ -196,33 +247,50 @@ const renderContext = async () => {
 
     const head = document.createElement("div");
     head.className = "ctx-msg-head";
+    const check = document.createElement("label");
+    check.className = "ctx-check";
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.addEventListener("change", () => setGroupSelected(groups[i], cb.checked));
-    const left = document.createElement("span");
-    left.appendChild(cb);
-    const dot = document.createElement("span");
-    dot.className = `ctx-dot ${escape(role)}`;
-    left.appendChild(dot);
+    const box = document.createElement("span");
+    box.className = "ctx-box";
+    check.appendChild(cb);
+    check.appendChild(box);
+    head.appendChild(check);
     const roleSpan = document.createElement("span");
-    roleSpan.className = `ctx-role ${escape(role)}`;
+    roleSpan.className = `p-badge ctx-role ${escape(role)}`;
     roleSpan.textContent = role;
-    left.appendChild(roleSpan);
+    head.appendChild(roleSpan);
     const tokSpan = document.createElement("span");
     tokSpan.className = "ctx-tokens";
     tokSpan.textContent = `~${fmtTok(tok)}`;
-    left.appendChild(tokSpan);
-    const right = document.createElement("span");
-    right.textContent = `#${i}`;
-    head.appendChild(left);
-    head.appendChild(right);
+    head.appendChild(tokSpan);
+    const idxSpan = document.createElement("span");
+    idxSpan.className = "ctx-idx";
+    idxSpan.textContent = `#${i}`;
+    head.appendChild(idxSpan);
     wrap.appendChild(head);
 
     const body = document.createElement("div");
     body.className = "ctx-text";
     const textNode = document.createElement("div");
     textNode.className = "ctx-text-inner";
-    textNode.textContent = text;
+    // 截断渲染：完整文本仅通过闭包引用 currentMsgs 里的字符串（无拷贝），
+    // DOM 初始只放预览；展开时注入全文，折叠时恢复预览，长文本不常驻 DOM。
+    const truncated = text.length > CTX_TEXT_MAX;
+    const preview = truncated ? text.slice(0, CTX_TEXT_MAX) : text;
+    const setText = (full) => {
+      if (full || !truncated) {
+        textNode.textContent = text;
+        return;
+      }
+      textNode.textContent = preview;
+      const more = document.createElement("span");
+      more.className = "ctx-ellipsis";
+      more.textContent = " …";
+      textNode.appendChild(more);
+    };
+    setText(false);
     body.appendChild(textNode);
     const chev = document.createElement("button");
     chev.type = "button";
@@ -232,17 +300,16 @@ const renderContext = async () => {
       ev.stopPropagation();
       const on = !body.classList.contains("expanded");
       body.classList.toggle("expanded", on);
+      setText(on);
       chev.textContent = on ? t("ctx.collapse") : t("ctx.expand");
     });
     body.appendChild(chev);
     wrap.appendChild(body);
 
-    requestAnimationFrame(() => {
-      if (textNode.scrollHeight <= textNode.clientHeight + 4) chev.hidden = true;
-    });
-
+    chevMeasure.push(wrap);
     ctxBody.appendChild(wrap);
   });
+  measureChevrons(chevMeasure);
   applyCtxFilter();
   updateDropButton();
 };
@@ -275,7 +342,7 @@ ctxDrop?.addEventListener("click", async () => {
 ctxRefresh?.addEventListener("click", () => renderContext());
 
 ctxFilters?.addEventListener("click", (ev) => {
-  const btn = ev.target.closest(".ctx-chip");
+  const btn = ev.target.closest(".p-seg-item");
   if (!btn) return;
   const role = btn.dataset.role;
   const roles = activeRolesSet();
@@ -288,8 +355,8 @@ ctxFilters?.addEventListener("click", (ev) => {
     else roles.add(role);
     if (roles.size === 0) roles.add("all");
   }
-  ctxFilters.querySelectorAll(".ctx-chip").forEach((c) => {
-    c.dataset.active = roles.has(c.dataset.role) ? "1" : "0";
+  ctxFilters.querySelectorAll(".p-seg-item").forEach((c) => {
+    c.classList.toggle("active", roles.has(c.dataset.role));
   });
   applyCtxFilter();
 });

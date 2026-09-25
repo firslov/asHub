@@ -95,12 +95,37 @@ interface Session {
   _needsRestore?: boolean;
   /** Guards against concurrent _ensureBridge calls (page HTML + SSE arriving together). */
   _restorePromise?: Promise<void>;
+  /** Next replay index tagLastQueryFrame has not yet classified.  Incremental
+   *  watermark so each frame's JSON.parse happens once per session instead of
+   *  once per turn-end flush.  Reset on replay rebuilds. */
+  _tagScanIdx?: number;
+  /** Untagged non-command query frames awaiting an entryId tag, newest first.
+   *  Entries are dropped after MAX_TAG_ATTEMPTS failed flushes. */
+  _tagPending?: Array<{ idx: number; query: string; attempts: number }>;
+  /** PTY-output coalescing state (terminal sessions): raw chunks accumulated
+   *  during the current merge window, flushed as a single shell:pty-data
+   *  frame.  _ptyMeta is the meta of the window's first chunk. */
+  _ptyChunks?: string[];
+  _ptyBuffered?: number;
+  _ptyTimer?: ReturnType<typeof setTimeout>;
+  _ptyMeta?: { source: string; ts: number; id: string; name: string };
+  /** FIFO of transient replay frames (pty-data, ui notices) with size
+   *  accounting so the in-memory scrollback stays bounded — transient frames
+   *  are never persisted, so without a cap a busy terminal accumulates one
+   *  full SSE frame per PTY chunk forever. */
+  _transientFrames?: string[];
+  _transientSize?: number;
 }
 
 const AUTO_APPROVE_KEY = "ashub.permissions.autoApprove";
 
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;
+
+function replayFrameId(frame: string): number | null {
+  const m = frameIdRe.exec(frame);
+  return m ? Number(m[1]) : null;
+}
 
 function parseFrameName(frame: string): string {
   const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
@@ -114,6 +139,36 @@ function parseFrameName(frame: string): string {
 // by far the largest frame source (one frame per reasoning delta) and would
 // drown out real history.  Live clients still receive chunks via the direct
 // SSE write in pushFrame; restored sessions simply show no thinking blocks.
+//
+// Frame names dropped from replay on restore.  Every frame in replay.jsonl
+// is sseFrame output — `id: N\ndata: {"meta":{…},"payload":…}\n\n` written by
+// JSON.stringify — so meta.name always serializes exactly as `"name":"<name>"`
+// and the meta object precedes payload.  That lets the restore filter extract
+// the name with plain string ops instead of a full JSON.parse per frame
+// (~40ms for a 50k-frame session on the session-open path).
+const RESTORE_DROP_NAMES = ["ui:error", "ui:info", "agent:thinking-chunk"] as const;
+const RESTORE_DROP_NEEDLES = RESTORE_DROP_NAMES.map((n) => `"name":"${n}"`);
+
+function isDroppedRestoreFrame(frame: string): boolean {
+  // Necessary condition first: without the literal needle the frame cannot
+  // be a drop candidate (JSON.stringify never inserts spaces).
+  if (!RESTORE_DROP_NEEDLES.some((needle) => frame.includes(needle))) return false;
+  // meta's scalar values (source/ts/id) contain no quotes or braces, so the
+  // FIRST `"name":"` in the data line is meta.name — a needle hit inside
+  // payload text does not false-positive.  A frame missing the full envelope
+  // (e.g. a torn tail after a crash mid-append) is one JSON.parse would
+  // reject, and the old parse-based filter KEPT those — keep them here too.
+  const ds = frame.indexOf("data: ");
+  if (ds < 0) return false;
+  const line = frame.slice(ds + "data: ".length, frame.endsWith("\n\n") ? -2 : undefined);
+  if (!line.startsWith('{"meta":{') || !line.endsWith("}")) return false;
+  const nameStart = line.indexOf('"name":"');
+  if (nameStart < 0) return false;
+  const from = nameStart + '"name":"'.length;
+  const to = line.indexOf('"', from);
+  if (to < 0) return false;
+  return (RESTORE_DROP_NAMES as readonly string[]).includes(line.slice(from, to));
+}
 const REPLAY_NAMES = new Set([
   "agent:info",
   "agent:query",
@@ -169,11 +224,27 @@ const SESSIONS_DIR = path.join(
 const FRAME_SEQ_FILE = path.join(SESSIONS_DIR, ".frame-seq");
 
 // Persist the global frameSeq counter so reconnections work across restarts.
-async function saveFrameSeq(): Promise<void> {
-  try {
-    await ensureSessionsDir();
-    await fs.promises.writeFile(FRAME_SEQ_FILE, String(frameSeq));
-  } catch {}
+// Writes are batched: pushFrame only marks the counter dirty, and the 2s
+// replay-flush cycle (_flushBuf) writes it once per batch.  A dedicated
+// promise chain serializes writes across sessions, and values are sampled
+// from the monotonic counter at schedule time, so a stale write can never
+// overwrite a newer seq.
+let _frameSeqDirty = false;
+let _frameSeqChain: Promise<void> = Promise.resolve();
+
+function flushFrameSeq(force = false): void {
+  if (!force && !_frameSeqDirty) return;
+  _frameSeqDirty = false;
+  const seq = frameSeq;
+  _frameSeqChain = _frameSeqChain.then(async () => {
+    try {
+      if (!_mkdirDone.has(SESSIONS_DIR)) {
+        await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
+        _mkdirDone.add(SESSIONS_DIR);
+      }
+      await fs.promises.writeFile(FRAME_SEQ_FILE, String(seq));
+    } catch {}
+  });
 }
 
 async function loadFrameSeq(): Promise<void> {
@@ -223,10 +294,12 @@ function sessionMetaPath(id: string): string {
 const _metaTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const META_DEBOUNCE_MS = 500;
 
-async function saveSessionMeta(session: Session): Promise<void> {
+async function saveSessionMeta(session: Session, opts?: { allowClosed?: boolean }): Promise<void> {
   // Closed/archived session: its files were (or are being) deleted —
-  // writing meta.json would resurrect the session on next launch.
-  if (session._closed) return;
+  // writing meta.json would resurrect the session on next launch.  The
+  // shutdown meta flush passes allowClosed because bridge.close() marks
+  // every session _closed without deleting any files.
+  if (session._closed && !opts?.allowClosed) return;
   await ensureSessionsDir();
   const metaPath = sessionMetaPath(session.id);
   let existing: Record<string, unknown> = {};
@@ -234,7 +307,7 @@ async function saveSessionMeta(session: Session): Promise<void> {
   const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified, lastFrameSeq: session.lastFrameSeq };
   // Re-check right before the write: the session may have been closed
   // while we read the existing meta.
-  if (session._closed) return;
+  if (session._closed && !opts?.allowClosed) return;
   await fs.promises.writeFile(metaPath, JSON.stringify(merged));
   // If the session's files are being deleted while we wrote, remove what
   // we just wrote so it can't resurrect the session on next launch.
@@ -267,6 +340,9 @@ const _pendingDeletes = new Map<string, Promise<void>>();
 const BATCH_FLUSH_MS = 2000;
 
 function _flushBuf(sessionId: string): void {
+  // Piggyback the global frameSeq write on the 2s batch cycle: one write per
+  // flush instead of one per replay frame.
+  flushFrameSeq();
   const buf = _writeBufs.get(sessionId);
   if (!buf || buf.frames.length === 0) return;
   if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
@@ -303,14 +379,17 @@ function persistReplayFrame(sessionId: string, frame: string): void {
 }
 
 export async function shutdownHub(server?: http.Server, sessions?: Map<string, Session>): Promise<void> {
+  // Snapshot the session list up front: step 3's bridge.close() fires
+  // onClose, which marks sessions _closed and removes them from the map —
+  // but their files stay on disk, so step 4's meta flush must still see them.
+  const allSessions = sessions ? Array.from(sessions.values()) : [];
+
   // 1. Close all SSE long-lived connections so server.close() doesn't hang.
-  if (sessions) {
-    for (const s of sessions.values()) {
-      for (const res of s.sseClients) {
-        try { res.end(); } catch {}
-      }
-      s.sseClients.clear();
+  for (const s of allSessions) {
+    for (const res of s.sseClients) {
+      try { res.end(); } catch {}
     }
+    s.sseClients.clear();
   }
 
   // 2. Stop accepting new connections with a hard timeout.
@@ -338,7 +417,24 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
   for (const id of Array.from(_writeBufs.keys())) {
     _flushBuf(id);
   }
+  // frameSeq backstop: the dirty flag is set at every counter increment, but
+  // write unconditionally on exit so the persisted counter always covers
+  // every frame id any client may have seen.
+  flushFrameSeq(true);
+  // Persist per-session metas (carrying lastFrameSeq) — in-memory values are
+  // updated on every pushFrame, but the meta file is otherwise only written
+  // on spawn/title-change, so without this the fast restore path would keep
+  // seeing a stale lastFrameSeq.  Also flushes any debounced meta writes.
+  // allowClosed: step 3's bridge close marked these sessions _closed, but
+  // their files were NOT deleted (no closeSession), so writing the meta
+  // cannot resurrect anything.
+  await Promise.allSettled(allSessions.map(async (s) => {
+    const t = _metaTimers.get(s.id);
+    if (t) { clearTimeout(t); _metaTimers.delete(s.id); }
+    try { await saveSessionMeta(s, { allowClosed: true }); } catch {}
+  }));
   await Promise.allSettled(Array.from(_writeLocks.values()));
+  await _frameSeqChain;
 
   // 5. Await in-flight session-file deletions (closeSession).  Without
   // this, a close-then-quit can leave the session's files on disk and
@@ -533,7 +629,9 @@ const MIME: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
+  ".woff": "font/woff",
   ".ttf": "font/ttf",
+  ".otf": "font/otf",
 };
 
 /**
@@ -702,6 +800,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       if (req.method === "POST" && rest === "/fork") return forkEndpoint(req, res, session);
       if (req.method === "PUT" && rest === "/model") return setModelEndpoint(req, res, session);
       if (req.method === "PUT" && rest === "/sa-model") return setSubagentModel(req, res, session);
+      if (req.method === "PUT" && rest === "/sa-budget") return setSubagentBudget(req, res, session);
       if (req.method === "GET" && rest === "/sa-model") return getSubagentModelOverrides(req, res, session);
       if (req.method === "GET" && rest === "/sa-types") return getSubagentTypes(req, res, session);
       if (req.method === "GET" && rest === "/pin") return togglePin(req, res, session);
@@ -713,17 +812,17 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       if ((req.method === "POST" || req.method === "GET") && rest === "/pin") return togglePin(req, res, session);
 
       const file = rest === "/" || rest === "/index.html" ? "/index.html" : rest;
-      return serveStatic(res, opts.webRoot, file);
+      return serveStatic(req, res, opts.webRoot, file);
     }
 
     if (url === "/") {
       const first = Array.from(sessions.keys())[0];
       if (first) { res.writeHead(302, { Location: `/${first}/` }); res.end(); return; }
       // No sessions yet — serve the landing page; the user clicks "+" to spawn.
-      return serveStatic(res, opts.webRoot, "/index.html");
+      return serveStatic(req, res, opts.webRoot, "/index.html");
     }
 
-    return serveStatic(res, opts.webRoot, url.split("?")[0]!);
+    return serveStatic(req, res, opts.webRoot, url.split("?")[0]!);
   });
 
   // Restore persisted sessions before starting the HTTP server so that
@@ -1265,10 +1364,8 @@ async function createSession(
               const replayFrames = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n")
                 // Drop transient UI frames and legacy thinking-chunk frames
                 // (no longer persisted; they only inflate the frame count).
-                .filter((f) => {
-                  const n = parseFrameName(f);
-                  return n !== "ui:error" && n !== "ui:info" && n !== "agent:thinking-chunk";
-                });
+                // Cheap substring pre-filter — no JSON.parse per frame.
+                .filter((f) => !isDroppedRestoreFrame(f));
               if (replayFrames.length > 0) {
                 // Keep the FULL history: tail=100 resyncs slice at send time
                 // (openSseMulti), so truncating here only loses old turns.
@@ -1547,9 +1644,13 @@ function routeEvent(session: Session, e: BusEvent): void {
   };
 
   if (session.kind === "terminal" || session.kind === "ash-terminal") {
-    if (e.name === "shell:pty-data" || e.name === "shell:exit") {
-      pushFrame(session, e.name, sseFrame(meta, e.payload), { transient: true });
-    } else if (e.name === "ui:error" || e.name === "ui:info") {
+    if (e.name === "shell:pty-data") {
+      bufferPtyData(session, meta, (e.payload as { raw?: string })?.raw ?? "");
+    } else if (e.name === "shell:exit" || e.name === "ui:error" || e.name === "ui:info") {
+      // Flush buffered PTY output first so these frames keep their stream
+      // order (an exit that arrives during a coalesce window must land
+      // after the output that preceded it).
+      flushPtyBuffer(session);
       pushFrame(session, e.name, sseFrame(meta, e.payload), { transient: true });
     }
     return;
@@ -1734,8 +1835,94 @@ function flushSegment(session: Session): void {
   pushFrame(session, "agent:response-segment", sseFrame(meta, { text }));
 }
 
+// Every counter increment must eventually be persisted: mark dirty here so
+// frames that never touch the replay write buffer (transient PTY frames,
+// broadcast-only control frames, direct response-chunk writes) can't leave
+// the on-disk counter behind what clients have already seen — a stale
+// counter after restart would make the incremental since-filter drop new
+// frames permanently.
+function nextFrameId(): number {
+  _frameSeqDirty = true;
+  return ++frameSeq;
+}
+
 function sseFrame(meta: object, payload: unknown): string {
-  return `id: ${++frameSeq}\ndata: ${JSON.stringify({ meta, payload })}\n\n`;
+  return `id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta, payload })}\n\n`;
+}
+
+// Terminal output arrives as one PTY chunk per read(2) — thousands of tiny
+// frames per second during a screen refresh, each with its own JSON.stringify
+// and per-client socket write.  Coalesce chunks within a short window into a
+// single shell:pty-data frame (the frontend just writes the raw text to
+// xterm, so a merged frame renders identically).  An oversized buffer
+// flushes immediately so bulk output (cat of a large file) isn't delayed.
+const PTY_COALESCE_MS = 12;
+const PTY_COALESCE_MAX_CHARS = 256 * 1024;
+
+function bufferPtyData(session: Session, meta: { source: string; ts: number; id: string; name: string }, raw: string): void {
+  session._ptyChunks ??= [];
+  if (session._ptyChunks.length === 0) session._ptyMeta = meta;
+  session._ptyChunks.push(raw);
+  session._ptyBuffered = (session._ptyBuffered ?? 0) + raw.length;
+  if (session._ptyBuffered >= PTY_COALESCE_MAX_CHARS) {
+    flushPtyBuffer(session);
+    return;
+  }
+  if (!session._ptyTimer) {
+    session._ptyTimer = setTimeout(() => {
+      session._ptyTimer = undefined;
+      flushPtyBuffer(session);
+    }, PTY_COALESCE_MS);
+  }
+}
+
+function flushPtyBuffer(session: Session): void {
+  if (session._ptyTimer) { clearTimeout(session._ptyTimer); session._ptyTimer = undefined; }
+  const chunks = session._ptyChunks;
+  if (!chunks || chunks.length === 0) return;
+  session._ptyChunks = [];
+  session._ptyBuffered = 0;
+  const meta = session._ptyMeta ?? {
+    source: session.id,
+    ts: Date.now(),
+    id: `hub:${session.id}:pty`,
+    name: "shell:pty-data",
+  };
+  session._ptyMeta = undefined;
+  pushFrame(session, "shell:pty-data", sseFrame(meta, { raw: chunks.join("") }), { transient: true });
+}
+
+// Transient frames (pty-data, ui:error/ui:info) are kept in session.replay so
+// reconnecting clients see recent scrollback, but they are never persisted —
+// cap their in-memory footprint.  64K chars ≈ 64-192KB of terminal scrollback;
+// xterm's own buffer covers anything deeper.
+const TRANSIENT_REPLAY_MAX_CHARS = 64 * 1024;
+
+function pushTransientFrame(session: Session, frame: string): void {
+  session.replay.push(frame);
+  const fifo = (session._transientFrames ??= []);
+  fifo.push(frame);
+  session._transientSize = (session._transientSize ?? 0) + frame.length;
+  // Always keep at least the newest frame.
+  while ((session._transientSize ?? 0) > TRANSIENT_REPLAY_MAX_CHARS && fifo.length > 1) {
+    const oldest = fifo.shift()!;
+    session._transientSize! -= oldest.length;
+    const i = session.replay.indexOf(oldest);
+    if (i >= 0) {
+      session.replay.splice(i, 1);
+      // The splice shifts every later frame down by one — keep the tag
+      // watermark and pending indices aligned with the frames they point
+      // at, or tagLastQueryFrame could patch an entryId onto the wrong
+      // query frame.  Pendings at or below the evicted slot are dropped:
+      // frames below the watermark that lost their pending simply stay on
+      // the legacy turn-number rewind (conservative, never wrong).
+      if (session._tagScanIdx !== undefined && session._tagScanIdx > i) session._tagScanIdx--;
+      if (session._tagPending?.length) {
+        session._tagPending = session._tagPending.filter((p) => p.idx > i);
+        for (const p of session._tagPending) p.idx--;
+      }
+    }
+  }
 }
 
 function pushFrame(session: Session, name: string, frame: string, opts?: { transient?: boolean }): void {
@@ -1744,21 +1931,21 @@ function pushFrame(session: Session, name: string, frame: string, opts?: { trans
   // recreate the deleted replay file as an orphan.
   if (session._closed) return;
   if (opts?.transient) {
-    session.replay.push(frame);
+    pushTransientFrame(session, frame);
   } else if (REPLAY_NAMES.has(name)) {
     // The replay keeps the FULL history (no sliding window): thinking-chunk
     // frames — the original reason for the cap — are no longer replayed, so
     // growth is modest, and tail=N subscribers slice at send time anyway.
     session.replay.push(frame);
     persistReplayFrame(session.id, frame);
-    // Track highest frameSeq per-session for fast restore
-    const m = frame.match(frameIdRe);
-    if (m) {
-      session.lastFrameSeq = Math.max(session.lastFrameSeq, Number(m[1]));
-      // Persist global counter (debounced by the replay write buffer)
-      void saveFrameSeq().catch(() => {});
-    }
   }
+  // Track highest frameSeq per-session for fast restore — for EVERY pushed
+  // frame, transient included: terminal sessions emit nothing but transient
+  // frames, so gating this on REPLAY_NAMES left their meta lastFrameSeq at 0
+  // forever.  (The global counter's dirty flag is set in nextFrameId at
+  // increment time.)
+  const m = frame.match(frameIdRe);
+  if (m) session.lastFrameSeq = Math.max(session.lastFrameSeq, Number(m[1]));
   for (const r of session.sseClients) {
     if (r.writableEnded) continue;
     try { r.write(frame); } catch {}
@@ -1970,7 +2157,9 @@ async function spawnSession(
 }
 
 function expandHome(input: string): string {
-  if (input === "~" || input.startsWith("~/")) return os.homedir() + input.slice(1);
+  // Windows produces "~\..." as well as the POSIX "~/..." form — accept both.
+  if (input === "~") return os.homedir();
+  if (input.startsWith("~/") || input.startsWith("~\\")) return os.homedir() + input.slice(1);
   return input;
 }
 
@@ -2034,7 +2223,7 @@ function pickDir(res: http.ServerResponse): void {
 
 async function listDirs(res: http.ServerResponse, prefix: string): Promise<void> {
   const home = os.homedir();
-  const usedTilde = prefix === "~" || prefix.startsWith("~/");
+  const usedTilde = prefix === "~" || prefix.startsWith("~/") || prefix.startsWith("~\\");
   let raw = prefix ? expandHome(prefix) : process.cwd() + path.sep;
 
   let parent: string, partial: string;
@@ -2213,16 +2402,16 @@ async function openSseMulti(
   for (const { id, tail } of subs) {
     const session = sessions.get(id);
     if (!session) {
-      const errFrame = `id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: "Session not found." } })}\n\n`;
+      const errFrame = `id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: "Session not found." } })}\n\n`;
       try { res.write(errFrame); } catch {}
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
-      try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch {}
+      try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch {}
       continue;
     }
     // Send keepalive before potentially-slow _ensureBridge so the
     // client's 500ms safety timer is reset and doesn't fire prematurely.
     if (tail > 0) {
-      try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "hub:replay-starting" } })}\n\n`); } catch { return; }
+      try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "hub:replay-starting" } })}\n\n`); } catch { return; }
     }
     // Lazily create bridge + restore session data if needed.
     let ensureFailed = false;
@@ -2231,10 +2420,10 @@ async function openSseMulti(
     } catch (err) {
       ensureFailed = true;
       console.error(`[hub] _ensureBridge failed for ${id}:`, err);
-      const errFrame = `id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: "Failed to restore session data." } })}\n\n`;
+      const errFrame = `id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: "Failed to restore session data." } })}\n\n`;
       try { res.write(errFrame); } catch {}
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
-      try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
+      try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
       continue; // don't replay or subscribe — session is broken
     }
     if (tail > 0) {
@@ -2251,19 +2440,46 @@ async function openSseMulti(
       }
       if (session.lastAgentInfo) {
         const meta = { source: id, ts: Date.now(), id: `hub:${id}:reemit:agent:info`, name: "agent:info" };
-        try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta, payload: session.lastAgentInfo })}\n\n`); } catch { return; }
+        try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta, payload: session.lastAgentInfo })}\n\n`); } catch { return; }
       }
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
-      try { res.write(`id: ${++frameSeq}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
+      try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
     } else if (since > 0) {
       // Only clear hasUnread once this connection has actually received the
       // missed frames — clearing up-front would lose the unread badge if
       // this connection drops before any frame is delivered.
       let sentAny = false;
-      for (const line of session.replay) {
-        const m = line.match(frameIdRe);
-        if (m && Number(m[1]) > since) {
-          try { res.write(line); sentAny = true; } catch { return; }
+      const replay = session.replay;
+      // Frame ids within a session's replay are strictly increasing (every
+      // frame id comes from the single monotonic global frameSeq counter —
+      // live pushes, disk-restored files, and synthesizeBranchFrames rebuilds
+      // alike), so binary-search the first frame newer than `since` instead
+      // of regex-matching all N frames.  A boundary monotonicity check guards
+      // the assumption; if it fails, fall back to the old full scan.
+      let start: number | null = null;
+      if (replay.length > 0) {
+        const firstId = replayFrameId(replay[0]!);
+        const lastId = replayFrameId(replay[replay.length - 1]!);
+        if (firstId !== null && lastId !== null && (replay.length === 1 || lastId > firstId)) {
+          let lo = 0, hi = replay.length;
+          while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            const id = replayFrameId(replay[mid]!);
+            if (id !== null && id > since) hi = mid; else lo = mid + 1;
+          }
+          start = lo;
+        }
+      }
+      if (start !== null) {
+        for (let i = start; i < replay.length; i++) {
+          try { res.write(replay[i]!); sentAny = true; } catch { return; }
+        }
+      } else {
+        for (const line of replay) {
+          const m = line.match(frameIdRe);
+          if (m && Number(m[1]) > since) {
+            try { res.write(line); sentAny = true; } catch { return; }
+          }
         }
       }
       if (sentAny) session.hasUnread = false;
@@ -2574,12 +2790,26 @@ function getBranchEntries(session: Session): Array<{ id: string; type: string; p
   });
 }
 
+// The frontend re-fetches the branch after every turn; spawning a git child
+// process each time is wasteful, so cache per cwd with a short TTL.  The
+// branch changing mid-TTL just means the badge lags a few seconds.
+const GIT_BRANCH_CACHE_TTL_MS = 5_000;
+const _gitBranchCache = new Map<string, { branch: string | null; ts: number }>();
+
 function gitBranchEndpoint(res: http.ServerResponse, session: Session): void {
   res.setHeader("Content-Type", "application/json");
+  const cached = _gitBranchCache.get(session.cwd);
+  if (cached && Date.now() - cached.ts < GIT_BRANCH_CACHE_TTL_MS) {
+    res.end(JSON.stringify({ branch: cached.branch }));
+    return;
+  }
   execFile("git", ["-C", session.cwd, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 1000 }, (err, stdout) => {
-    if (err) { res.end(JSON.stringify({ branch: null })); return; }
-    const branch = stdout.toString().trim();
-    res.end(JSON.stringify({ branch: branch && branch !== "HEAD" ? branch : null }));
+    const trimmed = err ? "" : stdout.toString().trim();
+    const branch = trimmed && trimmed !== "HEAD" ? trimmed : null;
+    // Bound the map — cwds are few, but closed sessions would linger.
+    if (_gitBranchCache.size > 500) _gitBranchCache.clear();
+    _gitBranchCache.set(session.cwd, { branch, ts: Date.now() });
+    res.end(JSON.stringify({ branch }));
   });
 }
 
@@ -2827,36 +3057,73 @@ async function syncTreeAfterRewind(session: Session, newLength: number): Promise
  * Queued turns finish back-to-back, so several query frames may be awaiting
  * a tag when one flush lands — tag them all.  Matching is by query text
  * against the kernel's real user messages (newest first): a turn that died
- * before reaching the kernel has no message and simply stays untagged,
- * falling back to the legacy turn-number rewind.
+ * before reaching the kernel has no message and is dropped after
+ * MAX_TAG_ATTEMPTS flushes, falling back to the legacy turn-number rewind.
+ *
+ * Scanning is incremental: _tagScanIdx watermarks the replay so each frame
+ * is classified exactly once, instead of re-parsing the whole tail (down to
+ * the last tagged query) on every turn-end flush.
  */
+const MAX_TAG_ATTEMPTS = 3;
+
 async function tagLastQueryFrame(session: Session): Promise<void> {
   if (!session.capture || session._closed) return;
-  // Untagged non-command query frames at the replay tail, newest first.
-  // Stop at the first frame already carrying an entryId (patched below, or
-  // rebuilt with it inline): everything older is already addressed.
-  const pending: Array<{ idx: number; query: string }> = [];
-  for (let i = session.replay.length - 1; i >= 0; i--) {
+  if (session._tagScanIdx === undefined) {
+    // First scan for this session (fresh restore / replay just loaded):
+    // one legacy backward pass establishes the settled boundary — everything
+    // at or below the newest already-tagged query frame (or the first
+    // unparseable one) is addressed and never re-examined.
+    let floor = 0;
+    for (let i = session.replay.length - 1; i >= 0; i--) {
+      const f = session.replay[i]!;
+      if (parseFrameName(f) !== "agent:query") continue;
+      const dataLine = f.split("\n").find((l) => l.startsWith("data: "));
+      if (!dataLine) { floor = i + 1; break; }
+      try {
+        const inner = JSON.parse(dataLine.slice("data: ".length));
+        if (inner?.payload?.command === true) continue;
+        if (inner?.payload?.entryId) { floor = i + 1; break; }
+      } catch { floor = i + 1; break; }
+    }
+    session._tagScanIdx = floor;
+    session._tagPending = [];
+  }
+  // Classify only frames appended since the last scan.
+  for (let i = session._tagScanIdx; i < session.replay.length; i++) {
     const f = session.replay[i]!;
     if (parseFrameName(f) !== "agent:query") continue;
     const dataLine = f.split("\n").find((l) => l.startsWith("data: "));
-    if (!dataLine) break;
+    if (!dataLine) continue;
     try {
       const inner = JSON.parse(dataLine.slice("data: ".length));
       if (inner?.payload?.command === true) continue;
-      if (inner?.payload?.entryId) break;
-      pending.push({ idx: i, query: typeof inner?.payload?.query === "string" ? inner.payload.query : "" });
-    } catch { break; }
+      if (inner?.payload?.entryId) continue; // already addressed
+      session._tagPending!.unshift({
+        idx: i,
+        query: typeof inner?.payload?.query === "string" ? inner.payload.query : "",
+        attempts: 0,
+      });
+    } catch { continue; }
   }
+  session._tagScanIdx = session.replay.length;
+  const pending = session._tagPending!;
   if (pending.length === 0) return;
   // Backends without snapshot support (ACP) can't be tagged — their rewind
   // stays on the legacy turn-number path.  Bail quietly instead of throwing
-  // into the caller's "capture.flush failed" catch-log every single turn.
+  // into the caller's "capture.flush failed" catch-log every single turn —
+  // but still age the pendings out, or they would be re-matched (and their
+  // frames re-parsed) on every turn-end flush forever.
   let snap: ContextSnapshot;
-  try { snap = await session.bridge.snapshot(); } catch { return; }
+  try {
+    snap = await session.bridge.snapshot({ skipTokens: true });
+  } catch {
+    session._tagPending = pending.filter((p) => ++p.attempts < MAX_TAG_ATTEMPTS);
+    return;
+  }
   const msgs = snap.messages as Array<{ role?: string; content?: unknown }>;
   const used = new Set<number>();
   const tags: Array<{ idx: number; query: string; entryId: string }> = [];
+  const matched = new Set<number>();
   for (const p of pending) {
     // Newest available matching kernel message: both sequences are
     // chronological, so newest-frame ↔ newest-message keeps duplicate
@@ -2874,23 +3141,45 @@ async function tagLastQueryFrame(session: Session): Promise<void> {
       // turns, silently keeping them on the legacy turn-number rewind.
       if (stripContextWrappers(extractText(m.content)).trim() !== p.query.trim()) continue;
       used.add(i);
+      matched.add(p.idx);
       tags.push({ ...p, entryId });
       break;
     }
   }
+  // Retry bookkeeping: matched frames leave the list; unmatched ones age
+  // out after MAX_TAG_ATTEMPTS flushes so a turn that never reached the
+  // kernel stops being re-matched (and its frame re-parsed) forever.
+  session._tagPending = pending.filter((p) => {
+    if (matched.has(p.idx)) return false;
+    return ++p.attempts < MAX_TAG_ATTEMPTS;
+  });
   // Process oldest first so clients pairing tags to boxes in stream order
   // stay consistent for identical consecutive queries.
   for (const { idx, query, entryId } of tags.reverse()) {
     // Patch the in-memory frame (same SSE id, entryId added to payload).
-    const f = session.replay[idx]!;
+    // Verify frame identity first: pushTransientFrame evictions adjust the
+    // watermark/pending indices on splice, but a belt-and-braces check here
+    // guarantees a stale idx can never stamp an entryId onto an unrelated
+    // frame (which would rewind the user to the wrong tree node).
+    const f = session.replay[idx];
+    if (f === undefined || parseFrameName(f) !== "agent:query") continue;
     const dataLine = f.split("\n").find((l) => l.startsWith("data: "));
     if (dataLine) {
+      let queryMatches = false;
       try {
         const inner = JSON.parse(dataLine.slice("data: ".length));
-        inner.payload = { ...inner.payload, entryId };
-        const idLine = f.split("\n").find((l) => l.startsWith("id: "));
-        session.replay[idx] = `${idLine ?? ""}\ndata: ${JSON.stringify(inner)}\n\n`;
+        const frameQuery = typeof inner?.payload?.query === "string" ? inner.payload.query : "";
+        if (frameQuery.trim() === query.trim()) {
+          queryMatches = true;
+          inner.payload = { ...inner.payload, entryId };
+          const idLine = f.split("\n").find((l) => l.startsWith("id: "));
+          session.replay[idx] = `${idLine ?? ""}\ndata: ${JSON.stringify(inner)}\n\n`;
+        }
       } catch { /* leave frame as-is; the tag frame below still covers it */ }
+      // Wrong frame at this index (a splice shifted the array after the
+      // match) — drop the tag entirely rather than risk pairing it to a
+      // different query client-side.
+      if (!queryMatches) continue;
     }
     pushFrame(session, "agent:query-tagged", sseFrame({
       source: session.id,
@@ -3037,6 +3326,15 @@ async function rebuildReplay(
   session.replay = frames;
   session.segmentText = "";
   session.segmentSeq = 0;
+  // The replay array was replaced wholesale — the transient-frame FIFO's
+  // references are no longer in it, so reset the accounting.
+  session._transientFrames = [];
+  session._transientSize = 0;
+  // Rebuilt frames carry their entryIds inline (or were deliberately left
+  // untagged by the rebuild), so tagLastQueryFrame treats them as settled:
+  // only frames pushed after this rebuild are tag candidates.
+  session._tagScanIdx = frames.length;
+  session._tagPending = [];
   for (const r of session.sseClients) {
     if (r.writableEnded) continue;
     for (const f of frames) { try { r.write(f); } catch {} }
@@ -3111,6 +3409,16 @@ function truncateReplayToTurnCount(session: Session, keepCount: number): void {
   }
   if (truncateAt < session.replay.length) {
     session.replay.length = truncateAt;
+    // Frames past truncateAt are gone: clamp the tag watermark so a new
+    // turn's query frame is scannable again, and drop pending indices that
+    // now point past the end (an out-of-range idx would crash the tag patch
+    // loop on undefined).  Mirrors rebuildReplay's reset semantics.
+    if (session._tagScanIdx !== undefined && session._tagScanIdx > truncateAt) {
+      session._tagScanIdx = truncateAt;
+    }
+    if (session._tagPending?.length) {
+      session._tagPending = session._tagPending.filter((p) => p.idx < truncateAt);
+    }
     void persistReplayFile(session.id, session.replay).catch(() => {});
   }
 }
@@ -3635,18 +3943,44 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-function serveStatic(res: http.ServerResponse, root: string, urlPath: string): void {
+function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, root: string, urlPath: string): void {
   // Normalize and resolve to absolute path to prevent directory traversal
   const resolvedRoot = path.resolve(root);
   const filePath = path.resolve(path.join(resolvedRoot, urlPath));
   if (!filePath.startsWith(resolvedRoot + path.sep) && filePath !== resolvedRoot) {
     res.statusCode = 403; res.end(); return;
   }
-  fs.readFile(filePath, (err, data) => {
-    if (err) { res.statusCode = 404; res.end("not found"); return; }
-    const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { "Content-Type": MIME[ext] ?? "application/octet-stream" });
-    res.end(data);
+  fs.stat(filePath, (statErr, st) => {
+    if (statErr || !st.isFile()) { res.statusCode = 404; res.end("not found"); return; }
+    const etag = `W/"${st.size}-${Math.floor(st.mtimeMs)}"`;
+    const lastModified = st.mtime.toUTCString();
+    // Vendor assets live under versioned directories (katex/fonts/…) — safe
+    // to cache for a day.  Everything else revalidates (no-cache + ETag →
+    // cheap 304s) so app updates take effect immediately.
+    const cacheControl = urlPath.includes("/vendor/")
+      ? "public, max-age=86400"
+      : "no-cache";
+    const inm = req.headers["if-none-match"];
+    const ims = req.headers["if-modified-since"];
+    const imsMs = typeof ims === "string" ? Date.parse(ims) : NaN;
+    // HTTP dates have 1s resolution — compare at second granularity.
+    const mtimeMs = Math.floor(st.mtimeMs / 1000) * 1000;
+    if ((typeof inm === "string" && inm === etag) || (!inm && !Number.isNaN(imsMs) && imsMs >= mtimeMs)) {
+      res.writeHead(304, { ETag: etag, "Last-Modified": lastModified, "Cache-Control": cacheControl });
+      res.end();
+      return;
+    }
+    fs.readFile(filePath, (err, data) => {
+      if (err) { res.statusCode = 404; res.end("not found"); return; }
+      const ext = path.extname(filePath).toLowerCase();
+      res.writeHead(200, {
+        "Content-Type": MIME[ext] ?? "application/octet-stream",
+        ETag: etag,
+        "Last-Modified": lastModified,
+        "Cache-Control": cacheControl,
+      });
+      res.end(data);
+    });
   });
 }
 
@@ -3673,8 +4007,46 @@ async function setSubagentModel(req: http.IncomingMessage, res: http.ServerRespo
   res.end(JSON.stringify({ ok: true }));
 }
 
-// Whitelist for PUT /sa-model — mirrors SUBAGENT_TYPES in bridges/ash.ts.
+// Whitelist for PUT /sa-model and PUT /sa-budget — mirrors SUBAGENT_TYPES in bridges/ash.ts.
 const VALID_SUBAGENT_TYPES = new Set(["plan", "explore", "review", "research", "implement"]);
+const VALID_REASONING_LEVELS = new Set(["off", "low", "medium", "high", "xhigh", "inherit"]);
+
+async function setSubagentBudget(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
+  const bad = (error: string) => {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error }));
+  };
+  const body = await readBody(req);
+  let parsed: { type?: string; budgetTokens?: number | null; maxIterations?: number | null; reasoning?: string | null };
+  try { parsed = JSON.parse(body); } catch {
+    return bad("invalid JSON");
+  }
+  if (!parsed.type || !VALID_SUBAGENT_TYPES.has(parsed.type)) {
+    return bad("unknown subagent type");
+  }
+  const numOk = (v: unknown) => v === null || (typeof v === "number" && Number.isFinite(v) && v > 0);
+  if (parsed.budgetTokens !== undefined && !numOk(parsed.budgetTokens)) {
+    return bad("budgetTokens must be a positive number or null");
+  }
+  if (parsed.maxIterations !== undefined && !numOk(parsed.maxIterations)) {
+    return bad("maxIterations must be a positive number or null");
+  }
+  if (parsed.reasoning !== undefined && !(parsed.reasoning === null || (typeof parsed.reasoning === "string" && VALID_REASONING_LEVELS.has(parsed.reasoning)))) {
+    return bad("reasoning must be one of off/low/medium/high/xhigh/inherit or null");
+  }
+  if (parsed.budgetTokens === undefined && parsed.maxIterations === undefined && parsed.reasoning === undefined) {
+    return bad("nothing to set — pass budgetTokens, maxIterations, and/or reasoning");
+  }
+  session.bridge.execCommand?.("/sa-budget", JSON.stringify({
+    type: parsed.type,
+    ...(parsed.budgetTokens !== undefined ? { budgetTokens: parsed.budgetTokens } : {}),
+    ...(parsed.maxIterations !== undefined ? { maxIterations: parsed.maxIterations } : {}),
+    ...(parsed.reasoning !== undefined ? { reasoning: parsed.reasoning } : {}),
+  }));
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
 
 async function getSubagentModelOverrides(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   const bridge = session.bridge as any;

@@ -58,41 +58,36 @@ const renderList = () => {
 
   prompts.forEach((p) => {
     const li = document.createElement("li");
-    li.className = "prompt-item";
-
-    const info = document.createElement("div");
-    info.className = "prompt-item-info";
+    li.className = "p-row";
 
     const name = document.createElement("span");
-    name.className = "prompt-item-name";
+    name.className = "p-row-main prompt-name";
     name.textContent = p.name;
 
     const preview = document.createElement("span");
-    preview.className = "prompt-item-preview";
+    preview.className = "prompt-preview";
     preview.textContent = p.content.length > 60 ? p.content.slice(0, 60) + "…" : p.content;
 
-    info.appendChild(name);
-    info.appendChild(preview);
-
     const actions = document.createElement("div");
-    actions.className = "prompt-item-actions";
+    actions.className = "prompt-actions";
 
     const editBtn = document.createElement("button");
-    editBtn.className = "prompt-item-btn";
+    editBtn.className = "p-icon-btn";
     editBtn.title = t("prompts.edit");
-    editBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 1.5a1.4 1.4 0 1 1 2 2l-7 7-2.7.7.7-2.7 7-7z"/></svg>`;
+    editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5a1.65 1.65 0 1 1 2.33 2.33l-8.16 8.16-3.67.84.84-3.67 8.16-8.16z"/></svg>`;
     editBtn.addEventListener("click", () => startEdit(p.id));
 
     const delBtn = document.createElement("button");
-    delBtn.className = "prompt-item-btn prompt-item-del";
+    delBtn.className = "p-icon-btn danger";
     delBtn.title = t("prompts.delete");
-    delBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg>`;
+    delBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="3" y1="3" x2="11" y2="11"/><line x1="11" y1="3" x2="3" y2="11"/></svg>`;
     delBtn.addEventListener("click", () => deletePrompt(p.id));
 
     actions.appendChild(editBtn);
     actions.appendChild(delBtn);
 
-    li.appendChild(info);
+    li.appendChild(name);
+    li.appendChild(preview);
     li.appendChild(actions);
     promptList.appendChild(li);
   });
@@ -100,6 +95,7 @@ const renderList = () => {
 
 // ── Editor ────────────────────────────────────────────────────────
 const startAdd = () => {
+  setActiveTab("prompts");
   editingId = null;
   promptEditorName.value = "";
   promptEditorContent.value = "";
@@ -166,7 +162,7 @@ const deletePrompt = (id) => {
 export const setActiveTab = (tab) => {
   tabPrompts?.classList.toggle("active", tab === "prompts");
   tabShortcuts?.classList.toggle("active", tab === "shortcuts");
-  for (const p of document.querySelectorAll(".commands-panel")) {
+  for (const p of promptOverlay?.querySelectorAll("[data-panel]") ?? []) {
     if (p.dataset.panel === tab) p.removeAttribute("hidden");
     else p.setAttribute("hidden", "");
   }
@@ -175,13 +171,12 @@ export const setActiveTab = (tab) => {
 // ── Panel open / close ────────────────────────────────────────────
 export const setPromptOpen = (on, tab = "prompts") => {
   if (on) {
-    promptOverlay.removeAttribute("hidden"); promptOverlay.classList.add("open");
+    promptOverlay.removeAttribute("hidden");
     promptToggle?.classList.add("active");
     setActiveTab(tab);
     if (tab === "prompts") renderList();
   } else {
     promptOverlay.setAttribute("hidden", "");
-    promptOverlay.classList.remove("open");
     promptToggle?.classList.remove("active");
     cancelEdit();
   }
@@ -236,6 +231,10 @@ export const attachPromptAutocomplete = (inputEl) => {
     },
     accept: (it) => {
       inputEl.value = it.content;
+      // Match the slash accept in composer.js: notify listeners so shell
+      // mode detection ("!" quick prompts) and autocomplete re-evaluation
+      // run on the accepted content.
+      inputEl.dispatchEvent(new Event("input", { bubbles: true }));
     },
   });
 
@@ -245,8 +244,6 @@ export const attachPromptAutocomplete = (inputEl) => {
 // ── Refresh labels on language change ─────────────────────────────
 document.addEventListener("langchange", () => {
   if (promptOverlay && !promptOverlay.hasAttribute("hidden")) {
-    const addLabel = promptAddBtn?.querySelector("span");
-    if (addLabel) addLabel.textContent = t("prompts.add.prompt");
     if (promptEditorSave) {
       promptEditorSave.textContent = editingId ? t("prompts.save") : t("prompts.add");
     }
@@ -264,9 +261,8 @@ document.addEventListener("langchange", () => {
 
 import { registerPanel, closeOtherPanels } from './panel-manager.js';
 
-// Toggle the merged commands panel.  Closed → open on `tab`; open on the same
 // Single toolbar button toggles the merged commands panel (default: prompts
-// tab).  Tab switching happens inside via the .commands-tab buttons.
+// tab).  Tab switching happens inside via the .p-seg-item buttons.
 const toggleCommands = () => {
   const open = promptOverlay && !promptOverlay.hasAttribute("hidden");
   if (open) {

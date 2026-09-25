@@ -14,6 +14,10 @@ const onChannel = (channel, callback) => {
 };
 
 contextBridge.exposeInMainWorld("electronAPI", {
+  /** process.platform ("win32" | "darwin" | "linux") — the renderer's platform
+   *  source of truth.  navigator.platform is deprecated in Chromium and the
+   *  Windows custom title bar depends on this value being right. */
+  platform: process.platform,
   pickDirectory: () => ipcRenderer.invoke("pick-directory"),
   checkForUpdate: () => ipcRenderer.invoke("check-for-update"),
   startUpdateDownload: () => ipcRenderer.invoke("start-update-download"),

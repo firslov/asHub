@@ -34,17 +34,17 @@ const showFilesEmpty = (msg, sub) => {
 
 const makeEntryEl = (f, basePath) => {
   const el = document.createElement("div");
-  el.className = `files-entry ${f.kind}`;
+  el.className = `p-row files-row ${f.kind}`;
   el.dataset.name = f.name;
   el.dataset.path = basePath ? basePath + "/" + f.name : f.name;
 
   const depth = basePath ? basePath.split("/").length : 0;
-  if (depth > 0) el.style.paddingLeft = `${1 + depth * 1.2}rem`;
+  if (depth > 0) el.style.setProperty("--depth", depth);
 
   // Expand/collapse chevron for directories
   if (f.kind === "dir") {
     const chevron = document.createElement("span");
-    chevron.className = "files-entry-chevron";
+    chevron.className = "files-row-chevron";
     chevron.innerHTML = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 2L7 5L3 8"/>
     </svg>`;
@@ -52,7 +52,7 @@ const makeEntryEl = (f, basePath) => {
   }
 
   const icon = document.createElement("span");
-  icon.className = `files-entry-icon ${f.kind}`;
+  icon.className = `files-row-icon ${f.kind}`;
   icon.innerHTML = f.kind === "dir"
     ? `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
         <path d="M1 3.5a1.5 1.5 0 0 1 1.5-1.5h3L7 4h4.5a1.5 1.5 0 0 1 1.5 1.5V11a1.5 1.5 0 0 1-1.5 1.5H2.5A1.5 1.5 0 0 1 1 11V3.5z"/>
@@ -62,10 +62,14 @@ const makeEntryEl = (f, basePath) => {
         <polyline points="8 1.5 8 4.5 11 4.5"/>
        </svg>`;
   const name = document.createElement("span");
-  name.className = "files-entry-name";
+  name.className = "p-row-main";
   name.textContent = f.name;
   const kb = document.createElement("span");
-  kb.className = "files-entry-kb";
+  kb.className = "files-row-kb";
+  kb.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 6.5H4"/>
+    <path d="M6.5 3L3 6.5l3.5 3.5"/>
+  </svg>`;
   el.appendChild(icon);
   el.appendChild(name);
   el.appendChild(kb);
@@ -96,7 +100,7 @@ const toggleDir = async (entryEl) => {
   const dirPath = entryEl.dataset.path;
   if (!dirPath) return;
 
-  const chevron = entryEl.querySelector(".files-entry-chevron");
+  const chevron = entryEl.querySelector(".files-row-chevron");
 
   if (expandedDirs().has(dirPath)) {
     // Collapse: remove children and clean up nested expanded state
@@ -131,11 +135,13 @@ const toggleDir = async (entryEl) => {
     // Create child container
     const childContainer = document.createElement("div");
     childContainer.className = "files-children";
+    // Indent guide line sits on the parent row's chevron axis
+    const parentDepth = dirPath.split("/").length;
+    childContainer.style.setProperty("--guide-x", `${13 + parentDepth * 16}px`);
 
     const frag = document.createDocumentFragment();
     for (const f of data.files || []) {
       const childEl = makeEntryEl(f, dirPath);
-      childEl.classList.add("files-child");
       frag.appendChild(childEl);
     }
     childContainer.appendChild(frag);
@@ -155,7 +161,7 @@ const renderFiles = (files, basePath) => {
   if (!filesBody || !filesEmpty) return;
 
   // Only clear root entries; we manage children separately
-  filesBody.querySelectorAll(":scope > .files-entry, :scope > .files-children").forEach((el) => el.remove());
+  filesBody.querySelectorAll(":scope > .files-row, :scope > .files-children").forEach((el) => el.remove());
   expandedDirs().clear();
 
   if (files.length === 0) {
@@ -173,7 +179,7 @@ const renderFiles = (files, basePath) => {
 
 // Delegate click events on the files body for expand/collapse
 filesBody?.addEventListener("click", (e) => {
-  const entry = e.target.closest(".files-entry");
+  const entry = e.target.closest(".files-row");
   if (!entry) return;
   // Only handle click for directories
   if (!entry.classList.contains("dir")) return;
@@ -197,7 +203,7 @@ const fetchFiles = async () => {
   fetchAbort = ac;
   const mySeq = ++fetchSeq;
   showFilesEmpty(t("files.loading"));
-  filesBody.querySelectorAll(":scope > .files-entry, :scope > .files-children").forEach((el) => el.remove());
+  filesBody.querySelectorAll(":scope > .files-row, :scope > .files-children").forEach((el) => el.remove());
   expandedDirs().clear();
   try {
     const resp = await fetch(`/${sid}/files`, { signal: ac.signal });

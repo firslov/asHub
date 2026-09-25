@@ -122,7 +122,13 @@
      shared grid so all windows stay visually consistent.
      (--sidebar-w is dynamic, managed by prefs.js on .app.) */
   --toolbar-w: 42px;
-  --panel-w:   300px;
+  --panel-w:   340px;
+  /* Effective drawer width — shrinks on narrow windows so the shifted
+     conversation column always keeps a usable minimum (~380px accounts
+     for the collapsed-min sidebar + readable content). The terminal
+     shift (live.css) reads this same variable, so shift and drawer
+     can never drift apart. */
+  --drawer-w:  clamp(240px, calc(100vw - var(--toolbar-w) - 380px), var(--panel-w));
 
   /* Unified shell material — one surface for the sidebar, side panels,
      overlays and toolbar so the whole app reads as a single consistent

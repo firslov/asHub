@@ -1174,6 +1174,11 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
       if (old.subagentModels !== undefined) {
         parsed.subagentModels = old.subagentModels;
       }
+      // subagentBudgets is likewise written straight to disk by the subagent
+      // panel — same snapshot race, same on-disk-wins guard.
+      if (old.subagentBudgets !== undefined) {
+        parsed.subagentBudgets = old.subagentBudgets;
+      }
       // Masked apiKeys in the submitted config come from the GET round-trip —
       // restore the real values before persisting.
       unmaskApiKeys(parsed, old);

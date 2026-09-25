@@ -1376,6 +1376,22 @@ async function createSession(
                 // (openSseMulti), so truncating here only loses old turns.
                 session.replay = replayFrames;
                 loadedReplay = true;
+                // SSE control frames (hub:replay-starting/done, ui:error,
+                // reemit agent:info) are written straight to clients without
+                // touching meta lastFrameSeq, and an idle session has no 2s
+                // flush timer — so the persisted counters can lag the ids a
+                // client has already seen.  Raise frameSeq past the max id in
+                // the restored file (ids are monotonic, so the last frame's
+                // id is the max; the file was just fully read, so this is
+                // free) — otherwise a restart could reissue old ids and a
+                // since=N incremental reconnect would filter new frames
+                // permanently.  Monotonicity is preserved: the raised
+                // counter keeps every new frame id larger than replayed ones.
+                const lastId = replayFrameId(replayFrames[replayFrames.length - 1]!);
+                if (lastId !== null) {
+                  if (lastId > frameSeq) { frameSeq = lastId; _frameSeqDirty = true; }
+                  if (lastId > session.lastFrameSeq) session.lastFrameSeq = lastId;
+                }
               }
             } catch {}
 
@@ -1417,10 +1433,17 @@ async function createSession(
                 if (name === "agent:processing-start") { hasDangling = true; break; }
               }
               if (hasDangling) {
-                session.replay.push(sseFrame(
+                const frame = sseFrame(
                   { source: id, ts: Date.now(), id: `hub:${id}:recovery`, name: "agent:cancelled" },
                   {},
-                ));
+                );
+                // Deliberately NOT persisted (recovery marker, rebuilt on the
+                // next restore) — but like pushFrame it must still track the
+                // per-session high-water mark so meta lastFrameSeq never lags
+                // an id a client may have seen.
+                session.replay.push(frame);
+                const m = frame.match(frameIdRe);
+                if (m) session.lastFrameSeq = Math.max(session.lastFrameSeq, Number(m[1]));
               }
             }
 

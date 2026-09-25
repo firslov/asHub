@@ -25,6 +25,11 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
+      # gh resolves the target repository from the working directory by
+      # default and fails with "not a git repository" without one.  The
+      # checkout plus the explicit --repo below keep it independent of that.
+      - uses: actions/checkout@v4
+
       - name: Forward this tag to the release pipeline
         env:
           GH_TOKEN: ${{ github.token }}
@@ -36,7 +41,7 @@ jobs:
             exit 1
           fi
           echo "tag ${GITHUB_REF_NAME} -> dispatching release.yml for version ${version}"
-          if ! gh workflow run release.yml --ref main -f "version=${version}"; then
+          if ! gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f "version=${version}"; then
             echo "::error::could not dispatch release.yml. Run it manually: Actions -> Release -> Run workflow, version=${version}"
             exit 1
           fi

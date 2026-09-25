@@ -728,6 +728,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (req.method === "POST" && url === "/api/sessions/unpin") return unpinSession(req, res);
     if (req.method === "POST" && url === "/api/permission/decide") return decidePermission(req, res, sessions);
     if (req.method === "POST" && url === "/api/upload") return uploadImage(req, res);
+    if (req.method === "GET" && url.startsWith("/api/uploads/")) return serveUpload(res, decodeURIComponent(url.slice("/api/uploads/".length)));
     if (req.method === "GET" && url === "/api/sessions/pinned") return listPinnedSessions(res);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -2572,16 +2573,28 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   }
 
   query = parsed.query ?? "";
+  // Image refs carried by the agent:query/agent:queued frames — replay after
+  // restart rebuilds the user box from these, so they must reference the
+  // persisted uploads/ files by id, not transient base64 data.
+  let imageRefs: Array<{ id?: string; data?: string; mimeType: string }> | undefined;
   if (Array.isArray(parsed.images) && parsed.images.length > 0) {
     try {
+      imageRefs = [];
       const resolved = await Promise.all(parsed.images.map(async (img) => {
-        if (img.data) return { data: img.data, mimeType: img.mimeType };
+        if (img.data) {
+          // Raw-data fallback (client upload failed): persist now so replay
+          // frames can reference the file by id.
+          const id = await persistImageData(session.id, img.data, img.mimeType);
+          imageRefs!.push({ id, mimeType: img.mimeType });
+          return { data: img.data, mimeType: img.mimeType };
+        }
         if (img.id) {
           const uploadsDir = path.join(SESSIONS_DIR, "uploads");
           const files = await fs.promises.readdir(uploadsDir);
           const match = files.find((f) => f.startsWith(img.id!));
           if (match) {
             const buf = await fs.promises.readFile(path.join(uploadsDir, match));
+            imageRefs!.push({ id: img.id, mimeType: img.mimeType });
             return { data: buf.toString("base64"), mimeType: img.mimeType };
           }
         }
@@ -2620,7 +2633,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     // segmentText (see submit()'s catch). Reset here so a fresh turn can
     // never inherit it.
     session.segmentText = "";
-    pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query }));
+    pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
     pushFrame(session, "agent:processing-start", sseFrame(meta("agent:processing-start"), {}));
   }
 
@@ -2662,7 +2675,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
     .then((result) => {
       cleanup();
       if (result.stopReason === "queued") {
-        pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query }));
+        pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
         return;
       }
       flushSegment(session);
@@ -4193,6 +4206,50 @@ async function uploadImage(req: http.IncomingMessage, res: http.ServerResponse):
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }
+}
+
+// Persist a base64 image into uploads/ with a session-prefixed id (same
+// naming as uploadImage, so cleanup on session delete covers it). Used by
+// submit() when the client sends raw data instead of an uploaded id.
+async function persistImageData(sessionId: string, data: string, mimeType: string): Promise<string> {
+  if (!/^image\/(png|jpe?g|gif|webp)$/i.test(mimeType)) throw new Error("unsupported image type");
+  const uploadsDir = path.join(SESSIONS_DIR, "uploads");
+  await fs.promises.mkdir(uploadsDir, { recursive: true });
+  const baseId = `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = `${sessionId}_${baseId}`;
+  const ext = mimeType.split("/")[1]!.toLowerCase().replace("jpeg", "jpg");
+  await fs.promises.writeFile(path.join(uploadsDir, `${id}.${ext}`), Buffer.from(data, "base64"));
+  return id;
+}
+
+// Serve an uploaded image by id (prefix match, same lookup as submit()).
+// Ids carry an unguessable random component; the id charset is validated so
+// the read cannot escape uploadsDir.
+async function serveUpload(res: http.ServerResponse, id: string): Promise<void> {
+  if (!/^[0-9a-z_]+$/i.test(id)) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "invalid image id" }));
+    return;
+  }
+  const uploadsDir = path.join(SESSIONS_DIR, "uploads");
+  let match: string | undefined;
+  try {
+    match = (await fs.promises.readdir(uploadsDir)).find((f) => f.startsWith(id));
+  } catch { /* dir missing */ }
+  if (!match) {
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+    return;
+  }
+  const ext = match.split(".").pop()?.toLowerCase() ?? "png";
+  const types: Record<string, string> = { png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+  const buf = await fs.promises.readFile(path.join(uploadsDir, match));
+  res.writeHead(200, {
+    "Content-Type": types[ext] ?? "application/octet-stream",
+    // Ids are unique per upload — the content at this URL never changes.
+    "Cache-Control": "public, max-age=31536000, immutable",
+  });
+  res.end(buf);
 }
 
 async function listPinnedSessions(res: http.ServerResponse): Promise<void> {

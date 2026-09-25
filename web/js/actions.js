@@ -58,9 +58,15 @@ export const createUserBox = (queryText, images, ts, turn) => {
   box.className = "agent-box";
   let imagesHtml = "";
   if (images && images.length > 0) {
-    imagesHtml = images.map((img) =>
-      `<img class="agent-box-img" src="data:${img.mimeType};base64,${img.data}" alt="attached image">`
-    ).join("");
+    imagesHtml = images.map((img) => {
+      // Uploaded images persist server-side and are referenced by id (this is
+      // what replay frames carry after a restart); raw base64 only appears in
+      // live optimistic boxes and branch-tree rebuilds.
+      const src = img.id
+        ? `/api/uploads/${encodeURIComponent(img.id)}`
+        : `data:${img.mimeType};base64,${img.data}`;
+      return `<img class="agent-box-img" src="${src}" alt="attached image">`;
+    }).join("");
   }
   const timestamp = typeof ts === "number" ? ts : Date.now();
   box._ts = timestamp;

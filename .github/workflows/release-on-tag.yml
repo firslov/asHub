@@ -1,0 +1,43 @@
+name: Release on tag
+
+# release.yml owns the release pipeline: it takes an explicit version, creates
+# the tag, builds macOS (arm64 + x64), Windows and Linux, publishes the GitHub
+# Release and mirrors the artifacts to COS.  It is workflow_dispatch-only, so a
+# tag pushed by hand would otherwise start nothing at all.
+#
+# Rather than duplicating the pipeline here (two release jobs racing for the
+# same GitHub Release is what the tag trigger used to cause), this workflow
+# forwards the tag to release.yml with the version parsed out of it.
+#
+# Needs the workflow token to be allowed to dispatch workflows:
+#   Settings -> Actions -> General -> Workflow permissions.
+# If it is not, the step fails with the exact command to run by hand.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Forward this tag to the release pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::tag ${GITHUB_REF_NAME} is not vX.Y.Z — refusing to guess a version"
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} -> dispatching release.yml for version ${version}"
+          if ! gh workflow run release.yml --ref main -f "version=${version}"; then
+            echo "::error::could not dispatch release.yml. Run it manually: Actions -> Release -> Run workflow, version=${version}"
+            exit 1
+          fi
+          echo "dispatched; follow it at ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/release.yml"

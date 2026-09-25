@@ -11,7 +11,8 @@
 :root {
   /* Light palette — clean, warm paper tones for comfortable reading.
      Surface ramp: bg (content) → bg2 (panel body) → bg3 (head/hover)
-     → bg4 (pressed), with an even perceptual step between each. */
+     → bg4 (pressed). OKLab lightness steps verified even:
+     ΔL 0.033 / 0.031 / 0.031; bg-elevated sits one step above bg. */
   --bg:           #fafaf8;
   --bg2:          #f0efe9;
   --bg3:          #e6e5de;
@@ -20,30 +21,34 @@
 
   /* Accent: warm amber/gold — the single brand accent. Every derived
      state (glow/soft/border) is computed from --accent-rgb so it can
-     never drift into a second gold. */
-  --accent:        #c2851a;
-  --accent-rgb:    194, 133, 26;
-  --accent-dim:    #9a6f08;
+     never drift into a second gold.
+     Deepened from #c2851a so white --on-accent text on it reaches
+     WCAG 4.6:1 (was 3.15:1); dim/hover keep a strict darkening ladder. */
+  --accent:        #9a6d0c;
+  --accent-rgb:    154, 109, 12;
+  --accent-dim:    #7c5607;
   --accent-light:  #c99a3a;
-  --accent-hover:  #a6730e;
+  --accent-hover:  #8a610a;
   --accent-glow:   rgba(var(--accent-rgb), 0.10);
   --accent-soft:   rgba(var(--accent-rgb), 0.16);
   --accent-border: rgba(var(--accent-rgb), 0.32);
 
   /* Cyan is a SEMANTIC color only (info / read / terminal kind), never a
-     decorative second accent. */
-  --cyan:       #2d8a94;
-  --cyan-rgb:   45, 138, 148;
-  --cyan-dim:   #23767f;
+     decorative second accent.
+     Deepened from #2d8a94 for ≥4.5:1 text contrast on bg (now 5.05:1). */
+  --cyan:       #26767f;
+  --cyan-rgb:   38, 118, 127;
+  --cyan-dim:   #1f666e;
   --cyan-light: #54b8c2;
   --cyan-glow:  rgba(var(--cyan-rgb), 0.08);
   --cyan-soft:  rgba(var(--cyan-rgb), 0.14);
 
   /* Status colors — each with an RGB triplet so tinted states
-     (rgba(var(--X-rgb), a)) always match the base token. */
-  --green:       #4a8a5e;
-  --green-rgb:   74, 138, 94;
-  --green-dim:   #3d7550;
+     (rgba(var(--X-rgb), a)) always match the base token.
+     green deepened from #4a8a5e to reach 4.77:1 on bg (was 3.95:1). */
+  --green:       #3f7c50;
+  --green-rgb:   63, 124, 80;
+  --green-dim:   #33634a;
   --red:         #b33a3a;
   --red-rgb:     179, 58, 58;
   --red-dim:     #932e2e;
@@ -58,8 +63,8 @@
   /* Semantic status tokens — single source for success/warning/error/info.
      Base tokens alias the per-theme palette, so theme overrides apply. */
   --success:        var(--green);
-  --warning:        #c25e1e;
-  --warning-rgb:    194, 94, 30;
+  --warning:        #b05515;
+  --warning-rgb:    176, 85, 21;
   --error:          var(--red);
   --info:           var(--cyan);
   --on-accent:      #fff;
@@ -85,12 +90,14 @@
   --shadow-panel-lg:  0 12px 40px rgba(0, 0, 0, 0.10);
   --shadow-elevated:  0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 8px rgba(0, 0, 0, 0.06);
 
-  /* Text hierarchy */
+  /* Text hierarchy — WCAG contrast vs bg / bg2 (targets: text ≥12,
+     dim ≥7, mid ≥4.5, faint ≥3):
+     text 16.1/14.6 · dim 7.7/7.0 · mid 5.0/4.5 · faint 3.4/3.1 */
   --text:         #1d1d22;
-  --text-dim:     #6b6b75;
-  --text-mid:     #8e8e98;
-  --text-faint:   #b8b8c2;
-  --text-muted:  #a0a0aa;
+  --text-dim:     #4f4f59;
+  --text-mid:     #6c6c76;
+  --text-faint:   #878791;
+  --text-muted:  #7a7a84;
   --fg:          #1d1d22;
 
   /* Borders and surfaces */
@@ -138,8 +145,9 @@
   --surface-head:  var(--bg3);
   --icon-btn-size: 2rem;
 
-  /* Scrollbar */
-  --scrollbar-thumb: #c8c8d2;
+  /* Scrollbar — thumb at 1.6:1 vs bg2: visible at a glance without
+     reading as a border. */
+  --scrollbar-thumb: #bdbdc7;
   --scrollbar-track: transparent;
 
   /* Logo / brand */
@@ -199,6 +207,8 @@
 
 /* ── Dark theme ──────────────────────────────────────────────────── */
 [data-theme="dark"] {
+  /* Surface ramp — OKLab lightness steps verified even at low luminance:
+     ΔL 0.035 / 0.039 / 0.036 (bg→bg2→bg3→bg4). */
   --bg:           #17171b;
   --bg2:          #1f1f24;
   --bg3:          #282830;
@@ -209,10 +219,13 @@
   --accent-rgb:    232, 200, 80;
   --accent-dim:    #c9a84e;
   --accent-light:  #f0d070;
-  --accent-hover:  #c9a84e;
-  --accent-glow:   rgba(var(--accent-rgb), 0.15);
-  --accent-soft:   rgba(var(--accent-rgb), 0.22);
-  --accent-border: rgba(var(--accent-rgb), 0.35);
+  /* hover sits between accent and dim (was identical to dim) */
+  --accent-hover:  #d4b44a;
+  /* Alpha ladder slightly reined in (was 0.15/0.22/0.35): still a notch
+     above light's 0.10/0.16/0.32 so tints read equally on dark surfaces. */
+  --accent-glow:   rgba(var(--accent-rgb), 0.13);
+  --accent-soft:   rgba(var(--accent-rgb), 0.20);
+  --accent-border: rgba(var(--accent-rgb), 0.33);
 
   --cyan:         #58c8d4;
   --cyan-rgb:     88, 200, 212;
@@ -237,11 +250,14 @@
   --warning-rgb:  224, 138, 74;
   --on-accent:    #1a1a1e;
 
+  /* Text hierarchy — WCAG contrast vs bg / bg2 (targets: text ≥12,
+     dim ≥7, mid ≥4.5, faint ≥3):
+     text 14.6/13.4 · dim 7.7/7.1 · mid 4.9/4.5 · faint 3.3/3.0 */
   --text:         #e8e8ec;
-  --text-dim:     #9898a4;
-  --text-mid:     #6c6c78;
-  --text-faint:   #4a4a56;
-  --text-muted:   #7a7a86;
+  --text-dim:     #a9a9b5;
+  --text-mid:     #868692;
+  --text-faint:   #6a6a76;
+  --text-muted:   #9696a2;
   --fg:           #e8e8ec;
 
   --border:       rgba(255, 255, 255, 0.10);
@@ -272,8 +288,10 @@
 /* Cool cream tones with scholarly burgundy accents.
    Designed for focused, distraction-free reading with gravitas. */
 [data-theme="academic"] {
+  /* Surface ramp — bg2 deepened one notch (#eeeadf→#ede9de) so the OKLab
+     lightness steps even out: ΔL 0.037 / 0.036 / 0.039 (was 0.034/0.039/0.039). */
   --bg:           #f8f5ef;
-  --bg2:          #eeeadf;
+  --bg2:          #ede9de;
   --bg3:          #e2ddd0;
   --bg4:          #d6d0c2;
   --bg-elevated:  #fbfaf4;
@@ -282,17 +300,21 @@
   --accent-rgb:   30, 59, 92;
   --accent-dim:   #162d47;
   --accent-light: #2e5a8c;
-  --accent-hover: #162d47;
-  --accent-glow:  rgba(var(--accent-rgb), 0.07);
-  --accent-soft:  rgba(var(--accent-rgb), 0.12);
-  --accent-border: rgba(var(--accent-rgb), 0.22);
+  /* hover sits between accent and dim (was identical to dim) */
+  --accent-hover: #1a3450;
+  /* Alpha ladder raised from 0.07/0.12/0.22: the dark navy tint vanished
+     on cream at those levels; still lighter-handed than light's
+     0.10/0.16/0.32 because the accent itself is dark. */
+  --accent-glow:  rgba(var(--accent-rgb), 0.09);
+  --accent-soft:  rgba(var(--accent-rgb), 0.14);
+  --accent-border: rgba(var(--accent-rgb), 0.26);
 
   --cyan:         #2d6b7a;
   --cyan-rgb:     45, 107, 122;
   --cyan-dim:     #225360;
   --cyan-light:   #4a8e9e;
-  --cyan-glow:    rgba(var(--cyan-rgb), 0.07);
-  --cyan-soft:    rgba(var(--cyan-rgb), 0.12);
+  --cyan-glow:    rgba(var(--cyan-rgb), 0.08);
+  --cyan-soft:    rgba(var(--cyan-rgb), 0.13);
 
   --green:        #3d6040;
   --green-rgb:    61, 96, 64;
@@ -304,36 +326,45 @@
   --red-light:    #9e4848;
   --purple:       #4a4468;
   --purple-rgb:   74, 68, 104;
-  --amber:        #7a5a30;
+  /* amber lifted from #7a5a30 — less muddy on cream, still desaturated
+     to match the scholarly palette */
+  --amber:        #7f6027;
 
   --warning:      #a55a24;
   --warning-rgb:  165, 90, 36;
   --on-accent:    #fff;
 
+  /* Text hierarchy — WCAG contrast vs bg / bg2 (targets: text ≥12,
+     dim ≥7, mid ≥4.5, faint ≥3):
+     text 15.9/14.4 · dim 7.8/7.1 · mid 5.0/4.5 · faint 3.3/3.0 */
   --text:         #1a1a1f;
-  --text-dim:     #5a5a65;
-  --text-mid:     #787883;
-  --text-faint:   #a0a0aa;
-  --text-muted:   #b0b0b8;
+  --text-dim:     #4b4b56;
+  --text-mid:     #686873;
+  --text-faint:   #858590;
+  --text-muted:   #777781;
   --fg:           #1a1a1f;
 
   --border:       rgba(30, 59, 92, 0.09);
   --border-light: rgba(30, 59, 92, 0.05);
   --border-mid:   rgba(30, 59, 92, 0.14);
-  --border-accent: rgba(var(--accent-rgb), 0.22);
+  --border-accent: rgba(var(--accent-rgb), 0.25);
   --edge-highlight: rgba(255, 255, 255, 0.5);
   --surface-panel: var(--bg2);
   --surface-head:  var(--bg3);
 
-  --shadow-sm:   0 1px 3px rgba(30, 35, 45, 0.06);
-  --shadow-md:   0 4px 16px rgba(30, 35, 45, 0.08);
-  --shadow-lg:   0 8px 40px rgba(30, 35, 45, 0.10);
+  /* Shadows — cool blue-gray base rgba(30,35,45,*) per the academic
+     spec. Values intentionally match the "softer paper" overrides that
+     live.css duplicates at its academic section; keep these in sync and
+     let live.css drop its copies. */
+  --shadow-sm:   0 1px 2px rgba(30, 35, 45, 0.04);
+  --shadow-md:   0 3px 10px rgba(30, 35, 45, 0.06);
+  --shadow-lg:   0 6px 24px rgba(30, 35, 45, 0.08);
   --shadow-glow: 0 0 40px rgba(var(--accent-rgb), 0.04);
 
-  --shadow-panel-sm:  0 2px 10px rgba(30, 35, 45, 0.08);
-  --shadow-panel-md:  0 4px 22px rgba(30, 35, 45, 0.10);
+  --shadow-panel-sm:  0 1px 4px rgba(30, 35, 45, 0.05);
+  --shadow-panel-md:  0 3px 12px rgba(30, 35, 45, 0.06);
   --shadow-panel-lg:  0 12px 44px rgba(30, 35, 45, 0.12);
-  --shadow-elevated:  0 1px 2px rgba(30, 35, 45, 0.06), 0 4px 10px rgba(30, 35, 45, 0.08);
+  --shadow-elevated:  0 1px 2px rgba(30, 35, 45, 0.04), 0 3px 8px rgba(30, 35, 45, 0.05);
 
   --scrollbar-thumb: #c4bdb0;
   --logo-bg:      linear-gradient(135deg, #1e3b5c 0%, #162d47 100%);

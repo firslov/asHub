@@ -272,9 +272,10 @@
 /* 去掉 live.css 的顶部渐变条与左侧 accent 边——层次交给底色与徽章 */
 .live-wrap .agent-reply pre::before { content: none; }
 
-/* 深色主题：比页面底色更深的专用代码底 */
+/* 深色主题：比页面底色更深的专用代码底（--bg 的 55% 亮度派生，
+   不写死黑色，始终跟随主题底色） */
 [data-theme="dark"] .live-wrap .agent-reply pre {
-  background: color-mix(in srgb, var(--bg) 55%, #000);
+  background: rgb(from var(--bg) calc(r * 0.55) calc(g * 0.55) calc(b * 0.55));
   border-color: var(--border);
 }
 
@@ -288,8 +289,8 @@
    .live-wrap .agent-reply pre 用 box-shadow: none 刻意把内阴影拉平（层次交给
    底色与徽章），深色主题也没有恢复它；两套主题保持一致。 */
 [data-theme="academic"] .live-wrap .agent-reply pre {
-  background: #f0ece3;
-  border-color: rgba(30, 59, 92, 0.12);
+  background: color-mix(in srgb, var(--bg2) 70%, var(--bg));
+  border-color: rgba(var(--accent-rgb), 0.12);
 }
 
 [data-theme="academic"] .live-wrap .agent-reply h1,
@@ -301,33 +302,41 @@
 }
 
 [data-theme="academic"] .live-wrap .diff-added {
-  background: rgba(92, 124, 92, 0.10);
-  border-left-color: #5c7c5c;
+  background: color-mix(in srgb, var(--green-light) 12%, transparent);
+  border-left-color: var(--green-light);
+}
+
+/* removed 行的陶土墨色：red-light 偏暖（warning）再用 text-mid 去饱和。
+   color-mix 只接受两个颜色分量，嵌套分两步；先定义 ink，再派生 tint。 */
+[data-theme="academic"] .live-wrap .diff-block {
+  --diff-rm-ink: color-mix(in srgb,
+    color-mix(in srgb, var(--red-light) 60%, var(--warning)) 75%,
+    var(--text-mid));
 }
 
 [data-theme="academic"] .live-wrap .diff-removed {
-  background: rgba(155, 100, 90, 0.09);
-  border-left-color: #9b645a;
+  background: color-mix(in srgb, var(--diff-rm-ink, var(--red)) 9%, transparent);
+  border-left-color: var(--diff-rm-ink, var(--red));
 }
 
 [data-theme="academic"] .live-wrap .diff-head {
-  background: #ebe6db;
+  background: color-mix(in srgb, var(--bg2) 75%, var(--bg3));
   color: var(--text-dim);
 }
 
 [data-theme="academic"] .live-wrap .diff-sep {
-  background: #f0ece3;
-  color: #8a8275;
+  background: color-mix(in srgb, var(--bg2) 70%, var(--bg));
+  color: color-mix(in srgb, var(--text-mid) 80%, var(--bg4));
 }
 
 [data-theme="academic"] .live-wrap .tool-row:hover {
-  background: #ebe7de;
+  background: color-mix(in srgb, var(--bg2) 80%, var(--bg3));
 }
 
 /* .live-wrap .thinking-block 用 border-left 简写，会连 border-left-color 一起
    改写，所以 academic 的蓝色左边框同样会被压掉（基础规则见上方 458 行）。 */
 [data-theme="academic"] .live-wrap .thinking-block {
-  border-left-color: rgba(30, 59, 92, 0.20);
+  border-left-color: var(--accent-border);
 }
 
 .live-wrap .agent-reply pre code,
@@ -418,7 +427,7 @@
 }
 
 [data-theme="dark"] .live-wrap .agent-reply tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.025);
+  background: color-mix(in srgb, var(--text) 2.5%, transparent);
 }
 
 /* ── Blockquote ──────────────────────────────────────────────────── */
@@ -811,5 +820,23 @@
   .live-wrap .terminal {
     margin: var(--space-2);
     border-radius: var(--radius-md);
+  }
+
+  /* 内容列极窄（drawer clamp 后 ~250px）时表格改横向滚动。
+     基础规则 display:table + overflow:hidden 会吞掉溢出内容；
+     block 化后 overflow-x 生效，live.css 预留的滚动阴影渐变
+     （background-attachment: local）也同时激活。 */
+  .live-wrap .agent-reply table {
+    display: block;
+    overflow-x: auto;
+  }
+
+  /* 代码块收窄内边距，给横向滚动留出更多可视宽度 */
+  .live-wrap .agent-reply pre {
+    padding: 0.7rem 0.85rem;
+  }
+
+  .live-wrap .usage-strip {
+    padding: 0.4rem 0.75rem;
   }
 }

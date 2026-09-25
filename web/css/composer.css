@@ -219,8 +219,10 @@
   height: 18px;
   border-radius: 50%;
   border: none;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
+  /* 墨滴式遮罩：随主题取反（深色主题下为浅色 scrim + 深色 ×），
+     不写死黑白，任何主题下与底色保持对比 */
+  background: color-mix(in srgb, var(--text) 62%, transparent);
+  color: var(--bg);
   font-size: var(--fs-sm);
   line-height: 1;
   cursor: pointer;

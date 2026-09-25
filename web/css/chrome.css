@@ -261,6 +261,14 @@
   border-radius: var(--radius-pill);
 }
 
+/* Dark: bg3-over-bg2 lands within ~5% lightness of the active capsule's
+   bg-elevated, so the pill disappears into its slot. Recess the slot
+   toward --bg instead — same segmented-control recipe as .p-seg, just
+   one step deeper so the elevated capsule reads. */
+[data-theme="dark"] .title-bar .session-tabs {
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
 .session-tab {
   margin: 0;
   padding: 0.24rem 0.85rem;
@@ -613,7 +621,9 @@
    为 0,2,0,而本文件后加载，那条会被静默压掉。补一层 [data-theme] 拿回来。 */
 [data-theme="academic"] .os-win32 .win-title-bar {
   background: var(--bg);
-  border-bottom-color: rgba(30, 59, 92, 0.10);
+  /* academic --border is exactly rgba(30, 59, 92, 0.09) — the old 0.10
+     literal was the same navy hairline by hand */
+  border-bottom-color: var(--border);
 }
 
 .win-title-bar-drag {
@@ -634,6 +644,8 @@
 }
 
 .win-title-bar-controls button.close:hover {
+  /* OS semantic: Windows window-close hover is #c42b1c by convention
+     (WinUI/Win32), independent of the theme accent — intentional literal. */
   background: #c42b1c;
   color: #fff;
 }

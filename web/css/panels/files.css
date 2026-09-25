@@ -7,6 +7,8 @@
 
 /* Windows custom title bar: drawers sit below it */
 .os-win32 #files-panel { top: 78px; }
+/* UI chrome stays sans in academic (mirrors skills/config/prompt). */
+[data-theme="academic"] #files-panel { font-family: var(--font-sans); }
 
 /* ── Tree rows (built on .p-row) ─────────────────────────────────── */
 /* Depth indent: base padding + 16px per level; files (no chevron) get an

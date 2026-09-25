@@ -88,11 +88,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "v${{ inputs.version }}" >/dev/null 2>&1; then
-            gh release delete "v${{ inputs.version }}" --yes
+          # --repo is required: this job has no checkout, and gh otherwise
+          # fails with "not a git repository" — which the 2>&1 on the old
+          # view call swallowed, so the cleanup silently never ran and a
+          # re-release kept the previous assets.  Leaving stderr alone means
+          # a real failure (auth, rate limit) reaches the log now.
+          if gh release view "v${{ inputs.version }}" --repo "$GITHUB_REPOSITORY" >/dev/null; then
+            gh release delete "v${{ inputs.version }}" --yes --repo "$GITHUB_REPOSITORY"
             echo "removed existing release v${{ inputs.version }}"
           else
-            echo "no existing release"
+            echo "no existing release for v${{ inputs.version }}"
           fi
       - uses: softprops/action-gh-release@v2
         with:

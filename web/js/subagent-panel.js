@@ -268,7 +268,7 @@ const startNumberEdit = (btn) => {
   };
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); settle(true); }
-    else if (e.key === "Escape") { e.preventDefault(); settle(false); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); settle(false); }
   });
   input.addEventListener("blur", () => settle(true));
 };

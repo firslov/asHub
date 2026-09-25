@@ -144,6 +144,21 @@ let shutdownHubRef = null;
 // flow).  Set on update-downloaded, cleared when the download cache is.
 let cachedUpdateFile = null;
 
+// Single source of truth for "an update archive is downloaded and ready
+// to install": the path recorded on update-downloaded, or electron-updater's
+// own downloadedUpdateHelper as a fallback (the helper survives restarts of
+// the update flow where the update-downloaded event does not re-fire).
+// A cached path whose file has since been removed (download cache wiped
+// between runs) does not count and is cleared so later checks — quit-and-
+// install's gate and before-quit's fast path — don't keep trusting it.
+function hasDownloadedUpdate() {
+  if (cachedUpdateFile) {
+    if (fs.existsSync(cachedUpdateFile)) return true;
+    cachedUpdateFile = null;
+  }
+  try { return !!autoUpdater.downloadedUpdateHelper?.file; } catch { return false; }
+}
+
 // If an update is found before the renderer's update card is subscribed,
 // buffer the version and deliver it once the page signals readiness
 // (updater.js's notifyUpdaterReady) or on did-finish-load fallback.
@@ -378,14 +393,6 @@ function setupIPC() {
     }
   });
 
-  // Single source of truth for "an update archive is downloaded and ready
-  // to install": the path recorded on update-downloaded, or electron-updater's
-  // own downloadedUpdateHelper as a fallback.
-  const hasDownloadedUpdate = () => {
-    if (cachedUpdateFile) return true;
-    try { return !!autoUpdater.downloadedUpdateHelper?.file; } catch { return false; }
-  };
-
   ipcMain.handle("quit-and-install", async () => {
     // Without a downloaded update, electron-updater's quitAndInstall silently
     // returns false and never quits — the user gets no feedback, and a stale
@@ -414,7 +421,24 @@ function setupIPC() {
       // do nothing.
       _installOnQuit = true;
       console.log("[updater] quit-and-install requested");
+      // quitAndInstall is fire-and-forget: on success the app begins quitting
+      // (will-quit fires); on failure it returns silently — no quit, no throw.
+      // Detect the silent case via will-quit instead of trusting the call, so
+      // a failed install doesn't leave _installOnQuit stuck and skip the
+      // graceful shutdown on the next normal Cmd+Q.  The 250ms grace covers
+      // the native hand-off; on success the process is quitting anyway, so
+      // this continuation (and its reply) simply never matters.
+      let quitStarted = false;
+      const onWillQuit = () => { quitStarted = true; };
+      app.once("will-quit", onWillQuit);
       autoUpdater.quitAndInstall();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (!quitStarted) {
+        app.removeListener("will-quit", onWillQuit);
+        _installOnQuit = false;
+        console.error("[updater] quitAndInstall returned without quitting");
+        return { ok: false, error: "Update installer did not start" };
+      }
       return { ok: true };
     } catch (err) {
       console.error("[updater] quit-and-install failed:", err.message);
@@ -678,7 +702,6 @@ async function startServer() {
     }
   }, 10000);
 
-  mainWindow = null;
   const origCreate = createWindow;
   createWindow = function () {
     clearTimeout(fallbackTimeout);
@@ -780,10 +803,11 @@ if (!gotTheLock) {
     // waiting for termination — a graceful hub shutdown here delays it
     // and can make the install silently fail.  This also covers a plain
     // Cmd+Q with an update already downloaded (autoInstallOnAppQuit =
-    // true): cachedUpdateFile != null means the quit will run the
-    // installer, so take the same fast path.  Best-effort shutdown in the
-    // background, then let the quit proceed without preventDefault.
-    if (_installOnQuit || cachedUpdateFile != null) {
+    // true): hasDownloadedUpdate() checks the helper too, so it catches a
+    // download completed before a restart where update-downloaded never
+    // re-fired and cachedUpdateFile was never set.  Best-effort shutdown
+    // in the background, then let the quit proceed without preventDefault.
+    if (_installOnQuit || hasDownloadedUpdate()) {
       _shuttingDown = true;
       shutdownHubRef().catch(() => {});
       return;

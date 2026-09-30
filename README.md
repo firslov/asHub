@@ -2,7 +2,7 @@
 
 [English](#ashub) | [简体中文](README_CN.md)
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20.3-brightgreen.svg)](package.json)
 
 Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — it spawns and supervises

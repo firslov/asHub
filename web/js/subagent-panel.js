@@ -56,7 +56,7 @@ const FALLBACK_TYPES = {
   },
 };
 
-const REASONING_LEVELS = ["low", "medium", "high"];
+const REASONING_LEVELS = ["off", "low", "medium", "high", "xhigh"];
 
 // 60000 → "60k", 64000 → "64k", 32500 → "32.5k", 900 → "900".
 const fmtTokens = (n) => {
@@ -90,6 +90,7 @@ let _optionsSig = "";
 // ours when config-panel broadcasts ash:models-changed after a save.
 let _modelsCache = null;
 let _modelsPromise = null;
+let _modelsGeneration = 0;
 
 const fetchModelsCatalog = () => {
   // Mirror sse.js: an OpenRouter catalog stuck at ≤1 model means its async
@@ -99,24 +100,47 @@ const fetchModelsCatalog = () => {
   );
   if (_modelsCache && !stale) return Promise.resolve(_modelsCache);
   if (!_modelsPromise) {
-    _modelsPromise = fetch("/api/models")
+    const generation = _modelsGeneration;
+    const pending = fetch("/api/models")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d) => {
+        if (generation !== _modelsGeneration) return fetchModelsCatalog();
+        if (setModelCache(d) === false) throw new Error("Invalid model catalog");
         _modelsCache = d;
-        setModelCache(d);
         return d;
       })
-      .catch(() => _modelsCache ?? null)
-      .finally(() => { _modelsPromise = null; });
+      .catch(() => generation !== _modelsGeneration ? fetchModelsCatalog() : _modelsCache ?? null)
+      .finally(() => { if (_modelsPromise === pending) _modelsPromise = null; });
+    _modelsPromise = pending;
   }
   return _modelsPromise;
 };
 
-document.addEventListener("ash:models-changed", () => { _modelsCache = null; });
+document.addEventListener("ash:models-changed", () => {
+  _modelsGeneration++;
+  _modelsCache = null;
+  _modelsPromise = null;
+});
 
-export const renderSubagentPanel = () => {
+let panelRenderSeq = 0;
+export const renderSubagentPanel = function renderSubagentPanel() {
   if (!saTypes) return;
   const sid = currentSessionId();
+  const request = ++panelRenderSeq;
+  if (!sid) {
+    ++modelRefreshSeq;
+    _renderedSid = null;
+    _optionsSig = "";
+    saTypes.innerHTML = `<div class="p-empty">${escape(t("no.session.title"))}</div>`;
+    return;
+  }
+  const protectEdits = _renderedSid === sid;
+  if (!protectEdits) {
+    saTypes.innerHTML = "";
+    _renderedSid = null;
+  }
+  const budgetChange = saBudgetSeq;
+  const modelChange = saModelSeq;
 
   fetch(`/${sid}/sa-types`)
     .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -129,10 +153,25 @@ export const renderSubagentPanel = () => {
     .then((list) => {
       // Session switched again while sa-types was in flight — the newer
       // render owns the panel now.
-      if (sid !== currentSessionId()) return;
+      if (sid !== currentSessionId() || request !== panelRenderSeq) return;
+      if (budgetChange !== saBudgetSeq || modelChange !== saModelSeq) {
+        // Keep current edits, but a newly cleared panel needs a fresh read.
+        if (!protectEdits || _renderedSid !== sid) renderSubagentPanel();
+        else document.dispatchEvent(new Event("ash:subagent-budget-deferred"));
+        return;
+      }
+      if (_renderedSid === sid && (
+        Array.from(saTypes.querySelectorAll(".sa-card")).some(card => Object.values(card._budgetSaving ?? {}).some(Boolean))
+        || Array.from(saTypes.querySelectorAll(".sa-model-select")).some(select => select._modelSaving)
+        || saTypes.querySelectorAll(".sa-meta-input").length > 0
+      )) {
+        document.dispatchEvent(new Event("ash:subagent-budget-deferred"));
+        return;
+      }
       _renderedSid = sid;
       _optionsSig = "";
       renderCards(list);
+      document.dispatchEvent(new Event("ash:subagent-budget-rendered"));
     });
 };
 
@@ -193,9 +232,14 @@ const metaLabel = (field, v) =>
 // PUT one budget field; on failure re-read sa-types and restore the
 // control's value to the backend's effective one.
 const commitBudgetField = (card, field, value, restore) => {
+  const sid = currentSessionId();
+  if (!sid) return;
   const type = card.dataset.type;
   const mySeq = ++saBudgetSeq;
-  const sid = currentSessionId();
+  card._budgetSeq ??= {};
+  card._budgetSeq[field] = mySeq;
+  card._budgetSaving ??= {};
+  card._budgetSaving[field] = true;
   fetch(`/${sid}/sa-budget`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -208,17 +252,22 @@ const commitBudgetField = (card, field, value, restore) => {
     .catch(() => {
       toast(t(field === "reasoning" ? "sa.reasoning.failed" : "sa.budget.failed", { type }), { type: "error" });
       // Re-read the effective values so the card matches the backend.
-      fetch(`/${sid}/sa-types`)
+      return fetch(`/${sid}/sa-types`)
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
         .then(d => {
-          if (mySeq !== saBudgetSeq) return;
+          if (mySeq !== card._budgetSeq[field]) return;
           // Session switched while the re-read was in flight — don't write
           // the old session's values into the new one's card.
           if (sid !== currentSessionId()) return;
           const list = Array.isArray(d) ? d : d?.types;
           restore(list?.find?.(e => e?.type === type) ?? null);
         })
-        .catch(() => { if (mySeq === saBudgetSeq && sid === currentSessionId()) restore(null); });
+        .catch(() => { if (mySeq === card._budgetSeq[field] && sid === currentSessionId()) restore(null); });
+    }).finally(() => {
+      ++saBudgetSeq;
+      if (mySeq === card._budgetSeq[field]) card._budgetSaving[field] = false;
+      if (sid !== currentSessionId()) document.dispatchEvent(new Event("ash:subagent-budget-changed"));
+      else document.dispatchEvent(new Event("ash:subagent-budget-settled"));
     });
 };
 
@@ -240,6 +289,11 @@ const makeMetaButton = (field, value) => {
 const startNumberEdit = (btn) => {
   const field = btn.dataset.field;
   const oldVal = Number(btn.dataset.value) || 0;
+  const card = btn.closest(".sa-card");
+  if (card) {
+    card._budgetValues ??= {};
+    card._budgetValues[field] ??= oldVal;
+  }
   const input = document.createElement("input");
   input.type = "number";
   input.className = "p-input sa-meta-input";
@@ -254,16 +308,26 @@ const startNumberEdit = (btn) => {
     if (settled) return;
     settled = true;
     const val = Math.round(Number(input.value));
-    const accepted = commit && Number.isFinite(val) && val > 0 && val !== oldVal;
-    const card = input.closest(".sa-card");
-    const fresh = makeMetaButton(field, accepted ? val : oldVal);
+    const effective = card?._budgetValues[field] ?? oldVal;
+    const accepted = commit && Number.isFinite(val) && val > 0 && val !== effective;
+    const fresh = makeMetaButton(field, accepted ? val : effective);
     input.replaceWith(fresh);
-    if (!accepted || !card) return;
+    if (!accepted || !card) {
+      document.dispatchEvent(new Event("ash:subagent-budget-settled"));
+      return;
+    }
+    card._budgetValues[field] = val;
     commitBudgetField(card, field, val, (entry) => {
       const v = Number(entry?.[field]);
-      const effective = Number.isFinite(v) && v > 0 ? v : oldVal;
-      fresh.dataset.value = String(effective);
-      fresh.textContent = metaLabel(field, effective);
+      const restored = Number.isFinite(v) && v > 0 ? v : effective;
+      card._budgetValues[field] = restored;
+      // The original button may now be an input or a newer button. Keep
+      // an in-progress draft intact; its cancel path reads the shared value.
+      const visible = card.querySelector(`.sa-meta-btn[data-field="${field}"]`);
+      if (visible) {
+        visible.dataset.value = String(restored);
+        visible.textContent = metaLabel(field, restored);
+      }
     });
   };
   input.addEventListener("keydown", (e) => {
@@ -331,33 +395,55 @@ const buildModelSelects = () => {
     const select = document.createElement("select");
     select.className = "p-select sa-model-select";
     select.dataset.type = type;
-    select.innerHTML = `<option value="inherit">inherit</option>`;
+    select.innerHTML = `<option value="inherit">${escape(t("loading"))}</option>`;
+    select.disabled = true;
     select.addEventListener("change", () => {
-      const mySeq = ++saModelSeq;
+      ++saModelSeq;
+      const mySeq = select._modelSeq = (select._modelSeq ?? 0) + 1;
+      select._modelSaving = true;
+      const value = select.value;
+      const previous = select.dataset.confirmed ?? "inherit";
       const sid = currentSessionId();
+      if (!sid) { select._modelSaving = false; return; }
       fetch(`/${sid}/sa-model`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, model: select.value }),
+        body: JSON.stringify({ type, model: value }),
       })
         .then(r => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          if (mySeq === select._modelSeq) select.dataset.confirmed = value;
           toast(t("sa.model.saved", { type }), { type: "success" });
         })
         .catch(() => {
           toast(t("sa.model.failed", { type }), { type: "error" });
           // Re-read the real value so the select matches the backend.
-          fetch(`/${sid}/sa-model`).then(r => r.json())
+          return fetch(`/${sid}/sa-model`).then(async r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const data = await r.json();
+            if (!data?.models || typeof data.models !== "object" || Array.isArray(data.models)
+              || Object.values(data.models).some(value => typeof value !== "string")) throw new Error("Invalid subagent model settings");
+            return data;
+          })
             .then(d => {
-              if (mySeq !== saModelSeq) return;
+              if (mySeq !== select._modelSeq) return;
               // Session switched while the re-read was in flight — don't
               // write the old session's override into the new one's select.
               if (sid !== currentSessionId()) return;
               const v = d?.models?.[type] ?? "inherit";
               ensureOverrideOption(select, v);
               select.value = v;
+              select.dataset.confirmed = v;
             })
-            .catch(() => { if (mySeq === saModelSeq && sid === currentSessionId()) select.value = "inherit"; });
+            .catch(() => { if (mySeq === select._modelSeq && sid === currentSessionId()) select.value = select.dataset.confirmed ?? previous; });
+        })
+        .finally(() => {
+          // Invalidate GETs started while this write was pending, even if
+          // their responses arrive after the write has completed.
+          ++saModelSeq;
+          if (mySeq === select._modelSeq) select._modelSaving = false;
+          if (sid !== currentSessionId()) document.dispatchEvent(new Event("ash:subagent-model-changed"));
+          document.dispatchEvent(new Event("ash:subagent-budget-settled"));
         });
     });
     wrap.appendChild(select);
@@ -367,19 +453,37 @@ const buildModelSelects = () => {
 // Fill/refresh the per-card selects: the model catalog comes from the
 // shared cache (options rebuilt only when the list changes); the sa-model
 // overrides are always re-read for the current session.
-const refreshModelDropdowns = () => {
+let modelRefreshSeq = 0;
+const refreshModelDropdowns = function refreshModelDropdowns() {
+  const refresh = ++modelRefreshSeq;
+  const modelChange = saModelSeq;
   const sid = currentSessionId();
+  if (!sid) return;
   // The backend strips @provider from overrides and reuses the main
   // session's provider, so only the current provider's models are listed.
   const provider = agentInfo.provider || "";
   Promise.all([
     fetchModelsCatalog(),
-    fetch(`/${sid}/sa-model`).then(r => r.json()).catch(() => ({ models: {} })),
+    fetch(`/${sid}/sa-model`).then(async r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (!data?.models || typeof data.models !== "object" || Array.isArray(data.models)
+        || Object.values(data.models).some(value => typeof value !== "string")) throw new Error("Invalid subagent model settings");
+      return data;
+    }),
   ]).then(([d, overridesData]) => {
       // Session switched while the fetches were in flight — the newer
       // session's render owns the panel; don't write the old session's
       // overrides into its selects.
-      if (sid !== currentSessionId()) return;
+      if (sid !== currentSessionId() || refresh !== modelRefreshSeq) return;
+      if (modelChange !== saModelSeq) {
+        // A previous session's save must not strand new dropdowns on inherit.
+        // Re-read after the global change; edited controls keep their value.
+        if (Array.from(saTypes.querySelectorAll(".sa-model-select")).some(
+          select => !select._modelsLoaded && !select._modelSeq && !select._modelSaving
+        )) refreshModelDropdowns();
+        return;
+      }
       const models = [];
       for (const p of (d?.providers ?? [])) {
         if (provider && p?.name !== provider) continue;
@@ -391,10 +495,12 @@ const refreshModelDropdowns = () => {
       const sig = models.map(m => `${m.id}@${m.provider}`).join("\x1e");
       const rebuild = sig !== _optionsSig;
       const overrides = overridesData?.models ?? {};
+      let skipped = false;
       saTypes.querySelectorAll(".sa-model-select").forEach((select) => {
+        if (select._modelSaving) { skipped = true; return; }
         const type = select.dataset.type;
         const selected = overrides[type] ?? "inherit";
-        if (rebuild) {
+        if (rebuild || !select._modelsLoaded) {
           const opts = [`<option value="inherit">inherit</option>`];
           for (const m of models) {
             const val = `${m.id}@${m.provider}`;
@@ -404,11 +510,40 @@ const refreshModelDropdowns = () => {
         }
         ensureOverrideOption(select, selected);
         select.value = selected;
+        select.dataset.confirmed = selected;
+        select._modelsLoaded = true;
+        select.disabled = false;
       });
-      _optionsSig = sig;
+      _optionsSig = skipped ? "" : sig;
     })
-    .catch(() => {});
+    .catch(err => {
+      if (sid !== currentSessionId() || refresh !== modelRefreshSeq || modelChange !== saModelSeq) return;
+      toast(t("sa.model.load.failed"), { type: "error", detail: String(err?.message ?? err) });
+    });
 };
+
+// Overrides are global. A save from a departed session also invalidates
+// a new panel whose first read happened to finish before that save.
+document.addEventListener("ash:subagent-model-changed", () => {
+  if (saPanel && !saPanel.hidden) refreshModelDropdowns();
+});
+
+let budgetRefreshPending = false;
+const refreshDeferredBudget = () => {
+  if (!budgetRefreshPending) return;
+  if (!saPanel || saPanel.hidden) { _renderedSid = null; return; }
+  if (Array.from(saTypes.querySelectorAll(".sa-card")).some(card => Object.values(card._budgetSaving ?? {}).some(Boolean))
+    || Array.from(saTypes.querySelectorAll(".sa-model-select")).some(select => select._modelSaving)
+    || saTypes.querySelectorAll(".sa-meta-input").length) return;
+  renderSubagentPanel();
+};
+document.addEventListener("ash:subagent-budget-changed", () => {
+  budgetRefreshPending = true;
+  refreshDeferredBudget();
+});
+document.addEventListener("ash:subagent-budget-deferred", () => { budgetRefreshPending = true; refreshDeferredBudget(); });
+document.addEventListener("ash:subagent-budget-rendered", () => { budgetRefreshPending = false; });
+document.addEventListener("ash:subagent-budget-settled", refreshDeferredBudget);
 
 // ── Toggle ─────────────────────────────────────────────────────────
 

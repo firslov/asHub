@@ -1,0 +1,50 @@
+const {env,Bridge,assert,path,root,fs}=require('./harness.cjs');
+const {once}=require('node:events');
+(async()=>{
+ const e=env();e.context.process.env.ASHUB_TOKEN='integration-test-token';
+ const {server,shutdown}=e.hub().startHub({host:'127.0.0.1',port:0,webRoot:path.join(root,'web'),makeBridge:o=>new Bridge(o)});
+ await once(server,'listening');
+ const url=`http://127.0.0.1:${server.address().port}`;
+ const headers={Authorization:'Bearer integration-test-token','Content-Type':'application/json'};
+ try {
+   assert((await fetch(url+'/sessions')).status===401,'unauthenticated real HTTP request accepted');
+   assert((await fetch(url+'/sessions',{headers})).status===200,'authenticated HTTP request rejected');
+   assert((await fetch(url+'/sessions',{method:'POST',headers:{...headers,Origin:'https://foreign.invalid'},body:'{}'})).status===403,'cross-origin mutation accepted');
+   const spawn=await fetch(url+'/sessions',{method:'POST',headers,body:JSON.stringify({cwd:e.dir})});
+   const data=await spawn.json();assert(spawn.ok&&data.instanceId,'failed to spawn fake session');
+   const landing=await fetch(url+'/',{headers,redirect:'manual'});assert(landing.status===200&&(await landing.text()).includes('id="no-session-empty"'),'empty workspace redirected to an existing session');
+   const direct=await fetch(url+`/${data.instanceId}/`,{headers});assert(direct.ok,'direct session link failed');
+   const settingsFile=path.join(e.dir,'settings.json');
+   fs.writeFileSync(settingsFile,'{broken');
+   assert((await fetch(url+'/api/config',{headers})).status===500,'corrupt settings were reported as an editable empty configuration');
+   fs.writeFileSync(settingsFile,JSON.stringify({providers:{preview:{apiKey:'fixture-only-key'}},custom:'keep'}));
+   const configRead=await fetch(url+'/api/config',{headers});const configText=await configRead.text();assert(configRead.ok&&!configText.includes('fixture-only-key')&&JSON.parse(configText).custom==='keep','valid config recovery or key masking failed');
+   const largeDir=path.join(e.dir,'large-directory');fs.mkdirSync(largeDir);for(let i=0;i<205;i++)fs.writeFileSync(path.join(largeDir,'file'+String(i).padStart(3,'0')),'');
+   const filesRead=await fetch(url+`/${data.instanceId}/files?subdir=large-directory`,{headers});const filesData=await filesRead.json();assert(filesRead.ok&&filesData.files.length===205&&filesData.files.some(f=>f.name==='file204'),'directory listing silently truncated');
+   const missingDir=await fetch(url+`/${data.instanceId}/files?subdir=missing-directory`,{headers});assert(missingDir.status===500&&(await missingDir.json()).error,'missing directory reported as empty');
+   const malformed=await fetch(url+`/${data.instanceId}/submit`,{method:'POST',headers,body:'{"query":123}'});assert(malformed.status===400,'invalid query did not return 400');
+   const good=await fetch(url+`/${data.instanceId}/submit`,{method:'POST',headers,body:'{"query":"hello"}'});assert(good.ok,'server did not survive malformed request');
+   const badApproval=await fetch(url+'/api/settings/auto-approve',{method:'PUT',headers,body:JSON.stringify({autoApprove:'false'})});
+   assert(badApproval.status===400,'invalid approval value accepted');
+   const before=await (await fetch(url+`/${data.instanceId}/context`,{headers})).json();
+   assert(typeof before.revision==='string','context revision missing');
+   await fetch(url+`/${data.instanceId}/submit`,{method:'POST',headers,body:'{"query":"next"}'});
+   const staleDrop=await fetch(url+`/${data.instanceId}/context/drop`,{method:'POST',headers,body:JSON.stringify({indices:[0],revision:before.revision})});
+   assert(staleDrop.status===409,'stale HTTP context deletion accepted');
+   const latest=await (await fetch(url+`/${data.instanceId}/context`,{headers})).json();
+   const freshDrop=await fetch(url+`/${data.instanceId}/context/drop`,{method:'POST',headers,body:JSON.stringify({indices:[1],revision:latest.revision})});
+   assert(freshDrop.ok,'fresh HTTP context deletion rejected');
+   const sse=await fetch(url+`/events?subs=${data.instanceId}:all`,{headers});
+   const reader=sse.body.getReader();let text='';const timeout=setTimeout(()=>reader.cancel(),3000);
+   try { while(!text.includes('hub:replay-done')) { const {value,done}=await reader.read();if(done)break;text+=Buffer.from(value).toString(); } } finally {clearTimeout(timeout);await reader.cancel();}
+   assert(text.includes('hub:replay-starting')&&text.includes('hello'),'SSE replay missing: '+text);
+   const upload=await fetch(url+'/api/upload',{method:'POST',headers,body:JSON.stringify({sessionId:data.instanceId,data:'YQ==',mimeType:'image/png'})});
+   assert(upload.ok&&(await upload.json()).id,'valid HTTP upload rejected');
+   const unsupported=await fetch(url+`/${data.instanceId}/cwd`,{method:'PUT',headers,body:JSON.stringify({cwd:e.dir})});
+   assert(unsupported.status===409,'unsupported cwd returned success');
+   const deleted=await fetch(url+`/${data.instanceId}/`,{method:'DELETE',headers});assert(deleted.ok,'HTTP delete failed');
+   const lateUpload=await fetch(url+'/api/upload',{method:'POST',headers,body:JSON.stringify({sessionId:data.instanceId,data:'YQ==',mimeType:'image/png'})});assert(lateUpload.status===404,'deleted session accepted upload');
+   const retry=await fetch(url+`/${data.instanceId}/`,{method:'DELETE',headers});assert(retry.ok,'DELETE retry failed');
+   console.log('PASS real HTTP auth, origin guard, malformed requests, SSE, uploads, cwd capability idempotent deletion, approval validation and context revisions');
+ } finally {await shutdown();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

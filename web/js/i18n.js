@@ -4,6 +4,14 @@ const LS_LANG = "ash.lang";
 
 const translations = {
   en: {
+    "workspace.label": "Workspace",
+    "welcome.title": "A little clarity. A lot of possibility.",
+    "welcome.description": "Explore an idea, understand your project, or make something better.",
+    "message.label": "Message the agent",
+    "composer.shortcuts": "/ commands · @ files · # prompts",
+    "composer.keyboard": "Enter to send · Shift + Enter for a new line",
+    "sidebar.resize": "Resize sidebar with left and right arrow keys",
+
     // ── HTML static strings ────────────────────────────────────────
     "sessions": "Sessions",
     "new.session": "New session",
@@ -12,6 +20,7 @@ const translations = {
     "sidebar.view.workspaces": "Workspaces",
     "sidebar.view.terminals": "Terminals",
     "collapse.sidebar": "Collapse sidebar",
+    "expand.sidebar": "Expand sidebar",
     "connecting": "connecting…",
     "checking.updates": "checking for updates…",
     "interrupt": "Interrupt response (Esc)",
@@ -52,7 +61,7 @@ const translations = {
     "shortcuts.mention": "Mention file",
     "shortcuts.prompt_pick": "Insert saved prompt",
     "new.output": "new output",
-    "ask.agent": "ask the agent…  (! shell · / commands · @ files · # prompts)",
+    "ask.agent": "Describe what you want to work on…",
     "ask.agent.noshell": "ask the agent…  (/ commands · @ files · # prompts)",
     "context": "Context",
     "tree": "Tree",
@@ -118,10 +127,14 @@ const translations = {
     "skills.installed": "Installed",
     "skills.none": "No skills installed",
     "skills.empty": "No skills found",
+    "skills.load.failed": "Could not load the skill catalog. Check your connection and retry.",
+    "skills.catalog.partial": "Some sources are unavailable. Showing available or cached skills.",
     "skills.noresults": "No matching skills",
     "skills.loading": "Loading skills…",
     "skills.count": "skills",
     "model.load.failed": "Couldn't load models — using cached/manual entry",
+    "model.list.failed": "Couldn't load models. Open the model picker again to retry.",
+    "model.switch.failed": "Failed to switch model",
     "apikey.hint": "Your API key is stored locally in ~/.agent-sh/settings.json",
     "save.reload": "save & reload",
     "valid.json": "✓ valid json",
@@ -134,6 +147,8 @@ const translations = {
     "prompts.add.prompt": "add prompt",
     "prompts.add": "add",
     "prompts.save": "save",
+    "prompts.conflict": "This prompt changed in another window. Your draft is kept; reopen the prompt to review the latest version.",
+    "prompts.save.failed": "Could not save prompts. Please try again.",
     "prompts.edit": "Edit",
     "prompts.delete": "Delete",
     "prompts.empty": "No quick prompts yet — click + above to add one.",
@@ -142,7 +157,7 @@ const translations = {
 
     // ── Sidebar ────────────────────────────────────────────────────
     "edit.title": "edit title",
-    "ask.anything": "ask anything…",
+    "ask.anything": "Start a conversation",
     "no.session.cta": "New session",
     "close.session": "close session",
     "close.session.confirm": "Close session {title}?",
@@ -150,10 +165,10 @@ const translations = {
     "archive.confirm": "Archive {title}?",
     "archive.empty": "No archived conversations",
     "try.saying": "Try saying",
-    "hint.review": "🔍 Review codebase",
-    "hint.explore": "🗺️ Explore project",
-    "hint.plan": "📋 Plan a project",
-    "hint.trip": "✈️ Plan a trip",
+    "hint.review": "Review code",
+    "hint.explore": "Explore project",
+    "hint.plan": "Make a plan",
+    "hint.trip": "Plan a trip",
     "restore": "Restore",
     "pin": "Pin to top",
     "unpin": "Unpin",
@@ -175,11 +190,14 @@ const translations = {
     "export.md": "Export conversation as Markdown",
     "export.no.session": "No active session to export",
     "export.failed": "Export failed",
+    "export.image": "Image",
+    "export.image.unavailable": "Image attachment unavailable",
 
     // ── Actions / user box ─────────────────────────────────────────
     "you": "you",
     "rewind.here": "Rewind to here (puts message back in composer)",
     "rewind.failed": "rewind failed ({status})",
+    "rewind.refresh.required": "Refresh this session before rewinding; the message has no stable history ID.",
     "rewind.action.failed": "Rewind failed: {msg}",
     "cancel": "Cancel (Esc)",
     "permission.deny": "Deny",
@@ -212,6 +230,11 @@ const translations = {
     "tree.time.ago": "{t} ago",
     "config.save.done": "Configuration saved, model list updated",
     "skills.install.failed": "Install failed",
+    "skills.uninstall.failed": "Uninstall failed. Please retry.",
+    "skills.source.conflict": "Name in use",
+    "skills.source.conflict.hint": "A skill with this name has a different or unknown source. Manage it in Installed skills.",
+    "sa.model.load.failed": "Could not load subagent models. Reopen this panel to retry.",
+    "session.open.failed": "Could not open the session. Please retry.",
     "session.new.failed": "New session failed",
     "terminal.not.supported.win": "ash-terminal sessions are not supported on Windows",
     "toast.details": "Details",
@@ -257,6 +280,7 @@ const translations = {
     "copied": "copied",
     "show.less": "show less",
     "show.n.more": "show {n} more",
+    "output.truncated": "[Output truncated: only the last {n} lines are retained]",
     "tool": "tool",
     "click.expand.cmd": "click to expand command",
     "click.collapse.cmd": "click to collapse command",
@@ -312,6 +336,9 @@ const translations = {
 
     // ── Config panel ───────────────────────────────────────────────
     "config.save.failed": "save failed: {msg}",
+    "config.load.failed": "Could not load settings. Retry before editing or saving.",
+    "config.catalog.failed": "Could not load providers. Use Advanced settings to repair the configuration, or retry.",
+    "config.provider.required": "Choose a provider, or configure one in Advanced settings.",
     "config.section.provider": "Provider",
     "config.section.interface": "Interface",
     "config.section.permissions": "Permissions",
@@ -346,6 +373,14 @@ const translations = {
   },
 
   zh: {
+    "workspace.label": "工作空间",
+    "welcome.title": "让想法向前一步",
+    "welcome.description": "理解项目、探索思路，或把一个想法变成现实",
+    "message.label": "向 Agent 发送消息",
+    "composer.shortcuts": "/ 指令 · @ 文件 · # 提示词",
+    "composer.keyboard": "Enter 发送 · Shift + Enter 换行",
+    "sidebar.resize": "使用左右方向键调整侧栏宽度",
+
     // ── HTML static strings ────────────────────────────────────────
     "sessions": "会话列表",
     "new.session": "新建会话",
@@ -354,6 +389,7 @@ const translations = {
     "sidebar.view.workspaces": "工作区",
     "sidebar.view.terminals": "终端",
     "collapse.sidebar": "折叠侧边栏",
+    "expand.sidebar": "展开侧边栏",
     "connecting": "连接中…",
     "checking.updates": "检查更新中…",
     "interrupt": "中断响应 (Esc)",
@@ -394,7 +430,7 @@ const translations = {
     "shortcuts.mention": "引用文件",
     "shortcuts.prompt_pick": "插入已存提示词",
     "new.output": "新输出",
-    "ask.agent": "向 agent 提问…  (! shell · / 命令 · @ 文件 · # 提示词)",
+    "ask.agent": "描述你的想法，或输入 / 查看指令…",
     "ask.agent.noshell": "向 agent 提问…  (/ 命令 · @ 文件 · # 提示词)",
     "context": "上下文",
     "refresh": "刷新",
@@ -460,10 +496,14 @@ const translations = {
     "skills.installed": "已安装",
     "skills.none": "未安装任何 skill",
     "skills.empty": "未找到 skill",
+    "skills.load.failed": "技能列表加载失败，请检查网络后重试",
+    "skills.catalog.partial": "部分来源暂不可用，当前显示可用或缓存的技能",
     "skills.noresults": "无匹配结果",
     "skills.loading": "加载中…",
     "skills.count": "个",
     "model.load.failed": "加载失败 — 使用缓存或手动输入",
+    "model.list.failed": "模型列表加载失败，请重新打开模型选择器重试。",
+    "model.switch.failed": "模型切换失败",
     "apikey.hint": "API 密钥存储在本地 ~/.agent-sh/settings.json",
     "save.reload": "保存并重载",
     "valid.json": "✓ JSON 有效",
@@ -476,6 +516,8 @@ const translations = {
     "prompts.add.prompt": "添加提示词",
     "prompts.add": "添加",
     "prompts.save": "保存",
+    "prompts.conflict": "此提示词已在另一窗口修改或删除。草稿已保留，请重新打开提示词查看最新版本。",
+    "prompts.save.failed": "提示词保存失败，请重试。",
     "prompts.edit": "编辑",
     "prompts.delete": "删除",
     "prompts.empty": "还没有快捷提示词 — 点击上方 + 添加。",
@@ -484,7 +526,7 @@ const translations = {
 
     // ── Sidebar ────────────────────────────────────────────────────
     "edit.title": "编辑标题",
-    "ask.anything": "想问什么…",
+    "ask.anything": "开始对话",
     "no.session.cta": "新建对话",
     "close.session": "关闭会话",
     "close.session.confirm": "关闭会话 {title}？",
@@ -512,11 +554,14 @@ const translations = {
     "export.md": "导出对话为 Markdown",
     "export.no.session": "没有可导出的活跃会话",
     "export.failed": "导出失败",
+    "export.image": "图片",
+    "export.image.unavailable": "图片附件不可用",
 
     // ── Actions / user box ─────────────────────────────────────────
     "you": "你",
     "rewind.here": "回退到此处（消息将放回输入框）",
     "rewind.failed": "回退失败 ({status})",
+    "rewind.refresh.required": "请先刷新此会话再回退；该消息尚无稳定的历史标识。",
     "rewind.action.failed": "回退失败：{msg}",
     "cancel": "取消 (Esc)",
     "permission.deny": "拒绝",
@@ -549,6 +594,11 @@ const translations = {
     "tree.time.ago": "{t}前",
     "config.save.done": "配置已保存，模型列表已更新",
     "skills.install.failed": "安装失败",
+    "skills.uninstall.failed": "卸载失败，请重试",
+    "skills.source.conflict": "同名技能",
+    "skills.source.conflict.hint": "已有其他来源或来源未知的同名技能，请在已安装列表中管理",
+    "sa.model.load.failed": "子代理模型配置加载失败，请重新打开面板重试",
+    "session.open.failed": "会话打开失败，请重试",
     "session.new.failed": "新建会话失败",
     "terminal.not.supported.win": "Windows 平台暂不支持 ash-terminal 会话",
     "toast.details": "详情",
@@ -594,6 +644,7 @@ const translations = {
     "copied": "已复制",
     "show.less": "收起",
     "show.n.more": "展开 {n} 条",
+    "output.truncated": "[输出已截断：仅保留末尾 {n} 行]",
     "tool": "工具",
     "click.expand.cmd": "点击展开命令",
     "click.collapse.cmd": "点击收起命令",
@@ -649,6 +700,9 @@ const translations = {
 
     // ── Config panel ───────────────────────────────────────────────
     "config.save.failed": "保存失败：{msg}",
+    "config.load.failed": "设置加载失败，请重试后再编辑或保存",
+    "config.catalog.failed": "服务商列表加载失败，可在高级设置中修复配置，或重试加载",
+    "config.provider.required": "请选择服务商，或在高级设置中添加配置",
     "config.section.provider": "模型服务",
     "config.section.interface": "界面",
     "config.section.permissions": "权限",
@@ -681,10 +735,10 @@ const translations = {
     "sugg.explain": "阅读 README 并告诉我主要功能特性。",
     "sugg.issues": "查找代码库中的 bug 或潜在问题。",
     "try.saying": "试试这样说",
-    "hint.review": "🔍 代码审查",
-    "hint.explore": "🗺️ 探索项目",
-    "hint.plan": "📋 项目规划",
-    "hint.trip": "✈️ 行程安排",
+    "hint.review": "检查代码",
+    "hint.explore": "理解项目",
+    "hint.plan": "制定计划",
+    "hint.trip": "规划行程",
   },
 };
 
@@ -734,6 +788,11 @@ export const scanI18n = (root = document) => {
   root.querySelectorAll("[data-i18n-title]").forEach((el) => {
     const key = el.getAttribute("data-i18n-title");
     if (key) el.title = t(key);
+  });
+  // Accessible names are translated independently from visible labels.
+  root.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-aria");
+    if (key) el.setAttribute("aria-label", t(key));
   });
   // placeholder
   root.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {

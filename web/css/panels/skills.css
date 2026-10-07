@@ -6,7 +6,7 @@
 .app:has(#skills-overlay:not([hidden])) .live-wrap .terminal {
   margin-right: calc(var(--space-3) + var(--drawer-w));
 }
-.os-win32 #skills-overlay { top: 78px; }
+.os-win32 #skills-overlay { top: calc(var(--ui-chrome-height) + 10px); }
 [data-theme="academic"] #skills-overlay { font-family: var(--font-sans); }
 
 /* ── Top segmented control (Marketplace / Installed) ──────────────── */
@@ -136,3 +136,17 @@
 #skills-installed-list .p-row { cursor: default; }
 .sk-remove { margin-left: auto; }
 .sk-remove:disabled { opacity: 0.45; pointer-events: none; }
+
+.sk-controls { padding: 14px 20px 0; border-bottom: 0; }
+.sk-toolbar { padding: 14px 20px 0; flex-wrap: wrap; }
+.sk-search { flex: 1 1 100%; }
+#skills-source-tabs { margin-left: auto; }
+.p-seg--sm .p-seg-item { height: 24px; }
+.sk-list { gap: 12px; }
+.sk-card { gap: 10px; border-radius: 12px; }
+.sk-badge { width: 28px; height: 28px; border-radius: 8px; }
+.sk-name { font-weight: 600; }
+.sk-desc { line-height: 1.65; -webkit-line-clamp: 3; }
+.sk-meta { padding-top: 2px; }
+#skills-installed-list .p-row { min-height: 48px; padding: 8px; border-bottom: 1px solid var(--border-light); border-radius: 0; }
+#skills-installed-list .p-row-main { flex: 1; min-width: 0; }

@@ -6,7 +6,7 @@
    below against #files-panel. */
 
 /* Windows custom title bar: drawers sit below it */
-.os-win32 #files-panel { top: 78px; }
+.os-win32 #files-panel { top: calc(var(--ui-chrome-height) + 10px); }
 /* UI chrome stays sans in academic (mirrors skills/config/prompt). */
 [data-theme="academic"] #files-panel { font-family: var(--font-sans); }
 
@@ -86,3 +86,9 @@
   font-size: var(--fs-xs);
   color: var(--text-mid);
 }
+
+#files-panel .files-row { min-height: 40px; border-radius: 8px; gap: 9px; }
+.files-row-icon { width: 16px; height: 16px; }
+#files-panel .files-row.dir .p-row-main { font-weight: 500; }
+.files-row:focus-within .files-row-kb { opacity: 1; }
+@media (hover: none) { .files-row-kb { opacity: .65; } }

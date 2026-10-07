@@ -669,3 +669,62 @@
   outline: 2px solid var(--accent-border);
   outline-offset: 2px;
 }
+
+/* Shared width keeps model/context metadata aligned with the composer. */
+.live-wrap { --composer-gutter: 20px; --composer-max-width: 52rem; }
+.live-input, .live-wrap .usage-strip {
+  width: calc(100% - 2 * var(--composer-gutter));
+  max-width: var(--composer-max-width);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* The composer is a stable two-level card: message first, actions underneath. */
+.live-input {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px 36px;
+  gap: 10px 8px;
+  margin: 0 auto 20px;
+  padding: var(--ui-input-padding-y, 0.85rem) 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-mid);
+  border-radius: 16px;
+  box-shadow: 0 3px 16px rgb(0 0 0 / 3%);
+}
+.live-input:focus-within {
+  background: var(--bg-elevated);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.live-input textarea { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; min-height: 28px; padding: 2px 2px 6px; font-size: var(--fs-lg); line-height: 1.65; background: transparent; }
+.live-input:focus-within textarea::placeholder { opacity: 1; }
+.live-input .image-previews { grid-column: 1 / -1; grid-row: 1; }
+.live-input .vision-indicator { grid-column: 1; grid-row: 3; width: 32px; height: 32px; }
+.live-input .usage-strip-toggle { grid-column: 3; grid-row: 3; width: 32px; height: 32px; }
+.live-input .send-btn { grid-column: 4; grid-row: 3; width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: var(--on-accent); border: 0; opacity: 1; }
+.live-input .send-btn:disabled { background: var(--bg3); color: var(--text-faint); opacity: 0.7; }
+.live-input .send-btn:not(:disabled):hover { background: var(--accent-hover); color: var(--on-accent); }
+.live-input .send-btn.busy, .live-input .send-btn.busy:hover { background: var(--error-bg); color: var(--red); border: 1px solid var(--red); }
+.live-input:focus-within .send-btn { transform: none; }
+.live-input .composer-help { grid-column: 2; grid-row: 3; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 16px; min-width: 0; color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.5; }
+.live-wrap .usage-strip { background: transparent; border: 0; box-shadow: none; padding: 7px 10px; gap: 4px 6px; }
+.live-wrap .usage-strip .usage-chip { background: transparent; border-color: transparent; padding: 0.12rem 0.35rem; }
+.live-wrap .usage-strip .model-picker { min-width: 0; max-width: min(100%, 30rem); }
+.live-wrap .usage-strip .usage-model-balance { min-width: 0; max-width: 100%; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-wrap .usage-strip .usage-model-balance:not([hidden]) { display: block; }
+.live-wrap .usage-strip .usage-location { max-width: min(100%, 12rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-wrap .usage-strip .usage-location:not([hidden]) { display: block; }
+.live-wrap .usage-strip .terminal-usage { gap: 4px; min-width: 0; max-width: 100%; flex-wrap: wrap; overflow: visible; }
+
+@media (max-width: 700px) {
+  .live-wrap { --composer-gutter: 12px; }
+  .live-input { margin-bottom: max(12px, env(safe-area-inset-bottom)); padding-left: 10px; padding-right: 10px; border-radius: 13px; }
+  .live-input textarea { font-size: 16px; }
+  .composer-keyboard { display: none; }
+  .live-wrap .usage-strip { padding: 6px; }
+}
+
+/* Shell mode retains its semantic cyan without placing a badge over the draft. */
+.live-input.shell-mode::after { top: 0; right: 18px; transform: translateY(-50%); }
+.live-input.shell-mode .send-btn:not(:disabled):not(.busy) { background: var(--cyan); color: var(--on-accent); }
+.live-input.shell-mode:focus-within { box-shadow: 0 0 0 3px var(--cyan-glow); }

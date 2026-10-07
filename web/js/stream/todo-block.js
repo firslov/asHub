@@ -15,39 +15,13 @@ const liveBlock = (session) => {
   return root?.contains(block) ? block : null;
 };
 
-// Same max-height collapse animation as tool-group.js.
+// Hidden sessions and replay fragments have no measurable layout. Let CSS
+// control collapse state so opening never pins their content to zero height.
 const setTodoCollapsed = (block, collapsed) => {
   const body = block.querySelector(".todo-body");
   const head = block.querySelector(".todo-head");
   if (!body || collapsed === block.classList.contains("collapsed")) return;
-  if (collapsed) {
-    body.style.maxHeight = body.scrollHeight + "px";
-    body.offsetHeight;
-    block.classList.add("collapsed");
-    body.style.maxHeight = "0";
-  } else {
-    // Detached (replay fragment): the node has no layout, so scrollHeight
-    // reads 0 and the choreography below would pin an inline max-height:"0px"
-    // that no transitionend ever clears (no transition runs while detached) —
-    // the body would stay zero-height after the fragment is attached.  Just
-    // drop the class and clear the inline value so the natural height applies
-    // once connected.
-    if (!body.isConnected) {
-      body.style.maxHeight = "";
-      block.classList.remove("collapsed");
-    } else {
-      body.style.maxHeight = "0";
-      block.classList.remove("collapsed");
-      body.offsetHeight;
-      body.style.maxHeight = body.scrollHeight + "px";
-      const onEnd = (ev) => {
-        if (ev.propertyName !== "max-height") return;
-        body.style.maxHeight = "";
-        body.removeEventListener("transitionend", onEnd);
-      };
-      body.addEventListener("transitionend", onEnd);
-    }
-  }
+  block.classList.toggle("collapsed", collapsed);
   if (head) {
     head.setAttribute("aria-expanded", String(!collapsed));
     head.title = collapsed ? t("todo.expand") : t("todo.collapse");
@@ -178,8 +152,7 @@ export const updateTodoBlock = (session, todos) => {
   // Work is underway again, but a turn boundary settled this card collapsed
   // (settleTodoBlock) and nothing ever expanded it back — the re-render above
   // would land behind .todo-body's max-height: 0, leaving only the head's N/M
-  // moving.  Expand after the re-render so the max-height transition measures
-  // the new content instead of the old, and leave a manual collapse
+  // moving. Expand after the re-render, and leave a manual collapse
   // (userToggled) alone: that is the user's choice, not staleness.
   if (!settledNow && block.classList.contains("collapsed") && !block.dataset.userToggled) {
     setTodoCollapsed(block, false);

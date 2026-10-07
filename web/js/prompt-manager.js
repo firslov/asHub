@@ -5,23 +5,78 @@
  * - Attaches "#" autocomplete to the input
  */
 import { t } from "./i18n.js";
+import { toast } from "./toast.js";
 import { attachAutocomplete } from "./autocomplete.js";
 
 const LS_PROMPTS = "ash.prompts";
+const LS_PROMPT_PREFIX = "ash.prompt.";
 
 // ── localStorage helpers ──────────────────────────────────────────
-const loadPrompts = () => {
+const loadPrompts = (strict = false) => {
   try {
     const raw = localStorage.getItem(LS_PROMPTS);
     const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr : [];
-  } catch {
+    const merged = new Map((Array.isArray(arr) ? arr : []).map(p => [p.id, p]));
+    // Read the legacy array, then overlay per-id records. A delete marker
+    // prevents a legacy entry from reappearing without rewriting that array.
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(LS_PROMPT_PREFIX)) continue;
+      const id = key.slice(LS_PROMPT_PREFIX.length);
+      const record = JSON.parse(localStorage.getItem(key));
+      if (record === null) merged.delete(id);
+      else merged.set(id, record);
+    }
+    return [...merged.values()];
+  } catch (err) {
+    if (strict) throw err;
     return [];
   }
 };
 
-const savePrompts = (prompts) => {
-  try { localStorage.setItem(LS_PROMPTS, JSON.stringify(prompts)); } catch {}
+// Reclaim legacy bodies only after their per-id replacement is committed.
+// A deletion may also reclaim its own legacy body first when quota is full.
+const compactLegacyPrompts = (deletedId = null) => {
+  const raw = localStorage.getItem(LS_PROMPTS);
+  if (!raw) return;
+  const legacy = JSON.parse(raw);
+  if (!Array.isArray(legacy)) return;
+  const kept = legacy.filter(p => p.id !== deletedId && localStorage.getItem(LS_PROMPT_PREFIX + p.id) === null);
+  if (kept.length !== legacy.length) localStorage.setItem(LS_PROMPTS, JSON.stringify(kept));
+};
+
+const savePrompts = async (change) => {
+  const write = () => {
+    const latest = loadPrompts(true);
+    // Each action changes one id. Separate keys also protect unrelated
+    // prompts in browsers/HTTP origins where Web Locks is unavailable.
+    const previous = new Map(latest.map(p => [p.id, JSON.stringify(p)]));
+    const next = change(latest);
+    const remaining = new Set(next.map(p => p.id));
+    for (const p of next) {
+      const record = JSON.stringify(p);
+      if (record !== previous.get(p.id)) localStorage.setItem(LS_PROMPT_PREFIX + p.id, record);
+    }
+    for (const id of previous.keys()) {
+      if (!remaining.has(id)) {
+        try { localStorage.setItem(LS_PROMPT_PREFIX + id, "null"); }
+        catch (err) {
+          // Shrinking the legacy array frees space without allocating a
+          // second copy of the deleted body. Keep other legacy prompts.
+          compactLegacyPrompts(id);
+          localStorage.setItem(LS_PROMPT_PREFIX + id, "null");
+        }
+      }
+    }
+    // Cleanup is optional: a committed per-id record remains authoritative
+    // even if legacy compaction is temporarily unavailable.
+    try { compactLegacyPrompts(); } catch {}
+    prompts = next;
+  };
+  // Web Locks serializes read/modify/write across same-origin windows.
+  // Per-id writes remain independent when this API is unavailable.
+  if (globalThis.navigator?.locks) await navigator.locks.request(LS_PROMPTS, write);
+  else write();
 };
 
 let prompts = loadPrompts();
@@ -42,6 +97,9 @@ const tabPrompts = document.getElementById("tab-prompts");
 const tabShortcuts = document.getElementById("tab-shortcuts");
 
 let editingId = null; // null = adding new, string = editing existing
+let editingOriginal = null;
+let saving = false;
+let editorVersion = 0;
 
 // ── Render prompt list ────────────────────────────────────────────
 const renderList = () => {
@@ -95,6 +153,8 @@ const renderList = () => {
 
 // ── Editor ────────────────────────────────────────────────────────
 const startAdd = () => {
+  ++editorVersion;
+  editingOriginal = null;
   setActiveTab("prompts");
   editingId = null;
   promptEditorName.value = "";
@@ -105,9 +165,12 @@ const startAdd = () => {
 };
 
 const startEdit = (id) => {
+  prompts = loadPrompts();
   const p = prompts.find((x) => x.id === id);
   if (!p) return;
+  ++editorVersion;
   editingId = id;
+  editingOriginal = JSON.stringify(p);
   promptEditorName.value = p.name;
   promptEditorContent.value = p.content;
   promptEditorSave.textContent = t("prompts.save");
@@ -116,13 +179,16 @@ const startEdit = (id) => {
 };
 
 const cancelEdit = () => {
+  ++editorVersion;
+  editingOriginal = null;
   editingId = null;
   promptEditorName.value = "";
   promptEditorContent.value = "";
   promptEditor.setAttribute("hidden", "");
 };
 
-const doSave = () => {
+const doSave = async () => {
+  if (saving) return;
   const name = promptEditorName.value.trim();
   const content = promptEditorContent.value.trim();
   if (!name) {
@@ -134,29 +200,58 @@ const doSave = () => {
     return;
   }
 
-  if (editingId) {
-    // Update existing
-    const idx = prompts.findIndex((p) => p.id === editingId);
-    if (idx !== -1) {
-      prompts[idx] = { ...prompts[idx], name, content };
+  const id = editingId;
+  const original = editingOriginal;
+  const version = editorVersion;
+  let committed;
+  saving = true;
+  promptEditorSave.disabled = true;
+  try {
+    await savePrompts((latest) => {
+      if (id) {
+        const idx = latest.findIndex(p => p.id === id);
+        if (idx < 0 || JSON.stringify(latest[idx]) !== original) throw new Error("prompts.conflict");
+        committed = { ...latest[idx], name, content };
+        latest[idx] = committed;
+      } else {
+        committed = { id: crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, "0")).join(""), name, content };
+        latest.push(committed);
+      }
+      return latest;
+    });
+    if (editorVersion === version) {
+      // The draft may have advanced while waiting for the lock. Associate
+      // it with the committed id/snapshot without replacing newer text.
+      editingId = committed.id;
+      editingOriginal = JSON.stringify(committed);
+      promptEditorSave.textContent = t("prompts.save");
+      if (promptEditorName.value.trim() === name && promptEditorContent.value.trim() === content) cancelEdit();
     }
-  } else {
-    // Add new
-    prompts.push({ id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36), name, content });
+    renderList();
+  } catch (err) {
+    toast(t(err?.message === "prompts.conflict" ? "prompts.conflict" : "prompts.save.failed"), { type: "error" });
+  } finally {
+    saving = false;
+    promptEditorSave.disabled = false;
   }
-
-  savePrompts(prompts);
-  cancelEdit();
-  renderList();
 };
 
-const deletePrompt = (id) => {
-  prompts = prompts.filter((p) => p.id !== id);
-  savePrompts(prompts);
-  // If editing the deleted prompt, cancel
-  if (editingId === id) cancelEdit();
-  renderList();
+const deletePrompt = async (id) => {
+  try {
+    await savePrompts(latest => latest.filter(p => p.id !== id));
+    if (editingId === id) cancelEdit();
+    renderList();
+  } catch {
+    toast(t("prompts.save.failed"), { type: "error" });
+  }
 };
+
+// Refresh lists/autocomplete without replacing a draft in the editor.
+window.addEventListener("storage", (event) => {
+  if (event.key !== LS_PROMPTS && event.key !== null && !event.key?.startsWith(LS_PROMPT_PREFIX)) return;
+  prompts = loadPrompts();
+  renderList();
+});
 
 // ── Tab switching ─────────────────────────────────────────────────
 export const setActiveTab = (tab) => {
@@ -171,6 +266,7 @@ export const setActiveTab = (tab) => {
 // ── Panel open / close ────────────────────────────────────────────
 export const setPromptOpen = (on, tab = "prompts") => {
   if (on) {
+    prompts = loadPrompts();
     promptOverlay.removeAttribute("hidden");
     promptToggle?.classList.add("active");
     setActiveTab(tab);
@@ -259,22 +355,12 @@ document.addEventListener("langchange", () => {
   }
 });
 
-import { registerPanel, closeOtherPanels } from './panel-manager.js';
+import { registerPanel } from './panel-manager.js';
 
-// Single toolbar button toggles the merged commands panel (default: prompts
-// tab).  Tab switching happens inside via the .p-seg-item buttons.
-const toggleCommands = () => {
-  const open = promptOverlay && !promptOverlay.hasAttribute("hidden");
-  if (open) {
-    setPromptOpen(false);
-  } else {
-    closeOtherPanels("prompts");
-    setPromptOpen(true, "prompts");
-  }
-};
-
-promptToggle?.addEventListener("click", toggleCommands);
-
-// Register the panel (no toggle button) so ESC-to-close and close-others
-// still know about it; the toolbar toggle is wired above.
-registerPanel('prompts', { toggleBtnId: null, panelId: 'prompt-overlay', open: () => setPromptOpen(true), close: () => setPromptOpen(false) });
+// Use the same toggle, accessible state and Escape focus handling as other drawers.
+registerPanel('prompts', {
+  toggleBtnId: 'prompt-toggle',
+  panelId: 'prompt-overlay',
+  open: () => setPromptOpen(true, 'prompts'),
+  close: () => setPromptOpen(false),
+});

@@ -12,6 +12,7 @@
  */
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
+import { updateSettingsFile } from "../settings-store.js";
 import path from "node:path";
 import * as os from "node:os";
 import { createCore, type AgentShellCore, runSubagent, type ToolDefinition } from "agent-sh";
@@ -302,6 +303,8 @@ function renderTodos(todos: TodoItem[]): string {
 
 
 export class AshBridge extends EventEmitter implements Bridge {
+  readonly supportsQueue = true;
+  readonly supportsCwdChange = true;
   private core: AgentShellCore | null = null;
   private initPromise: Promise<void>;
   private opts: BridgeOpts;
@@ -310,6 +313,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private queryQueue: string[] = [];
   private shellQueue: string[] = [];
   private closed = false;
+  private providerGeneration = 0;
   private backendRegistered = false;
   private pendingPermissions = new Map<string, { resolve: (d: { outcome: string; reason?: string }) => void; timer: ReturnType<typeof setTimeout>; kind: string }>();
   private permissionSessionApproved = new Set<string>();
@@ -325,20 +329,34 @@ export class AshBridge extends EventEmitter implements Bridge {
   private shellLastInjected = 0;
   private shellNextId = 1;
 
+  readonly backendId = "ash";
+
   constructor(opts: BridgeOpts) {
     super();
+    if ((opts.restoreBackend && opts.restoreBackend !== this.backendId) || opts.restoreState?.acpSessionId) throw new Error("This session belongs to another backend; restart with its original backend.");
     this.opts = opts;
-    this.initPromise = this.init();
+    this.initPromise = this.init().catch(err => {
+      // An extension/backend may finish after close(). Drain resources again
+      // when initialization settles, without emitting a second closed event.
+      if (this.closed) this.releaseResources();
+      else this.close();
+      throw err;
+    });
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error("bridge closed during initialization");
   }
 
   private async init(): Promise<void> {
     // Read auto-approve setting from disk
     try {
-      const raw = await fs.promises.readFile(path.join(os.homedir(), ".agent-sh", "settings.json"), "utf-8");
+      const raw = await fs.promises.readFile(path.join(CONFIG_DIR, "settings.json"), "utf-8");
       const data = JSON.parse(raw);
-      this.autoApprove = !!data["ashub.permissions.autoApprove"];
+      this.autoApprove = data["ashub.permissions.autoApprove"] === true;
     } catch {}
 
+    this.assertOpen();
     const core = createCore({ model: this.opts.model, provider: this.opts.provider });
     this.core = core;
 
@@ -405,6 +423,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     // before core:extensions-loaded fires and activateBackend() runs.
     // This matches the CLI init order in agent-sh/dist/cli/index.js.
     const exposeTerminal = this.opts.kind === "ash-terminal";
+    if (exposeTerminal && process.platform === "win32") {
+      throw new Error("ash-terminal requires zsh, bash or fish; use a regular terminal on Windows");
+    }
     // registerShellHandlers must precede activateAgent + loadBuiltinExtensions
     // so ctx.shell.compositor + tui-renderer are wired before the input mode prompt fires.
     if (exposeTerminal) registerShellHandlers(extCtx);
@@ -437,6 +458,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       ...(settings.disabledBuiltins ?? []),
     ];
     const builtinNames = await loadBuiltinExtensions(extCtx, headlessDisabled);
+    this.assertOpen();
 
     // In Electron (ASHUB_UNDER), tsx's module.register() spawns a
     // worker thread that can race with Chromium init.  Yield once on
@@ -445,6 +467,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     if (process.env.ASHUB_UNDER && _firstBridge) {
       _firstBridge = false;
       await new Promise<void>((r) => setTimeout(r, 200));
+      this.assertOpen();
     }
 
     // User extensions (~/.agent-sh/extensions/) load too. Extensions that
@@ -460,6 +483,8 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       process.stderr.write(`[ash-bridge] ${err instanceof Error ? err.message : err}\n`);
       return [] as string[];
     });
+
+    this.assertOpen();
 
     // AgentLoop (constructed by activateAgent) defines its own
     // history:read-recent in its constructor, and ember may advise it.
@@ -755,20 +780,21 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       // Read-modify-write the subagentModels field wholesale instead,
       // then drop the getSettings() cache so it re-reads.
       const settingsPath = path.join(CONFIG_DIR, "settings.json");
-      let data: Record<string, unknown> = {};
-      try { data = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as Record<string, unknown>; } catch {}
-      const current = { ...((data.subagentModels as Record<string, string> | undefined) ?? {}) };
-      if (opts.model === "inherit" || !opts.model) {
-        delete current[opts.type];
-      } else {
-        current[opts.type] = opts.model;
-      }
-      data.subagentModels = current;
       try {
-        fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+        updateSettingsFile(settingsPath, data => {
+          const current = { ...((data.subagentModels as Record<string, string> | undefined) ?? {}) };
+          if (opts.model === "inherit" || !opts.model) {
+            delete current[opts.type];
+          } else {
+            current[opts.type] = opts.model;
+          }
+          data.subagentModels = current;
+          return data;
+        });
         reloadSettings();
       } catch (err) {
         process.stderr.write(`[ash-bridge] failed to persist subagent model override: ${err instanceof Error ? err.message : err}\n`);
+        throw err;
       }
     });
 
@@ -785,31 +811,32 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     }) => {
       if (!SUBAGENT_TYPES[opts.type]) return;
       const settingsPath = path.join(CONFIG_DIR, "settings.json");
-      let data: Record<string, unknown> = {};
-      try { data = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as Record<string, unknown>; } catch {}
-      const current = { ...((data.subagentBudgets as Record<string, SubagentBudgetOverride> | undefined) ?? {}) };
-      const entry: SubagentBudgetOverride = { ...(current[opts.type] ?? {}) };
-      // null clears a field back to the preset; undefined leaves it unchanged.
-      if (opts.budgetTokens === null) delete entry.budgetTokens;
-      else if (typeof opts.budgetTokens === "number" && Number.isFinite(opts.budgetTokens) && opts.budgetTokens > 0) {
-        entry.budgetTokens = Math.floor(opts.budgetTokens);
-      }
-      if (opts.maxIterations === null) delete entry.maxIterations;
-      else if (typeof opts.maxIterations === "number" && Number.isFinite(opts.maxIterations) && opts.maxIterations > 0) {
-        entry.maxIterations = Math.floor(opts.maxIterations);
-      }
-      if (opts.reasoning === null || opts.reasoning === "inherit") delete entry.reasoning;
-      else if (typeof opts.reasoning === "string" && REASONING_LEVELS.has(opts.reasoning)) {
-        entry.reasoning = opts.reasoning;
-      }
-      if (Object.keys(entry).length === 0) delete current[opts.type];
-      else current[opts.type] = entry;
-      data.subagentBudgets = current;
       try {
-        fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+        updateSettingsFile(settingsPath, data => {
+          const current = { ...((data.subagentBudgets as Record<string, SubagentBudgetOverride> | undefined) ?? {}) };
+          const entry: SubagentBudgetOverride = { ...(current[opts.type] ?? {}) };
+          // null clears a field back to the preset; undefined leaves it unchanged.
+          if (opts.budgetTokens === null) delete entry.budgetTokens;
+          else if (typeof opts.budgetTokens === "number" && Number.isFinite(opts.budgetTokens) && opts.budgetTokens > 0) {
+            entry.budgetTokens = Math.floor(opts.budgetTokens);
+          }
+          if (opts.maxIterations === null) delete entry.maxIterations;
+          else if (typeof opts.maxIterations === "number" && Number.isFinite(opts.maxIterations) && opts.maxIterations > 0) {
+            entry.maxIterations = Math.floor(opts.maxIterations);
+          }
+          if (opts.reasoning === null || opts.reasoning === "inherit") delete entry.reasoning;
+          else if (typeof opts.reasoning === "string" && REASONING_LEVELS.has(opts.reasoning)) {
+            entry.reasoning = opts.reasoning;
+          }
+          if (Object.keys(entry).length === 0) delete current[opts.type];
+          else current[opts.type] = entry;
+          data.subagentBudgets = current;
+          return data;
+        });
         reloadSettings();
       } catch (err) {
         process.stderr.write(`[ash-bridge] failed to persist subagent budget override: ${err instanceof Error ? err.message : err}\n`);
+        throw err;
       }
     });
 
@@ -1406,6 +1433,8 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
 
     // Permission gate for file-modifying tools
     core.handlers.advise("tool:execute", async (next: (ctx: unknown) => Promise<unknown>, ctx) => {
+      const signal = (ctx as { signal?: AbortSignal }).signal;
+      if (signal?.aborted) return { content: "Cancelled", exitCode: 1, isError: true };
       const args = (ctx as { args?: Record<string, unknown> }).args || {};
       const tool = (ctx as { tool?: ToolDefinition }).tool;
       const name = (ctx as { name?: string }).name || "unknown";
@@ -1413,10 +1442,11 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       if (this.autoApprove) return next(ctx);
 
       const metaPath = (args.path || args.command || "") as string;
-      const permPayload = { kind: "file-write", title: `${name}: ${metaPath}`, description: (args.description || "") as string, metadata: { filePath: args.path || metaPath, diff: args.diff } };
+      const permPayload = { signal, kind: "file-write", title: `${name}: ${metaPath}`, description: (args.description || "") as string, metadata: { filePath: args.path || metaPath, diff: args.diff } };
       const result = await (core.bus.emitPipeAsync as (name: string, payload: unknown) => Promise<unknown>)("permission:request", permPayload) as Record<string, unknown>;
       const decision = result?.decision as { outcome: string; reason?: string } | undefined;
 
+      if (signal?.aborted) return { content: "Cancelled", exitCode: 1, isError: true };
       if (decision?.outcome !== "approved") {
         return { content: `Permission denied: ${decision?.reason || "denied by user"}`, exitCode: 1, isError: true };
       }
@@ -1472,6 +1502,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     });
 
     await core.activateBackend();
+    this.assertOpen();
 
     const startCwd = this.opts.cwd ? path.resolve(this.opts.cwd) : os.homedir();
     this.liveCwd = startCwd;
@@ -1515,8 +1546,22 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
             return { info: `${p.dim}${info.name}${info.model ? ` (${info.model})` : ""}${p.reset}` };
           } : undefined,
         });
-        this.shell.onExit(() => { this.shell = null; });
+        const shell = this.shell;
+        shell.onExit(({ exitCode, signal }) => {
+          if (this.closed || this.shell !== shell) return;
+          if (exposeTerminal) {
+            // Deliver the exit after buffered output, before Hub removes the
+            // session. close() also releases Shell's temp files and listeners.
+            try { this.emit("event", { name: "shell:exit", payload: { exitCode, signal } } satisfies BusEvent); }
+            finally { this.close(); }
+          } else {
+            // A regular agent can continue without its optional shell.
+            this.shell = null;
+            try { shell.kill(); } catch {}
+          }
+        });
       } catch (err) {
+        if (exposeTerminal) throw err;
         process.stderr.write(`[ash-bridge] shell spawn failed: ${err instanceof Error ? err.message : err}\n`);
       }
       if (exposeTerminal) {
@@ -1539,14 +1584,14 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
         });
       }
       const onAnyBus = core.bus.on.bind(core.bus) as unknown as (n: string, fn: (p: unknown) => void) => void;
-      onAnyBus("shell:cwd-change", (payload) => {
-        const next = (payload as { cwd?: string })?.cwd;
-        if (typeof next === "string" && next) this.liveCwd = next;
-      });
       onAnyBus("shell:command-done", (payload) => {
         this.recordShellExchange(payload as { command?: string; output?: string; cwd?: string; exitCode?: number | null });
       });
     }
+    core.bus.on("shell:cwd-change", (payload: unknown) => {
+      const next = (payload as { cwd?: string })?.cwd;
+      if (typeof next === "string" && next) this.liveCwd = next;
+    });
     core.handlers.advise("cwd", () => this.liveCwd);
 
     core.handlers.advise("system-prompt:build", (next: () => string) => {
@@ -1832,6 +1877,8 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       fn: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>,
     ) => void;
     onPipe("permission:request", async (payload) => {
+      const signal = payload.signal as AbortSignal | undefined;
+      if (signal?.aborted) { payload.decision = { outcome: "denied", reason: "cancelled" }; return payload; }
       // Session-level auto-approve (user clicked "Approve All")
       const kind = (payload.kind || "") as string;
       if (this.permissionSessionApproved.has(kind)) {
@@ -1842,9 +1889,10 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const p = payload as Record<string, unknown>;
       p.requestId = requestId;
+      p.expiresAt = Date.now() + 30_000;
 
       // Forward to client for user approval
-      this.emit("event", { name: "permission:request", payload: p });
+      this.emit("event", { name: "permission:request", payload: { ...p, signal: undefined } });
 
       // Wait for user decision (30s timeout → auto-deny)
       const decision = await new Promise<{ outcome: string; reason?: string }>((resolve) => {
@@ -1854,11 +1902,23 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
           // promise is harmless, but sessionWide approval would wrongly
           // whitelist the kind for the rest of the session.
           this.pendingPermissions.delete(requestId);
-          resolve({ outcome: "denied", reason: "timeout" });
+          finish({ outcome: "denied", reason: "timeout" });
         }, 30_000);
-        this.pendingPermissions.set(requestId, { resolve, timer, kind });
+        const onAbort = () => {
+          this.pendingPermissions.delete(requestId);
+          finish({ outcome: "denied", reason: "cancelled" });
+        };
+        const finish = (decision: { outcome: string; reason?: string }) => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          resolve(decision);
+        };
+        this.pendingPermissions.set(requestId, { resolve: finish, timer, kind });
+        signal?.addEventListener("abort", onAbort, { once: true });
+        if (signal?.aborted) onAbort();
       });
 
+      this.emit("event", { name: "permission:resolved", payload: { requestId, outcome: decision.outcome } });
       payload.decision = decision;
       return payload;
     });
@@ -1903,25 +1963,29 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       this.queryQueue.push(text);
       return { stopReason: "queued" };
     }
-    // Check for multimodal payload: { query, images: [{ data, mimeType }] }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let images: any;
-    let query = text;
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed.query && Array.isArray(parsed.images)) {
-        query = parsed.query;
-        images = parsed.images.map((img: { data: string; mimeType: string }) => ({
-          type: "image" as const, data: img.data, mimeType: img.mimeType,
-        }));
-      }
-    } catch { /* plain text */ }
+    const { query, images } = this.parseSubmission(text);
     return new Promise<{ stopReason: string }>((resolve, reject) => {
       this.pendingTurn = { resolve, reject };
       // agent-sh 0.14.11+ handles images natively: auto-drops for
       // non-multimodal models and builds multimodal content from images.
       this.core!.bus.emit("agent:submit", { query, images });
     });
+  }
+
+  private parseSubmission(text: string) {
+    // Check for multimodal payload: { query, images: [{ data, mimeType }] }
+    let images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+    let query = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed.query === "string" && Array.isArray(parsed.images)) {
+        query = parsed.query;
+        images = parsed.images.map((img: { data: string; mimeType: string }) => ({
+          type: "image" as const, data: img.data, mimeType: img.mimeType,
+        }));
+      }
+    } catch { /* plain text */ }
+    return { query, images };
   }
 
   private drainQueue(): void {
@@ -1941,8 +2005,9 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
         this.emit("event", { name: "agent:queued-done", payload: {} } satisfies BusEvent);
       },
     };
-    this.emit("event", { name: "agent:queued-submit", payload: { query: next } } satisfies BusEvent);
-    this.core.bus.emit("agent:submit", { query: next });
+    const payload = this.parseSubmission(next);
+    this.emit("event", { name: "agent:queued-submit", payload } satisfies BusEvent);
+    this.core.bus.emit("agent:submit", payload);
   }
 
   // Discard all queued queries, emitting queued-done for each so every
@@ -1953,11 +2018,15 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
   private dropQueued(): void {
     while (this.queryQueue.length > 0) {
       const dropped = this.queryQueue.shift()!;
-      this.emit("event", { name: "agent:queued-done", payload: { query: dropped, dropped: true } } satisfies BusEvent);
+      this.emit("event", { name: "agent:queued-done", payload: { query: this.parseSubmission(dropped).query, dropped: true } } satisfies BusEvent);
     }
   }
 
   cancel(): void {
+    for (const entry of this.pendingPermissions.values()) {
+      entry.resolve({ outcome: "denied", reason: "cancelled" });
+    }
+    this.pendingPermissions.clear();
     this.core?.bus.emit("agent:cancel-request", {});
     // If no agent backend is registered (e.g. missing API key), the
     // cancel-request has no listener and pendingTurn would never settle.
@@ -1983,23 +2052,18 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       const id = at > 0 ? args.slice(0, at) : args;
       const providerHint = at > 0 ? args.slice(at + 1) : undefined;
       const found = models.find((m) => m.id === id && (!providerHint || m.provider === providerHint));
-      this.core?.bus.emit("config:switch-model", found
-        ? { id: found.id, provider: found.provider }
-        : { id, provider: providerHint ?? "" });
+      if (!this.core || this.closed) throw new Error("backend not ready");
+      if (!found) throw new Error(`Unknown model: ${providerHint ?? ""}:${id}`);
+      this.core.bus.emit("config:switch-model", { id: found.id, provider: found.provider });
+      const active = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+      if (active?.model !== found.id || active?.provider !== found.provider) {
+        throw new Error("backend did not confirm the requested model");
+      }
       return;
     }
-    if (name === "/sa-model" && args) {
-      try {
-        const parsed = JSON.parse(args) as { type: string; model: string };
-        this.core?.handlers.call("subagent:set-model", parsed);
-      } catch { /* ignore parse error */ }
-      return;
-    }
-    if (name === "/sa-budget" && args) {
-      try {
-        const parsed = JSON.parse(args) as { type: string; budgetTokens?: number | null; maxIterations?: number | null; reasoning?: string | null };
-        this.core?.handlers.call("subagent:set-budget", parsed);
-      } catch { /* ignore parse error */ }
+    if ((name === "/sa-model" || name === "/sa-budget") && args) {
+      if (!this.core) throw new Error("backend not ready");
+      this.core.handlers.call(name === "/sa-model" ? "subagent:set-model" : "subagent:set-budget", JSON.parse(args));
       return;
     }
     this.core?.bus.emit("command:execute", { name, args });
@@ -2010,13 +2074,14 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
   }
 
   reloadProviders(): void {
+    const generation = ++this.providerGeneration;
     // agent-sh 0.15.3 calls refreshSettingsProviders() on
     // providers:changed, which re-reads settings.json and
     // merges fresh apiKey/baseURL with the existing provider
     // contributions (which retain the async-fetched model list).
     // config:switch-model then forces agent-loop to re-resolve
     // activeEndpoint and reconfigure llmClient immediately.
-    if (!this.core) return;
+    if (!this.core || this.closed) return;
     // For OpenRouter, re-fetch the full model catalog with the
     // new apiKey so the model list updates without restart.
     try {
@@ -2026,7 +2091,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
         if (key) {
           const ctxAgent = (this.extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
           if (ctxAgent?.providers?.register) {
-            this.refetchOpenRouterModels(ctxAgent, key);
+            void this.refetchOpenRouterModels(ctxAgent, key, generation);
           }
         }
       }
@@ -2043,6 +2108,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
   private async refetchOpenRouterModels(
     ctxAgent: { providers?: { register: (reg: Record<string, unknown>) => unknown } },
     apiKey: string,
+    generation: number,
   ): Promise<void> {
     try {
       const res = await fetch("https://openrouter.ai/api/v1/models", {
@@ -2050,6 +2116,7 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       });
       if (!res.ok || !ctxAgent.providers?.register) return;
       const data = (await res.json()) as { data?: Array<{ id: string; supported_parameters?: string[]; context_length?: number; architecture?: { input_modalities?: string[] } }> };
+      if (this.closed || generation !== this.providerGeneration) return;
       const models = data.data ?? [];
       if (models.length === 0) return;
       ctxAgent.providers.register({
@@ -2259,6 +2326,11 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.releaseResources();
+    this.emit("closed");
+  }
+
+  private releaseResources(): void {
     // Abort and clean up any async subagents still running.
     for (const [, entry] of (this as any)._subagents as Map<any, any>) {
       try { entry.controller?.abort(); } catch {}
@@ -2275,8 +2347,9 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
     try { this._contextProducerUnsubscribe?.(); } catch {}
     try { this.core?.kill(); } catch {}
     if (this.shell) {
-      try { this.shell.kill(); } catch {}
+      const shell = this.shell;
       this.shell = null;
+      try { shell.kill(); } catch {}
     }
     for (const ex of this.shellExchanges) {
       if (ex.spillPath) {
@@ -2284,7 +2357,6 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
       }
     }
     this.shellExchanges.length = 0;
-    this.emit("closed");
   }
 
   onEvent(fn: (e: BusEvent) => void): () => void {

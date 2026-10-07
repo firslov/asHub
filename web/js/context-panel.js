@@ -107,7 +107,8 @@ const currentGroupsArr = () => ctx()?.currentGroups ?? [];
 
 const updateDropButton = () => {
   const selected = selectedSet();
-  ctxDrop.disabled = selected.size === 0;
+  ctxDrop.disabled = !!ctx()?.readOnly || selected.size === 0;
+  ctxDrop.hidden = !!ctx()?.readOnly;
   if (selected.size > 0) {
     let tok = 0;
     const msgs = currentMsgsArr();
@@ -183,18 +184,20 @@ const renderContext = async () => {
   const c = ctx();
   if (c) c.selected.clear();
   const sid = currentSessionId();
-  if (!sid) { ctxBody.innerHTML = `<div class="p-empty">${t("ctx.no.session")}</div>`; updateDropButton(); return; }
   ctxFetchAbort?.abort();
+  const mySeq = ++ctxFetchSeq;
+  ctxMeta.textContent = "";
+  updateDropButton();
+  if (!sid) { ctxBody.innerHTML = `<div class="p-empty">${t("ctx.no.session")}</div>`; updateDropButton(); return; }
   const ac = new AbortController();
   ctxFetchAbort = ac;
-  const mySeq = ++ctxFetchSeq;
   ctxBody.innerHTML = `<div class="p-empty">${t("ctx.loading")}</div>`;
   let data;
   try {
     const res = await fetch(`/${sid}/context`, { signal: ac.signal });
     if (!res.ok) throw new Error(await res.text());
     data = await res.json();
-    if (mySeq !== ctxFetchSeq) return;
+    if (mySeq !== ctxFetchSeq || sid !== currentSessionId()) return;
   } catch (e) {
     if (e?.name === "AbortError" || mySeq !== ctxFetchSeq) return;
     ctxBody.innerHTML = `<div class="p-empty">${escape(String(e.message ?? e))}</div>`;
@@ -203,6 +206,8 @@ const renderContext = async () => {
   }
   const msgs = Array.isArray(data.messages) ? data.messages : [];
   if (c) {
+    c.readOnly = !!data.readOnly;
+    c.revision = data.revision;
     c.currentMsgs = msgs;
     c.currentGroups = computeGroups(msgs);
   }
@@ -251,6 +256,8 @@ const renderContext = async () => {
     check.className = "ctx-check";
     const cb = document.createElement("input");
     cb.type = "checkbox";
+    cb.disabled = !!data.readOnly;
+    check.hidden = !!data.readOnly;
     cb.addEventListener("change", () => setGroupSelected(groups[i], cb.checked));
     const box = document.createElement("span");
     box.className = "ctx-box";
@@ -315,14 +322,17 @@ const renderContext = async () => {
 };
 
 ctxDrop?.addEventListener("click", async () => {
+  const origin = ctx();
+  const sid = currentSessionId();
+  const revision = origin?.revision;
   const selected = selectedSet();
-  if (selected.size === 0) return;
+  if (ctx()?.readOnly || selected.size === 0) return;
   const indices = [...selected].sort((a, b) => a - b);
   try {
-    const res = await fetch(`/${currentSessionId()}/context/drop`, {
+    const res = await fetch(`/${sid}/context/drop`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ indices }),
+      body: JSON.stringify({ indices, revision }),
     });
     if (!res.ok) throw new Error(await res.text());
   } catch (e) {
@@ -336,7 +346,7 @@ ctxDrop?.addEventListener("click", async () => {
     });
     return;
   }
-  renderContext();
+  if (sid === currentSessionId() && origin === ctx()) renderContext();
 });
 
 ctxRefresh?.addEventListener("click", () => renderContext());
@@ -369,13 +379,6 @@ const setCtxOpen = (on) => {
   try { localStorage.setItem(LS_CTX, on ? "1" : "0"); } catch {}
 };
 
-// 延迟初始化，避免循环依赖导致的 TDZ 错误
-setTimeout(() => {
-  try {
-    if (localStorage.getItem(LS_CTX) === "1") setCtxOpen(true);
-  } catch {}
-}, 0);
-
 ctxClose?.addEventListener("click", () => setCtxOpen(false));
 
 // Refresh context panel content when language changes while panel is open
@@ -398,14 +401,6 @@ effect(() => {
 });
 
 export { setCtxOpen };
-
-document.addEventListener("keydown", (ev) => {
-  const meta = ev.metaKey || ev.ctrlKey;
-  if (meta && ev.key === "\\") {
-    ev.preventDefault();
-    setCtxOpen(ctxPanel.hasAttribute("hidden"));
-  }
-});
 
 import { registerPanel } from './panel-manager.js';
 registerPanel('ctx', { toggleBtnId: 'ctx-toggle', panelId: 'ctx-panel', open: () => setCtxOpen(true), close: () => setCtxOpen(false) });

@@ -32,13 +32,18 @@ input?.addEventListener("compositionend", () => {
   input.style.height = "";
 });
 
+const imageDrafts = new Map();
+const textDrafts = new Map();
+const pendingSubmits = new Set();
+let attachedImages = [];
+
 // ── Send button (submit when idle, cancel while busy) ─────────────
 
 const updateSendBtn = () => {
   if (!sendBtn) return;
   const session = activeSession.peek();
   const busy = !!session?.state?.isProcessing;
-  const hasText = !!input?.value.trim();
+  const hasText = !!input?.value.trim() || attachedImages.length > 0;
   sendBtn.classList.toggle("busy", busy);
   sendBtn.disabled = busy ? false : (!session || !hasText);
   sendBtn.title = busy ? t("interrupt") : t("send");
@@ -66,7 +71,7 @@ effect(() => {
 
 // ── Image attachments ──────────────────────────────────────────────
 
-let attachedImages = [];  // [{ data: "<base64>", mimeType: "image/png" }]
+
 
 const MAX_IMAGE_PX = 1200; // max width/height in pixels
 
@@ -111,10 +116,14 @@ const compressImage = (file) => new Promise((resolve, reject) => {
 });
 
 const addImage = async (file) => {
+  const sid = currentSessionId();
+  if (!sid) return;
+  const draft = imageDrafts.get(sid) ?? [];
+  imageDrafts.set(sid, draft);
   try {
     const data = await compressImage(file);
-    attachedImages.push({ data, mimeType: file.type || "image/png" });
-    renderImagePreviews();
+    draft.push({ data, mimeType: file.type || "image/png" });
+    if (sid === currentSessionId()) { attachedImages = draft; renderImagePreviews(); updateSendBtn(); }
   } catch (e) {
     console.error("Failed to attach image:", e);
   }
@@ -123,6 +132,7 @@ const addImage = async (file) => {
 const removeImage = (index) => {
   attachedImages.splice(index, 1);
   renderImagePreviews();
+  updateSendBtn();
 };
 
 const renderImagePreviews = () => {
@@ -175,6 +185,14 @@ visionIndicator?.addEventListener("click", () => {
   inp.click();
 });
 
+effect(() => {
+  const id = activeSession.value?.id;
+  attachedImages = imageDrafts.get(id) ?? [];
+  if (id) imageDrafts.set(id, attachedImages);
+  renderImagePreviews();
+  updateSendBtn();
+});
+
 // Show/hide upload button based on model capabilities
 effect(() => {
   const session = activeSession.value;
@@ -192,6 +210,32 @@ let shellMode = false;
 const setShellMode = (on) => {
   shellMode = !!on;
   form?.classList.toggle("shell-mode", shellMode);
+};
+
+// Draft ownership is independent of the replayable SessionView state.
+let draftSessionId = currentSessionId();
+effect(() => {
+  const id = activeSession.value?.id;
+  if (id === draftSessionId) return;
+  if (draftSessionId) textDrafts.set(draftSessionId, { text: input?.value ?? "", shell: shellMode });
+  draftSessionId = id;
+  const draft = textDrafts.get(id);
+  if (input) { input.value = draft?.text ?? ""; input.style.height = ""; }
+  setShellMode(draft?.shell ?? false);
+  updateSendBtn();
+});
+
+const restoreDraft = (sid, text, shell = false) => {
+  const active = sid === currentSessionId();
+  const draft = active ? { text: input?.value ?? "", shell: shellMode } : (textDrafts.get(sid) ?? { text: "", shell: false });
+  const restored = { text: draft.text ? text + "\n" + draft.text : text, shell: shell || draft.shell };
+  textDrafts.set(sid, restored);
+  if (active && input) {
+    input.value = restored.text;
+    setShellMode(restored.shell);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
 };
 
 input?.addEventListener("keydown", (ev) => {
@@ -261,20 +305,15 @@ const doShellSubmit = async (raw) => {
   input.style.height = "";
   updateSendBtn();
   try {
-    await fetch(`/${sid}/pty-input`, {
+    await assertSubmitOk(await fetch(`/${sid}/pty-input`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ data: raw + "\n" }),
-    });
+    }));
   } catch (e) {
     console.error("pty-input failed", e);
-    // Restore the command so a transient failure doesn't lose it.  When not
-    // in shell mode the restored "!" prefix re-enters shell mode via the
-    // input listener (which strips the prefix), preserving the original
-    // shell semantics either way.
-    input.value = shellMode ? raw : "!" + raw;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.setSelectionRange(input.value.length, input.value.length);
+    toast(String(e.message ?? e), { type: "error" });
+    restoreDraft(sid, raw, true);
   }
 };
 
@@ -283,11 +322,11 @@ const submitSlash = async (raw) => {
   const space = trimmed.indexOf(" ");
   const name = space === -1 ? trimmed : trimmed.slice(0, space);
   const args = space === -1 ? "" : trimmed.slice(space + 1);
-  await fetch(`/${currentSessionId()}/command`, {
+  await assertSubmitOk(await fetch(`/${currentSessionId()}/command`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, args }),
-  });
+  }));
 };
 
 const slashAc = attachAutocomplete({
@@ -386,19 +425,20 @@ const assertSubmitOk = async (res) => {
 };
 
 const doSubmit = async (query) => {
-  if (!query) return;
+  if (!query && !attachedImages.length) return;
   if (shellMode || (shellSupported && query.startsWith("!"))) {
     await doShellSubmit(query.startsWith("!") ? query.slice(1) : query);
     return;
   }
   const sv = activeSession.peek();
   if (!sv) return;
-  if (sv.state.isSubmitting) {
+  if (pendingSubmits.has(sv.id) || sv.state.isSubmitting) {
     toast(t("submit.busy"), { type: "info" });
     return;
   }
   sv.state.lastQuery = query;
   queryHistory.push(query);
+  pendingSubmits.add(sv.id);
   sv.state.isSubmitting = true;
   input.value = "";
   input.style.height = "";
@@ -425,15 +465,17 @@ const doSubmit = async (query) => {
   // The input stays enabled so keystrokes during slow submits aren't
   // swallowed; sv.state.isSubmitting above guards against double submits.
   const sid = sv.id;
+  const sentImages = attachedImages.slice();
+  const draft = attachedImages;
   try {
     if (query.startsWith("/")) {
       await submitSlash(query);
-    } else if (attachedImages.length > 0) {
+    } else if (sentImages.length > 0) {
       // Upload images first, then submit with server IDs.
-      let imageRefs = attachedImages;
+      let imageRefs = sentImages;
       try {
         const uploaded = await Promise.all(
-          attachedImages.map(async (img) => {
+          sentImages.map(async (img) => {
             const r = await fetch("/api/upload", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -454,8 +496,8 @@ const doSubmit = async (query) => {
         headers: { "Content-Type": "application/json" },
         body,
       }));
-      attachedImages = [];
-      renderImagePreviews();
+      for (const img of sentImages) { const i = draft.indexOf(img); if (i >= 0) draft.splice(i, 1); }
+      if (sid === currentSessionId()) { renderImagePreviews(); updateSendBtn(); }
     } else {
       await assertSubmitOk(await fetch(`/${sid}/submit`, {
         method: "POST",
@@ -468,19 +510,12 @@ const doSubmit = async (query) => {
     optimisticBox?.remove();
     optimisticSep?.remove();
     toast(t("submit.failed"), { type: "error", detail: String(e?.message || e) });
-    // Restore the submitted text so a failed submit doesn't lose it.  The
-    // input stayed enabled during the submit, so keep anything typed since;
-    // the history push above is intentionally not repeated.
-    if (input) {
-      const typed = input.value;
-      input.value = typed ? query + "\n" + typed : query;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.setSelectionRange(input.value.length, input.value.length);
-    }
+    restoreDraft(sid, query);
   } finally {
+    pendingSubmits.delete(sid);
     sv.state.isSubmitting = false;
     updateSendBtn();
-    input.focus();
+    if (sid === currentSessionId()) input.focus();
   }
 };
 
@@ -504,6 +539,7 @@ const killRange = (start, end) => {
 };
 
 input?.addEventListener("keydown", (ev) => {
+  if (ev.isComposing || ev.keyCode === 229) return;
   // Reset history navigation when user starts modifying the recalled text
   if (queryHistory._index !== -1 && ev.key !== "ArrowUp" && ev.key !== "ArrowDown"
       && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
@@ -560,7 +596,7 @@ input?.addEventListener("keydown", (ev) => {
     // bypassing autocomplete accept — Tab is for selecting items.
     ev.preventDefault();
     const query = input.value.trim();
-    if (query) doSubmit(query);
+    if (query || attachedImages.length) doSubmit(query);
   } else if (ev.key === "ArrowUp" && (!input.value || queryHistory._index !== -1) && queryHistory.hasItems) {
     ev.preventDefault();
     const recalled = queryHistory.recallUp(input.value);
@@ -593,6 +629,15 @@ document.addEventListener("keydown", (ev) => {
     input?.focus();
   }
 });
+
+export const setComposerTextForSession = (sid, text) => {
+  if (!sid) return;
+  textDrafts.set(sid, { text: text ?? "", shell: false });
+  if (currentSessionId() === sid) {
+    shellMode = false;
+    setComposerText(text);
+  }
+};
 
 export const setComposerText = (text) => {
   if (!input) return;

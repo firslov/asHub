@@ -215,3 +215,30 @@
 }
 #config-valid { color: var(--success); }
 #config-invalid { color: var(--error); }
+
+/* A readable form rhythm, with quiet section dividers and generous fields. */
+#config-body-simple { gap: 18px; }
+#config-overlay .p-section { margin: 10px 0 0; padding-top: 20px; border-top: 1px solid var(--border-light); }
+#config-overlay .p-section:first-child { padding-top: 0; margin-top: 2px; border: 0; }
+#config-overlay .config-field { gap: 8px; }
+#config-overlay .config-label { color: var(--text-dim); font-weight: 500; }
+#config-overlay .config-hint { line-height: 1.65; overflow-wrap: anywhere; }
+#config-overlay .config-select-chevron { right: 12px; }
+#config-overlay .config-toggle-wrap { padding: 12px; border: 1px solid var(--border-light); border-radius: 10px; background: var(--bg2); }
+#config-overlay .config-toggle { position: relative; width: 100%; gap: 12px; }
+#config-overlay .config-toggle-label { line-height: 1.5; }
+/* Keep the native switch reachable by keyboard while using its custom visual. */
+#config-overlay .config-toggle input { display: block; position: absolute; width: 36px; height: 20px; opacity: 0; margin: 0; }
+#config-overlay .config-toggle input:focus-visible + .config-toggle-slider { outline: 2px solid var(--accent); outline-offset: 3px; }
+#config-overlay .config-actions { padding-top: 16px; border-top: 1px solid var(--border-light); margin-top: 4px; }
+#config-overlay #config-model-refresh { width: 32px; height: 32px; }
+#config-overlay .config-apikey-toggle { width: 30px; height: 30px; }
+#config-overlay .config-apikey-wrap .p-input { padding-right: 38px; }
+#config-editor { min-height: 240px; padding: 14px; background: var(--bg2); border-color: var(--border); border-radius: 10px; line-height: 1.8; }
+
+/* Keep recovery available without exposing an editable, incomplete form. */
+.config-load-state { margin: 0 20px 16px; padding: 12px; border-radius: 10px; background: var(--bg2); color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.config-load-state:not([hidden]) { display: flex; align-items: center; gap: 12px; }
+.config-load-state span { flex: 1; }
+.config-load-state .p-btn { flex-shrink: 0; }
+#config-body-simple[inert], #config-body-advanced[inert] { opacity: .45; }

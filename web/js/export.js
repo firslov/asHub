@@ -23,11 +23,27 @@ const stripContextWrappers = (s) => {
   }
 };
 
+// Keep embedded images portable in the Markdown itself; unsupported or
+// missing sources still leave a visible attachment placeholder.
+const imageMarkdown = (part) => {
+  const raw = typeof part.image_url === "string" ? part.image_url : part.image_url?.url;
+  if (typeof raw !== "string" || !raw.trim()) return `[${t("export.image.unavailable")}]`;
+  try {
+    const url = new URL(raw);
+    const supported = /^https?:$/.test(url.protocol)
+      || /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,[a-z0-9+/=\s]+$/i.test(raw);
+    if (!supported) return `[${t("export.image.unavailable")}]`;
+    const target = url.href.replace(/[<>\r\n]/g, c => encodeURIComponent(c));
+    return `![${t("export.image")}](${"<" + target + ">"})`;
+  } catch { return `[${t("export.image.unavailable")}]`; }
+};
+
 const textOf = (m) => {
   if (typeof m?.content === "string") return m.content;
   if (Array.isArray(m?.content)) {
     return m.content
-      .map((p) => (typeof p === "string" ? p : p?.text ?? p?.content ?? ""))
+      .map((p) => p?.type === "image_url" ? imageMarkdown(p)
+        : typeof p === "string" ? p : p?.text ?? p?.content ?? "")
       .filter(Boolean)
       .join("\n");
   }

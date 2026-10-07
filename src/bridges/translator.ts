@@ -105,6 +105,10 @@ function bodyFromContent(content: Array<Record<string, unknown>> | undefined):
   | undefined
 {
   if (!Array.isArray(content) || content.length === 0) return undefined;
+  const text = content.flatMap(c => {
+    const value = c.type === "content" ? c.content as Record<string, unknown> : c;
+    return value?.type === "text" && typeof value.text === "string" ? [value.text] : [];
+  });
   for (const c of content) {
     if (c.type === "diff" && typeof c.path === "string") {
       const oldText = String(c.oldText ?? "");
@@ -120,7 +124,7 @@ function bodyFromContent(content: Array<Record<string, unknown>> | undefined):
       }
     }
   }
-  return undefined;
+  return text.length ? { body: { kind: "lines", lines: text.join("\n").split("\n") } } : undefined;
 }
 
 /**

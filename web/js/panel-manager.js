@@ -4,6 +4,7 @@
 
 const panels = {};
 const _hasListener = new Set();
+let panelIntent = 0;
 
 const isPanelOpen = (panelId) => {
   const el = document.getElementById(panelId);
@@ -21,25 +22,32 @@ const closeOthers = (except) => {
   }
 };
 
-export const closeOtherPanels = (except) => closeOthers(except);
+export const closeOtherPanels = (except) => { ++panelIntent; closeOthers(except); };
 
 export const registerPanel = (name, { toggleBtnId, panelId, load, open, close }) => {
   if (!load) {
     // Direct registration (eager or from lazy-loaded module)
-    panels[name] = { panelId, open, close };
+    panels[name] = { panelId, toggleBtnId, open, close };
   }
 
   if (_hasListener.has(name)) return; // Listener already set by first call
   _hasListener.add(name);
 
   const btn = document.getElementById(toggleBtnId);
+  const panelEl = document.getElementById(panelId);
+  btn?.setAttribute("aria-controls", panelId);
+  const syncExpanded = () => btn?.setAttribute("aria-expanded", String(isPanelOpen(panelId)));
+  syncExpanded();
+  // Close buttons and programmatic panel switches also update accessible state.
+  if (panelEl) new MutationObserver(syncExpanded).observe(panelEl, { attributes: true, attributeFilter: ["hidden"] });
   btn?.addEventListener("click", async () => {
+    const intent = ++panelIntent;
     // Lazy-load on first click
     if (!panels[name]) {
       btn.disabled = true;
       try { await load(); } catch { /* panel failed to load */ }
       btn.disabled = false;
-      if (!panels[name]) return; // load failed silently
+      if (!panels[name] || intent !== panelIntent) return;
     }
 
     if (isPanelOpen(panelId)) {
@@ -47,6 +55,7 @@ export const registerPanel = (name, { toggleBtnId, panelId, load, open, close })
       btn?.classList.remove("active");
     } else {
       closeOthers(name);
+      document.dispatchEvent(new Event("ash:panel-opening"));
       const result = panels[name].open();
       if (result?.catch) result.catch(() => {});
       btn?.classList.add("active");
@@ -62,6 +71,7 @@ export const registerPanel = (name, { toggleBtnId, panelId, load, open, close })
 // and stopImmediatePropagation below still suppresses it.
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
+  ++panelIntent; // Also cancel a first-open request still importing its module.
   for (const [name, p] of Object.entries(panels)) {
     const el = document.getElementById(p.panelId);
     const isOpen = p.panelId.includes("overlay")
@@ -69,6 +79,7 @@ document.addEventListener("keydown", (ev) => {
       : el && !el.hidden;
     if (isOpen && el) {
       try { p.close(); } catch {}
+      document.getElementById(p.toggleBtnId)?.focus();
       ev.stopImmediatePropagation();
       return; // only close one
     }

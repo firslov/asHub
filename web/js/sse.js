@@ -2,8 +2,9 @@ import { escape, stripAnsi, mdToHtml, highlightWithin, renderMathIn, blockToText
 import { setBusy } from "./state.js";
 import { effect } from "../vendor/signals-core.js";
 import { t } from "./i18n.js";
+import { toast } from "./toast.js";
 import { maybeScroll, forceScrollBottom } from "./stream/scroll.js";
-import { append, appendAfterPending, appendToGroup, bumpToolCount, insertStreamNode, closeToolGroup } from "./stream/tool-group.js";
+import { append, appendAfterPending, appendToGroup, bumpToolCount, insertStreamNode, closeToolGroup, refreshToolSummaries } from "./stream/tool-group.js";
 import {
   renderUsage, hideUsage, renderTurnSep, renderErrorCard,
   renderDiffBlock, renderToolBody, buildToolRow,
@@ -155,12 +156,15 @@ export const hidePageLoader = () => {
 
 const BALANCE_PROVIDERS = new Set(["deepseek", "openrouter"]);
 const _balanceCache = new Map();  // provider -> { data, ts }
+let _balanceGeneration = 0;
 
 async function fetchProviderBalance(provider) {
+  const generation = _balanceGeneration;
   try {
     const r = await fetch(`/api/balance?provider=${provider}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
+    if (generation !== _balanceGeneration) return null;
     _balanceCache.set(provider, { data, ts: Date.now() });
     return data;
   } catch {
@@ -208,8 +212,9 @@ function syncAllBalanceChips() {
 
 // Refresh a provider's balance and sync all chips for that provider.
 async function refreshProviderBalance(provider) {
+  const generation = _balanceGeneration;
   const data = await fetchProviderBalance(provider);
-  if (!data) return;
+  if (!data || generation !== _balanceGeneration) return;
   for (const [_, s] of sessions) {
     if ((s.agentInfo?.provider ?? "") === provider && s.balanceEl) {
       renderBalance(s.balanceEl, data);
@@ -217,6 +222,15 @@ async function refreshProviderBalance(provider) {
     }
   }
 }
+
+// Config saves already notify model-catalog consumers. Balances use the
+// same provider credentials, including requests still in flight at save time.
+document.addEventListener("ash:models-changed", () => {
+  _balanceGeneration++;
+  _balanceCache.clear();
+  syncAllBalanceChips();
+  for (const provider of BALANCE_PROVIDERS) void refreshProviderBalance(provider);
+});
 
 // On session switch, sync chips and usage-strip toggle.
 effect(() => {
@@ -404,8 +418,15 @@ export const handlers = {
     }
   },
 
+  "hub:capabilities"(p) {
+    this.state.readOnlyContext = !!p?.readOnlyContext;
+  },
   "shell:cwd-change"(p) {
+    const previous = this.state.cwd;
     this.state.cwd = p?.cwd ?? "";
+    if (previous !== this.state.cwd) {
+      document.dispatchEvent(new CustomEvent("ash:cwd-change", { detail: { sessionId: this.id } }));
+    }
     refreshCwdChip(this);
     if (this === activeSession.peek()) refreshFilesIfOpen();
   },
@@ -420,7 +441,7 @@ export const handlers = {
   // order at the end rather than inverting during replay.
   "agent:queued"(p, meta) {
     const queryText = p?.query ?? "";
-    if (!queryText) return;
+    if (!queryText && !p?.images?.length) return;
     // Don't create duplicate optimistic boxes — composer.js may have
     // already done so for live viewers.  During replay the boxes live in
     // the replay fragment, so search the container they were appended to.
@@ -442,7 +463,7 @@ export const handlers = {
       `<span class="turn-time">${date.toLocaleTimeString()}</span>` +
       `<span class="turn-line"></span>`;
     appendAfterPending(this, sep);
-    const box = createUserBox(queryText, null, meta?.ts);
+    const box = createUserBox(queryText, p?.images ?? null, meta?.ts);
     box.classList.add("pending");
     box.dataset.queued = queryText;
     box._queryText = queryText;
@@ -478,6 +499,7 @@ export const handlers = {
       if (!isCommand) {
         this.state.currentTurn++;
         matched.dataset.turn = String(this.state.currentTurn);
+        if (p?.queryId) matched.dataset.queryId = p.queryId;
         if (p?.entryId) matched.dataset.entryId = p.entryId;
       }
       matched.classList.remove("pending");
@@ -489,22 +511,22 @@ export const handlers = {
     const box = createUserBox(queryText, images, meta?.ts, isCommand ? null : this.state.currentTurn);
     if (!isCommand) {
       box.dataset.turn = String(this.state.currentTurn);
+      if (p?.queryId) box.dataset.queryId = p.queryId;
       if (p?.entryId) box.dataset.entryId = p.entryId;
     }
     append(this, box);
   },
 
-  // Late-arriving tree entry id for a live turn's query frame (pushed by
-  // the hub once capture.flush() has persisted the turn).  Match the first
-  // untagged box by query text: tag frames arrive in turn order, before any
-  // later turn's box exists.
+  // Match the exact query frame, including identical or failed turns.
+  // Legacy queries carry entryId directly; uncorrelated legacy tags must
+  // never lend a later turn's ID to an earlier failed message.
   "agent:query-tagged"(p) {
     const entryId = p?.entryId;
-    const queryText = p?.query ?? "";
-    if (!entryId) return;
+    const queryId = p?.queryId;
+    if (!entryId || !queryId) return;
     const root = (this.state.replaying && this._replayFrag) || this.streamEl;
     for (const b of root?.querySelectorAll(".agent-box[data-turn]:not([data-entry-id])") ?? []) {
-      if (b._queryText === queryText) { b.dataset.entryId = entryId; break; }
+      if (b.dataset.queryId === queryId) { b.dataset.entryId = entryId; break; }
     }
   },
 
@@ -519,7 +541,6 @@ export const handlers = {
   "agent:queued-done"(p) {
     if (!p?.dropped) return;
     const queryText = p?.query ?? "";
-    if (!queryText) return;
     const pendRoot = (this.state.replaying && this._replayFrag) || this.streamEl;
     let matched = pendRoot?.querySelector(`.agent-box.pending[data-queued="${CSS.escape(queryText)}"]`) ?? null;
     if (!matched) {
@@ -538,7 +559,7 @@ export const handlers = {
     hideUsage(this);
     setBusy(this, true);
     if (!this.state.replaying) setSessionStatus(this.id, "session-streaming");
-    if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change"));
+    if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change", { detail: { sessionId: this.id } }));
     hideThinking(this);
     sweepOrphanThinking(this);
     finalizeThinking(this);
@@ -563,17 +584,13 @@ export const handlers = {
 
   // Replay-only: live chunks already covered the segment.
   "agent:response-segment"(p) {
-    if (hasReply(this) || sawLiveSegment(this)) return;
+    if (sawLiveSegment(this)) return;
     if (!p?.text) return;
     finalizeThinking(this);
-    const block = document.createElement("div");
-    block.className = "agent-reply";
-    block.dataset.turn = String(this.state.currentTurn);
-    block.innerHTML = mdToHtml(stripAnsi(p.text));
-    append(this, block);
-    renderMathIn(block);
-    if (!this.state.replaying) highlightWithin(block);
-    addReplyCopyBtn(block, stripAnsi(p.text ?? ""));
+    appendReplyChunk(this, stripAnsi(p.text));
+    // Persisted segments are fragments of the current reply. Keep its text
+    // and node open so a reconnect can continue an unfinished Markdown block.
+    this.reply.liveSegment = false;
   },
 
   "agent:thinking-chunk"(p) {
@@ -595,7 +612,7 @@ export const handlers = {
     if (this.usageStripEl) this.usageStripEl.hidden = false;
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
-    document.dispatchEvent(new CustomEvent("sse:processing-change"));
+    document.dispatchEvent(new CustomEvent("sse:processing-change", { detail: { sessionId: this.id } }));
     this._subagent = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
@@ -618,7 +635,7 @@ export const handlers = {
     setBusy(this, false);
     settleTodoBlock(this);
     if (!this.state.replaying) setSessionStatus(this.id, "");
-    if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change"));
+    if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change", { detail: { sessionId: this.id } }));
     this._subagent = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
@@ -669,7 +686,7 @@ export const handlers = {
     append(this, card);
     setBusy(this, false);
     if (!this.state.replaying) setSessionStatus(this.id, "");
-    if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change"));
+    if (!this.state.replaying) document.dispatchEvent(new CustomEvent("sse:processing-change", { detail: { sessionId: this.id } }));
     this._subagent = null;
     if (!this.state.replaying && this.streamEl) compactReasoning(this.streamEl);
     this.scheduleReplayFlush();
@@ -885,6 +902,7 @@ export const handlers = {
     if (!row) return;
     const ok = p?.exitCode === 0 || p?.exitCode == null;
     row.classList.add(ok ? "ok" : "err");
+    refreshToolSummaries(row);
     const summary = p?.resultDisplay?.summary ?? "";
     const mark = ok ? "✓" : `✗ exit ${p?.exitCode}`;
     const tail = document.createElement("span");
@@ -996,11 +1014,8 @@ export const handlers = {
       card.querySelector(".permission-main")?.appendChild(diffWrap);
     }
 
-    // Replayed requests are history, not actionable: render the card as
-    // already handled — no countdown, no decide listeners.  A live 30s
-    // timer here would wrongly auto-deny an old request (and a click
-    // would send a stale decide that can wake a sleeping bridge).
-    if (this.state.replaying) {
+    // Only the server can distinguish a pending request from historical replay.
+    if (this.state.replaying && !p?.pending) {
       card.classList.add("decided");
       card.querySelectorAll(".permission-btn").forEach((b) => b.disabled = true);
       card.querySelector(".permission-countdown")?.remove();
@@ -1031,12 +1046,13 @@ export const handlers = {
     // Countdown
     const ringCircle = card.querySelector(".perm-ring-fill");
     const countText = card.querySelector(".perm-count-text");
-    let remaining = 30;
+    const expiresAt = p?.expiresAt ?? Date.now() + 30_000;
+    let remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
     const tick = () => {
       // Session tab closed or stream rebuilt (resync / branch switch) —
       // stop the countdown instead of idling on a detached card.
-      if (!card.isConnected) { clearInterval(timer); return; }
-      remaining--;
+      if (!card.isConnected && !this.state.replaying) { clearInterval(timer); return; }
+      remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
       if (countText) countText.textContent = String(remaining);
       if (ringCircle) {
         const offset = 62.83 * (1 - remaining / 30);
@@ -1063,21 +1079,28 @@ export const handlers = {
     const timer = setInterval(tick, 1000);
     card._timer = timer;
 
-    const decide = (outcome, sessionWide) => {
-      if (!card.isConnected) return; // expired
-      clearInterval(timer);
-      disarmApproveAll();
-      card.classList.add("decided");
-      card.classList.add(outcome === "approved" ? "allowed" : "blocked");
+    let deciding = false;
+    const decide = async (outcome, sessionWide) => {
+      if (!card.isConnected || deciding || card.classList.contains("decided")) return;
+      deciding = true;
       card.querySelectorAll(".permission-btn").forEach(b => b.disabled = true);
-      // Same terminal-state cleanup as the timeout/cleanup paths.
-      card.querySelector(".permission-countdown")?.remove();
-      card.querySelector(".permission-timeout-note")?.remove();
-      fetch("/api/permission/decide", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId, outcome, sessionId: this.id, sessionWide }),
-      }).catch(() => {});
+      try {
+        const response = await fetch("/api/permission/decide", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId, outcome, sessionId: this.id, sessionWide }),
+        });
+        if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+        clearInterval(timer);
+        disarmApproveAll();
+        card.classList.add("decided", outcome === "approved" ? "allowed" : "blocked");
+        card.querySelector(".permission-countdown")?.remove();
+        card.querySelector(".permission-timeout-note")?.remove();
+      } catch (err) {
+        toast(String(err.message ?? err), { type: "error" });
+        if (!card.classList.contains("decided") && Date.now() < expiresAt) {
+          card.querySelectorAll(".permission-btn").forEach(b => b.disabled = false);
+        }
+      } finally { deciding = false; }
     };
 
     card.querySelector(".deny")?.addEventListener("click", () => decide("denied", false));
@@ -1111,6 +1134,18 @@ export const handlers = {
       card._needsClipMeasure = true;
       requestAnimationFrame(() => measureDiffClip(card));
     }
+  },
+
+  "permission:resolved"(p) {
+    const root = (this.state.replaying && this._replayFrag) || this.streamEl;
+    const card = root?.querySelector(`.permission-card[data-request-id="${CSS.escape(String(p?.requestId ?? ""))}"]`);
+    if (!card) return;
+    clearInterval(card._timer);
+    card._disarm?.();
+    card.classList.add("decided", p.outcome === "approved" ? "allowed" : "blocked");
+    card.querySelectorAll(".permission-btn").forEach(b => b.disabled = true);
+    card.querySelector(".permission-countdown")?.remove();
+    card.querySelector(".permission-timeout-note")?.remove();
   },
 
   "permission:request-cleanup"() {
@@ -1335,7 +1370,8 @@ export const handlers = {
   // for this event to avoid the 12ms debounce (since _ensureBridge may take
   // 200ms+ before real replay frames arrive).
   "hub:replay-starting"() {
-    if (!this.state.replaying) return;
+    this.resetForBranchSwitch?.();
+    this.enterReplayMode?.();
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
     this.replayFlushTimer = setTimeout(() => this.exitReplayMode(), 500);
   },
@@ -1369,6 +1405,7 @@ export const onReplayDone = (session) => {
 
 export const seedSessionInfo = (session, info) => {
   if (!session || !info) return;
+  if (info.readOnlyContext) session.state.readOnlyContext = true;
   if (info.cwd && !session.state.cwd) session.state.cwd = info.cwd;
   if (info.model && !session.agentInfo.model) session.agentInfo.model = info.model;
   if (info.provider && !session.agentInfo.provider) session.agentInfo.provider = info.provider;
@@ -1390,6 +1427,7 @@ const refreshModelChip = (session) => {
   // Combined model + balance
   const balanceText = session.modelEl?._balanceLabel ?? "";
   const text = [modelText, balanceText].filter(Boolean).join(" · ");
+  session.modelEl.title = text; // Keep the full label available when the chip is truncated.
   if (text) { session.modelEl.textContent = text; session.modelEl.hidden = false; }
   else { session.modelEl.hidden = true; }
 
@@ -1408,10 +1446,21 @@ const refreshModelChip = (session) => {
 // ── Model picker dropdown ───────────────────────────────────────────
 
 let _allModelsCache = null;  // { providers: [{ name, models: [{id, modalities}] }] }
+let _modelCacheGeneration = 0;
 
 // Exposed for config panel to invalidate after provider changes.
-export const invalidateModelCache = () => { _allModelsCache = null; };
-export const setModelCache = (data) => { _allModelsCache = data; };
+export const invalidateModelCache = () => {
+  _allModelsCache = null;
+  return ++_modelCacheGeneration;
+};
+export const getModelCacheGeneration = () => _modelCacheGeneration;
+export const setModelCache = (data, generation = _modelCacheGeneration) => {
+  if (generation !== _modelCacheGeneration || !Array.isArray(data?.providers)
+    || !data.providers.every(p => typeof p?.name === "string" && Array.isArray(p.models)
+      && p.models.every(m => typeof m?.id === "string"))) return false;
+  _allModelsCache = data;
+  return true;
+};
 
 // Build a quick lookup: "provider:model" -> modalities or undefined.
 const getModelCapabilities = () => {
@@ -1565,10 +1614,16 @@ const toggleModelDropdown = async (session) => {
     _allModelsCache.providers?.some((p) => p.name === "openrouter" && (p.models?.length || 0) <= 1)
   );
   if (needsRefresh) {
+    const generation = _modelCacheGeneration;
     try {
       const r = await fetch("/api/models");
-      _allModelsCache = await r.json();
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (generation !== _modelCacheGeneration) return;
+      if (!setModelCache(data, generation)) throw new Error("Invalid model catalog");
     } catch {
+      if (generation !== _modelCacheGeneration) return;
+      toast(t("model.list.failed"), { type: "error" });
       if (!_allModelsCache) return;
     }
   }
@@ -1632,24 +1687,31 @@ const toggleModelDropdown = async (session) => {
 };
 
 const selectModel = (session, modelId, provider) => {
-  session.agentInfo.model = modelId;
-  if (provider) session.agentInfo.provider = provider;
-  // Clear modalities until agent:info confirms the new model's capabilities.
-  session.agentInfo.modalities = undefined;
-  // Switching to a non-balance provider: drop any stale balance label
-  // immediately so the chip doesn't flash the previous provider's balance.
-  if (provider && !BALANCE_PROVIDERS.has(provider) && session.modelEl) {
-    session.modelEl._balanceLabel = "";
-  }
-  refreshModelChip(session);
-  // Update vision indicator immediately while waiting for backend.
-  const btn = document.getElementById("vision-indicator");
-  if (btn) btn.hidden = true;
-  fetch(`/${session.id}/model`, {
+  const seq = session._modelRequestSeq = (session._modelRequestSeq ?? 0) + 1;
+  return fetch(`/${session.id}/model`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: modelId, provider: provider || undefined }),
-  }).catch(() => {});
+  }).then(res => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (seq !== session._modelRequestSeq) return;
+    // The backend's agent:info owns confirmed capabilities. Avoid clearing
+    // them if it already announced this model before the HTTP response.
+    if (session.agentInfo.model !== modelId || (provider && session.agentInfo.provider !== provider)) {
+      session.agentInfo.model = modelId;
+      if (provider) session.agentInfo.provider = provider;
+      session.agentInfo.modalities = undefined;
+      if (provider && !BALANCE_PROVIDERS.has(provider) && session.modelEl) session.modelEl._balanceLabel = "";
+      refreshModelChip(session);
+      if (activeSession.peek() === session) {
+        const btn = document.getElementById("vision-indicator");
+        if (btn) btn.hidden = true;
+      }
+    }
+  }).catch(err => {
+    if (seq !== session._modelRequestSeq) return;
+    toast(t("model.switch.failed"), { type: "error", detail: String(err?.message ?? err) });
+  });
 };
 
 const escapeAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

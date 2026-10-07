@@ -19,6 +19,9 @@ jobs:
       version: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
       - run: |
           # Commit as the workflow trigger (repo owner), not the GitHub bot,
           # so automated version bumps don't add a bot entry to contributors.
@@ -59,7 +62,7 @@ jobs:
           ref: v${{ inputs.version }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: .nvmrc
       - run: npm ci
       - run: npm run build
       - if: matrix.target == 'win'

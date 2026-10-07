@@ -74,24 +74,59 @@ try {
 
 themeToggle?.addEventListener("click", toggleTheme);
 
-const setSidebarCollapsed = (on) => {
+const setSidebarCollapsed = (on, persist = true) => {
   app.classList.toggle("sidebar-collapsed", on);
-  try { localStorage.setItem(LS_SIDEBAR, on ? "1" : "0"); } catch {}
+  sidebarToggle?.setAttribute("aria-expanded", String(!on));
+  const label = on ? "expand.sidebar" : "collapse.sidebar";
+  sidebarToggle?.setAttribute("data-i18n-title", label);
+  if (sidebarToggle) sidebarToggle.title = t(label);
+  if (persist) { try { localStorage.setItem(LS_SIDEBAR, on ? "1" : "0"); } catch {} }
 };
 
 try {
-  if (localStorage.getItem(LS_SIDEBAR) === "1") setSidebarCollapsed(true);
+  const saved = localStorage.getItem(LS_SIDEBAR);
+  if (saved === "1" || window.matchMedia?.("(max-width: 700px)").matches) {
+    setSidebarCollapsed(true, false);
+  }
 } catch {}
+
+// A right-side panel takes the foreground on small screens without changing
+// the user's saved desktop sidebar preference.
+document.addEventListener("ash:panel-opening", () => {
+  if (window.matchMedia?.("(max-width: 700px)").matches) setSidebarCollapsed(true, false);
+});
 
 sidebarToggle?.addEventListener("click", () => {
   setSidebarCollapsed(!app.classList.contains("sidebar-collapsed"));
 });
 
+document.getElementById("sidebar-backdrop")?.addEventListener("click", () => {
+  setSidebarCollapsed(true);
+  sidebarToggle?.focus();
+});
+// On a narrow screen choosing a conversation should reveal it immediately.
+// Keep the desktop preference intact when merely navigating on mobile.
+document.getElementById("sidebar")?.addEventListener("click", (ev) => {
+  if (!window.matchMedia?.("(max-width: 700px)").matches) return;
+  if (!ev.target.closest(".session-list a, .workspace-children a, .terminal-list a, #new-session, #new-terminal")) return;
+  setSidebarCollapsed(true, false);
+});
+// The mobile navigation overlays the workspace, so Escape closes it before
+// the global Escape-to-cancel handler can interrupt a running conversation.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape" || !window.matchMedia?.("(max-width: 700px)").matches
+      || app.classList.contains("sidebar-collapsed")) return;
+  setSidebarCollapsed(true, false);
+  sidebarToggle?.focus();
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+}, true);
 const sidebarResize = document.getElementById("sidebar-resize");
 
 const setSidebarWidth = (w) => {
   const clamped = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w));
   app.style.setProperty("--sidebar-w", `${clamped}px`);
+  sidebarResize?.setAttribute("aria-valuenow", String(clamped));
   return clamped;
 };
 
@@ -121,8 +156,19 @@ sidebarResize?.addEventListener("mousedown", (ev) => {
   document.addEventListener("mouseup", onUp);
 });
 
+sidebarResize?.addEventListener("keydown", (ev) => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
+  ev.preventDefault();
+  const current = document.getElementById("sidebar")?.getBoundingClientRect().width || SIDEBAR_MIN;
+  const width = ev.key === "Home" ? SIDEBAR_MIN : ev.key === "End" ? SIDEBAR_MAX
+    : current + (ev.key === "ArrowRight" ? 16 : -16);
+  const applied = setSidebarWidth(width);
+  try { localStorage.setItem(LS_SIDEBAR_W, String(applied)); } catch {}
+});
 sidebarResize?.addEventListener("dblclick", () => {
   app.style.removeProperty("--sidebar-w");
+  const width = document.getElementById("sidebar")?.getBoundingClientRect().width;
+  if (width) sidebarResize?.setAttribute("aria-valuenow", String(Math.round(width)));
   try { localStorage.removeItem(LS_SIDEBAR_W); } catch {}
 });
 
@@ -168,17 +214,17 @@ const UI_PREFS = {
 // These replace the old CSS-level "normal" defaults so the minimal UI is
 // the only built-in mode. Server / localStorage config can override.
 const DEFAULT_UI = {
-  "conversation.center": false,
+  "conversation.center": true,
   "conversation.message-gap": "0.9rem",
   "conversation.turn-gap": "1.2rem",
   "reply.border.show": false,
   "reply.border.gradient": true,
   "reply.hover": false,
   "reply.code.border": false,
-  "message.gradient": true,
+  "message.gradient": false,
   "input.gradient": false,
   "input.focus-ring": false,
-  "input.padding-y": "0.35rem",
+  "input.padding-y": "0.85rem",
   "turn.time.show": false,
   "turn.sep.show": false,
   "usage.align": "left",
@@ -187,7 +233,7 @@ const DEFAULT_UI = {
   "usage.cache.show": true,
   "usage.total.show": false,
   "usage.model.show": true,
-  "title-bar.height": "40px",
+  "title-bar.height": "52px",
   "title-bar.model.show": false,
   "title-bar.model.uppercase": false,
   "title-bar.version.show": true,

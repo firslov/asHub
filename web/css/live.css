@@ -513,7 +513,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* ── Toolbar ─────────────────────────────────────────────────────── */
 .toolbar {
   position: fixed;
-  top: var(--ui-title-bar-height, 40px);
+  top: var(--ui-chrome-height);
   left: auto;
   right: 0;
   bottom: 0;
@@ -1147,14 +1147,14 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   -webkit-font-smoothing: subpixel-antialiased;
 }
 
-:root.os-win32 { --ui-title-bar-height: 78px; }
+/* Window-controls height is included by --ui-chrome-height. */
 
 /* Windows custom title bar */
 .win-title-bar { display: none; }
 /* Ensure the toolbar clears the custom title bar on Windows (drawer
    panels get their own .os-win32 offsets in css/panels/*.css). */
 .os-win32 .toolbar {
-  top: 78px;
+  top: var(--ui-chrome-height);
 }
 
 .os-win32 .win-title-bar {
@@ -1172,7 +1172,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-bottom: 1px solid var(--border);
 }
 .os-win32 .title-bar {
-  height: 78px;
+  height: var(--ui-chrome-height);
   padding: 0.35rem 1rem;
   padding-top: 36px;
   gap: 0.4rem;
@@ -2867,7 +2867,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .tool-group-body {
   opacity: 1;
   overflow: hidden;
-  max-height: 2000px;
+  max-height: none;
   transition: max-height var(--dur-medium) var(--ease-out-expo), opacity var(--dur-quick);
 }
 .tool-group-body {
@@ -3005,7 +3005,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 .todo-body {
   opacity: 1;
   overflow: hidden;
-  max-height: 2000px;
+  max-height: none;
   transition: max-height var(--dur-medium) var(--ease-out-expo), opacity var(--dur-quick);
 }
 .todo-block.collapsed .todo-body {

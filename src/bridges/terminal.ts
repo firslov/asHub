@@ -75,7 +75,7 @@ export class TerminalBridge extends EventEmitter implements Bridge {
       this.emit("event", { name: "shell:pty-data", payload: { raw: data } } satisfies BusEvent);
     });
     proc.onExit(({ exitCode, signal }) => {
-      if (this.respawning) return; // intentional kill for shell fallback
+      if (this.respawning || this.proc !== proc) return; // intentional kill for shell fallback
       this.emit("event", { name: "shell:exit", payload: { exitCode, signal } } satisfies BusEvent);
       this.closed = true;
       this.emit("closed");
@@ -100,7 +100,13 @@ export class TerminalBridge extends EventEmitter implements Bridge {
         void this.spawn(alt.path, alt.args, cwd, true).catch((err) => {
           // Never let a failed fallback escape as an unhandled rejection —
           // in the Electron main process that can kill the whole backend.
-          process.stderr.write(`[terminal] fallback shell spawn failed: ${err instanceof Error ? err.message : err}\n`);
+          const message = `Terminal fallback shell failed: ${err instanceof Error ? err.message : err}`;
+          process.stderr.write(`[terminal] ${message}\n`);
+          try { this.emit("event", { name: "ui:error", payload: { message } } satisfies BusEvent); }
+          finally {
+            try { this.emit("event", { name: "shell:exit", payload: {} } satisfies BusEvent); }
+            finally { this.close(); }
+          }
         });
       }, 2500);
     } else if (process.platform === "win32" && retried) {

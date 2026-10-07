@@ -3,7 +3,7 @@
 [English](#ashub) | [简体中文](README_CN.md)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20.3-brightgreen.svg)](package.json)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.12.0-brightgreen.svg)](package.json)
 
 Desktop app for [agent-sh](https://github.com/guanyilun/agent-sh) — it spawns and supervises
 agent-sh sessions and exposes them through a browser UI on a single port.
@@ -109,7 +109,9 @@ which is what the one-line installer and the in-app updater use by default.
 
 ## Run from source
 
-Requires **Node.js ≥ 20.3**.
+Requires **Node.js ≥ 22.12.0** (the build tooling requires this minimum).
+The project pins **Node.js 22.23.3** in `.nvmrc` and `.node-version`; with nvm,
+run `nvm install && nvm use` before installing dependencies.
 
 ```sh
 git clone https://github.com/firslov/ashub.git
@@ -264,3 +266,18 @@ GitHub when it is unreachable.
 ## License
 
 MIT
+
+Remote access requires an access token. On a non-loopback bind, asHub generates
+a token and prints it in the terminal; open `/auth` in your browser to sign in.
+Set `ASHUB_TOKEN` before launch to use a persistent token. API clients can send
+`Authorization: Bearer <token>`. Use a trusted network or an HTTPS reverse proxy.
+Loopback-only desktop use remains unchanged.
+
+ACP sessions resume through the agent's `session/load` capability. If an agent
+does not support loading sessions, or a legacy session has no saved remote ID,
+its history remains readable but continuing it reports an explicit error.
+Create a new session in that case.
+
+Run `npm test` for isolated regressions, followed by `npm run typecheck` and
+`npm run typecheck:web`. Tests use temporary data and mock Agent, DOM, PTY and
+Electron boundaries; they do not call a model or access your configured keys.

@@ -140,6 +140,11 @@ let mainWindow = null;
 let _shuttingDown = false;
 let _installOnQuit = false;
 let shutdownHubRef = null;
+let shutdownPromise = null;
+let restartHubRef = null;
+function prepareShutdown() {
+  return shutdownPromise ??= Promise.resolve().then(() => shutdownHubRef?.());
+}
 // Path of the last downloaded update archive (macOS ad-hoc manual-install
 // flow).  Set on update-downloaded, cleared when the download cache is.
 let cachedUpdateFile = null;
@@ -363,9 +368,10 @@ function setupAutoUpdater() {
 }
 
 function setupIPC() {
-  ipcMain.handle("pick-directory", async () => {
-    if (!mainWindow) return { cancelled: true };
-    const result = await dialog.showOpenDialog(mainWindow, {
+  ipcMain.handle("pick-directory", async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    if (!owner || owner.isDestroyed()) return { cancelled: true };
+    const result = await dialog.showOpenDialog(owner, {
       properties: ["openDirectory", "createDirectory"],
       title: "Select working directory",
     });
@@ -414,11 +420,8 @@ function setupIPC() {
       return { ok: false, manual: true, error: res.error };
     }
     try {
-      // Flag the quit as an update install so the before-quit handler
-      // skips the slow graceful hub shutdown.  On macOS Squirrel.Mac's
-      // ShipIt installer is already waiting for the app to terminate;
-      // a 5s teardown can make it miss the install window and appear to
-      // do nothing.
+      // Save before handing control to the native update installer.
+      await prepareShutdown();
       _installOnQuit = true;
       console.log("[updater] quit-and-install requested");
       // quitAndInstall is fire-and-forget: on success the app begins quitting
@@ -437,11 +440,13 @@ function setupIPC() {
         app.removeListener("will-quit", onWillQuit);
         _installOnQuit = false;
         console.error("[updater] quitAndInstall returned without quitting");
+        restartHubRef?.();
         return { ok: false, error: "Update installer did not start" };
       }
       return { ok: true };
     } catch (err) {
       console.error("[updater] quit-and-install failed:", err.message);
+      try { if (shutdownPromise) restartHubRef?.(); } catch (restartError) { console.error("[updater] backend recovery failed:", restartError); }
       _installOnQuit = false;
       return { ok: false, error: err.message };
     }
@@ -567,12 +572,12 @@ function setupIPC() {
     }
   });
 
-  ipcMain.handle("move-tab-to-window-at", (event, sessionId) => {
-    if (!isValidSessionId(sessionId)) return { ok: false, moved: false };
+  ipcMain.handle("move-tab-to-window-at", (event, sessionId, kind) => {
+    if (!["agent", "terminal", "ash-terminal"].includes(kind) || !isValidSessionId(sessionId)) return { ok: false, moved: false };
     const pt = screen.getCursorScreenPoint();
     const target = findWinAt(event.sender, pt.x, pt.y);
     if (!target) return { ok: true, moved: false };
-    target.webContents.send("accept-tab", sessionId);
+    target.webContents.send("accept-tab", { sessionId, kind });
     target.focus();
     return { ok: true, moved: true };
   });
@@ -662,12 +667,24 @@ async function startServer() {
 
   let server;
   try {
-    const hub = startHub({
+    const hubOptions = {
       port: HUB_PORT,
       host: "127.0.0.1",
       webRoot,
       makeBridge: (opts) => opts.kind === "terminal" ? new TerminalBridge(opts) : new AshBridge(opts),
-    });
+    };
+    const hub = startHub(hubOptions);
+    restartHubRef = () => {
+      const recovered = startHub(hubOptions);
+      server = recovered.server;
+      shutdownHubRef = recovered.shutdown;
+      shutdownPromise = null;
+      _shuttingDown = false;
+      server.on("error", err => dialog.showErrorBox("Server Error", String(err)));
+      server.on("listening", () => {
+        for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed()) win.webContents.reload();
+      });
+    };
     server = hub.server;
     shutdownHubRef = hub.shutdown;
   } catch (err) {
@@ -798,30 +815,9 @@ if (!gotTheLock) {
     if (mainWindow) mainWindow.removeAllListeners("closed");
     if (_shuttingDown || !shutdownHubRef) return;
 
-    // Installing an update: quit immediately.  The ShipIt installer on
-    // macOS (and the NSIS/AppImage installer elsewhere) is already
-    // waiting for termination — a graceful hub shutdown here delays it
-    // and can make the install silently fail.  This also covers a plain
-    // Cmd+Q with an update already downloaded (autoInstallOnAppQuit =
-    // true): hasDownloadedUpdate() checks the helper too, so it catches a
-    // download completed before a restart where update-downloaded never
-    // re-fired and cachedUpdateFile was never set.  Best-effort shutdown
-    // in the background, then let the quit proceed without preventDefault.
-    if (_installOnQuit || hasDownloadedUpdate()) {
-      _shuttingDown = true;
-      shutdownHubRef().catch(() => {});
-      return;
-    }
-
     _shuttingDown = true;
     event.preventDefault();
-    Promise.resolve()
-      // Bound the graceful shutdown: a hung bridge/delete must not block
-      // the quit (or electron-updater's install step) forever.
-      .then(() => Promise.race([
-        shutdownHubRef(),
-        new Promise((resolve) => setTimeout(resolve, 5000)),
-      ]))
+    prepareShutdown()
       .catch((err) => console.error("[electron] shutdown failed:", err))
       // app.quit() (not app.exit) so the normal will-quit/quit flow runs —
       // electron-updater installs the pending update there.

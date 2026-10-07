@@ -1,24 +1,7 @@
 import { currentSessionId } from "./state.js";
 import { attachAutocomplete } from "./autocomplete.js";
 
-const getActiveAtToken = (el) => {
-  const v = el.value;
-  const cur = el.selectionStart ?? v.length;
-  let i = cur;
-  while (i > 0) {
-    const ch = v[i - 1];
-    if (/\s/.test(ch)) return null;
-    if (ch === "@") {
-      const before = i - 2 >= 0 ? v[i - 2] : "";
-      if (i - 2 < 0 || /\s/.test(before)) {
-        return { start: i - 1, end: cur, query: v.slice(i, cur) };
-      }
-      return null;
-    }
-    i--;
-  }
-  return null;
-};
+import { getActiveAtToken, formatFileMention } from "./file-mention.js";
 
 // Directory listings keyed by `${sessionId}:${subdir}`.  Typing a path like
 // "@src/comp" refetches the same subdir listing on every keystroke without
@@ -29,21 +12,27 @@ const getActiveAtToken = (el) => {
 const DIR_CACHE_MAX = 50;
 const DIR_CACHE_TTL = 30 * 1000;
 const dirCache = new Map();
+const directoryGenerations = new Map();
+const generationFor = sid => directoryGenerations.get(sid) ?? 0;
 
 // Turn boundary: the agent may have written files this turn, so drop that
-// session's cached listings — the next @ refetches them. The event carries
-// no detail today; fall back to the current session (the only one @ reads).
-document.addEventListener("sse:processing-change", (ev) => {
+// session's cached listings — the next @ refetches them. Legacy callers
+// without a session ID fall back to the current session.
+const invalidateDirectories = (ev) => {
   const sid = ev.detail?.sessionId ?? ev.detail?.sid ?? currentSessionId();
-  if (!sid) { dirCache.clear(); return; }
+  if (!sid) { dirCache.clear(); directoryGenerations.clear(); return; }
+  directoryGenerations.set(sid, generationFor(sid) + 1);
   const prefix = `${sid}:`;
   for (const key of dirCache.keys()) {
     if (key.startsWith(prefix)) dirCache.delete(key);
   }
-});
+};
+document.addEventListener("sse:processing-change", invalidateDirectories);
+document.addEventListener("ash:cwd-change", invalidateDirectories);
 
 const fetchEntries = async (subdir) => {
   const sid = currentSessionId();
+  const generation = generationFor(sid);
   const key = `${sid}:${subdir}`;
   if (dirCache.has(key)) {
     const cached = dirCache.get(key);
@@ -61,6 +50,7 @@ const fetchEntries = async (subdir) => {
   const r = await fetch(url);
   if (!r.ok) return [];
   const data = await r.json();
+  if (sid !== currentSessionId() || generation !== generationFor(sid)) return [];
   const files = data.files || [];
   dirCache.set(key, { files, ts: Date.now() });
   while (dirCache.size > DIR_CACHE_MAX) {
@@ -70,7 +60,7 @@ const fetchEntries = async (subdir) => {
 };
 
 export const attachAtMentionAutocomplete = (inputEl) => {
-  return attachAutocomplete({
+  const autocomplete = attachAutocomplete({
     inputEl,
     listEl: document.getElementById("autocomplete"),
     shouldOpen: () => {
@@ -84,13 +74,15 @@ export const attachAtMentionAutocomplete = (inputEl) => {
       const lastSlash = tok.query.lastIndexOf("/");
       const subdir = lastSlash === -1 ? "" : tok.query.slice(0, lastSlash);
       const prefix = (lastSlash === -1 ? tok.query : tok.query.slice(lastSlash + 1)).toLowerCase();
+      const sid = currentSessionId();
+      const generation = generationFor(sid);
       const files = await fetchEntries(subdir);
       const toItem = (f) => ({
         name: f.name + (f.kind === "dir" ? "/" : ""),
         description: f.kind === "dir" ? "dir" : "",
         kind: f.kind,
         rawName: f.name,
-        subdir,
+        subdir, sid, generation,
       });
       if (!prefix) return files.slice(0, 50).map(toItem);
       // Partial (substring) match so a query like "成绩" surfaces
@@ -112,15 +104,24 @@ export const attachAtMentionAutocomplete = (inputEl) => {
         .map((x) => toItem(x.f));
     },
     accept: (it) => {
+      if (it.sid !== currentSessionId() || it.generation !== generationFor(it.sid)) return;
       const tok = getActiveAtToken(inputEl);
       if (!tok) return;
       const path = (it.subdir ? it.subdir + "/" : "") + it.rawName;
-      const trail = it.kind === "dir" ? "/" : " ";
-      const insertion = "@" + path + trail;
+      const { text, cursor } = formatFileMention(path, it.kind === "dir");
       const v = inputEl.value;
-      inputEl.value = v.slice(0, tok.start) + insertion + v.slice(tok.end);
-      const newCur = tok.start + insertion.length;
-      inputEl.setSelectionRange(newCur, newCur);
+      inputEl.value = v.slice(0, tok.start) + text + v.slice(tok.end);
+      inputEl.setSelectionRange(tok.start + cursor, tok.start + cursor);
+      inputEl.dispatchEvent(new Event("input", { bubbles: true }));
     },
   });
+  const refresh = (event) => {
+    const sid = event.detail?.sessionId ?? event.detail?.sid ?? currentSessionId();
+    if (sid && sid !== currentSessionId()) return;
+    autocomplete.close?.();
+    if (getActiveAtToken(inputEl)) inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  document.addEventListener("ash:cwd-change", refresh);
+  document.addEventListener("sse:processing-change", refresh);
+  return autocomplete;
 };

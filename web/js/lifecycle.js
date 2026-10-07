@@ -4,6 +4,7 @@ let _paused = false;
 let _resumeTimer = null;
 
 const pause = () => {
+  if (_resumeTimer !== null) { clearTimeout(_resumeTimer); _resumeTimer = null; }
   if (_paused) return;
   _paused = true;
 
@@ -21,17 +22,13 @@ const resume = () => {
   if (_resumeTimer) clearTimeout(_resumeTimer);
   _resumeTimer = setTimeout(() => {
     _resumeTimer = null;
-    resumeSSE();
+    if (!_paused) resumeSSE();
   }, 1000 + Math.random() * 2000);
 };
 
 // Browser tab visibility changes (also covers system sleep on some OS).
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    pause();
-  } else {
-    resume();
-  }
+  if (!document.hidden) resume();
 });
 
 // Back/forward cache restore — reconnect SSE if paused.

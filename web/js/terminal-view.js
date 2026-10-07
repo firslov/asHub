@@ -8,6 +8,7 @@ class TerminalView extends HTMLElement {
   connectedCallback() {
     this.id = this.getAttribute("session-id") || parseId();
     this.term = null;
+    this.ended = false;
     this.fitTimer = null;
     this.lastSize = { cols: 0, rows: 0 };
 
@@ -35,7 +36,7 @@ class TerminalView extends HTMLElement {
     this.term.open(this.hostEl);
 
     this.term.onData((data) => {
-      if (!this.id) return;
+      if (!this.id || this.ended) return;
       fetch(`/${this.id}/pty-input`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -64,10 +65,21 @@ class TerminalView extends HTMLElement {
   receiveFrame(frame) {
     const name = frame?.meta?.name;
     if (!this.term) return;
-    if (name === "shell:pty-data") {
+    if (name === "hub:replay-starting") {
+      this.term.reset();
+      this.ended = false;
+      this.term.options.disableStdin = false;
+      this.term.options.cursorBlink = true;
+    } else if (name === "shell:pty-data") {
       const raw = frame.payload?.raw;
       if (typeof raw === "string") this.term.write(raw);
+    } else if (name === "ui:error") {
+      const message = String(frame.payload?.message ?? "Terminal error");
+      this.term.write(`\r\n\x1b[31m${message}\x1b[0m\r\n`);
     } else if (name === "shell:exit") {
+      this.ended = true;
+      this.term.options.disableStdin = true;
+      this.term.options.cursorBlink = false;
       const code = frame.payload?.exitCode;
       this.term.write(`\r\n\x1b[2m[process exited${typeof code === "number" ? ` with code ${code}` : ""}]\x1b[0m\r\n`);
     } else if (name === "hub:replay-done") {

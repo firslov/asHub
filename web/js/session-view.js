@@ -2,6 +2,7 @@ import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_D
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
 import { compactReasoning } from "./stream/compact.js";
 import { hideUsage } from "./stream/renderers.js";
+import { discardPendingThinking } from "./stream/thinking.js";
 
 import { STATE_DEFAULTS } from "./state.js";
 import { t, lang, scanI18n } from "./i18n.js";
@@ -71,6 +72,7 @@ class SessionView extends HTMLElement {
   }
 
   initStreamShell() {
+    discardPendingThinking(this);
     this.controller = new AbortController();
 
     const tpl = document.getElementById("session-view-tpl");
@@ -89,7 +91,12 @@ class SessionView extends HTMLElement {
     this.modelPickerEl = this.querySelector(".model-picker");
     this.cwdEl = this.querySelector(".usage-location");
 
-    this.state = { ...STATE_DEFAULTS };
+    this.state = { ...STATE_DEFAULTS,
+      cwd: this.state?.cwd ?? STATE_DEFAULTS.cwd,
+      contextWindow: this.state?.contextWindow ?? STATE_DEFAULTS.contextWindow,
+      isSubmitting: this.state?.isSubmitting ?? false,
+      readOnlyContext: this.state?.readOnlyContext ?? false,
+    };
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };
     this.thinking = { el: null, block: null };
     this.toolGroup = { current: null };
@@ -150,6 +157,7 @@ class SessionView extends HTMLElement {
   }
 
   resetForBranchSwitch() {
+    discardPendingThinking(this);
     const wasReplaying = this.state.replaying;
     if (this.streamEl) {
       // Permission-card countdown/confirm timers would keep firing on
@@ -159,12 +167,21 @@ class SessionView extends HTMLElement {
         card._disarm?.();
       }
       this.streamEl.innerHTML = "";
+      // Replay resets must keep the welcome and loading nodes connected.
+      // Their listeners belong to this view and remain valid after reattachment.
+      if (this.emptyStateEl) this.streamEl.appendChild(this.emptyStateEl);
+      if (this.loadingEl) this.streamEl.appendChild(this.loadingEl);
       // Reset the compaction cursor — a stale value larger than the new
       // child count would make compactReasoning early-return forever.
       this.streamEl._compactedUntil = 0;
     }
     this._replayFrag = null;
-    this.state = { ...STATE_DEFAULTS };
+    this.state = { ...STATE_DEFAULTS,
+      cwd: this.state?.cwd ?? STATE_DEFAULTS.cwd,
+      contextWindow: this.state?.contextWindow ?? STATE_DEFAULTS.contextWindow,
+      isSubmitting: this.state?.isSubmitting ?? false,
+      readOnlyContext: this.state?.readOnlyContext ?? false,
+    };
     this.state.replaying = wasReplaying; // preserve replay mode across branch resets
     this.reply = { current: null, text: "", pendingChunkRender: false, liveSegment: false };
     this.thinking = { el: null, block: null };
@@ -183,6 +200,7 @@ class SessionView extends HTMLElement {
   }
 
   disconnectedCallback() {
+    discardPendingThinking(this);
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
     this.controller?.abort();
     // Permission-card countdown/confirm timers would keep firing on detached

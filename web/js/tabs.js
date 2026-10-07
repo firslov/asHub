@@ -1,8 +1,9 @@
 import { effect } from "../vendor/signals-core.js";
-import { activeSessionId, openTabs, openTab, closeTab } from "./session-manager.js";
+import { activeSessionId, openTabs, openTab, closeTab, sessionKinds, setSessionKind } from "./session-manager.js";
 import { getSession, setSessions, allSessions, pinnedIds } from "./store.js";
 import { t } from "./i18n.js";
 import { escape } from "./utils.js";
+import { toast } from "./toast.js";
 
 const strip = document.getElementById("session-tabs");
 const app = document.querySelector(".app");
@@ -38,6 +39,8 @@ const showPreview = (clientX, clientY, label) => {
 const hidePreview = () => { previewEl?.remove(); previewEl = null; };
 
 const startRename = (btn, id) => {
+  // A trailing dblclick can arrive after click has removed/replaced this tab.
+  if (!btn.isConnected || !openTabs.peek().includes(id)) return;
   const labelEl = btn.querySelector(".session-tab-label");
   if (!labelEl) return;
   if (editingId) {
@@ -63,19 +66,22 @@ const startRename = (btn, id) => {
     editingId = null;
     const val = input.value.trim();
     const shouldSave = commit && val && val !== current;
-    if (shouldSave) {
-      const meta = getSession(id);
-      if (meta) meta.title = val;
-    }
-    render(true);
+    // Blur runs between pointer down and click. Preserve the tab and close
+    // targets so that finishing an edit never swallows the pending click.
+    input.replaceWith(labelEl);
+    setTimeout(() => render(), 0);
     if (shouldSave) {
       try {
-        await fetch(`/${id}/title`, {
+        const response = await fetch(`/${id}/title`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: val }),
         });
-      } catch {}
+        if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+        // Use the shared title refresh even for a tab without a live SSE subscription.
+        document.dispatchEvent(new Event("sse:title"));
+      } catch (err) { toast(String(err?.message ?? err), { type: "error" }); }
+      render(true);
     }
   };
 
@@ -127,11 +133,11 @@ const render = (force = false) => {
   allSessions.value; // signal subscription — re-render on title/cwd updates
   const pins = pinnedIds.value;
   if (editingId) {
-    // Don't clobber an in-progress rename — but only while its input is
-    // genuinely live. A stale editingId (input destroyed without finish(),
-    // e.g. its tab was closed) would freeze the strip forever.
-    if (strip.querySelector(".session-tab-rename")) return;
+    // Preserve a live editor, but never let a closed/detached editor freeze
+    // the strip: removing a focused DOM node does not reliably fire blur.
+    if (tabs.includes(editingId) && strip.querySelector(".session-tab-rename")) return;
     editingId = null;
+    force = true;
   }
 
   const sig = JSON.stringify([
@@ -164,10 +170,18 @@ const render = (force = false) => {
     close.className = "session-tab-close";
     close.title = t("close");
     close.textContent = "×";
+    close.addEventListener("mousedown", (ev) => {
+      if (ev.button === 0) ev.preventDefault();
+    });
     close.addEventListener("click", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
+      strip.querySelector(".session-tab-rename")?.blur();
       closeTab(id);
+    });
+    close.addEventListener("dblclick", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
     });
     btn.appendChild(close);
 
@@ -246,13 +260,13 @@ const render = (force = false) => {
       if (!outsideSource && !farBelowStrip) { stopPoll(); return; }
 
       if (outsideSource) {
-        const res = await api.moveTabToWindowAt?.(torn);
-        if (res?.moved) { closeTab(torn); stopPoll(); return; }
+        const res = await api.moveTabToWindowAt?.(torn, sessionKinds.get(torn) ?? getSession(torn)?.kind);
+        if (res?.moved) { closeTab(torn, { transfer: true }); stopPoll(); return; }
       }
       stopPoll();
       if (openTabs.peek().length <= 1 || !api.openSessionWindow) return;
       const r = await api.openSessionWindow(torn, { x: sx, y: sy });
-      if (r?.ok) closeTab(torn);
+      if (r?.ok) closeTab(torn, { transfer: true });
     });
     btn.addEventListener("dragover", (ev) => {
       if (!dragId || dragId === id) return;
@@ -322,8 +336,21 @@ window.electronAPI?.onTabDragHover?.(({ hovering, screenPos, label }) => {
   if (anchor) anchor.classList.add(finalSide === "after" ? "drop-after" : "drop-before");
 });
 
-window.electronAPI?.onAcceptTab?.((sessionId) => {
-  if (typeof sessionId !== "string") return;
+window.electronAPI?.onAcceptTab?.(async (payload) => {
+  const sessionId = typeof payload === "string" ? payload : payload?.sessionId;
+  if (typeof sessionId !== "string" || !/^[0-9a-f]{4,32}$/i.test(sessionId)) return;
+  let kind = typeof payload === "object" ? payload?.kind : sessionKinds.get(sessionId);
+  // Legacy ID-only transfers must resolve metadata before choosing a view.
+  if (!["agent", "terminal", "ash-terminal"].includes(kind)) {
+    try {
+      const response = await fetch("/sessions");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const list = await response.json();
+      kind = list.find(s => s.instanceId === sessionId)?.kind ?? (list.some(s => s.instanceId === sessionId) ? "agent" : null);
+      if (!["agent", "terminal", "ash-terminal"].includes(kind)) throw new Error("Session is unavailable");
+    } catch (err) { toast(t("session.open.failed"), { type: "error", detail: String(err?.message ?? err) }); return; }
+  }
+  setSessionKind(sessionId, kind);
   const targetId = externalDropTargetId;
   const side = externalDropSide;
   clearExternalDropMarks();

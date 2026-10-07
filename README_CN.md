@@ -3,7 +3,7 @@
 [English](README.md) | [简体中文](#ashub)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20.3-brightgreen.svg)](package.json)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.12.0-brightgreen.svg)](package.json)
 
 [agent-sh](https://github.com/guanyilun/agent-sh) 的桌面应用 —— 它负责创建并监管 agent-sh 会话，
 并通过单一端口把它们暴露给浏览器界面。
@@ -104,7 +104,9 @@ curl -fsSL https://raw.githubusercontent.com/firslov/ashub/main/install.sh | bas
 
 ## 源码运行
 
-需要 **Node.js ≥ 20.3**。
+需要 **Node.js ≥ 22.12.0**（构建工具要求的最低版本）。
+项目通过 `.nvmrc` 和 `.node-version` 固定使用 **Node.js 22.23.3**；
+使用 nvm 时，请先运行 `nvm install && nvm use`，再安装依赖。
 
 ```sh
 git clone https://github.com/firslov/ashub.git
@@ -253,3 +255,15 @@ macOS 一行安装脚本与应用内更新都优先走镜像，镜像不可达�
 ## 许可证
 
 MIT
+
+局域网访问需要访问令牌。绑定非回环地址时，asHub 会生成令牌并输出到终端；
+在浏览器打开 `/auth` 输入令牌登录。也可在启动前设置 `ASHUB_TOKEN` 使用固定令牌。
+API 客户端通过 `Authorization: Bearer <令牌>` 认证。请使用可信网络或 HTTPS 反向代理。
+仅监听本机回环地址的桌面使用方式不变。
+
+ACP 会话通过后端的 `session/load` 能力恢复。后端不支持恢复，或旧会话未保存
+远端会话 ID 时，历史仍可查看，但继续提交会明确报错；这种情况需要新建会话。
+
+执行 `npm test` 运行隔离回归测试，再执行 `npm run typecheck` 和
+`npm run typecheck:web`。测试使用临时数据及 Agent、DOM、PTY、Electron 替身，
+不会调用模型或读取实际配置密钥。

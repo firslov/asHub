@@ -99,8 +99,8 @@ export function createCapture(
       const newLeafId = leafIdx >= 0 ? liveEntryIds[leafIdx]! : null;
       if (newLeafId) {
         opts?.onWarn?.(`capture: snapshot shrank (${messages.length} < ${liveEntryIds.length}); realigned to verified prefix of ${prefix} message(s), re-appending divergent tail`);
-        liveEntryIds = liveEntryIds.slice(0, prefix);
         store.setActiveLeaf(newLeafId);
+        liveEntryIds = liveEntryIds.slice(0, prefix);
       } else {
         // Path 2 — no verifiable shared prefix (contents diverge from index
         // 0, or the boundary entry is a compaction placeholder): any append

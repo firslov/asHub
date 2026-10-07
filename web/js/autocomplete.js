@@ -7,7 +7,7 @@ import { escape } from "./utils.js";
 const peersByList = new WeakMap();
 
 export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpen }) => {
-  const state = { open: false, items: [], index: 0, token: 0, timer: null };
+  const state = { open: false, items: [], index: 0, token: 0, timer: null, buffer: null };
   let lastSig = null;
 
   let peers = peersByList.get(listEl);
@@ -87,7 +87,7 @@ export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpe
 
   const doAccept = () => {
     const it = state.items[state.index];
-    if (!it) return;
+    if (!state.open || !it || state.buffer !== inputEl.value) { close(); return; }
     accept(it);
     close();
     request();
@@ -98,23 +98,26 @@ export const attachAutocomplete = ({ inputEl, listEl, fetcher, accept, shouldOpe
     // token) — skip the shouldOpen scan and fetch; compositionend re-runs it.
     if (composing) return;
     const buffer = inputEl.value;
-    if (!shouldOpen(buffer)) { close(); return; }
+    // Old choices belong to the previous input, including while a new
+    // request is debounced, pending, or failing.
+    close();
+    if (!shouldOpen(buffer)) return;
     const my = ++state.token;
-    clearTimeout(state.timer);
-    // Cancel in-flight fetch to save bandwidth
-    if (state.abort) { state.abort.abort(); state.abort = null; }
     state.abort = new AbortController();
     const signal = state.abort.signal;
     state.timer = setTimeout(async () => {
       try {
         const items = await fetcher(buffer, signal);
-        if (my !== state.token) return;
+        if (my !== state.token || inputEl.value !== buffer) return;
+        state.buffer = buffer;
         state.items = Array.isArray(items) ? items : [];
         state.index = 0;
         state.open = state.items.length > 0;
         if (state.open) closePeers();
         render();
-      } catch {}
+      } catch {
+        if (my === state.token) close();
+      }
     }, 60);
   };
 

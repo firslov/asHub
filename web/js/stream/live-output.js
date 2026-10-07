@@ -3,15 +3,21 @@ import { t } from "../i18n.js";
 
 const LIVE_OUTPUT_MAX_LINES = 2000;
 
+// Keep the notice outside the bounded log buffer: trimming subsequent chunks
+// must never remove it. Use the same representation for display and copying.
+const outputText = (lo, lines = lo.lines) => {
+  const text = lines.join("\n");
+  return lo.truncated
+    ? `${t("output.truncated", { n: LIVE_OUTPUT_MAX_LINES })}\n${text}`
+    : text;
+};
+
 const flushLiveOutput = (session) => {
   const lo = session?.liveOutput.output;
   if (!lo) return;
   lo.rafPending = false;
   const el = lo.blockEl;
-  if (lo.truncated && lo.lines.length > LIVE_OUTPUT_MAX_LINES) {
-    lo.lines = lo.lines.slice(-LIVE_OUTPUT_MAX_LINES);
-  }
-  el.textContent = lo.lines.join("\n");
+  el.textContent = outputText(lo);
   el.scrollTop = el.scrollHeight;
   maybeScroll(session);
 };
@@ -64,16 +70,10 @@ export const appendLiveOutputChunk = (session, chunk) => {
   for (let i = 1; i < parts.length; i++) {
     lo.lines.push(parts[i]);
   }
-  // Cap live output buffer — prevents freeze from huge tool output
-  if (!lo.truncated && lo.lines.length > LIVE_OUTPUT_MAX_LINES) {
+  // Bound only actual output lines; the truncation notice is derived on render.
+  if (lo.lines.length > LIVE_OUTPUT_MAX_LINES) {
     lo.truncated = true;
-    lo.lines = [`... (output truncated to last ${LIVE_OUTPUT_MAX_LINES} lines)`].concat(
-      lo.lines.slice(-LIVE_OUTPUT_MAX_LINES));
-    lo.blockEl.style.opacity = "0.8";
-  }
-  // Keep buffer bounded after truncation
-  if (lo.truncated && lo.lines.length > LIVE_OUTPUT_MAX_LINES + 1) {
-    lo.lines = lo.lines.slice(-(LIVE_OUTPUT_MAX_LINES + 1));
+    lo.lines = lo.lines.slice(-LIVE_OUTPUT_MAX_LINES);
   }
   scheduleLiveOutput(session);
 };
@@ -87,8 +87,9 @@ export const absorbAsToolBody = (session, callId) => {
   const blockEl = lo.blockEl;
   blockEl.classList.add("final");
   const lines = lo.lines;
-  const all = lines.join("\n");
+  const all = outputText(lo);
   const LIMIT = 6;
+  const preview = outputText(lo, lines.slice(0, LIMIT));
 
   const textEl = document.createElement("span");
   textEl.className = "tool-body-text";
@@ -100,14 +101,14 @@ export const absorbAsToolBody = (session, callId) => {
   actions.className = "tool-body-actions";
 
   if (lines.length > LIMIT) {
-    textEl.textContent = lines.slice(0, LIMIT).join("\n");
+    textEl.textContent = preview;
     const toggle = document.createElement("button");
     toggle.className = "tool-body-btn";
     toggle.textContent = t("show.n.more", { n: lines.length - LIMIT });
     let expanded = false;
     toggle.addEventListener("click", () => {
       expanded = !expanded;
-      textEl.textContent = expanded ? all : lines.slice(0, LIMIT).join("\n");
+      textEl.textContent = expanded ? all : preview;
       toggle.textContent = expanded
         ? t("show.less")
         : t("show.n.more", { n: lines.length - LIMIT });

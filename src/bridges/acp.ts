@@ -19,8 +19,8 @@ interface JsonRpcMessage {
 
 /** ACP permission option as sent by the child process. */
 interface AcpPermissionOption {
-  id: string;
-  label: string;
+  optionId: string;
+  name: string;
   kind?: string;
 }
 
@@ -29,12 +29,13 @@ interface AcpPermissionRequest {
   sessionId?: string;
   kind?: string;
   description?: string;
+  toolCall?: { title?: string; kind?: string };
   options?: AcpPermissionOption[];
 }
 
 /** Stored state for a pending permission request. */
 interface PendingPermission {
-  resolve: (optionId: string) => void;
+  resolve: (optionId: string | null) => void;
   options: AcpPermissionOption[];
 }
 
@@ -47,7 +48,7 @@ const ACP_KIND_MAP: Record<string, string> = {
 };
 
 function mapAcpKind(raw: string | undefined): string {
-  if (!raw) return "file-write";
+  if (typeof raw !== "string" || !raw) return "file-write";
   return ACP_KIND_MAP[raw] ?? raw.replace(/_/g, "-");
 }
 
@@ -60,23 +61,23 @@ function mapAcpKind(raw: string | undefined): string {
 type OptionClass = "allow" | "reject" | "unknown";
 
 function classifyOption(o: AcpPermissionOption): OptionClass {
-  const kind = o.kind ?? "";
+  const kind = typeof o.kind === "string" ? o.kind : "";
   if (kind.startsWith("allow_")) return "allow";
   if (kind.startsWith("reject_")) return "reject";
-  if (/^allow([_-]|$)/.test(o.id)) return "allow";
-  if (/^reject([_-]|$)/.test(o.id)) return "reject";
-  if (o.id.includes("deny")) return "reject";
+  if (/^allow([_-]|$)/.test(o.optionId)) return "allow";
+  if (/^reject([_-]|$)/.test(o.optionId)) return "reject";
+  if (o.optionId.includes("deny")) return "reject";
   return "unknown";
 }
 
 function isAlwaysOption(o: AcpPermissionOption): boolean {
-  return o.kind?.endsWith("_always") === true || o.id.includes("always");
+  return (typeof o.kind === "string" && o.kind.endsWith("_always")) || o.optionId.includes("always");
 }
 
 /** Option id to answer a denial with: reject_once, else any reject variant. */
 function pickRejectOption(options: AcpPermissionOption[]): string {
   const rejects = options.filter((o) => classifyOption(o) === "reject");
-  return rejects.find((o) => !isAlwaysOption(o))?.id ?? rejects[0]?.id ?? "reject_once";
+  return rejects.find((o) => !isAlwaysOption(o))?.optionId ?? rejects[0]?.optionId ?? "reject_once";
 }
 
 /** Option id to answer an approval with. */
@@ -84,13 +85,13 @@ function pickAllowOption(options: AcpPermissionOption[], sessionWide?: boolean):
   const allows = options.filter((o) => classifyOption(o) === "allow");
   if (sessionWide) {
     const always = allows.find((o) => isAlwaysOption(o));
-    if (always) return always.id;
+    if (always) return always.optionId;
   }
   const once = allows.find((o) => !isAlwaysOption(o));
-  if (once) return once.id;
-  if (allows[0]) return allows[0].id;
+  if (once) return once.optionId;
+  if (allows[0]) return allows[0].optionId;
   // Legacy fallback: first option that doesn't look like a denial.
-  return options.find((o) => classifyOption(o) !== "reject")?.id
+  return options.find((o) => classifyOption(o) !== "reject")?.optionId
     ?? (sessionWide ? "allow_always" : "allow_once");
 }
 
@@ -111,6 +112,10 @@ export interface AcpBridgeExtra {
 }
 
 export class AcpBridge extends EventEmitter implements Bridge {
+  readonly readOnlyContext = true;
+  readonly backendId = "acp";
+  readonly supportsImages = false;
+  private transportError: Error | null = null;
   private child: ChildProcess;
   private buf = "";
   private nextId = 1;
@@ -118,10 +123,13 @@ export class AcpBridge extends EventEmitter implements Bridge {
   private pendingAcpPermissions = new Map<number | string, PendingPermission>();
   private sessionId: string | null = null;
   private initPromise: Promise<void>;
+  private loading = false;
+  private processing = false;
   private translator = new Translator();
 
   constructor(opts: BridgeOpts) {
     super();
+    if (opts.restoreBackend && opts.restoreBackend !== this.backendId) throw new Error("This session belongs to another backend; restart with its original backend.");
     const extra = (opts.extra ?? {}) as Partial<AcpBridgeExtra>;
     if (!extra.command) throw new Error("AcpBridge requires extra.command");
 
@@ -142,9 +150,12 @@ export class AcpBridge extends EventEmitter implements Bridge {
       for (const p of this.pending.values()) p.reject(new Error("child closed"));
       this.pending.clear();
     });
-    this.child.on("error", (err) => this.emit("error", err));
+    const transportFailed = (err: Error) => this.failTransport(err);
+    this.child.on("error", transportFailed);
+    this.child.stdin?.on?.("error", transportFailed);
+    this.child.stdout?.on?.("error", transportFailed);
 
-    this.initPromise = withTimeout(this.initialize(opts.cwd), INIT_TIMEOUT_MS, "ACP initialize/session/new")
+    this.initPromise = withTimeout(this.initialize(opts), INIT_TIMEOUT_MS, "ACP initialize/session/new")
       .catch((err) => {
         // A child that never answers initialize is not an ACP server; don't
         // leave it running after the hub gives up on the bridge.
@@ -153,49 +164,65 @@ export class AcpBridge extends EventEmitter implements Bridge {
       });
   }
 
-  private async initialize(cwd?: string): Promise<void> {
-    await this.request("initialize", { protocolVersion: "0.1.0" });
-    const newRes = await this.request("session/new", {
-      cwd: cwd ?? process.cwd(),
-      mcpServers: [],
-    }) as { sessionId: string };
-    this.sessionId = newRes.sessionId;
+  private async initialize(opts: BridgeOpts): Promise<void> {
+    const init = await this.request("initialize", { protocolVersion: 1, clientCapabilities: {} }) as {
+      protocolVersion: number; agentCapabilities?: { loadSession?: boolean };
+    };
+    if (init.protocolVersion !== 1) throw new Error(`Unsupported ACP protocol version: ${init.protocolVersion}`);
+    const cwd = opts.cwd ?? process.cwd();
+    const oldId = opts.restoreState?.acpSessionId;
+    if (opts.isRestored || opts.initialMessages?.length || oldId) {
+      if (typeof oldId !== "string" || !init.agentCapabilities?.loadSession) {
+        throw new Error("This ACP session cannot be resumed: no saved session ID or the agent does not support session/load. Create a new session to continue.");
+      }
+      this.loading = true;
+      try {
+        await this.request("session/load", { sessionId: oldId, cwd, mcpServers: [] });
+        this.sessionId = oldId;
+      } finally { this.loading = false; }
+    } else {
+      const result = await this.request("session/new", { cwd, mcpServers: [] }) as { sessionId: string };
+      this.sessionId = result.sessionId;
+    }
   }
+
+  getRestoreState(): Record<string, unknown> { return { acpSessionId: this.sessionId }; }
+  isProcessing(): boolean { return this.processing; }
 
   ready(): Promise<void> { return this.initPromise; }
 
   async submit(text: string): Promise<{ stopReason: string }> {
     await this.initPromise;
     if (!this.sessionId) throw new Error("session not initialized");
+    if (this.processing) throw new Error("ACP turn already in progress");
 
-    // The hub encodes multimodal submissions as JSON { query, images } (see
-    // hub.ts submit()). ACP children have no universally-supported image
-    // block — the reference ash-acp-bridge extracts only text/resource
-    // blocks and silently drops everything else. Forwarding the raw JSON
-    // verbatim would corrupt the prompt with an escaped object literal, so
-    // parse it, keep only the query, and let the child ignore the images.
+    // Reject unsupported attachments instead of silently sending only text.
     let query = text;
-    try {
-      const parsed = JSON.parse(text) as { query?: unknown; images?: unknown };
-      if (typeof parsed.query === "string" && Array.isArray(parsed.images)) {
-        query = parsed.query;
-      }
-    } catch { /* plain text */ }
+    let parsed: { query?: unknown; images?: unknown } | null = null;
+    try { parsed = JSON.parse(text); } catch { /* plain text */ }
+    if (parsed && typeof parsed.query === "string" && Array.isArray(parsed.images)) {
+      if (parsed.images.length) throw new Error("This ACP backend does not support image submissions");
+      query = parsed.query;
+    }
 
-    return this.request("session/prompt", {
+    this.processing = true;
+    try { return await this.request("session/prompt", {
       sessionId: this.sessionId,
       prompt: [{ type: "text", text: query }],
-    }) as Promise<{ stopReason: string }>;
+    }) as { stopReason: string };
+    } finally { this.processing = false; }
   }
 
   cancel(): void {
     if (!this.sessionId) return;
     this.notify("session/cancel", { sessionId: this.sessionId });
+    for (const p of this.pendingAcpPermissions.values()) p.resolve(null);
+    this.pendingAcpPermissions.clear();
   }
 
   close(): void {
     for (const p of this.pendingAcpPermissions.values()) {
-      p.resolve(pickRejectOption(p.options));
+      p.resolve(null);
     }
     this.pendingAcpPermissions.clear();
     try { this.child.stdin?.end(); } catch {}
@@ -234,7 +261,14 @@ export class AcpBridge extends EventEmitter implements Bridge {
       if (!line) continue;
       let msg: JsonRpcMessage;
       try { msg = JSON.parse(line); } catch { continue; }
-      this.dispatch(msg);
+      // A child owns only its own protocol stream, never the Hub process.
+      if (!msg || typeof msg !== "object" || Array.isArray(msg) || msg.jsonrpc !== "2.0"
+        || (msg.id !== undefined && typeof msg.id !== "string" && typeof msg.id !== "number")
+        || (msg.method !== undefined && typeof msg.method !== "string")) continue;
+      try { this.dispatch(msg); }
+      catch (err) {
+        this.emit("event", { name: "ui:error", payload: { message: `Invalid ACP message: ${String(err)}` } });
+      }
     }
   }
 
@@ -257,7 +291,7 @@ export class AcpBridge extends EventEmitter implements Bridge {
     if (msg.method === "session/update") {
       const params = msg.params as { update?: Record<string, unknown> };
       if (params?.update) {
-        for (const e of this.translator.translateUpdate(params.update)) {
+        for (const e of this.loading ? [] : this.translator.translateUpdate(params.update)) {
           this.emit("event", e);
         }
       }
@@ -268,12 +302,12 @@ export class AcpBridge extends EventEmitter implements Bridge {
     if (msg.method === "session/request_permission") {
       const requestId = msg.id!;
       const params = (msg.params ?? {}) as AcpPermissionRequest;
-      const options = params.options ?? [];
-      const kind = mapAcpKind(params.kind);
-      const title = params.description?.trim()
-        || params.options?.map((o) => o.label).join(" / ")
+      const options = (Array.isArray(params.options) ? params.options : []).filter(o => o && typeof o.optionId === "string" && typeof o.name === "string" && (o.kind === undefined || typeof o.kind === "string"));
+      const kind = mapAcpKind(params.toolCall?.kind ?? params.kind);
+      const title = (typeof params.toolCall?.title === "string" ? params.toolCall.title : "") || (typeof params.description === "string" ? params.description.trim() : "")
+        || options.map((o) => o.name).join(" / ")
         || "ACP permission request";
-      const description = params.description?.trim() || "";
+      const description = typeof params.description === "string" ? params.description.trim() : "";
 
       // Public id the hub round-trips back to decidePermission. The raw ACP
       // id may itself contain ":", so the pending map is keyed by this exact
@@ -286,6 +320,7 @@ export class AcpBridge extends EventEmitter implements Bridge {
           kind,
           title,
           description,
+          expiresAt: Date.now() + 30_000,
         },
       });
 
@@ -301,17 +336,12 @@ export class AcpBridge extends EventEmitter implements Bridge {
       this.pendingAcpPermissions.set(publicRequestId, {
         resolve: (optionId) => {
           clearTimeout(timer);
-          const chosen = options.find((o) => o.id === optionId);
-          this.send({
-            jsonrpc: "2.0",
-            id: requestId,
-            result: {
-              outcome: {
-                outcome: chosen && classifyOption(chosen) === "reject" ? "denied" : "selected",
-                optionId,
-              },
-            },
-          });
+          const chosen = options.find((o) => o.optionId === optionId);
+          const outcome = chosen ? { outcome: "selected", optionId: chosen.optionId } : { outcome: "cancelled" };
+          this.send({ jsonrpc: "2.0", id: requestId, result: { outcome } });
+          this.emit("event", { name: "permission:resolved", payload: {
+            requestId: publicRequestId, outcome: chosen && classifyOption(chosen) === "allow" ? "approved" : "denied",
+          } });
         },
         options,
       });
@@ -341,6 +371,7 @@ export class AcpBridge extends EventEmitter implements Bridge {
   }
 
   private request(method: string, params: unknown): Promise<unknown> {
+    if (this.transportError) return Promise.reject(this.transportError);
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -352,8 +383,20 @@ export class AcpBridge extends EventEmitter implements Bridge {
     this.send({ jsonrpc: "2.0", method, params });
   }
 
+  private failTransport(err: Error): void {
+    if (this.transportError) return;
+    this.transportError = err;
+    for (const pending of this.pending.values()) pending.reject(err);
+    this.pending.clear();
+    // Initialization can fail before the Hub has installed its listener.
+    if (this.listenerCount("error")) this.emit("error", err);
+    this.close();
+  }
+
   private send(msg: JsonRpcMessage): void {
-    if (!this.child.stdin?.writable) return;
-    try { this.child.stdin.write(JSON.stringify(msg) + "\n"); } catch {}
+    if (this.transportError) return;
+    if (!this.child.stdin?.writable) { this.failTransport(new Error("ACP input closed")); return; }
+    try { this.child.stdin.write(JSON.stringify(msg) + "\n"); }
+    catch (err) { this.failTransport(err instanceof Error ? err : new Error(String(err))); }
   }
 }

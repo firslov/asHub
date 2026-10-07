@@ -34,8 +34,14 @@ const refresh = async () => {
   // Invalidate any in-flight fetch even when there is nothing to load, so a
   // stale response from a previous session can't render into the panel.
   const mySeq = ++treeFetchSeq;
-  if (!sid || !body) return;
   treeFetchAbort?.abort();
+  treeFetchAbort = null;
+  if (!body) return;
+  if (!sid) {
+    body.innerHTML = `<div class="p-empty">${escape(t("no.session.title"))}</div>`;
+    return;
+  }
+  body.innerHTML = `<div class="p-empty">${escape(t("loading"))}</div>`;
   const ac = new AbortController();
   treeFetchAbort = ac;
   try {
@@ -51,7 +57,7 @@ const refresh = async () => {
     }
     const data = await res.json();
     if (mySeq !== treeFetchSeq) return;
-    render(data);
+    render(data, sid, mySeq);
   } catch (err) {
     if (err?.name === "AbortError" || mySeq !== treeFetchSeq) return;
     body.innerHTML = `<div class="p-empty">failed: ${escape(String(err))}</div>`;
@@ -68,7 +74,7 @@ const isVisible = (entry) => {
   return entry.role === "user";
 };
 
-const render = ({ leafId, rootId, entries }) => {
+const render = ({ leafId, rootId, entries }, sid, revision) => {
   if (!body) return;
   const byId = new Map((entries ?? []).map((e) => [e.id, e]));
   if (byId.size === 0 || !byId.get(rootId)) {
@@ -153,7 +159,7 @@ const render = ({ leafId, rootId, entries }) => {
 
   body.innerHTML = `<div class="tree-rows">${rows.join("")}</div>`;
   body.querySelectorAll('.tree-row[data-entry-id][data-switchable="1"]').forEach((row) => {
-    row.addEventListener("click", () => confirmFork(row, descendToRawLeaf(row.dataset.entryId)));
+    row.addEventListener("click", () => confirmFork(row, descendToRawLeaf(row.dataset.entryId), sid, revision));
   });
 };
 
@@ -204,11 +210,12 @@ const disarmForkRow = (row) => {
   row.title = t("tree.switch.hint", { id: row.dataset.entryId });
 };
 
-const confirmFork = (row, entryId) => {
+const confirmFork = (row, entryId, sid, revision) => {
+  if (!row.isConnected || sid !== currentSessionId() || revision !== treeFetchSeq) return;
   if (state.isProcessing) { toast(t("tree.busy"), { type: "info" }); return; }
   if (row.classList.contains("confirming")) {
     disarmForkRow(row);
-    fork(entryId);
+    fork(entryId, sid, revision);
     return;
   }
   row.classList.add("confirming");
@@ -218,9 +225,8 @@ const confirmFork = (row, entryId) => {
   row._forkTimer = setTimeout(() => disarmForkRow(row), 3000);
 };
 
-const fork = async (entryId) => {
-  const sid = currentSessionId();
-  if (!sid) return;
+const fork = async (entryId, sid, revision) => {
+  if (!sid || sid !== currentSessionId() || revision !== treeFetchSeq) return;
   if (state.isProcessing) { toast(t("tree.busy"), { type: "info" }); return; }
   try {
     const res = await fetch(`/${sid}/fork`, {
@@ -234,7 +240,7 @@ const fork = async (entryId) => {
       return;
     }
     toast(t("tree.fork.done"), { type: "success" });
-    refresh();
+    if (sid === currentSessionId() && revision === treeFetchSeq) refresh();
   } catch (err) {
     toast(t("tree.fork.failed"), { type: "error", detail: String(err?.message ?? err) });
   }

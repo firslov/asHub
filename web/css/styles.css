@@ -9,13 +9,13 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
+  --ui-chrome-height: var(--ui-title-bar-height, 52px);
   /* Light palette — clean, warm paper tones for comfortable reading.
      Surface ramp: bg (content) → bg2 (panel body) → bg3 (head/hover)
-     → bg4 (pressed). OKLab lightness steps verified even:
-     ΔL 0.033 / 0.031 / 0.031; bg-elevated sits one step above bg. */
-  --bg:           #fafaf8;
-  --bg2:          #f0efe9;
-  --bg3:          #e6e5de;
+     → bg4 (pressed); bg-elevated defines the input and control surface. */
+  --bg:           #fcfcfa;
+  --bg2:          #f3f3ef;
+  --bg3:          #eaeae5;
   --bg4:          #dcdbd3;
   --bg-elevated:  #fdfdfa;
 
@@ -128,8 +128,8 @@
      Keeps the right-side toolbar and every side panel/overlay on one
      shared grid so all windows stay visually consistent.
      (--sidebar-w is dynamic, managed by prefs.js on .app.) */
-  --toolbar-w: 42px;
-  --panel-w:   340px;
+  --toolbar-w: 52px;
+  --panel-w:   380px;
   /* Effective drawer width — shrinks on narrow windows so the shifted
      conversation column always keeps a usable minimum (~380px accounts
      for the collapsed-min sidebar + readable content). The terminal
@@ -171,10 +171,10 @@
 
   /* Font-size scale — shared type ramp for component styles (live.css).
      Map hardcoded font-sizes to these instead of adding new literals. */
-  --fs-xs: 0.68rem;  /* badges, timestamps, micro labels */
-  --fs-sm: 0.75rem;  /* secondary/meta text, sidebar items */
-  --fs-md: 0.82rem;  /* default UI body text */
-  --fs-lg: 0.9rem;   /* emphasized UI text, panel titles */
+  --fs-xs: 0.72rem;  /* badges, timestamps, micro labels */
+  --fs-sm: 0.8rem;  /* secondary/meta text, sidebar items */
+  --fs-md: 0.875rem;  /* default UI body text */
+  --fs-lg: 0.9375rem;   /* emphasized UI text, panel titles */
   --fs-xl: 1rem;     /* section headings, primary reading size */
   --fs-2xl: 1.25rem; /* page-level headings, empty-state titles */
   --fs-3xl: 2rem;    /* hero/display text */
@@ -207,24 +207,23 @@
 
 /* ── Dark theme ──────────────────────────────────────────────────── */
 [data-theme="dark"] {
-  /* Surface ramp — OKLab lightness steps verified even at low luminance:
-     ΔL 0.035 / 0.039 / 0.036 (bg→bg2→bg3→bg4). */
-  --bg:           #17171b;
-  --bg2:          #1f1f24;
-  --bg3:          #282830;
-  --bg4:          #313139;
-  --bg-elevated:  #2a2a32;
+  /* Charcoal surfaces with a muted champagne accent for focused work. */
+  --bg:           #181a19;
+  --bg2:          #202321;
+  --bg3:          #292d2a;
+  --bg4:          #333834;
+  --bg-elevated:  #2c302d;
 
-  --accent:        #e8c850;
-  --accent-rgb:    232, 200, 80;
-  --accent-dim:    #c9a84e;
-  --accent-light:  #f0d070;
+  --accent:        #d6bd86;
+  --accent-rgb:    214, 189, 134;
+  --accent-dim:    #d6bd86;
+  --accent-light:  #e4cea3;
   /* hover sits between accent and dim (was identical to dim) */
-  --accent-hover:  #d4b44a;
+  --accent-hover:  #e4cea3;
   /* Alpha ladder slightly reined in (was 0.15/0.22/0.35): still a notch
      above light's 0.10/0.16/0.32 so tints read equally on dark surfaces. */
-  --accent-glow:   rgba(var(--accent-rgb), 0.13);
-  --accent-soft:   rgba(var(--accent-rgb), 0.20);
+  --accent-glow:   rgba(var(--accent-rgb), 0.06);
+  --accent-soft:   rgba(var(--accent-rgb), 0.10);
   --accent-border: rgba(var(--accent-rgb), 0.33);
 
   --cyan:         #58c8d4;
@@ -250,13 +249,11 @@
   --warning-rgb:  224, 138, 74;
   --on-accent:    #1a1a1e;
 
-  /* Text hierarchy — WCAG contrast vs bg / bg2 (targets: text ≥12,
-     dim ≥7, mid ≥4.5, faint ≥3):
-     text 14.6/13.4 · dim 7.7/7.1 · mid 4.9/4.5 · faint 3.3/3.0 */
-  --text:         #e8e8ec;
-  --text-dim:     #a9a9b5;
-  --text-mid:     #868692;
-  --text-faint:   #6a6a76;
+  /* Text hierarchy: prose, secondary labels, controls and metadata. */
+  --text:         #ecefe8;
+  --text-dim:     #bac1b7;
+  --text-mid:     #a1a99e;
+  --text-faint:   #91998f;
   --text-muted:   #9696a2;
   --fg:           #e8e8ec;
 
@@ -627,3 +624,5 @@ nav {
 [data-platform="win32"] #session-tabs button {
   -webkit-app-region: no-drag;
 }
+
+[data-platform="win32"] { --ui-chrome-height: calc(var(--ui-title-bar-height, 52px) + 32px); }

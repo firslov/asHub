@@ -742,3 +742,23 @@
   .sidebar-filter { margin-left: var(--space-2); margin-right: var(--space-2); }
   .sidebar-action { padding-left: var(--space-2); padding-right: var(--space-2); }
 }
+
+/* Navigation has its own quiet surface; labels make every destination explicit. */
+.sidebar { background: var(--bg2); }
+.sidebar-head { height: auto; padding: 14px 12px 0; border: 0; }
+.sidebar-head .p-seg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; height: auto; padding: 3px; border-radius: 10px; }
+.sidebar-head .p-seg-item { height: 36px; justify-content: flex-start; gap: 7px; padding: 0 8px; font-size: 0.75rem; letter-spacing: 0; border-radius: 7px; min-width: 0; }
+.sidebar-head .p-seg-item svg { flex-shrink: 0; }
+.sidebar-head .p-seg-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-head .p-seg-item.active { color: var(--text); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
+.sidebar-action { padding: 18px 14px 0; }
+.sidebar-new-btn { height: 38px; border: 1px solid var(--border-mid); background: var(--bg-elevated); border-radius: 9px; font-size: var(--fs-md); font-weight: 500; color: var(--text); }
+.sidebar-filter { height: 36px; margin: 10px 14px 16px; padding: 0 10px; background: transparent; border-color: var(--border); border-radius: 8px; font-size: var(--fs-sm); }
+.session-list, .workspace-list, .terminal-list, .archive-list { padding: 0 8px 16px; }
+.session-list li, .terminal-list li, .workspace-children li, .archive-list li { border-radius: 8px; margin-bottom: 4px; }
+.session-list li.current, .terminal-list li.current, .workspace-children li.current,
+.session-list li.current:hover, .terminal-list li.current:hover, .workspace-children li.current:hover { background: var(--accent-glow); }
+.session-list li a { padding-top: 11px; padding-bottom: 11px; }
+.session-list li.current a { color: var(--text); }
+.sidebar-new-btn span { display: inline; }
+.session-list li:focus-within .session-actions { opacity: 1; pointer-events: auto; }

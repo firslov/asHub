@@ -45,29 +45,15 @@ export const sweepOrphanThinking = (session) => {
   }
 };
 
-// max-height needs an explicit pixel value to transition from/to 0.
+// Keep open content naturally sized even if a parent is hidden during a toggle.
 const setThinkingCollapsed = (block, collapsed) => {
   const body = block.querySelector(".thinking-block-body");
   if (!body) return;
   const isCollapsed = block.classList.contains("collapsed");
   if (collapsed === isCollapsed) return;
-  if (collapsed) {
-    body.style.maxHeight = body.scrollHeight + "px";
-    body.offsetHeight;
-    block.classList.add("collapsed");
-    body.style.maxHeight = "0";
-  } else {
-    body.style.maxHeight = "0";
-    block.classList.remove("collapsed");
-    body.offsetHeight;
-    body.style.maxHeight = body.scrollHeight + "px";
-    const onEnd = (ev) => {
-      if (ev.propertyName !== "max-height") return;
-      body.style.maxHeight = "";
-      body.removeEventListener("transitionend", onEnd);
-    };
-    body.addEventListener("transitionend", onEnd);
-  }
+  block.querySelector(".thinking-block-head")?.setAttribute("aria-expanded", String(!collapsed));
+  body.inert = collapsed;
+  block.classList.toggle("collapsed", collapsed);
 };
 
 // ── Thinking batching ─────────────────────────────────────────────
@@ -76,6 +62,15 @@ const setThinkingCollapsed = (block, collapsed) => {
 // thrashing and block the event loop. Batch chunks per animation frame.
 
 const _thinkingBuf = new WeakMap();  // session -> pending text
+
+// A view reset discards transient chunks; finalizing would render them into
+// the fresh replay. Also cancel the scheduled frame before reusing the view.
+export const discardPendingThinking = (session) => {
+  if (!session) return;
+  _thinkingBuf.delete(session);
+  if (session._thinkingRaf != null) cancelAnimationFrame(session._thinkingRaf);
+  session._thinkingRaf = null;
+};
 
 const flushThinkingBuf = (session) => {
   const text = _thinkingBuf.get(session);
@@ -89,9 +84,11 @@ const flushThinkingBuf = (session) => {
     const block = document.createElement("div");
     block.className = "thinking-block";
     session.thinking.block = block;
-    const head = document.createElement("div");
+    const head = document.createElement("button");
+    head.type = "button";
     head.className = "thinking-block-head";
-    head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t("thinking")}</span>`;
+    head.setAttribute("aria-expanded", "true");
+    head.innerHTML = `<span class="thinking-label">${t("thinking")}</span>`;
     head.addEventListener("click", () => {
       setThinkingCollapsed(block, !block.classList.contains("collapsed"));
     });
@@ -156,7 +153,7 @@ export const finalizeThinking = (session) => {
       // Keep a one-line preview in the collapsed head so folded thinking
       // blocks stay informative instead of reading as empty "thought".
       const preview = inner.textContent.trim().replace(/\s+/g, " ").slice(0, 100);
-      head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t("thought")}</span>` +
+      head.innerHTML = `<span class="thinking-label">${t("thought")}</span>` +
         (preview ? `<span class="thinking-preview">${escape(preview)}</span>` : "");
     }
     setThinkingCollapsed(block, true);
@@ -176,6 +173,6 @@ document.addEventListener("langchange", () => {
       const preview = block?.querySelector(".thinking-block-inner")?.textContent?.trim().replace(/\s+/g, " ").slice(0, 100) ?? "";
       if (preview) previewHtml = `<span class="thinking-preview">${escape(preview)}</span>`;
     }
-    head.innerHTML = `<span class="thinking-icon">💭</span><span class="thinking-label">${t(isCollapsed ? "thought" : "thinking")}</span>${previewHtml}`;
+    head.innerHTML = `<span class="thinking-label">${t(isCollapsed ? "thought" : "thinking")}</span>${previewHtml}`;
   });
 });

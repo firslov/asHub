@@ -8,6 +8,26 @@ import { t } from "../i18n.js";
  * Called from sse.js after agent:processing-done.
  */
 
+// Recompute from rows, including completions arriving after compaction.
+export function refreshReasoningFailures(phase) {
+  if (!phase) return;
+  const head = phase.querySelector(".reasoning-phase-head");
+  if (!head) return;
+  const failures = phase.querySelectorAll(".tool-row.err").length;
+  phase.dataset.failedTools = String(failures);
+  let status = head.querySelector(".activity-error");
+  if (!failures) {
+    status?.remove();
+    return;
+  }
+  if (!status) {
+    status = document.createElement("span");
+    status.className = "activity-error";
+    head.appendChild(status);
+  }
+  status.textContent = `✗ ${failures} ${t("error")}`;
+}
+
 export function compactReasoning(stream) {
   const children = Array.from(stream.children);
 
@@ -81,9 +101,10 @@ export function compactReasoning(stream) {
     const head = document.createElement("button");
     head.type = "button";
     head.className = "reasoning-phase-head";
+    head.setAttribute("aria-expanded", "false");
     head.innerHTML =
       `<span class="rp-arrow">▸</span>` +
-      `<span class="rp-text">💭 ${t("n.reasoning.rounds", { n: rounds })} · ${t("n.tools.compact", { n: totalTools })}</span>`;
+      `<span class="rp-text">${t("n.reasoning.rounds", { n: rounds })} · ${t("n.tools.compact", { n: totalTools })}</span>`;
     phase.appendChild(head);
 
     const body = document.createElement("div");
@@ -96,24 +117,15 @@ export function compactReasoning(stream) {
 
     // Move all run elements into the body (preserves event listeners)
     for (const el of run.elems) body.appendChild(el);
+    refreshReasoningFailures(phase);
 
     head.addEventListener("click", () => {
       const expanding = body.hidden;
+      head.setAttribute("aria-expanded", String(expanding));
       body.hidden = !body.hidden;
       phase.classList.toggle("open", expanding);
-      if (expanding) {
-        // Measure full content height, then animate in next frame.
-        // Avoids synchronous offsetHeight that forces layout thrashing.
-        const prev = body.style.maxHeight;
-        body.style.maxHeight = "none";
-        const fullHeight = body.scrollHeight;
-        body.style.maxHeight = prev;
-        requestAnimationFrame(() => {
-          body.style.maxHeight = `${fullHeight}px`;
-        });
-      } else {
-        body.style.maxHeight = "";
-      }
+      // Keep natural height while open: nested disclosures, long output and
+      // viewport changes can all resize this body after the initial click.
       const arrow = head.querySelector(".rp-arrow");
       if (arrow) arrow.textContent = body.hidden ? "▸" : "▾";
     });
@@ -132,8 +144,9 @@ document.addEventListener("langchange", () => {
     const head = phase.querySelector(".reasoning-phase-head");
     if (!head) return;
     const text = head.querySelector(".rp-text");
+    refreshReasoningFailures(phase);
     const pairs = parseInt(phase.dataset.pairs) || 0;
     const totalTools = parseInt(phase.dataset.totalTools) || 0;
-    if (text) text.textContent = `💭 ${t("n.reasoning.rounds", { n: pairs })} · ${t("n.tools.compact", { n: totalTools })}`;
+    if (text) text.textContent = `${t("n.reasoning.rounds", { n: pairs })} · ${t("n.tools.compact", { n: totalTools })}`;
   });
 });

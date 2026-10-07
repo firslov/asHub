@@ -1,5 +1,6 @@
 import { signal, computed, effect } from "../vendor/signals-core.js";
 import { activeSessionId, openTabs } from "./store.js";
+import { toast } from "./toast.js";
 
 export { activeSessionId, openTabs } from "./store.js";
 
@@ -22,35 +23,41 @@ export const openTab = (id) => {
   switchTo(id);
 };
 
-export const closeTab = (id) => {
-  if (!id) return;
-  // Let the tab strip cancel an in-progress rename of this tab before the
-  // editingId guard blocks its next render.
-  document.dispatchEvent(new CustomEvent("ash:tab-closing", { detail: { id } }));
+const closingTerminals = new Set();
+export const closeTab = async (id, { transfer = false, backendClosed = false } = {}) => {
+  if (!id || !openTabs.peek().includes(id) || closingTerminals.has(id)) return;
+  const kind = sessionKinds.get(id);
+  if (!transfer && !backendClosed && (kind === "terminal" || kind === "ash-terminal")) {
+    closingTerminals.add(id);
+    try {
+      const response = await fetch(`/${id}/`, { method: "DELETE" });
+      if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+      sessionKinds.delete(id);
+    } catch (err) {
+      toast(String(err?.message ?? err), { type: "error" });
+      return;
+    } finally { closingTerminals.delete(id); }
+  }
+  if (backendClosed) sessionKinds.delete(id);
   // Dedup openTabs in case duplicates crept in (signals batching edge case).
   const seen = new Set();
   const list = openTabs.value.filter((x) => (seen.has(x) ? false : seen.add(x)));
   if (list.length !== openTabs.peek().length) openTabs.value = list;
   const idx = list.indexOf(id);
   if (idx < 0) return;
+  // Cancel a pending rename only once this close is confirmed.
+  document.dispatchEvent(new CustomEvent("ash:tab-closing", { detail: { id } }));
   const next = list.filter((x) => x !== id);
   openTabs.value = next;
   if (activeSessionId.peek() === id) {
     const neighbor = next[idx] ?? next[idx - 1] ?? next[0] ?? "";
     if (neighbor) switchTo(neighbor);
-    else activeSessionId.value = "";
+    else {
+      history.replaceState({ sessionId: "" }, "", "/");
+      activeSessionId.value = "";
+    }
   }
-  // Terminals: DELETE the backend first so PTY resources are freed
-  // even if the DOM removal triggers a navigation away.
-  const kind = sessionKinds.get(id);
-  if (kind === "terminal" || kind === "ash-terminal") {
-    sessionKinds.delete(id);
-    fetch(`/${id}/`, { method: "DELETE" })
-      .catch(() => {})
-      .finally(() => sessions.get(id)?.remove());
-  } else {
-    sessions.get(id)?.remove();
-  }
+  sessions.get(id)?.remove();
 };
 
 export const registerSession = (view) => {
@@ -132,13 +139,20 @@ let es = null;
 let reopenScheduled = false;
 let paused = false;
 let lastSeenId = 0;
+const terminalCursors = new Map();
+let retryTimer = null;
+const isTerminal = id => ["terminal", "ash-terminal"].includes(sessionKinds.get(id));
 let retryCount = 0;
 const MAX_RETRIES = 10;
 
-const TAIL = { fresh: "all", ready: "0", resync: "100" };
+// Chunks are transient: a reconnect must rebuild from the complete persisted segments.
+const TAIL = { fresh: "all", ready: "all", resync: "all" };
 const buildSubsParam = () => {
   const parts = [];
-  for (const [id, status] of subState) parts.push(`${id}:${TAIL[status]}`);
+  for (const [id, status] of subState) {
+    const incremental = isTerminal(id) && status === "ready";
+    parts.push(incremental ? `${id}:0:${terminalCursors.get(id) ?? 0}` : `${id}:${TAIL[status]}`);
+  }
   return parts.join(",");
 };
 
@@ -146,6 +160,7 @@ const CONNECT_TIMEOUT_MS = 15_000;
 
 const reopen = () => {
   reopenScheduled = false;
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (paused) return; // pauseSSE() must not be undone by a queued reopen
   es?.close();
   es = null;
@@ -173,10 +188,11 @@ const reopen = () => {
     }
   }, CONNECT_TIMEOUT_MS);
   next.onopen = () => {
+    if (es !== next) return;
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
     globalConnState.value = "connected";
     retryCount = 0;
-    for (const id of subState.keys()) subState.set(id, "ready");
+    // A fresh terminal becomes ready only after its full replay completes.
   };
   next.onerror = () => {
     if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
@@ -193,14 +209,23 @@ const reopen = () => {
       es = null;
     } else {
       globalConnState.value = "reconnecting";
+      next.close();
+      es = null;
+      retryTimer = setTimeout(() => { retryTimer = null; scheduleReopen(); }, Math.min(1000 * 2 ** (retryCount - 1), 15000));
     }
   };
   next.onmessage = (ev) => {
+    if (es !== next) return;
     const id = Number(ev.lastEventId);
     if (id > lastSeenId) lastSeenId = id;
     let frame;
     try { frame = JSON.parse(ev.data); } catch { return; }
     const source = frame?.meta?.source;
+    if (frame?.meta?.name === "hub:replay-done" && subState.has(source)) subState.set(source, "ready");
+    if (isTerminal(source) && frame?.meta?.name === "shell:pty-data") {
+      if (subState.get(source) === "ready" && id <= (terminalCursors.get(source) ?? 0)) return;
+      terminalCursors.set(source, id);
+    }
     let target = sessions.get(source);
     if (!target && source) {
       // Preloaded view elements may exist in the DOM before registerSession runs.
@@ -232,6 +257,7 @@ export const subscribeSession = (id) => {
 };
 
 export const unsubscribeSession = (id) => {
+  terminalCursors.delete(id);
   if (subState.delete(id)) scheduleReopen();
 };
 
@@ -243,6 +269,7 @@ export const resyncSession = (id) => {
 
 export const pauseSSE = () => {
   paused = true;
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   reopenScheduled = false; // cancel a queued reopen so it can't fire mid-pause
   es?.close();
   es = null;
@@ -287,6 +314,7 @@ window.addEventListener("popstate", (ev) => {
   const id = ev.state?.sessionId
     ?? (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1];
   if (id) switchTo(id, { push: false });
+  else activeSessionId.value = "";
 });
 
 // Auto-tab the active session. peek() so removing a tab doesn't resurrect it.

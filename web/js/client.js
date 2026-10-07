@@ -58,6 +58,11 @@ import "./terminal-view.js";
 import "./lifecycle.js";
 
 document.addEventListener("keydown", (ev) => {
+  if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && ev.key === "\\") {
+    ev.preventDefault();
+    document.getElementById("ctx-toggle")?.click();
+    return;
+  }
   if (ev.key === "Escape") {
     // Panel ESC is handled by panel-manager.js
     // Don't cancel a running turn while the user is editing some other

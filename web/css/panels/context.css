@@ -4,7 +4,7 @@
    message-list anatomy. Tokens come from styles.css — no new colors. */
 
 /* ── Shell offsets that used to live in live.css (.ctx-panel rules) ── */
-.os-win32 #ctx-panel { top: 78px; }
+.os-win32 #ctx-panel { top: calc(var(--ui-chrome-height) + 10px); }
 /* UI chrome stays sans in academic (mirrors skills/config/prompt). */
 [data-theme="academic"] #ctx-panel { font-family: var(--font-sans); }
 
@@ -189,3 +189,14 @@
 }
 .ctx-chevron:hover { color: var(--accent); }
 .ctx-chevron[hidden] { display: none; }
+
+.ctx-toolbar { padding: 14px 16px; gap: 12px; }
+.ctx-toolbar .p-seg-item { height: 30px; }
+.ctx-msg { padding: 12px; border: 1px solid transparent; border-radius: 10px; }
+.ctx-msg.selected { border-color: var(--accent-border); background: var(--accent-glow); }
+.ctx-msg-head { margin-bottom: 6px; }
+.ctx-chevron { min-height: 28px; font-family: var(--font-sans); }
+.ctx-role { letter-spacing: 0; text-transform: none; }
+.ctx-msg.paired::before { left: 19px; }
+.ctx-msg.paired.pair-start::before { top: 30px; }
+.ctx-msg.paired.pair-end::before { bottom: calc(100% - 20px); }

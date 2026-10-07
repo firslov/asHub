@@ -1,17 +1,16 @@
 import { escape } from "./utils.js";
 import { currentSessionId, state } from "./state.js";
 import { activeSession } from "./session-manager.js";
-import { setComposerText } from "./composer.js";
+import { setComposerTextForSession } from "./composer.js";
 import { t } from "./i18n.js";
 import { toast } from "./toast.js";
 
-const rewindToTurn = async ({ turn, entryId }) => {
-  const res = await fetch(`/${currentSessionId()}/context/rewind-to-turn`, {
+const rewindToTurn = async ({ sid, turn, entryId }) => {
+  if (!entryId) throw new Error(t("rewind.refresh.required"));
+  const res = await fetch(`/${sid}/context/rewind-to-turn`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // Prefer the stable tree entry id; the legacy turn number is only a
-    // fallback for frames rendered before entryId tagging existed.
-    body: JSON.stringify(entryId ? { entryId } : { turn }),
+    body: JSON.stringify({ entryId }),
   });
   if (!res.ok) {
     const msg = await res.text();
@@ -23,24 +22,26 @@ const rewindToTurn = async ({ turn, entryId }) => {
 // Guard against double-clicks: one rewind per session at a time.  A queued
 // second request would be interpreted against the ALREADY-rewound state
 // (stale turn numbers), which looked like "rewind jumped to a fork point".
-let rewindInFlightFor = null;
+const rewindInFlightFor = new Set();
 
 const rewindFromBox = async (box) => {
-  if (state.isProcessing) return;
+  if (state.isProcessing || state.readOnlyContext) return;
   const sid = currentSessionId();
-  if (rewindInFlightFor === sid) return;
+  if (rewindInFlightFor.has(sid)) return;
+  const origin = activeSession.peek();
   const entryId = box.dataset.entryId || null;
   const turn = Number(box.dataset.turn);
   if (!entryId && (!Number.isInteger(turn) || turn < 0)) return;
   let data;
-  rewindInFlightFor = sid;
+  rewindInFlightFor.add(sid);
   try {
-    data = await rewindToTurn({ turn, entryId });
+    data = await rewindToTurn({ sid, turn, entryId });
   } catch (e) {
     toast(t("rewind.action.failed", { msg: e.message ?? e }), { type: "error" });
+    if (!entryId && origin?.isConnected !== false) origin?.resync({ force: true });
     return;
   } finally {
-    rewindInFlightFor = null;
+    rewindInFlightFor.delete(sid);
   }
   // stats === null means the context was already at this point — nothing moved
   if (!data || data.stats == null) {
@@ -48,9 +49,9 @@ const rewindFromBox = async (box) => {
     return;
   }
   toast(t("rewind.done"), { type: "success" });
-  document.dispatchEvent(new CustomEvent("ash:branch-switched"));
-  setComposerText(box._queryText ?? "");
-  activeSession.peek()?.resync({ force: true });
+  if (activeSession.peek()?.id === sid) document.dispatchEvent(new CustomEvent("ash:branch-switched"));
+  setComposerTextForSession(sid, box._queryText ?? "");
+  if (origin?.isConnected !== false) origin?.resync({ force: true });
 };
 
 export const createUserBox = (queryText, images, ts, turn) => {

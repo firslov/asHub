@@ -1,6 +1,6 @@
 import { t } from "./i18n.js";
 import { toast } from "./toast.js";
-import { invalidateModelCache, setModelCache } from "./sse.js";
+import { invalidateModelCache, setModelCache, getModelCacheGeneration } from "./sse.js";
 
 const configOverlay = document.getElementById("config-overlay");
 const configToggle = document.getElementById("config-toggle");
@@ -28,13 +28,44 @@ const configInvalid = document.getElementById("config-invalid");
 
 const configModeTabs = document.getElementById("config-mode-tabs");
 
+let panelProviderCatalog = null;
 let configMode = "simple";
 let originalConfig = "";
 let serverConfig = "";
 let originalApiKey = "";
+let simpleProviderId = "";
+let configLoadGeneration = 0;
+let configReady = false;
+let configSaving = false;
+let configSaveOwner = -1;
+const configLoadState = document.getElementById("config-load-state");
+const configLoadMessage = document.getElementById("config-load-message");
+const configLoadRetry = document.getElementById("config-load-retry");
+
+const setConfigReady = (ready) => {
+  configReady = ready;
+  // Leave the close button available while loading or recovering from failure.
+  const editingLocked = !ready || (configSaving && configSaveOwner === configLoadGeneration);
+  configBodySimple.inert = editingLocked || !panelProviderCatalog;
+  configBodyAdvanced.inert = editingLocked;
+  configModeTabs.inert = editingLocked;
+  configSave.disabled = !ready || configSaving;
+  configSaveSimple.disabled = !ready || configSaving || !panelProviderCatalog || !configProvider.value;
+  configModeTabs.querySelectorAll(".p-seg-item").forEach(tab => { tab.disabled = tab.dataset.mode === "simple" && !panelProviderCatalog; });
+  configReset.disabled = editingLocked;
+};
 
 let providerCatalog = null;
 let providerCatalogPromise = null;
+let providerCatalogGeneration = 0;
+
+const invalidateProviderCatalog = () => {
+  providerCatalogGeneration++;
+  providerCatalog = null;
+  providerCatalogPromise = null;
+  configModelRefresh?.classList.remove("loading");
+};
+document.addEventListener("ash:models-changed", invalidateProviderCatalog);
 
 const PROVIDER_LABELS = {
   deepseek: "DeepSeek",
@@ -46,7 +77,7 @@ const PROVIDER_LABELS = {
 export const providerLabel = (id) => PROVIDER_LABELS[id] ?? id;
 
 const providerEntry = (id) =>
-  providerCatalog?.providers?.find((p) => p.name === id) ?? null;
+  (panelProviderCatalog ?? providerCatalog)?.providers?.find((p) => p.name === id) ?? null;
 
 const providerDescription = (id) => {
   const key = `provider.desc.${id}`;
@@ -57,51 +88,68 @@ const providerDescription = (id) => {
 };
 
 export const loadProviderCatalog = async ({ force = false } = {}) => {
-  if (providerCatalog && !force) return providerCatalog;
-  if (providerCatalogPromise && !force) return providerCatalogPromise;
+  if (force) invalidateProviderCatalog();
+  if (providerCatalog) return providerCatalog;
+  if (providerCatalogPromise) return providerCatalogPromise;
 
+  const generation = providerCatalogGeneration;
   configModelRefresh?.classList.add("loading");
-  providerCatalogPromise = (async () => {
+  const pending = (async () => {
     try {
       const r = await fetch("/api/models");
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      providerCatalog = await r.json();
+      const data = await r.json();
+      if (generation !== providerCatalogGeneration) return loadProviderCatalog();
+      if (!Array.isArray(data?.providers) || !data.providers.every(p =>
+        typeof p?.name === "string" && Array.isArray(p.models) &&
+        p.models.every(m => typeof m?.id === "string"))) {
+        throw new Error("Invalid provider catalog");
+      }
+      providerCatalog = data;
       return providerCatalog;
     } catch (err) {
+      if (generation !== providerCatalogGeneration) return loadProviderCatalog();
       console.error("[providers] catalog fetch failed:", err);
       if (configModelHint) configModelHint.textContent = t("model.load.failed");
       return null;
-    } finally {
+    }
+  })().finally(() => {
+    if (providerCatalogPromise === pending) {
       configModelRefresh?.classList.remove("loading");
       providerCatalogPromise = null;
     }
-  })();
-  return providerCatalogPromise;
+  });
+  providerCatalogPromise = pending;
+  return pending;
 };
 
 const populateProviderSelect = () => {
-  if (!configProvider || !providerCatalog) return;
-  const ids = (providerCatalog.providers ?? []).map((p) => p.name);
+  if (!configProvider || !panelProviderCatalog) return;
+  const ids = (panelProviderCatalog.providers ?? []).map((p) => p.name);
   const current = configProvider.value;
-  configProvider.innerHTML = ids
-    .map((id) => `<option value="${id}">${providerLabel(id)}</option>`)
-    .join("");
-  if (current && ids.includes(current)) configProvider.value = current;
+  configProvider.replaceChildren(...ids.map(id => {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = providerLabel(id);
+    return option;
+  }));
+  configProvider.value = current && ids.includes(current) ? current : ids[0] ?? "";
 };
 
 const renderModelDatalist = (providerId) => {
   if (!configModelList) return;
   const entry = providerEntry(providerId);
   const models = entry?.models ?? [];
-  configModelList.innerHTML = models
-    .map((m) => `<option value="${m.id}"></option>`)
-    .join("");
+  configModelList.replaceChildren(...models.map(m => {
+    const option = document.createElement("option");
+    option.value = m.id;
+    return option;
+  }));
 };
 
-const buildConfig = () => {
-  const providerId = configProvider.value;
+const buildConfig = (providerId = configProvider.value) => {
   const apiKey = configApikey.value.trim();
-  if (!providerEntry(providerId)) return null;
+  if (!providerId) return null;
 
   let existing = {};
   try { existing = JSON.parse(originalConfig || "{}"); } catch {}
@@ -116,10 +164,8 @@ const buildConfig = () => {
 
   const providerCfg = { ...prev };
   delete providerCfg.apiKey;
-  // Models are managed by provider backends dynamically — remove
-  // any stale explicit model lists from previous config versions.
-  delete providerCfg.models;
-  delete providerCfg.defaultModel;
+  // Model definitions may belong to a custom provider. The simple editor
+  // only edits credentials; preserve model ids, defaults and capabilities.
 
   if (apiKey) {
     providerCfg.apiKey = apiKey;
@@ -150,7 +196,7 @@ const buildConfig = () => {
 };
 
 const parseConfigToSimple = (config) => {
-  const known = (providerCatalog?.providers ?? []).reduce((acc, p) => {
+  const known = (panelProviderCatalog?.providers ?? []).reduce((acc, p) => {
     acc[p.name] = p;
     return acc;
   }, {});
@@ -160,6 +206,8 @@ const parseConfigToSimple = (config) => {
   if (!config || typeof config !== "object" || Object.keys(config).length === 0) {
     configProvider.value = fallback;
     configApikey.value = "";
+    simpleProviderId = configProvider.value;
+    originalApiKey = "";
     return;
   }
 
@@ -188,6 +236,8 @@ const parseConfigToSimple = (config) => {
   }
 
   configApikey.value = detectedApiKey;
+  simpleProviderId = configProvider.value;
+  originalApiKey = storedApiKey(simpleProviderId);
 };
 
 const updateProviderDesc = () => {
@@ -204,7 +254,8 @@ const updateModelField = () => {
 const validateJson = () => {
   const val = configEditor.value;
   try {
-    JSON.parse(val);
+    const parsed = JSON.parse(val);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected settings object");
     configValid.hidden = false;
     configInvalid.hidden = true;
     configEditor.classList.remove("config-error");
@@ -218,6 +269,14 @@ const validateJson = () => {
 };
 
 const switchConfigMode = (mode) => {
+  if (mode === "simple" && !panelProviderCatalog) mode = "advanced";
+  // An incomplete advanced draft cannot be represented by the simple form.
+  // Keep it visible until corrected; initial/retry loads already supply a valid object.
+  if (configReady && configMode === "advanced" && mode === "simple" && !validateJson()) {
+    configEditor.focus();
+    return;
+  }
+  resetApiKeyReveal();
   configMode = mode;
 
   configModeTabs.querySelectorAll(".p-seg-item").forEach((tab) => {
@@ -241,16 +300,11 @@ const switchConfigMode = (mode) => {
     }
     updateProviderDesc();
     updateModelField();
+    setConfigReady(configReady);
   } else {
     configBodySimple.setAttribute("hidden", "");
     configBodyAdvanced.removeAttribute("hidden");
-    try {
-      const edited = JSON.parse(configEditor.value);
-      if (edited && typeof edited === "object" && !Array.isArray(edited)) {
-        originalConfig = JSON.stringify(edited, null, 2);
-      }
-    } catch {}
-    const config = buildConfig();
+    const config = panelProviderCatalog ? buildConfig() : null;
     configEditor.value = config
       ? JSON.stringify(config, null, 2)
       : originalConfig || "{}";
@@ -260,21 +314,24 @@ const switchConfigMode = (mode) => {
 };
 
 let apiKeyVisible = false;
+let apiKeyRequest = 0;
+configApikey?.addEventListener("input", () => { apiKeyRequest++; });
 let _maskedApiKey = "";
 let _revealedApiKey = "";
 configApikeyToggle?.addEventListener("click", async () => {
+  const request = ++apiKeyRequest;
   apiKeyVisible = !apiKeyVisible;
   if (apiKeyVisible) {
     // GET /api/config masks API keys by design — fetch the real value on
     // demand so the "show" button actually reveals it.
     _maskedApiKey = configApikey.value;
     const providerId = configProvider.value;
-    if (providerId) {
+    if (providerId && originalApiKey && configApikey.value === originalApiKey) {
       try {
         const r = await fetch(`/api/config/apikey?provider=${encodeURIComponent(providerId)}`);
         if (r.ok) {
           const data = await r.json();
-          if (typeof data.apiKey === "string" && data.apiKey && apiKeyVisible) {
+          if (typeof data.apiKey === "string" && data.apiKey && apiKeyVisible && request === apiKeyRequest && configProvider.value === providerId) {
             _revealedApiKey = data.apiKey;
             configApikey.value = data.apiKey;
           }
@@ -289,63 +346,88 @@ configApikeyToggle?.addEventListener("click", async () => {
     }
     _revealedApiKey = "";
   }
+  if (request !== apiKeyRequest) return;
   configApikey.type = apiKeyVisible ? "text" : "password";
   configApikeyToggle.classList.toggle("showing", apiKeyVisible);
 });
 
-configProvider?.addEventListener("change", () => {
-  updateProviderDesc();
-  updateModelField();
-  // Reset reveal state — the masked placeholder for the new provider must
-  // not stay in "text" input mode.
+// Only server placeholders may be revealed. Draft values must never trigger
+// a read that could restore an older credential over an edit or deletion.
+const storedApiKey = (id) => {
+  try {
+    const key = JSON.parse(serverConfig || "{}").providers?.[id]?.apiKey;
+    return typeof key === "string" ? key : "";
+  } catch { return ""; }
+};
+const resetApiKeyReveal = () => {
+  ++apiKeyRequest;
   apiKeyVisible = false;
+  if (_revealedApiKey && configApikey.value === _revealedApiKey) configApikey.value = _maskedApiKey;
   _maskedApiKey = "";
   _revealedApiKey = "";
   configApikey.type = "password";
   configApikeyToggle?.classList.remove("showing");
-  try {
-    const cfg = JSON.parse(originalConfig || serverConfig || "{}");
-    if (cfg.providers && cfg.providers[configProvider.value]) {
-      const pk = cfg.providers[configProvider.value].apiKey;
-      const key = typeof pk === "string" ? pk : "";
-      configApikey.value = key;
-      originalApiKey = key;
-    } else {
-      configApikey.value = "";
-      originalApiKey = "";
-    }
-  } catch {
-    configApikey.value = "";
-    originalApiKey = "";
-  }
+};
+
+configProvider?.addEventListener("change", () => {
+  resetApiKeyReveal();
+  // The select has already changed, but the input still belongs to the
+  // previous provider. Merge it into the draft before showing the next one.
+  const draft = buildConfig(simpleProviderId);
+  if (draft) originalConfig = JSON.stringify(draft, null, 2);
+  simpleProviderId = configProvider.value;
+  const cfg = JSON.parse(originalConfig || "{}");
+  const key = cfg.providers?.[simpleProviderId]?.apiKey;
+  configApikey.value = typeof key === "string" ? key : "";
+  originalApiKey = storedApiKey(simpleProviderId);
+  updateProviderDesc();
+  updateModelField();
+  setConfigReady(configReady);
 });
 
 export const setConfigOpen = async (on) => {
+  const generation = ++configLoadGeneration;
+  setConfigReady(false);
+  resetApiKeyReveal();
   if (on) {
+    panelProviderCatalog = null;
     configOverlay.removeAttribute("hidden");
     configToggle?.classList.add("active");
 
-    await loadProviderCatalog();
+    configLoadState.hidden = false;
+    configLoadMessage.textContent = t("loading");
+    configLoadRetry.hidden = true;
+    const catalog = await loadProviderCatalog();
+    if (generation !== configLoadGeneration) return;
+    panelProviderCatalog = catalog;
     populateProviderSelect();
 
-    let rawConfig = {};
+    let rawConfig;
     try {
       const r = await fetch("/api/config");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       rawConfig = await r.json();
-    } catch {}
+      if (!rawConfig || typeof rawConfig !== "object" || Array.isArray(rawConfig)) {
+        throw new Error("Invalid configuration");
+      }
+    } catch {
+      if (generation !== configLoadGeneration) return;
+      configLoadMessage.textContent = t("config.load.failed");
+      configLoadRetry.hidden = false;
+      return;
+    }
+    if (generation !== configLoadGeneration) return;
     originalConfig = JSON.stringify(rawConfig, null, 2);
     serverConfig = originalConfig;
     configEditor.value = originalConfig;
 
-    originalApiKey = "";
-    if (rawConfig.providers && rawConfig.defaultProvider && rawConfig.providers[rawConfig.defaultProvider]) {
-      const pk = rawConfig.providers[rawConfig.defaultProvider].apiKey;
-      if (typeof pk === "string") {
-        originalApiKey = pk;
-      }
-    }
-
     switchConfigMode("simple");
+    setConfigReady(true);
+    configLoadState.hidden = !!catalog;
+    if (!catalog) {
+      configLoadMessage.textContent = t("config.catalog.failed");
+      configLoadRetry.hidden = false;
+    }
 
     // Default working directory
     const cwdInput = document.getElementById("config-default-cwd");
@@ -367,13 +449,29 @@ export const setConfigOpen = async (on) => {
   }
 };
 
+configLoadRetry?.addEventListener("click", async () => {
+  if (!configReady) return setConfigOpen(true);
+  // Catalog-only retry must not replace the editable advanced draft.
+  const generation = configLoadGeneration;
+  configLoadRetry.disabled = true;
+  try {
+    const catalog = await loadProviderCatalog({ force: true });
+    if (generation !== configLoadGeneration || !catalog) return;
+    panelProviderCatalog = catalog;
+    populateProviderSelect();
+    setConfigReady(configReady);
+    configLoadState.hidden = true;
+  } finally { configLoadRetry.disabled = false; }
+});
+
 configModeTabs?.addEventListener("click", (ev) => {
+  if (!configReady) return;
   const tab = ev.target.closest(".p-seg-item");
-  if (!tab) return;
+  if (!tab || tab.dataset.mode === configMode) return;
   switchConfigMode(tab.dataset.mode);
 });
 
-configEditor?.addEventListener("input", validateJson);
+configEditor?.addEventListener("input", () => { resetApiKeyReveal(); validateJson(); });
 
 configEditor?.addEventListener("keydown", (ev) => {
   if (ev.key === "Tab") {
@@ -397,8 +495,7 @@ let doSave = async (jsonStr) => {
       body: jsonStr,
     });
     if (!r.ok) throw new Error(await r.text());
-    originalConfig = jsonStr;
-    invalidateModelCache();
+    const generation = invalidateModelCache();
     // Broadcast so other model-catalog consumers (subagent-panel.js keeps
     // its own copy — sse.js exposes no getter) can drop their caches too.
     document.dispatchEvent(new CustomEvent("ash:models-changed"));
@@ -406,11 +503,12 @@ let doSave = async (jsonStr) => {
     // Poll for up to 12 seconds, then cache whatever is available.
     let attempts = 0;
     const pollModels = async () => {
+      if (generation !== getModelCacheGeneration()) return;
       if (attempts++ > 12) {
         // Final fetch to pick up current state
         try {
           const r = await fetch("/api/models");
-          if (r.ok) setModelCache(await r.json());
+          if (r.ok) setModelCache(await r.json(), generation);
         } catch { /* ignore */ }
         return;
       }
@@ -418,13 +516,13 @@ let doSave = async (jsonStr) => {
         const r = await fetch("/api/models");
         if (!r.ok) return;
         const data = await r.json();
+        if (generation !== getModelCacheGeneration()) return;
         const hasOpenRouter = (data.providers || []).some((p) => p.name === "openrouter" && (p.models?.length || 0) > 1);
-        if (hasOpenRouter) { setModelCache(data); return; }
+        if (hasOpenRouter && setModelCache(data, generation)) return;
       } catch { /* ignore */ }
       setTimeout(pollModels, 1000);
     };
     setTimeout(pollModels, 1500);
-    setConfigOpen(false);
     toast(t("config.save.done"), { type: "success" });
     // Surface the risky state after every settings save.
     if (autoApproveToggle?.checked) {
@@ -466,14 +564,37 @@ export const saveProviderApiKey = async (providerId, apiKey) => {
   return doSave(JSON.stringify(config, null, 2) + "\n");
 };
 
+// A save belongs to the opening that started it. Its eventual completion
+// must not replace or close a later draft (including onboarding saves).
+const savePanelConfig = async (jsonStr) => {
+  if (!configReady || configSaving) return false;
+  const owner = configLoadGeneration;
+  configSaveOwner = owner;
+  configSaving = true;
+  setConfigReady(configReady);
+  try {
+    const ok = await doSave(jsonStr);
+    if (ok && owner === configLoadGeneration) {
+      originalConfig = jsonStr;
+      setConfigOpen(false);
+    }
+    return ok;
+  } finally {
+    configSaving = false;
+    setConfigReady(configReady);
+  }
+};
+
 configSave?.addEventListener("click", async () => {
+  if (!configReady || configSaving) return;
   if (!validateJson()) return;
-  await doSave(configEditor.value);
+  await savePanelConfig(configEditor.value);
 });
 
 configSaveSimple?.addEventListener("click", async () => {
+  if (!configReady || configSaving || !panelProviderCatalog) return;
   const config = buildConfig();
-  if (!config) return;
+  if (!config) { toast(t("config.provider.required"), { type: "error" }); return; }
 
   // Save default working directory
   const cwdInput = document.getElementById("config-default-cwd");
@@ -492,12 +613,7 @@ configSaveSimple?.addEventListener("click", async () => {
     applyScale(scaleSelect.value);
   }
 
-  if (!configApikey.value.trim() && originalApiKey) {
-    const providerId = configProvider.value;
-    config.providers[providerId].apiKey = originalApiKey;
-  }
-
-  await doSave(JSON.stringify(config, null, 2) + "\n");
+  await savePanelConfig(JSON.stringify(config, null, 2) + "\n");
 });
 
 configFormat?.addEventListener("click", () => {
@@ -509,6 +625,8 @@ configFormat?.addEventListener("click", () => {
 });
 
 configReset?.addEventListener("click", () => {
+  if (!configReady) return;
+  resetApiKeyReveal();
   if (configMode === "advanced") {
     configEditor.value = serverConfig;
     originalConfig = serverConfig;
@@ -523,7 +641,10 @@ configReset?.addEventListener("click", () => {
 configClose?.addEventListener("click", () => setConfigOpen(false));
 
 configModelRefresh?.addEventListener("click", async () => {
-  await loadProviderCatalog({ force: true });
+  const generation = configLoadGeneration;
+  const catalog = await loadProviderCatalog({ force: true });
+  if (generation !== configLoadGeneration || !catalog) return;
+  panelProviderCatalog = catalog;
   populateProviderSelect();
   updateModelField();
 });
@@ -570,20 +691,31 @@ const autoApproveToggleLabel = autoApproveToggle
   ?.closest(".config-toggle")
   ?.querySelector(".config-toggle-label");
 
+let autoApproveSeq = 0;
+let autoApproveSaving = false;
+let autoApproveConfirmed = null;
 const loadAutoApprove = async () => {
+  if (autoApproveSaving) return;
+  const request = ++autoApproveSeq;
   try {
     const r = await fetch("/api/settings/auto-approve");
     if (r.ok) {
       const { autoApprove } = await r.json();
-      if (autoApproveToggle) autoApproveToggle.checked = !!autoApprove;
+      if (request !== autoApproveSeq || autoApproveSaving) return;
+      autoApproveConfirmed = !!autoApprove;
+      if (autoApproveToggle) autoApproveToggle.checked = autoApproveConfirmed;
     }
   } catch {}
 };
 
 const putAutoApprove = async (on) => {
+  if (autoApproveSaving) return;
+  ++autoApproveSeq;
+  autoApproveSaving = true;
+  if (autoApproveToggle) autoApproveToggle.disabled = true;
   const fail = (msg, detail) => {
     // Revert the optimistic toggle — the setting was not persisted.
-    if (autoApproveToggle) autoApproveToggle.checked = !on;
+    if (autoApproveToggle) autoApproveToggle.checked = autoApproveConfirmed ?? !on;
     toast(t("config.save.failed", { msg }), { type: "error", detail });
   };
   try {
@@ -597,9 +729,14 @@ const putAutoApprove = async (on) => {
       fail(`HTTP ${r.status}`, text || undefined);
       return;
     }
+    autoApproveConfirmed = on;
+    if (autoApproveToggle) autoApproveToggle.checked = on;
     if (on) toast(t("permission.auto_approve.on"), { type: "info" });
   } catch (e) {
     fail(String(e?.message ?? e));
+  } finally {
+    autoApproveSaving = false;
+    if (autoApproveToggle) autoApproveToggle.disabled = false;
   }
 };
 

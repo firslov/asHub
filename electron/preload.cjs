@@ -37,7 +37,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   /** Send theme change to main process to update native title bar */
   onThemeChange: (theme) => ipcRenderer.send("theme-changed", theme),
   openSessionWindow: (sessionId, pos) => ipcRenderer.invoke("open-session-window", sessionId, pos),
-  moveTabToWindowAt: (sessionId, pos) => ipcRenderer.invoke("move-tab-to-window-at", sessionId, pos),
+  moveTabToWindowAt: (sessionId, kind) => ipcRenderer.invoke("move-tab-to-window-at", sessionId, kind),
   onAcceptTab: (cb) => onChannel("accept-tab", cb),
   tabDragUpdate: (pos, phase) => ipcRenderer.send("tab-drag-update", pos, phase),
   onTabDragHover: (cb) => onChannel("tab-drag-hover", (payload) => cb(payload || {})),

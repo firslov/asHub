@@ -13,6 +13,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>asHub</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/brand/icon.svg" />
   <script>
     // Anti-FOUC: seed the first-screen-critical data-ui-* defaults before the
     // first paint, so the UI never flashes the pre-JS styling. Keep these
@@ -20,11 +21,17 @@
     // truth; prefs.js applies the full set, including overrides, afterwards).
     // Only prefs whose CSS affects first-screen layout/visibility are listed.
     (() => {
+      try {
+        const theme = localStorage.getItem("ash-theme");
+        document.documentElement.dataset.theme = ["light", "dark", "academic"].includes(theme)
+          ? theme : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      } catch {}
+      document.documentElement.style.setProperty("--ui-title-bar-height", "52px");
       const defaults = [
         [".app", "data-ui-tabs-enabled", "true"],                     // tabs.enabled
-        [".terminal-wrap", "data-ui-conversation-center", "false"],   // conversation.center
+        [".terminal-wrap", "data-ui-conversation-center", "true"],   // conversation.center
         [".terminal-wrap", "data-ui-reply-border-show", "false"],     // reply.border.show
-        [".terminal-wrap", "data-ui-message-gradient", "true"],       // message.gradient
+        [".terminal-wrap", "data-ui-message-gradient", "false"],       // message.gradient
         [".terminal-wrap", "data-ui-turn-time-show", "false"],        // turn.time.show
         [".terminal-wrap", "data-ui-turn-sep-show", "false"],         // turn.sep.show
         [".terminal-wrap", "data-ui-usage-align", "left"],            // usage.align
@@ -89,15 +96,28 @@
     <header class="title-bar">
       <!-- Windows custom title bar (hidden on macOS) -->
       <div id="win-title-bar" class="win-title-bar os-other" hidden>
-        <div class="win-title-bar-drag">asHub</div>
+        <div class="win-title-bar-drag" role="img" aria-label="asHub"><svg class="brand-wordmark" width="68" height="18" viewBox="0 0 128 34" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M20 13V29M20 21a8 8 0 1 0-16 0 8 8 0 0 0 16 0"/>
+  <path d="M42 14.5C39 12.5 30 11.7 29 17C28 22 43 19.5 43 25C43 30.5 32 30.5 28.5 27.5"/>
+  <path d="M53 5V29M72 5V29M53 17H72"/>
+  <path d="M82 13V22C82 31.5 97 31.5 97 22V13M97 22V29"/>
+  <path d="M108 5V29M108 21a8 8 0 1 1 16 0 8 8 0 0 1-16 0"/>
+</g></svg></div>
         <div class="win-title-bar-controls">
           <button class="win-btn minimize" aria-label="Minimize">‒</button>
           <button class="win-btn maximize" aria-label="Maximize">□</button>
           <button class="win-btn close" aria-label="Close">✕</button>
         </div>
       </div>
+      <span class="title-brand" role="img" aria-label="asHub"><svg class="brand-wordmark" width="68" height="18" viewBox="0 0 128 34" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M20 13V29M20 21a8 8 0 1 0-16 0 8 8 0 0 0 16 0"/>
+  <path d="M42 14.5C39 12.5 30 11.7 29 17C28 22 43 19.5 43 25C43 30.5 32 30.5 28.5 27.5"/>
+  <path d="M53 5V29M72 5V29M53 17H72"/>
+  <path d="M82 13V22C82 31.5 97 31.5 97 22V13M97 22V29"/>
+  <path d="M108 5V29M108 21a8 8 0 1 1 16 0 8 8 0 0 1-16 0"/>
+</g></svg></span>
       <span class="title-bar-controls">
-        <button id="sidebar-toggle" class="sidebar-btn sidebar-toggle" data-i18n-title="collapse.sidebar" title="Collapse sidebar">
+        <button id="sidebar-toggle" aria-controls="sidebar" aria-expanded="true" class="sidebar-btn sidebar-toggle" data-i18n-title="collapse.sidebar" title="Collapse sidebar">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2"/>
             <line x1="9" y1="3" x2="9" y2="21"/>
@@ -118,7 +138,7 @@
         <span class="spinner" id="spinner" hidden></span>
       </span>
     </header>
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
         <div class="p-seg">
           <button id="sidebar-view-sessions" class="sidebar-view-btn p-seg-item" data-view="sessions" data-i18n-title="sidebar.view.sessions" title="Sessions">
@@ -127,7 +147,7 @@
               <line x1="4" y1="12" x2="20" y2="12"/>
               <line x1="4" y1="17" x2="20" y2="17"/>
             </svg>
-          </button>
+          <span data-i18n="sidebar.view.sessions"></span></button>
           <button id="sidebar-view-workspaces" class="sidebar-view-btn p-seg-item" data-view="workspaces" data-i18n-title="sidebar.view.workspaces" title="Workspaces">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="7" height="7" rx="1.5"/>
@@ -135,21 +155,21 @@
               <rect x="3" y="14" width="7" height="7" rx="1.5"/>
               <rect x="14" y="14" width="7" height="7" rx="1.5"/>
             </svg>
-          </button>
+          <span data-i18n="sidebar.view.workspaces"></span></button>
           <button id="sidebar-view-archive" class="sidebar-view-btn p-seg-item" data-view="archive" data-i18n-title="sidebar.view.archive" title="Archive">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="21 8 21 21 3 21 3 8"/>
               <rect x="1" y="3" width="22" height="5"/>
               <line x1="10" y1="12" x2="14" y2="12"/>
             </svg>
-          </button>
+          <span data-i18n="sidebar.view.archive"></span></button>
           <button id="sidebar-view-terminals" class="sidebar-view-btn p-seg-item" data-view="terminals" data-i18n-title="sidebar.view.terminals" title="Terminals">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="4" width="18" height="16" rx="2"/>
               <polyline points="7,9 10,12 7,15"/>
               <line x1="12" y1="16" x2="16" y2="16"/>
             </svg>
-          </button>
+          <span data-i18n="sidebar.view.terminals"></span></button>
         </div>
       </div>
       <div class="sidebar-action" id="sidebar-action-sessions">
@@ -162,7 +182,7 @@
           <span data-i18n="new.session">New session</span>
         </button>
       </div>
-      <input id="session-filter" class="sidebar-filter" type="text" data-i18n-placeholder="filter.sessions" placeholder="Filter sessions…" autocomplete="off" spellcheck="false" />
+      <input id="session-filter" data-i18n-aria="filter.sessions" aria-label="Filter sessions" class="sidebar-filter" type="text" data-i18n-placeholder="filter.sessions" placeholder="Filter sessions…" autocomplete="off" spellcheck="false" />
       <ul id="sessions" class="session-list"></ul>
       <ul id="workspaces" class="workspace-list" hidden></ul>
       <div class="sidebar-action" id="sidebar-action-terminals" hidden>
@@ -178,17 +198,19 @@
       </div>
       <ul id="terminals" class="terminal-list" hidden></ul>
       <ul id="archive" class="archive-list" hidden></ul>
-      <div id="sidebar-resize" class="sidebar-resize" role="separator" aria-orientation="vertical"></div>
+      <div id="sidebar-resize" tabindex="0" aria-label="Resize sidebar" data-i18n-aria="sidebar.resize" aria-valuemin="200" aria-valuemax="480" aria-valuenow="260" class="sidebar-resize" role="separator" aria-orientation="vertical"></div>
     </aside>
 
+    <button type="button" class="sidebar-backdrop" id="sidebar-backdrop" data-i18n-aria="collapse.sidebar" aria-label="Close sidebar" tabindex="-1"></button>
     <main class="main">
       <div class="page-loader" id="page-loader">
         <div class="page-loader-inner">
-          <svg class="page-loader-logo" width="40" height="40" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="2.75" y="2.75" width="42.5" height="42.5" rx="13" stroke="var(--accent-soft)" stroke-width="1"/>
-            <rect x="6.75" y="6.75" width="34.5" height="34.5" rx="9.5" stroke="var(--accent)" stroke-width="0.5" opacity="0.35"/>
-            <path d="M15.5 14 L29.5 24 L15.5 34" stroke="var(--accent)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-            <rect class="logo-cursor" x="33" y="16.5" width="3.6" height="15" rx="1.8" fill="var(--cyan)"/>
+          <svg class="page-loader-logo" width="56" height="56" viewBox="112 112 288 288" fill="none" aria-hidden="true">
+            <g fill="none" stroke-width="32" stroke-linejoin="round">
+              <path d="M224 176H204Q184 176 184 196V336" stroke="currentColor"/>
+              <path d="M288 336H308Q328 336 328 316V176" stroke="currentColor"/>
+              <path d="M184 256H328" stroke="var(--brand-metal)"/>
+  </g>
           </svg>
           <span class="page-loader-text" data-i18n="loading">loading…</span>
           <div class="page-loader-bar" id="page-loader-bar">
@@ -201,15 +223,18 @@
           <div class="no-session-empty terminal-body" id="no-session-empty" hidden>
             <div class="stream-empty-mini">
               <div class="stream-empty-logo">
-                <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
-                  <rect x="2.75" y="2.75" width="42.5" height="42.5" rx="13" stroke="var(--accent-soft)" stroke-width="1"/>
-                  <rect x="6.75" y="6.75" width="34.5" height="34.5" rx="9.5" stroke="var(--accent)" stroke-width="0.5" opacity="0.35"/>
-                  <path d="M15.5 14 L29.5 24 L15.5 34" stroke="var(--accent)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-                  <rect class="logo-cursor" x="33" y="16.5" width="3.6" height="15" rx="1.8" fill="var(--cyan)"/>
+                <svg width="56" height="56" viewBox="112 112 288 288" fill="none" aria-hidden="true">
+                  <g fill="none" stroke-width="32" stroke-linejoin="round">
+                    <path d="M224 176H204Q184 176 184 196V336" stroke="currentColor"/>
+                    <path d="M288 336H308Q328 336 328 316V176" stroke="currentColor"/>
+                    <path d="M184 256H328" stroke="var(--brand-metal)"/>
+  </g>
                 </svg>
               </div>
               <div class="stream-empty-line"></div>
             </div>
+            <h1 class="welcome-title" data-i18n="welcome.title"></h1>
+            <p class="welcome-description" data-i18n="welcome.description"></p>
             <button type="button" class="stream-empty-prompt" id="no-session-cta">
               <span data-i18n="no.session.cta">+  New session</span>
             </button>
@@ -238,17 +263,18 @@
               </svg>
             </button>
             <button type="submit" class="c-arrow send-btn" id="send-btn" disabled data-i18n-title="send" title="Send (Enter)">
-              <span class="send-arrow" aria-hidden="true">⟩</span>
+              <svg class="send-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
               <svg class="send-stop" width="11" height="11" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
                 <rect x="1.5" y="1.5" width="9" height="9" rx="2"></rect>
               </svg>
             </button>
-            <textarea id="query" autocomplete="off" data-i18n-placeholder="ask.agent" placeholder="ask the agent…  (! shell · / commands · @ files · # prompts)" rows="1"></textarea>
+            <textarea id="query" aria-label="Message" data-i18n-aria="message.label" aria-describedby="composer-help" autocomplete="off" data-i18n-placeholder="ask.agent" placeholder="ask the agent…  (! shell · / commands · @ files · # prompts)" rows="1"></textarea>
             <button type="button" class="usage-strip-toggle" id="usage-strip-toggle" data-i18n-title="toggle.status.bar" title="Toggle status bar">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="4 6 7 9 10 6"/>
               </svg>
             </button>
+            <div class="composer-help" id="composer-help"><span data-i18n="composer.shortcuts"></span><span class="composer-keyboard" data-i18n="composer.keyboard"></span></div>
             <ul class="autocomplete" id="autocomplete" hidden></ul>
           </form>
         </div>
@@ -260,16 +286,19 @@
         <div class="stream-empty">
           <div class="stream-empty-mini">
             <div class="stream-empty-logo">
-              <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
-                <rect x="2.75" y="2.75" width="42.5" height="42.5" rx="13" stroke="var(--accent-soft)" stroke-width="1"/>
-                <rect x="6.75" y="6.75" width="34.5" height="34.5" rx="9.5" stroke="var(--accent)" stroke-width="0.5" opacity="0.35"/>
-                <path d="M15.5 14 L29.5 24 L15.5 34" stroke="var(--accent)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-                <rect class="logo-cursor" x="33" y="16.5" width="3.6" height="15" rx="1.8" fill="var(--cyan)"/>
+              <svg width="56" height="56" viewBox="112 112 288 288" fill="none" aria-hidden="true">
+                <g fill="none" stroke-width="32" stroke-linejoin="round">
+                  <path d="M224 176H204Q184 176 184 196V336" stroke="currentColor"/>
+                  <path d="M288 336H308Q328 336 328 316V176" stroke="currentColor"/>
+                  <path d="M184 256H328" stroke="var(--brand-metal)"/>
+  </g>
               </svg>
             </div>
             <div class="stream-empty-line"></div>
           </div>
-          <button class="stream-empty-prompt">
+          <h1 class="welcome-title" data-i18n="welcome.title"></h1>
+          <p class="welcome-description" data-i18n="welcome.description"></p>
+          <button type="button" class="stream-empty-prompt">
             <span class="c-arrow">⟩</span>
             <span data-i18n="ask.anything">ask anything...</span>
           </button>
@@ -313,8 +342,10 @@
 
     <aside class="p-drawer" id="ctx-panel" hidden>
       <div class="p-head">
-        <span class="p-title" data-i18n="context">Context</span>
-        <span class="p-meta" id="ctx-meta"></span>
+        <div class="p-heading">
+          <span class="p-title" data-i18n="context">Context</span>
+          <span class="p-meta" id="ctx-meta"></span>
+        </div>
         <button class="p-icon-btn" id="ctx-refresh" data-i18n-title="refresh" title="Refresh">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
@@ -343,8 +374,10 @@
 
     <aside class="p-drawer" id="tree-panel" hidden>
       <div class="p-head">
-        <span class="p-title" data-i18n="tree">Tree</span>
-        <span class="p-meta"></span>
+        <div class="p-heading">
+          <span class="p-title" data-i18n="tree">Tree</span>
+          <span class="p-meta"></span>
+        </div>
         <button class="p-icon-btn" id="tree-refresh" data-i18n-title="refresh" title="Refresh">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
@@ -365,8 +398,10 @@
 
     <aside class="p-drawer" id="files-panel" hidden>
       <div class="p-head">
-        <span class="p-title" data-i18n="files">Files</span>
-        <span class="p-meta" id="files-cwd" title=""></span>
+        <div class="p-heading">
+          <span class="p-title" data-i18n="files">Files</span>
+          <span class="p-meta" id="files-cwd" title=""></span>
+        </div>
         <button class="p-icon-btn" id="files-refresh" data-i18n-title="refresh" title="Refresh">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
@@ -387,8 +422,10 @@
 
     <aside class="p-drawer" id="subagent-panel" hidden>
       <div class="p-head">
-        <span class="p-title" data-i18n="subagents">Subagents</span>
-        <span class="p-meta" id="sa-meta"></span>
+        <div class="p-heading">
+          <span class="p-title" data-i18n="subagents">Subagents</span>
+          <span class="p-meta" id="sa-meta"></span>
+        </div>
         <button class="p-icon-btn" id="sa-close" data-i18n-title="close" title="Close">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
             <line x1="2" y1="2" x2="10" y2="10"/>
@@ -482,8 +519,10 @@
 
     <div class="p-drawer" id="skills-overlay" hidden>
       <div class="p-head">
-        <span class="p-title" data-i18n="skills">Skills</span>
-        <span class="p-meta">~/.agent-sh/skills/</span>
+        <div class="p-heading">
+          <span class="p-title" data-i18n="skills">Skills</span>
+          <span class="p-meta">~/.agent-sh/skills/</span>
+        </div>
         <button class="p-icon-btn" id="skills-close" data-i18n-title="close" title="Close">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
             <line x1="2" y1="2" x2="10" y2="10"></line>
@@ -524,12 +563,10 @@
 
     <div class="p-drawer" id="config-overlay" hidden>
       <div class="p-head">
-        <span class="p-title" data-i18n="settings">Settings</span>
-        <div class="p-seg" id="config-mode-tabs">
-          <button class="p-seg-item active" data-mode="simple" data-i18n="simple">Simple</button>
-          <button class="p-seg-item" data-mode="advanced" data-i18n="advanced">Advanced</button>
+        <div class="p-heading">
+          <span class="p-title" data-i18n="settings">Settings</span>
+          <span class="p-meta" id="config-path">~/.agent-sh/settings.json</span>
         </div>
-        <span class="p-meta" id="config-path">~/.agent-sh/settings.json</span>
         <button class="p-icon-btn" id="config-reset" data-i18n-title="reset.defaults" title="Reset to defaults">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <path d="M12 7a5 5 0 1 1-1.2-3.2"></path>
@@ -542,6 +579,16 @@
             <line x1="10" y1="2" x2="2" y2="10"></line>
           </svg>
         </button>
+      </div>
+      <div class="p-controls">
+        <div class="p-seg" id="config-mode-tabs">
+          <button class="p-seg-item active" data-mode="simple" data-i18n="simple">Simple</button>
+          <button class="p-seg-item" data-mode="advanced" data-i18n="advanced">Advanced</button>
+        </div>
+      </div>
+      <div class="config-load-state" id="config-load-state" role="status" hidden>
+        <span id="config-load-message"></span>
+        <button class="p-btn" id="config-load-retry" type="button" data-i18n="error.retry" hidden>Retry</button>
       </div>
       <!-- Simple config mode -->
       <div class="p-body" id="config-body-simple">
@@ -642,8 +689,10 @@
 
     <div class="p-drawer" id="prompt-overlay" hidden>
       <div class="p-head">
-        <span class="p-title" data-i18n="commands.title">Commands</span>
-        <span class="p-meta"></span>
+        <div class="p-heading">
+          <span class="p-title" data-i18n="commands.title">Commands</span>
+          <span class="p-meta"></span>
+        </div>
         <button class="p-icon-btn" id="prompt-add-btn" data-i18n-title="prompts.add.prompt" title="add prompt">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <line x1="7" y1="2" x2="7" y2="12"></line>
@@ -690,9 +739,9 @@
         </div>
         <div class="p-section" data-i18n="shortcuts.navigation">Navigation</div>
         <div class="sc-group">
-          <div class="sc-row os-mac"><kbd>⌘⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
+          <div class="sc-row os-mac"><kbd>Ctrl+⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
           <div class="sc-row os-other"><kbd>Ctrl+⇧Tab</kbd><span data-i18n="shortcuts.prev_tab">Previous tab</span></div>
-          <div class="sc-row os-mac"><kbd>⌘Tab</kbd><span data-i18n="shortcuts.next_tab">Next tab</span></div>
+          <div class="sc-row os-mac"><kbd>Ctrl+Tab</kbd><span data-i18n="shortcuts.next_tab">Next tab</span></div>
           <div class="sc-row os-other"><kbd>Ctrl+Tab</kbd><span data-i18n="shortcuts.next_tab">Next tab</span></div>
           <div class="sc-row os-mac"><kbd>⌘1</kbd><span class="sc-range">–</span><kbd>9</kbd><span data-i18n="shortcuts.switch_tab">Switch to tab N</span></div>
           <div class="sc-row os-other"><kbd>Ctrl+1</kbd><span class="sc-range">–</span><kbd>9</kbd><span data-i18n="shortcuts.switch_tab">Switch to tab N</span></div>

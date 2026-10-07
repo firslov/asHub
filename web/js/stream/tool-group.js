@@ -1,5 +1,6 @@
 import { hideEmptyState, maybeScroll } from "./scroll.js";
 import { t } from "../i18n.js";
+import { refreshReasoningFailures } from "./compact.js";
 
 const TOOL_GROUP_COLLAPSE = 2;
 const groupState = new WeakMap();
@@ -72,7 +73,7 @@ const toolCount = (g) => g.querySelectorAll(".tool-row").length;
 
 const updateToolGroupHead = (g) => {
   const { head } = groupState.get(g);
-  head.textContent = `🔧 ${t("n.tools", { n: toolCount(g) })}`;
+  head.textContent = `${t("n.tools", { n: toolCount(g) })}`;
   // Summarize which tools ran so the collapsed group is informative at a
   // glance (top 3 by frequency), e.g. "read_file ×3 · grep · ls".
   const counts = new Map();
@@ -91,28 +92,36 @@ const updateToolGroupHead = (g) => {
     span.textContent = top;
     head.appendChild(span);
   }
+  // Keep failures visible even when the execution details are folded.
+  const failures = g.querySelectorAll(".tool-row.err").length;
+  if (failures) {
+    const status = document.createElement("span");
+    status.className = "activity-error";
+    status.textContent = `✗ ${failures} ${t("error")}`;
+    head.appendChild(status);
+  }
+};
+
+// Update the row's owners rather than session.toolGroup.current: a parallel
+// tool may finish after the stream has moved on to another group or phase.
+export const refreshToolSummaries = (row) => {
+  for (let g = row?.closest(".tool-group"); g; g = g.parentElement?.closest(".tool-group")) {
+    if (groupState.has(g)) updateToolGroupHead(g);
+  }
+  for (let phase = row?.closest(".reasoning-phase"); phase; phase = phase.parentElement?.closest(".reasoning-phase")) {
+    refreshReasoningFailures(phase);
+  }
 };
 
 const setToolGroupCollapsed = (g, collapsed) => {
-  const { body } = groupState.get(g);
+  const { head, body } = groupState.get(g);
   if (collapsed === g.classList.contains("collapsed")) return;
-  if (collapsed) {
-    body.style.maxHeight = body.scrollHeight + "px";
-    body.offsetHeight;
-    g.classList.add("collapsed");
-    body.style.maxHeight = "0";
-  } else {
-    body.style.maxHeight = "0";
-    g.classList.remove("collapsed");
-    body.offsetHeight;
-    body.style.maxHeight = body.scrollHeight + "px";
-    const onEnd = (ev) => {
-      if (ev.propertyName !== "max-height") return;
-      body.style.maxHeight = "";
-      body.removeEventListener("transitionend", onEnd);
-    };
-    body.addEventListener("transitionend", onEnd);
-  }
+  head.setAttribute("aria-expanded", String(!collapsed));
+  body.inert = collapsed;
+  // Let the open body follow its content height. A measured max-height
+  // can remain stuck when hiding a parent/session cancels the transition,
+  // clipping later output expansions. CSS still handles opacity changes.
+  g.classList.toggle("collapsed", collapsed);
 };
 
 const openToolGroup = (session) => {
@@ -122,6 +131,7 @@ const openToolGroup = (session) => {
   const head = document.createElement("button");
   head.type = "button";
   head.className = "tool-group-head";
+  head.setAttribute("aria-expanded", "true");
   head.hidden = true;
   head.addEventListener("click", () => {
     g.dataset.userToggled = "1";
@@ -197,7 +207,6 @@ document.addEventListener("langchange", () => {
   document.querySelectorAll(".tool-group-head").forEach((head) => {
     const g = head.closest(".tool-group");
     if (!g) return;
-    const n = g.querySelectorAll(".tool-row").length;
-    head.textContent = `🔧 ${t("n.tools", { n })}`;
+    if (groupState.has(g)) updateToolGroupHead(g);
   });
 });

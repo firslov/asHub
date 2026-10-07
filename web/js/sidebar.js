@@ -222,14 +222,14 @@ const startTitleEdit = (li, instanceId, currentTitle) => {
     input.remove();
     titleSpan.style.display = "";
     if (val && val !== currentTitle) {
-      titleSpan.textContent = val;
       try {
-        await fetch(`/${instanceId}/title`, {
+        const response = await fetch(`/${instanceId}/title`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: val }),
         });
-      } catch {}
+        if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+      } catch (err) { toast(String(err?.message ?? err), { type: "error" }); }
     }
     // Editing over — resume normal refreshes, pick up skipped updates.
     renderSessions();
@@ -308,8 +308,9 @@ const renderSessionItem = (s, isPinned = false) => {
     }
     close.classList.remove("confirming");
     try {
-      await fetch(`/${s.instanceId}/`, { method: "DELETE" });
-    } catch {}
+      const response = await fetch(`/${s.instanceId}/`, { method: "DELETE" });
+      if (!response.ok) throw new Error(await response.text());
+    } catch (err) { toast(String(err?.message ?? err), { type: "error" }); return; }
     if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
     const closingActive = s.instanceId === activeSessionId.peek();
     if (closingActive && spaEnabled()) {
@@ -366,12 +367,13 @@ const renderSessionItem = (s, isPinned = false) => {
     }
     archiveBtn.classList.remove("confirming");
     try {
-      await fetch("/api/sessions/archive", {
+      const response = await fetch("/api/sessions/archive", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: s.instanceId }),
       });
-    } catch {}
+      if (!response.ok) throw new Error(await response.text());
+    } catch (err) { toast(String(err?.message ?? err), { type: "error" }); return; }
 
     // Capture before remove() since unregisterSession clears activeSessionId.
     const wasActive = s.instanceId === activeSessionId.peek();
@@ -425,6 +427,7 @@ const renderSessionItem = (s, isPinned = false) => {
   const cwdBtn = document.createElement("button");
   cwdBtn.className = "session-cwd-btn";
   cwdBtn.title = t("change.dir");
+  cwdBtn.disabled = s.supportsCwdChange === false;
   cwdBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
   cwdBtn.addEventListener("click", async (ev) => {
     ev.preventDefault();
@@ -443,13 +446,14 @@ const renderSessionItem = (s, isPinned = false) => {
     }
     if (cwd) {
       try {
-        await fetch(`/${s.instanceId}/cwd`, {
+        const response = await fetch(`/${s.instanceId}/cwd`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ cwd }),
         });
+        if (!response.ok) throw new Error(await response.text());
         renderSessions();
-      } catch {}
+      } catch (err) { toast(String(err?.message ?? err), { type: "error" }); }
     }
   });
 
@@ -507,6 +511,8 @@ const refreshPinned = async () => {
   } catch { return false; }
 };
 
+let sessionsFetchSeq = 0;
+let sessionsRenderSeq = 0;
 const renderSessions = async (force = false, opts = null) => {
   try {
     // fromCache re-renders from the last fetched list (filter typing) with
@@ -515,19 +521,24 @@ const renderSessions = async (force = false, opts = null) => {
     if (opts?.fromCache && lastSessionsList) {
       list = lastSessionsList;
     } else {
-      list = await (await fetch("/sessions")).json();
+      const request = ++sessionsFetchSeq;
+      const response = await fetch("/sessions");
+      if (!response.ok) return;
+      list = await response.json();
+      if (request !== sessionsFetchSeq || !Array.isArray(list)) return;
       lastSessionsList = list;
     }
+    const render = ++sessionsRenderSeq;
     // Explicit pinned refresh (fallback poll): pin state lives outside the
     // content hash, so a change made in another window must force a rebuild.
     if (opts?.refreshPinned && await refreshPinned()) force = true;
+    if (render !== sessionsRenderSeq) return;
     // Include the filter query in the hash so typing/clearing the filter
     // invalidates this early return even when the session list is unchanged.
     const fullHash = JSON.stringify([filterQuery(), list.map((s) => [
       s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt, s.kind ?? "agent",
     ])]);
     if (!force && fullHash === fullHashCache) return;
-    fullHashCache = fullHash;
 
     // Content-level gate for the store: replacing the Map wakes every
     // allSessions subscriber (tab strip, workspace/terminal views), so only
@@ -550,6 +561,7 @@ const renderSessions = async (force = false, opts = null) => {
       // Refresh pinned only alongside substantive list changes (or forced
       // refreshes such as pin toggles) — not on every turn-end/title frame.
       await refreshPinned();
+      if (render !== sessionsRenderSeq) return;
     } else {
       // Sync volatile timestamps into the cached objects without a signal
       // tick. Workspace/terminal views read lastModified live, so bump the
@@ -563,6 +575,7 @@ const renderSessions = async (force = false, opts = null) => {
       if (v === "workspaces" || v === "terminals") bump();
     }
 
+    fullHashCache = fullHash;
     const agentList = list.filter((s) => (s.kind ?? "agent") === "agent");
     const pinIds = pinnedIds.peek();
 
@@ -933,8 +946,12 @@ const renderTerminals = () => {
         return;
       }
       close.classList.remove("confirming");
-      try { await fetch(`/${s.instanceId}/`, { method: "DELETE" }); } catch {}
-      if (openTabs.peek().includes(s.instanceId)) closeTab(s.instanceId);
+      try {
+        const response = await fetch(`/${s.instanceId}/`, { method: "DELETE" });
+        if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+      } catch (err) { toast(String(err?.message ?? err), { type: "error" }); return; }
+      // The server already closed the terminal; don't issue another DELETE.
+      if (openTabs.peek().includes(s.instanceId)) await closeTab(s.instanceId, { backendClosed: true });
       // renderTerminals reads the store, which still holds the deleted
       // session — refetch first (renderSessions updates the store), then
       // re-render, otherwise the closed tab stays visible.
@@ -1028,6 +1045,7 @@ effect(() => {
     const on = btn.dataset.view === view;
     btn.classList.toggle("current", on);
     btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", String(on));
   }
 });
 
@@ -1146,7 +1164,7 @@ const getDefaultCwd = () => {
   return "~";
 };
 
-const doCreateSession = async (cwd) => {
+const doCreateSession = async (cwd, { navigate = true } = {}) => {
   if (!cwd) return;
   try {
     const res = await fetch("/sessions", {
@@ -1160,21 +1178,25 @@ const doCreateSession = async (cwd) => {
       return;
     }
     const sess = await res.json();
-    if (sess.instanceId) window.location.href = `/${sess.instanceId}/`;
+    if (typeof sess.instanceId !== "string" || !/^[0-9a-f]{4,32}$/i.test(sess.instanceId)) throw new Error("Invalid session response");
+    if (navigate) window.location.href = `/${sess.instanceId}/`;
+    return sess.instanceId;
   } catch (e) {
     toast(t("session.new.failed"), { type: "error", detail: String(e?.message ?? e) });
   }
 };
 
-newBtn?.addEventListener("click", () => {
-  // Debounce like newTerminalBtn — rapid double-clicks otherwise race two
-  // POST /sessions and land the user on the slower one's full-page redirect.
-  if (newBtn.disabled) return;
-  newBtn.disabled = true;
-  doCreateSession(getDefaultCwd()).finally(() => { newBtn.disabled = false; });
-});
+export const createSession = async (options = {}) => {
+  if (newBtn?.disabled) return null;
+  if (newBtn) newBtn.disabled = true;
+  try { return await doCreateSession(getDefaultCwd(), options); }
+  finally { if (newBtn) newBtn.disabled = false; }
+};
+
+newBtn?.addEventListener("click", () => createSession());
 
 newTerminalBtn?.addEventListener("click", async (ev) => {
+  if (newTerminalBtn.disabled) return;
   const kind = (ev.metaKey || ev.ctrlKey) ? "ash-terminal" : "terminal";
   // agent-sh Shell has no Windows backend — the session would be a dead terminal.
   if (kind === "ash-terminal" && document.documentElement.dataset.platform === "win32") {
@@ -1200,6 +1222,8 @@ newTerminalBtn?.addEventListener("click", async (ev) => {
       setSessionKind(sess.instanceId, kind);
       window.location.href = `/${sess.instanceId}/`;
     }
+  } catch (err) {
+    toast(t("session.new.failed"), { type: "error", detail: String(err?.message ?? err) });
   } finally {
     newTerminalBtn.disabled = false;
   }

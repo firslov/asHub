@@ -1,5 +1,7 @@
+import { formatFileMention } from "./file-mention.js";
 import { currentSessionId } from "./state.js";
 import { t } from "./i18n.js";
+import { toast } from "./toast.js";
 import { activeSession } from "./session-manager.js";
 import { effect } from "../vendor/signals-core.js";
 
@@ -17,7 +19,17 @@ const LS_FILES = "ash.files-open";
 // Set initial text (JS manages this dynamically, so no data-i18n in HTML)
 if (filesEmpty) filesEmpty.textContent = t("files.loading");
 
-const expandedDirs = () => activeSession.peek()?.files?.expandedDirs ?? new Map();
+// Terminal views also need stable expansion state. Key fallback state by
+// the view so a response from another (or closed/reopened) session is rejected.
+const fallbackDirs = new WeakMap();
+const emptyDirs = new Map();
+const expandedDirs = () => {
+  const view = activeSession.peek();
+  if (!view) return emptyDirs;
+  if (view.files?.expandedDirs) return view.files.expandedDirs;
+  if (!fallbackDirs.has(view)) fallbackDirs.set(view, new Map());
+  return fallbackDirs.get(view);
+};
 
 const showFilesEmpty = (msg, sub) => {
   if (!filesEmpty) return;
@@ -80,9 +92,12 @@ const makeEntryEl = (f, basePath) => {
     if (!inp) return;
     const current = inp.value.trim();
     const sep = current.length > 0 ? " " : "";
-    inp.value = current + sep + "@" + el.dataset.path;
+    const mention = formatFileMention(el.dataset.path, f.kind === "dir");
+    inp.value = current + sep + mention.text.trimEnd();
     inp.focus();
-    inp.setSelectionRange(inp.value.length, inp.value.length);
+    const cursor = Math.min(inp.value.length, current.length + sep.length + mention.cursor);
+    inp.setSelectionRange(cursor, cursor);
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
   });
 
   return el;
@@ -97,6 +112,7 @@ const fetchSubdir = async (subdirPath) => {
 
 // Toggle expand/collapse for a folder entry
 const toggleDir = async (entryEl) => {
+  const origin = expandedDirs();
   const dirPath = entryEl.dataset.path;
   if (!dirPath) return;
 
@@ -129,6 +145,7 @@ const toggleDir = async (entryEl) => {
 
   try {
     const data = await fetchSubdir(dirPath);
+    if (expandedDirs() !== origin || !entryEl.isConnected) return;
     entryEl.classList.remove("loading");
     if (chevron) chevron.classList.remove("loading");
 
@@ -148,10 +165,12 @@ const toggleDir = async (entryEl) => {
 
     // Insert after the entry
     entryEl.after(childContainer);
-    expandedDirs().set(dirPath, childContainer);
+    origin.set(dirPath, childContainer);
     entryEl.classList.add("expanded");
     if (chevron) chevron.classList.add("expanded");
   } catch {
+    if (entryEl.isConnected && origin === expandedDirs()) toast(t("files.failed"), { type: "error" });
+  } finally {
     entryEl.classList.remove("loading");
     if (chevron) chevron.classList.remove("loading");
   }
@@ -196,17 +215,23 @@ let fetchAbort = null;
 const fetchFiles = async () => {
   if (!filesBody || !filesCwd || !filesEmpty) return;
   const sid = currentSessionId();
-  if (!sid) { showFilesEmpty(t("files.no.session"), t("files.no.session.hint")); return; }
-  // Cancel any in-flight request — rapid session switches otherwise race.
   fetchAbort?.abort();
+  const mySeq = ++fetchSeq;
+  filesCwd.textContent = "";
+  filesCwd.title = "";
+  if (!sid) {
+    filesBody.querySelectorAll(":scope > .files-row, :scope > .files-children").forEach(el => el.remove());
+    filesCwd.textContent = ""; filesCwd.title = "";
+    showFilesEmpty(t("files.no.session"), t("files.no.session.hint")); return; }
+  // Cancel any in-flight request — rapid session switches otherwise race.
   const ac = new AbortController();
   fetchAbort = ac;
-  const mySeq = ++fetchSeq;
   showFilesEmpty(t("files.loading"));
   filesBody.querySelectorAll(":scope > .files-row, :scope > .files-children").forEach((el) => el.remove());
   expandedDirs().clear();
   try {
     const resp = await fetch(`/${sid}/files`, { signal: ac.signal });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     if (mySeq !== fetchSeq) return;  // a newer fetch took over
     filesCwd.textContent = data.cwd || "";
@@ -228,13 +253,6 @@ const setFilesOpen = (on) => {
 
 filesClose?.addEventListener("click", () => setFilesOpen(false));
 filesRefresh?.addEventListener("click", () => fetchFiles());
-
-// 延迟初始化，避免循环依赖导致的 TDZ 错误
-setTimeout(() => {
-  try {
-    if (localStorage.getItem(LS_FILES) === "1") setFilesOpen(true);
-  } catch {}
-}, 0);
 
 export { setFilesOpen };
 

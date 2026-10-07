@@ -5,8 +5,9 @@ import { activeSession } from "./session-manager.js";
 
 export const sessionId = (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1] ?? "";
 
-/** Active session id at call time; falls back to URL session before SessionView upgrades. */
-export const currentSessionId = () => activeSessionId.peek() || sessionId;
+/** Read the current URL during startup; never reuse a closed initial session. */
+export const currentSessionId = () => activeSessionId.peek()
+  || (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1] || "";
 
 export const homeDir = signal("");
 

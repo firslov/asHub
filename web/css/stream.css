@@ -840,3 +840,238 @@
     padding: 0.4rem 0.75rem;
   }
 }
+
+/* A continuous reading canvas. Metadata and tools stay compact; prose breathes. */
+.live-wrap .terminal, [data-theme="dark"] .live-wrap .terminal {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--bg);
+}
+.live-wrap .terminal::before { display: none; }
+.live-wrap .terminal-body { padding: 28px clamp(20px, 3vw, 48px) 16px; }
+.live-wrap .agent-reply { font-size: var(--fs-lg); line-height: 1.85; }
+.live-wrap .agent-box { padding: 14px 18px; border: 1px solid var(--border-light); border-radius: 12px; }
+.live-wrap .agent-box:hover { transform: none; box-shadow: none; }
+.live-wrap .agent-box:focus-within .msg-actions { opacity: 1; }
+.live-wrap .agent-query { font-size: var(--fs-lg); line-height: 1.75; }
+.live-wrap .agent-reply pre { border-radius: 10px; }
+@media (max-width: 700px) {
+  .live-wrap .terminal-body { padding: 20px 16px 12px; }
+  .live-wrap .agent-box { padding: 12px 14px; }
+}
+
+/* ── Response activity: one quiet hierarchy across every renderer ──
+   Prose stays on the canvas. Process headers share a single neutral rail;
+   only output/code receives a surface. Keep status marks, full details,
+   existing collapse controls and all data-ui preferences intact. */
+.live-wrap {
+  --activity-surface: color-mix(in srgb, var(--bg2) 65%, var(--bg));
+  --activity-border: var(--border-light);
+}
+
+/* Process groups: consistent spacing, type and disclosure affordance. */
+[data-theme] .live-wrap :is(.thinking-block, .tool-group, .reasoning-phase) {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-mid);
+  background: transparent;
+  box-shadow: none;
+}
+.live-wrap :is(.thinking-block-head, .tool-group-head, .reasoning-phase-head) {
+  min-height: 32px;
+  padding: 5px 4px;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--text-dim);
+  border-radius: var(--radius-xs);
+}
+.live-wrap :is(.thinking-block-head, .tool-group-head, .reasoning-phase-head):hover {
+  background: var(--activity-surface);
+  color: var(--text);
+}
+.live-wrap :is(.thinking-block-head, .tool-group-head, .reasoning-phase-head)::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  margin: 0 5px 3px auto;
+  flex-shrink: 0;
+  opacity: 0.65;
+  transform: rotate(45deg);
+}
+.live-wrap :is(.thinking-block, .tool-group).collapsed > :is(.thinking-block-head, .tool-group-head)::after,
+.live-wrap .reasoning-phase:not(.open) > .reasoning-phase-head::after { transform: rotate(-45deg); }
+/* The shared CSS chevron replaces the phase's decorative text arrow. */
+.live-wrap .reasoning-phase .rp-arrow { display: none; }
+.live-wrap :is(.thinking-preview, .tool-group-names) {
+  color: var(--text-dim);
+  font-style: normal;
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+.live-wrap .thinking-block-inner {
+  padding: 8px 4px 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+}
+.live-wrap .reasoning-phase-body { padding: 4px 0; border-top-color: var(--activity-border); }
+.live-wrap .reasoning-phase-body :is(.thinking-block, .tool-group) {
+  border-left-color: var(--activity-border);
+  margin: 4px 0;
+}
+
+.live-wrap .activity-error {
+  flex-shrink: 0;
+  color: var(--red);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+[data-theme="dark"] .live-wrap .activity-error { color: var(--red-light); }
+.live-wrap .reasoning-phase .rp-text { min-width: 0; overflow-wrap: anywhere; }
+
+/* Tool identity comes from its icon/name, not a different colored card. */
+[data-theme] .live-wrap .tool-row {
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 7px 4px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-dim);
+  line-height: 1.65;
+}
+[data-theme] .live-wrap .tool-row:hover { background: var(--activity-surface); color: var(--text); }
+[data-theme] .live-wrap .tool-row.err { background: var(--error-bg); }
+.live-wrap .tool-row .tool-name,
+.live-wrap .tool-row .tool-icon { color: var(--text-dim); }
+.live-wrap .tool-name { margin-right: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.live-wrap .tool-icon { width: 15px; height: 15px; padding: 0; border-radius: 0; box-shadow: none; }
+.live-wrap .tool-detail {
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.live-wrap .tool-detail.tool-cmd {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.live-wrap .tool-mark {
+  max-width: 100%;
+  padding-left: 0;
+  font-size: var(--fs-xs);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 1;
+  animation: none;
+}
+.live-wrap .tool-row.ok .tool-mark { color: var(--green-dim); }
+.live-wrap .tool-row.err .tool-mark { color: var(--red); }
+[data-theme="dark"] .live-wrap .tool-row.ok .tool-mark { color: var(--green-light); }
+[data-theme="dark"] .live-wrap .tool-row.err .tool-mark { color: var(--red-light); }
+
+/* Output surfaces: stable footer controls never cover log text. */
+.live-wrap .tool-body,
+.live-wrap .tool-body-live:not(.final) {
+  margin: 2px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--activity-border);
+  border-radius: 8px;
+  background: var(--activity-surface);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.live-wrap .tool-body-text { overflow-wrap: anywhere; scrollbar-width: thin; }
+.live-wrap .tool-body-actions {
+  position: static;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  opacity: 1;
+}
+.live-wrap .tool-body-btn,
+.live-wrap .tool-body-live .tool-body-btn:not(.copy-btn) {
+  min-height: 28px;
+  padding: 3px 8px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+.live-wrap .tool-body-btn.copy-btn { opacity: 1; background: transparent; border-color: transparent; }
+.live-wrap .tool-body-btn:hover { background: var(--bg3); color: var(--text); }
+
+/* Delegated work and task lists share the same quiet surface. */
+.live-wrap :is(.subagent-block, .todo-block) {
+  border-color: var(--activity-border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: none;
+}
+.live-wrap :is(.subagent-head, .todo-head) { background: var(--activity-surface); padding: 10px 12px; }
+.live-wrap .subagent-head { flex-wrap: wrap; gap: 6px 8px; }
+.live-wrap .subagent-head.subagent-done { opacity: 1; background: transparent; }
+.live-wrap .subagent-type-badge {
+  color: var(--text-dim);
+  background: var(--bg2);
+  border-color: var(--activity-border);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.live-wrap .subagent-head.subagent-done .subagent-type-badge { opacity: 1; }
+.live-wrap .subagent-icon { color: var(--text-dim); }
+.live-wrap .subagent-spinner { border-color: var(--border-mid); border-top-color: var(--accent); }
+.live-wrap .subagent-label { white-space: normal; overflow-wrap: anywhere; flex-basis: 140px; }
+.live-wrap :is(.subagent-body, .subagent-result) { border-color: var(--activity-border); padding: 8px 12px; }
+.live-wrap .subagent-body .tool-row { margin-left: 0; padding-left: 4px; border: 0; }
+.live-wrap .subagent-swarm > .subagent-body { margin-left: 10px; padding-left: 10px; border-left-width: 1px; }
+.live-wrap .todo-head { font-size: var(--fs-sm); }
+.live-wrap .todo-progress { color: var(--text-dim); background: var(--bg3); }
+
+/* Shell is another execution surface; running/queued labels remain. */
+.live-wrap .shell-block {
+  border: 1px solid var(--activity-border) !important;
+  border-radius: 8px !important;
+  background: var(--activity-surface) !important;
+}
+.live-wrap .shell-block-head {
+  flex-wrap: wrap;
+  padding: 10px 12px !important;
+  background: transparent !important;
+  border-bottom-color: var(--activity-border) !important;
+}
+.live-wrap .shell-block-cmd { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.live-wrap .shell-block-head::after { color: var(--text-dim) !important; background: var(--bg3) !important; letter-spacing: 0 !important; }
+.live-wrap .shell-block-prompt { color: var(--text-dim); }
+
+/* Reading and controls: restrained decoration, visible keyboard focus. */
+.live-wrap .agent-reply.streaming::after { width: 3px; height: 0.85em; border-radius: 1px; }
+.live-wrap .agent-reply :not(pre) > code { color: var(--text); font-weight: 400; }
+[data-theme] .live-wrap .agent-reply pre { background: var(--activity-surface); }
+.live-wrap .agent-reply blockquote { background: transparent; border-left-color: var(--border-mid); }
+.live-wrap :is(.thinking-block-head, .tool-group-head, .reasoning-phase-head, .tool-body-btn, .diff-btn):focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+}
+@media (max-width: 700px) {
+  [data-theme] .live-wrap :is(.thinking-block, .tool-group, .reasoning-phase) { padding-left: 8px; }
+  .live-wrap .tool-mark { flex-basis: 100%; padding-left: 25px; }
+  .live-wrap .tool-body { padding: 8px 10px; }
+  .live-wrap :is(.subagent-body, .subagent-result) { padding: 6px 8px; }
+}

@@ -26,6 +26,9 @@ export interface BridgeOpts {
   extra?: Record<string, unknown>;
   /** Messages to seed into the conversation on startup (session restore). */
   initialMessages?: unknown[];
+  isRestored?: boolean;
+  restoreState?: Record<string, unknown>;
+  restoreBackend?: string;
   /** Optional compaction strategy that intercepts conversation:compact. */
   compactionStrategy?: CompactionStrategyHook;
 }
@@ -49,14 +52,23 @@ export interface ContextSnapshot {
   messages: unknown[];
   contextWindow: number;
   activeTokens: number;
+  readOnly?: boolean;
 }
 
 export interface Bridge {
+  readonly backendId?: string;
+  readonly supportsImages?: boolean;
   /** What kind of session this bridge implements. Defaults to "agent". */
   readonly kind?: SessionKind;
+  /** Explicitly supports returning queued and emitting queued-submit/done. */
+  readonly supportsQueue?: boolean;
+  readonly supportsCwdChange?: boolean;
+  readonly readOnlyContext?: boolean;
 
   /** Resolves once the underlying agent is initialized and ready for prompts. */
   ready(): Promise<void>;
+
+  getRestoreState?(): Record<string, unknown>;
 
   /** Submit a prompt; resolves at end of turn. */
   submit(text: string): Promise<{ stopReason: string }>;
@@ -71,7 +83,7 @@ export interface Bridge {
   resizePty?(cols: number, rows: number): void;
 
   /** Dispatch a slash command (e.g. "/model", "gpt-5"). Backends free to no-op. */
-  execCommand?(name: string, args: string): void;
+  execCommand?(name: string, args: string): void | Promise<void>;
 
   /** Set thinking level silently (no echo, no toast). */
   setThinking?(level: string): void;

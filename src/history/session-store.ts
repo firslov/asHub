@@ -122,12 +122,30 @@ export class SessionStore {
   private activeLeaf = "";
   private meta: SessionMeta;
   private pendingHeader: SessionHeaderEntry | null = null;
+  private externalMeta = false;
+  private sealed = false;
+  private writes = new Set<Promise<unknown>>();
+  private appendQueue: Promise<unknown> = Promise.resolve();
+  private writeFailed = false;
+
+  /** Refuse new writes immediately, then drain already-started appends. */
+  async seal(): Promise<void> {
+    this.sealed = true;
+    await Promise.allSettled([...this.writes]);
+  }
+  private track<T>(write: Promise<T>): Promise<T> {
+    this.writes.add(write);
+    void write.finally(() => this.writes.delete(write)).catch(() => {});
+    return write;
+  }
+  private assertWritable(): void { if (this.sealed || this.writeFailed) throw new Error("session store closed or requires recovery"); }
   readonly id: string;
 
   constructor(filePath: string, opts?: SessionStoreOpts) {
     this.entriesPath = filePath;
     this.leafPath = filePath + ".leaf";
     this.metaPath = opts?.metaPath ?? filePath + ".meta";
+    this.externalMeta = !!opts?.metaPath;
     this.meta = { createdAt: 0 };
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
@@ -157,15 +175,25 @@ export class SessionStore {
   private flushHeader(): void {
     if (!this.pendingHeader) return;
     const headerLine = JSON.stringify(this.pendingHeader) + "\n";
-    this.pendingHeader = null;
     fs.writeFileSync(this.entriesPath, headerLine);
+    this.pendingHeader = null;
     this.persistMeta();
     this.persistLeaf();
   }
 
   getActiveLeaf(): string { return this.activeLeaf; }
   setActiveLeaf(id: string): void {
+    this.assertWritable();
+    if (this.writes.size) throw new Error("session store append in progress");
     if (!this.entries.has(id)) throw new Error(`unknown entry: ${id}`);
+    this.flushHeader();
+    const size = fs.statSync(this.entriesPath).size;
+    try { fs.appendFileSync(this.entriesPath, JSON.stringify({ type: "leaf", leafId: id }) + "\n"); }
+    catch (err) {
+      try { fs.truncateSync(this.entriesPath, size); }
+      catch { this.writeFailed = true; }
+      throw err;
+    }
     this.activeLeaf = id;
     this.persistLeaf();
   }
@@ -176,18 +204,42 @@ export class SessionStore {
   }
   getMeta(): SessionMeta { return { ...this.meta }; }
   setName(name: string): void {
+    this.assertWritable();
     this.meta.name = name;
     this.persistMeta();
   }
   setMeta(patch: Partial<SessionMeta>): void {
+    this.assertWritable();
     this.meta = { ...this.meta, ...patch };
     this.persistMeta();
   }
 
-  async appendMessages(messages: AgentMessage[]): Promise<string[]> {
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    this.assertWritable();
+    const write = this.appendQueue.catch(() => {}).then(() => {
+      if (this.writeFailed) throw new Error("session store requires recovery");
+      return operation();
+    });
+    this.appendQueue = write;
+    return this.track(write);
+  }
+  private async appendDurably(data: string): Promise<void> {
+    const size = fs.statSync(this.entriesPath).size;
+    try { await fsp.appendFile(this.entriesPath, data); }
+    catch (err) {
+      try { await fsp.truncate(this.entriesPath, size); }
+      catch { this.writeFailed = true; }
+      throw err;
+    }
+  }
+  appendMessages(messages: AgentMessage[], parentId?: string): Promise<string[]> {
+    return this.enqueue(() => this.appendMessagesImpl(messages, parentId ?? this.activeLeaf));
+  }
+  private async appendMessagesImpl(messages: AgentMessage[], parentId: string): Promise<string[]> {
     if (messages.length === 0) return [];
     this.flushHeader();
-    let parent = this.activeLeaf;
+    if (!this.entries.has(parentId)) throw new Error("unknown branch parent");
+    let parent = parentId;
     const lines: string[] = [];
     const staged: MessageEntry[] = [];
     const newIds: string[] = [];
@@ -210,14 +262,18 @@ export class SessionStore {
     }
     // Persist first: commit to memory only after the lines are on disk, so a
     // failed append can't advance activeLeaf past entries the file lacks.
-    await fsp.appendFile(this.entriesPath, lines.join("\n") + "\n");
+    lines.push(JSON.stringify({ type: "leaf", leafId: parent }));
+    await this.appendDurably(lines.join("\n") + "\n");
     for (const e of staged) this.entries.set(e.id, e);
     this.activeLeaf = parent;
     this.persistLeaf();
     return newIds;
   }
 
-  async appendCompaction(firstKeptId: string, tokensBefore: number = 0): Promise<string> {
+  appendCompaction(firstKeptId: string, tokensBefore: number = 0): Promise<string> {
+    return this.enqueue(() => this.appendCompactionImpl(firstKeptId, tokensBefore));
+  }
+  private async appendCompactionImpl(firstKeptId: string, tokensBefore: number): Promise<string> {
     if (!this.entries.has(firstKeptId)) throw new Error(`firstKeptId unknown: ${firstKeptId}`);
     this.flushHeader();
     let id = newEntryId();
@@ -231,7 +287,7 @@ export class SessionStore {
       tokensBefore,
     };
     // Persist first; commit to memory only after the write succeeds.
-    await fsp.appendFile(this.entriesPath, JSON.stringify(e) + "\n");
+    await this.appendDurably(JSON.stringify(e) + "\n" + JSON.stringify({ type: "leaf", leafId: e.id }) + "\n");
     this.entries.set(e.id, e);
     this.activeLeaf = e.id;
     this.persistLeaf();
@@ -333,7 +389,7 @@ export class SessionStore {
     } catch { this.meta = { createdAt: 0 }; }
     let raw: string;
     try { raw = fs.readFileSync(this.entriesPath, "utf-8"); }
-    catch { return; }
+    catch (err) { if ((err as NodeJS.ErrnoException).code === "ENOENT") return; throw err; }
     // Detect a torn tail: a process killed mid-append leaves a final line
     // that lacks its trailing newline or fails to parse. Left in place, the
     // next append would glue onto it and the combined line would be skipped
@@ -358,27 +414,34 @@ export class SessionStore {
           fs.truncateSync(this.entriesPath, keepBytes);
           console.warn(`[session-store] truncated ${Buffer.byteLength(raw) - keepBytes} torn byte(s) from tail of ${this.entriesPath}`);
           raw = lines.slice(0, lastIdx).join("\n");
-        } catch { /* best effort; malformed lines are skipped below */ }
+        } catch (err) { throw new Error(`Cannot repair history tail: ${String(err)}`); }
       } else if (!raw.endsWith("\n")) {
         // A complete final line that lost its trailing newline (torn between
         // the entry and the "\n") parses fine, but the file is left without a
         // newline.  Restore it so the next append doesn't glue its first line
         // onto this one — otherwise the combined line becomes malformed and
         // both entries are dropped on the next load().
-        try { fs.appendFileSync(this.entriesPath, "\n"); } catch { /* best effort */ }
+        try { fs.appendFileSync(this.entriesPath, "\n"); }
+        catch (err) { throw new Error(`Cannot repair history newline: ${String(err)}`); }
       }
     }
+    let journalLeaf: string | undefined;
     for (const line of raw.split("\n")) {
       if (!line) continue;
       try {
-        const e = JSON.parse(line) as SessionEntry;
+        const record = JSON.parse(line);
+        if (record.type === "leaf") {
+          if (typeof record.leafId === "string") journalLeaf = record.leafId;
+          continue;
+        }
+        const e = record as SessionEntry;
         if (!e.id) continue;
         this.entries.set(e.id, e);
         if (e.type === "session") this.rootId = e.id;
       } catch { /* skip malformed */ }
     }
     try {
-      this.activeLeaf = fs.readFileSync(this.leafPath, "utf-8").trim();
+      this.activeLeaf = journalLeaf ?? fs.readFileSync(this.leafPath, "utf-8").trim();
       if (!this.entries.has(this.activeLeaf)) {
         // Leaf points at an entry missing from the file (e.g. dropped by the
         // torn-tail truncation above). Falling back to the root would make
@@ -398,9 +461,8 @@ export class SessionStore {
 
   private persistLeaf(): void {
     if (this.pendingHeader) return;
-    // Best effort: the jsonl already holds the entries and load() falls back
-    // to the last entry when the leaf file is missing/stale, so a failed
-    // write must not abort callers (e.g. capture.flush()) mid-commit.
+    // Cache only: the leaf commit in the JSONL is authoritative, including
+    // explicit rewinds. Legacy sessions still use this file until their next write.
     try {
       fs.writeFileSync(this.leafPath, this.activeLeaf);
     } catch (err) {
@@ -408,7 +470,8 @@ export class SessionStore {
     }
   }
   private persistMeta(): void {
-    if (this.pendingHeader) return;
+    // The Hub owns its shared meta file and serializes those writes itself.
+    if (this.externalMeta || this.pendingHeader) return;
     let existing: Record<string, unknown> = {};
     try { existing = JSON.parse(fs.readFileSync(this.metaPath, "utf-8")); } catch {}
     fs.writeFileSync(this.metaPath, JSON.stringify({ ...existing, ...this.meta }));

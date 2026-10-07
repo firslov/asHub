@@ -1,47 +1,111 @@
-# asHub
+<p align="center"><img src="web/assets/brand/icon.svg" width="72" height="72" alt="asHub"></p>
+<h1 align="center">asHub</h1>
+<p align="center">让想法成形，让复杂有序</p>
+<p align="center"><a href="https://ashub.aihao.world">主页与下载</a> · <a href="https://github.com/firslov/asHub/releases">Releases</a> · <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a></p>
 
-[English](README.md) | [简体中文](#ashub)
+[![License](https://img.shields.io/badge/license-MIT-787868.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-22-787868.svg)](.nvmrc)
+[![agent-sh](https://img.shields.io/badge/agent--sh-0.15.17-a58b5d.svg)](package.json)
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D22.12.0-brightgreen.svg)](package.json)
+asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌面 AI Agent 工作台。把多会话、模型选择、子代理、终端和文件放在同一个界面，既能专注阅读结果，也能展开审阅完整执行过程。
 
-[agent-sh](https://github.com/guanyilun/agent-sh) 的桌面应用 —— 它负责创建并监管 agent-sh 会话，
-并通过单一端口把它们暴露给浏览器界面。
+支持 **macOS（Apple Silicon / Intel）、Windows x64 与 Linux x64**。桌面版与浏览器版使用同一套客户端；使用前需配置自己的模型提供商与 API 凭据，模型调用费用由提供商收取。
 
-![asHub](pic/asHub_0.min.png)
+![asHub 多会话工作台：项目分析、格式化表格与会话管理](website/assets/showcase-workspace.png)
 
-桌面窗口和普通浏览器是**同一个客户端**：Electron 内嵌了下面这个 hub，所以在任意浏览器里打开
-`http://localhost:7878`，看到的内容与桌面窗口完全一致。
+*配图来自 v0.20.2 的真实界面，使用隔离的演示项目与示例对话，不包含个人会话或 API 凭据。*
 
-## 功能特性
+## 核心体验
 
-- **多会话** —— 侧边栏可创建、切换、搜索、置顶、归档、关闭会话
-- **工作区视图** —— 按工作目录分组展示会话，终端与归档各自独立成视图
-- **终端会话** —— 真正的 PTY shell 与 agent 会话并存，以标签页方式切换
-- **会话持久化** —— 重启后对话依然保留
-- **自动标题** —— LLM 生成会话标题，纯文本回退兜底
-- **实时流式输出** —— SSE 支持 Markdown、语法高亮代码、Diff 视图和工具调用
-- **推理过程折叠** —— 连续的 think→tool 轮次自动折叠为可展开的单一块
-- **任务清单** —— agent 自动维护任务追踪，渲染为吸附在消息流顶部的进度卡片
-- **子代理** —— 五种专家子代理（plan / explore / review / research / implement），支持权限审批、取消、并发限制、按类型模型覆盖与预算
-- **分支树** —— rewind 与 fork 自由穿梭对话历史，非破坏性时间旅行，可视化树形面板
-- **权限审批** —— 文件修改审批（倒计时、完整 diff 预览、会话级放行）
-- **导出** —— 一键导出对话为 Markdown
-- **技能市场** —— 从 GitHub / Gitee 浏览安装技能
-- **扩展机制** —— 从 `~/.agent-sh/extensions` 加载用户扩展，示例见 [`examples/extensions`](examples/extensions)
-- **系统通知** —— 后台运行时通知审批请求与回复完成
-- **图片支持** —— 多模态模型支持粘贴/上传图片，自动压缩并使用 Blob URL 渲染
-- **模型选择器** —— 按 provider 分组、可搜索的下拉列表，实时同步 OpenRouter 目录（300+ 模型）
-- **多模态指示器** —— 输入框左侧图标标识当前模型是否支持图片
-- **状态栏折叠** —— 一键隐藏/显示模型、缓存、余额信息
-- **缓存命中率** —— 圆形进度环展示 prompt cache 命中效率
-- **Provider 余额** —— 按会话独立显示 DeepSeek、OpenRouter 余额
-- **热重载** —— apiKey 和 provider 配置修改后立即生效，无需重启
-- **流式性能优化** —— block 级增量渲染、防抖语法高亮、SPA DOM 缓存
-- **休眠保护** —— 系统休眠时自动暂停 SSE 与渲染
-- **自动更新** —— 应用内更新走镜像下载，镜像不可用时回退 GitHub
-- **双语界面** —— 简体中文与 English，另有显示缩放设置
-- **跨平台** —— 已打包支持 macOS（Apple Silicon 与 Intel）、Windows (x64) 和 Linux (AppImage)
+| 能力 | 使用体验 |
+| --- | --- |
+| 多会话与工作区 | 标签切换，按工作目录组织，搜索、置顶、归档与历史恢复 |
+| 清晰的执行过程 | Markdown、代码高亮、Diff、思考与工具调用分层展示；详情可展开，输出可复制 |
+| 任务与子代理 | 任务清单与进度；规划、探索、审查、调研、实现五类子代理，支持模型与预算配置 |
+| 模型与上下文 | 搜索与切换模型，查看上下文用量、缓存命中率，以及支持的提供商余额 |
+| 可审阅的操作 | 权限审批、改动预览、会话级放行；后台完成与审批通知 |
+| 项目工具 | PTY 终端、文件浏览、图片输入、技能市场、用户扩展 |
+| 保留工作脉络 | 会话持久化、对话分支与回退、Markdown 导出 |
+| 统一的界面 | 浅色、深色与暖白主题，中英文切换、显示缩放、可折叠状态栏 |
+
+<details>
+<summary>查看执行过程：任务、代码差异与工具输出</summary>
+
+![任务进度、文件 Diff 与工具输出](website/assets/showcase-workflow.png)
+
+</details>
+
+<details>
+<summary>查看文件侧栏与暖白主题</summary>
+
+![文件侧栏与对话并排展示](website/assets/showcase-files.png)
+
+</details>
+
+## 安装与开始使用
+
+从 [主页](https://ashub.aihao.world/#download) 或 [GitHub Releases](https://github.com/firslov/asHub/releases/latest) 下载。桌面安装包包含运行环境，无需单独安装 Node.js。
+
+| 系统 | 安装包 |
+| --- | --- |
+| macOS Apple Silicon | `arm64.dmg` |
+| macOS Intel | `x64.dmg` |
+| Windows x64 | `Setup.exe` |
+| Linux x64 | `.AppImage` |
+
+1. 安装并打开 asHub
+2. 在右侧配置面板设置模型提供商、API 凭据与默认模型
+3. 新建会话，选择项目目录，开始对话；需要时打开文件、终端或其他辅助面板
+
+### macOS 一行安装
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/firslov/asHub/main/install.sh | bash
+```
+
+脚本识别 Apple Silicon / Intel，将应用安装到 `/Applications` 并清除隔离标记。手动安装 DMG 如被拦截，可在「系统设置 → 隐私与安全性」中选择「仍要打开」，或执行：
+
+```sh
+/usr/bin/xattr -dr com.apple.quarantine "/Applications/asHub.app"
+```
+
+### Linux
+
+下载 AppImage 后，在文件所在目录执行：
+
+```sh
+chmod +x ./asHub-*.AppImage
+./asHub-*.AppImage
+```
+
+## 从源码运行
+
+项目固定使用 **Node.js 22.23.3**（最低 **22.12.0**），内核为 **agent-sh 0.15.17**。使用 nvm 时：
+
+```sh
+git clone https://github.com/firslov/asHub.git
+cd asHub
+nvm install && nvm use
+npm ci
+npm run electron:dev
+```
+
+只运行本地 Web 服务：
+
+```sh
+npm start -- --port 7878
+# 浏览器打开 http://localhost:7878
+```
+
+### 跨设备访问
+
+```sh
+npm start -- --host 0.0.0.0 --port 7878
+```
+
+默认仅监听 `127.0.0.1`。非回环地址需要访问令牌：启动时终端会显示自动生成的令牌，在浏览器 `/auth` 页面登录。也可通过 `ASHUB_TOKEN` 设置固定令牌；API 客户端使用 `Authorization: Bearer <令牌>`。跨设备连接请使用可信网络或 HTTPS 反向代理。
+
+会话历史保存在本地；使用云端模型时，相关请求内容会发送给配置的提供商。ACP 会话恢复依赖后端的 `session/load`：不支持恢复或旧会话缺少远端 ID 时，历史仍可查看，但需新建会话继续。
 
 ## 工作原理
 
@@ -69,80 +133,6 @@ Electron 外壳 (electron/main.cjs)           浏览器（任意现代浏览器�
 
 因此新增一种后端只需要实现一个接口，hub、SSE 协议与前端都不用改。
 
-## 安装
-
-### macOS（Apple Silicon 与 Intel）
-
-一行命令安装，无需处理 Gatekeeper 拦截：
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/firslov/ashub/main/install.sh | bash
-```
-
-安装到 `/Applications` 并清除隔离标记。`install.sh` 会自动识别 `arm64` / `x86_64` 并取对应构建。
-
-<details>
-<summary>想用 .dmg 安装？</summary>
-
-从 [Releases](https://github.com/firslov/ashub/releases) 下载，拖入 Applications，然后：
-
-- 执行 `/usr/bin/xattr -dr com.apple.quarantine "/Applications/asHub.app"`，**或**
-- 先打开一次，进入 **系统设置 → 隐私与安全性**，拉到底部点击 **仍要打开**。
-
-</details>
-
-### Windows
-
-从 [Releases](https://github.com/firslov/ashub/releases) 下载安装包。
-终端会话使用系统 shell（`%COMSPEC%`，或 PowerShell）。
-
-### Linux
-
-从 [Releases](https://github.com/firslov/ashub/releases) 下载 AppImage。
-
-下载同样由项目自己的镜像提供（见 [下载与镜像](#下载与镜像)），一行命令安装脚本与应用内更新默认都走它。
-
-## 源码运行
-
-需要 **Node.js ≥ 22.12.0**（构建工具要求的最低版本）。
-项目通过 `.nvmrc` 和 `.node-version` 固定使用 **Node.js 22.23.3**；
-使用 nvm 时，请先运行 `nvm install && nvm use`，再安装依赖。
-
-```sh
-git clone https://github.com/firslov/ashub.git
-cd ashub
-npm install
-```
-
-**Electron**（桌面应用）：
-
-```sh
-npm run electron:dev
-```
-
-**命令行**（无窗口服务器）：
-
-```sh
-npm start -- --port 8080
-```
-
-**浏览器**（用任意浏览器作为界面）：
-
-```sh
-npm start -- --host 0.0.0.0 --port 7878
-# 在浏览器中打开 http://localhost:7878
-```
-
-> 绑定 `0.0.0.0` 允许局域网内其他设备访问。
-> `127.0.0.1`（默认）仅限本机访问。
-
-**构建**可分发的安装包：
-
-```sh
-npm run electron:dist:mac   # macOS .dmg（arm64 + x64）
-npm run electron:dist:win   # Windows .exe（NSIS）
-```
-
 ## 命令行参数
 
 以下参数适用于 `ashub` / `npm start`；Electron 应用以默认值在进程内启动同一个 hub。
@@ -166,104 +156,46 @@ ashub --port 8080
 ashub --backend acp --cmd "claude-code-acp"
 ```
 
-## HTTP 接口
+## 项目结构
 
-前端通过普通 HTTP 与 hub 通信，同一套接口也可供脚本调用。会话级路由以 `POST /sessions`
-返回的 `instanceId` 作为前缀。
-
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| `GET` | `/sessions` | 当前会话列表（JSON：cwd、标题、类型、模型、状态） |
-| `POST` | `/sessions` | 新建会话 —— `{ cwd?, kind? }` → `{ instanceId, cwd, kind }` |
-| `DELETE` | `/<id>/` | 关闭会话 |
-| `GET` | `/<id>/` | 该会话的网页界面 |
-| `GET` | `/<id>/events` | SSE 事件流（消息、工具调用、任务清单、审批、PTY 输出） |
-| `POST` | `/<id>/submit` | 提交提问 —— `{ query }` |
-| `POST` | `/<id>/cancel` | 取消当前回合 |
-| `POST` | `/<id>/pty-input`、`/<id>/pty-resize` | 终端会话的输入与尺寸 |
-| `GET`/`POST` | `/<id>/context`、`/context/rewind`、`/context/drop` | 查看与回退上下文 |
-| `GET`/`POST` | `/<id>/tree`、`/<id>/fork` | 分支树与非破坏性 fork |
-| `GET`/`PUT` | `/<id>/model`、`/sa-model`、`/sa-budget`、`/sa-types` | 模型与子代理设置 |
-| `POST` | `/api/permission/decide` | 回应权限审批 |
-| `POST` | `/api/upload`、`GET /api/uploads/<id>` | 图片附件 |
-| `GET` | `/api/models`、`/api/balance`、`/api/version` | 模型目录、Provider 余额、版本 |
-| `GET`/`PUT`/`POST` | `/api/config`、`/api/config/reload`、`/api/settings/auto-approve` | 配置项 |
-| `GET`/`POST` | `/api/skills`、`/api/skills/install`、`/api/skills/uninstall` | 技能市场 |
-| `GET` | `/fs`、`/<id>/files`、`/pick-dir` | 界面用的文件浏览 |
-
-## 目录结构
-
-```
-src/
-  cli.ts              入口：参数解析、桥接工厂、启动 hub
-  hub.ts              单端口 HTTP/SSE 服务：会话、路由、权限、上传
-  bridges/
-    types.ts          所有后端都实现的 Bridge 接口
-    ash.ts            进程内 agent-sh 内核
-    acp.ts            ACP 子进程与消息翻译
-    terminal.ts       PTY shell 会话
-  history/            会话存储、帧捕获、摘要、压缩策略
-web/                  前端：原生 ES 模块，无构建步骤（index.html + js/ + css/）
-  js/stream/          各类消息块的渲染器（思考、工具、任务清单、回复、实时输出）
-electron/             桌面外壳：窗口、菜单、IPC、自动更新、面向扩展的 tsx 加载
-mirror/               下载镜像与落地页，服务于 ashub.aihao.world
-examples/extensions/  agent-sh 扩展示例（wechat-bot）
-scripts/              构建辅助（依赖校验、Windows 资源、release JSON）
+```text
+src/                  HTTP/SSE 服务、会话生命周期、历史与权限
+  bridges/            agent-sh / ACP / PTY 桥接实现
+  history/            历史存储、帧捕获与上下文压缩
+web/                  原生 ES 模块与 CSS，无前端构建步骤
+  js/stream/          思考、工具、任务、正文与实时输出渲染
+  assets/brand/       统一的图标、标志与矢量字标
+electron/             桌面窗口、IPC、自动更新与应用图标
+website/              主页、下载模板、字体与应用配图
+scripts/              构建辅助与演示配图截取
+tests/                隔离回归、HTTP 与内核兼容测试
+examples/extensions/  扩展示例
 ```
 
-## 开发
+## 开发与验证
 
 | 命令 | 作用 |
-|---|---|
-| `npm start` | 用 `tsx` 直接从 TypeScript 运行 hub（无需构建） |
-| `npm run build` | 用 `tsc` 把 `src/` 编译到 `dist/` |
-| `npm run typecheck` | 类型检查 `src/`（`tsc --noEmit`） |
-| `npm run typecheck:web` | 按 `web/jsconfig.json` 检查 `web/js` |
-| `npm run electron:dev` | 先构建，再启动 Electron（它加载的是 `dist/`） |
-| `npm run electron:pack` | 生成解包后的应用目录，便于本地快速验证 |
-| `npm run electron:dist:mac` / `:win` | 生成可分发包 |
+| --- | --- |
+| `npm run build` | 编译后端 TypeScript 至 `dist/` |
+| `npm run typecheck` | 后端类型检查 |
+| `npm run typecheck:web` | 前端工程检查 |
+| `npm test` | 隔离回归测试 |
+| `npm run test:http` | HTTP 与会话接口测试 |
+| `npm run test:kernel` | 构建并检查内核兼容性 |
+| `npm run electron:pack` | 生成解包应用 |
+| `npm run electron:dist:mac` | 构建 macOS 安装包 |
+| `npm run electron:dist:win` | 构建 Windows 安装包 |
 
-几点说明：
+Electron 加载编译后的 `dist/`，CLI 通过 `tsx` 运行源码。前端第三方库随仓库提供，界面资源无需外部 CDN。回归测试使用临时数据与模拟边界，不调用模型，也不读取实际配置密钥。
 
-- `web/` **没有构建步骤** —— 原生 ES 模块与 CSS 直接加载。所有第三方前端库（marked、DOMPurify、
-  highlight.js、KaTeX、xterm）都放在 `web/vendor`，因此界面可离线工作。
-- Electron 加载的是编译产物 `dist/`，所以 `electron:dev` 会先跑 `build`；而 CLI 通过 `tsx`
-  直接运行 `src/` 里的同一份代码。
-- `prebuild` 会执行 `scripts/check-deps.cjs`：当 `git pull` 后 `node_modules` 过期时，
-  在 `tsc` 报出误导性错误之前先给出真实原因。
-- 类型检查是分开的：`src` 是严格 TypeScript，`web/js` 以 `checkJs: false` 检查
-  （见 `web/jsconfig.json`）。
+技能可从内置市场安装；扩展从 `~/.agent-sh/extensions/` 加载，支持 TypeScript。参见 [扩展示例](examples/extensions/wechat-bot)。HTTP 路由实现参见 [`src/hub.ts`](src/hub.ts)，后端接入契约参见 [`src/bridges/types.ts`](src/bridges/types.ts)。
 
-## 技能与扩展
+## 网站与发布
 
-- **技能**：通过侧边栏的技能面板，从内置市场（GitHub 或 Gitee 源）安装到 agent-sh 的技能目录。
-- **扩展**：ash 后端从 `~/.agent-sh/extensions/` 加载，并注册了 `tsx`，因此扩展可以用
-  TypeScript 编写。[`examples/extensions/wechat-bot`](examples/extensions/wechat-bot)
-  是一个完整示例：把消息转发到本地 webhook 的工具。
+GitHub Actions 构建 macOS arm64 / x64、Windows x64 与 Linux x64，并发布至 GitHub Releases。安装脚本与应用更新优先使用镜像，不可用时回退 GitHub。
 
-## 下载与镜像
-
-发布产物由 GitHub Actions 构建（macOS arm64 + x64、Windows x64、Linux x64），并同步到
-[`mirror/`](mirror/README.md) 里那个零依赖的小服务。它同时承担两件事：
-
-- **`mirror.aihao.world`** —— 面向 `electron-updater` 与手动下载的发布代理，会把二进制
-  地址改写到 CDN，避免大文件走 VPS 慢链路。
-- **`ashub.aihao.world`** —— 下载落地页，服务端渲染并注入当前版本号。
-
-macOS 一行安装脚本与应用内更新都优先走镜像，镜像不可达时回退 GitHub。
+[主页](https://ashub.aihao.world) 从镜像服务注入当前版本及安装包链接，避免硬编码下载地址。网站模板、配图复现和部署说明见 [`website/README.md`](website/README.md)。镜像服务独立部署，不在本仓库中。
 
 ## 许可证
 
-MIT
-
-局域网访问需要访问令牌。绑定非回环地址时，asHub 会生成令牌并输出到终端；
-在浏览器打开 `/auth` 输入令牌登录。也可在启动前设置 `ASHUB_TOKEN` 使用固定令牌。
-API 客户端通过 `Authorization: Bearer <令牌>` 认证。请使用可信网络或 HTTPS 反向代理。
-仅监听本机回环地址的桌面使用方式不变。
-
-ACP 会话通过后端的 `session/load` 能力恢复。后端不支持恢复，或旧会话未保存
-远端会话 ID 时，历史仍可查看，但继续提交会明确报错；这种情况需要新建会话。
-
-执行 `npm test` 运行隔离回归测试，再执行 `npm run typecheck` 和
-`npm run typecheck:web`。测试使用临时数据及 Agent、DOM、PTY、Electron 替身，
-不会调用模型或读取实际配置密钥。
+[MIT](LICENSE)

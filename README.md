@@ -199,6 +199,22 @@ GitHub Actions builds macOS arm64 / x64, Windows x64 and Linux x64 packages and 
 
 The [website](https://ashub.aihao.world) receives the current version and package URLs from the mirror service, avoiding hardcoded download links. See [`website/README.md`](website/README.md) for templates, reproducible screenshots and deployment. The mirror service is deployed separately and is not part of this repository.
 
+## asHub system prompt
+
+The built-in `ash` backend loads its product prompt from [`src/prompts/ashub.ts`](src/prompts/ashub.ts). It describes task execution, research and creative work, session context, tools and skills, delegation, verification and communication. Chat and agent-terminal sessions get different surface descriptions. Planning, response length and delegation remain task-dependent.
+
+The bridge uses agent-sh's identity and frontend hooks while preserving project conventions, global rules, skills, extension instructions and model capability context. Task authorization guidance does not bypass permission checks or change auto-approval settings. Specialized subagents keep their role prompts; external ACP backends manage their own system prompts.
+
+After changing this module, rebuild and restart the running asHub process. Restored sessions create a fresh bridge and load the current prompt. This is separate from the UI's reusable prompt library. `npm run test:kernel` checks the prompt sent to a loopback-only mock model through the real kernel.
+
+## Installation activity & privacy
+
+Packaged desktop builds share limited installation activity by default: a random persistent installation ID, app version, operating system and architecture. Reports run only while an asHub window is focused and the system has been used recently, at most hourly with an additional report across a Beijing-time date boundary. No conversations, prompts, file content, workspace paths or API keys are sent. Failed reports back off silently and never block sessions, startup or updates.
+
+Turn reporting off in **Privacy → Share installation activity** (Windows/Linux: press Alt to show the application menu if hidden), or launch with `ASHUB_USAGE_STATS=0`. The preference is stored locally in `usage-preferences.json`. Updates continue to work when reporting is disabled. Development and CLI builds do not send activity reports.
+
+The mirror reports **active installations**, not unique people. Older clients remain counted through update requests; inferred network fingerprints are shown separately. Download requests do not imply completed downloads or installations, and COS direct downloads bypass these counts. New application events do not persist raw IP addresses or user agents; existing historical logs are retained. As with ordinary HTTP requests, network addresses remain visible to the reverse proxy and its operational access logs. The server applies bounded in-memory limits to activity reports; these are abuse mitigation, not proof of a real user.
+
 ## License
 
 [MIT](LICENSE)

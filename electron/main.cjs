@@ -89,7 +89,6 @@ function detectAdhocSignature() {
 const isAdhocSigned = detectAdhocSignature();
 
 const fs = require("fs");
-const crypto = require("crypto");
 
 // ── Download mirror ────────────────────────────────────────────────────
 // Route auto-updater traffic through a mirror for faster GitHub access.
@@ -100,21 +99,27 @@ const GITHUB_REPO = "ashub";
 
 let mirrorFailed = false;
 
-function getInstallId() {
-  const file = path.join(app.getPath("userData"), ".install-id");
-  try {
-    const id = fs.readFileSync(file, "utf-8").trim();
-    if (id.length >= 16) return id;
-  } catch {}
-  const id = crypto.randomUUID();
-  try { fs.writeFileSync(file, id); } catch {}
-  return id;
+// Activity reporting has no effect on update checks, downloads or sessions.
+let usageReporter = null;
+let appIsSuspended = false;
+let mirrorFailedAt = 0;
+function syncUsageHeaders() {
+  autoUpdater.requestHeaders = { ...(autoUpdater.requestHeaders || {}),
+    "X-Ashub-Stats": usageReporter?.enabled ? "activity" : "off" };
 }
+function checkForUpdatesWithRecovery() {
+  // Retry the mirror on a later user check, never switch an in-flight download.
+  if (mirrorFailed && Date.now() - mirrorFailedAt >= 15 * 60 * 1000 &&
+      !updateDownloadInProgress && !hasDownloadedUpdate()) setupMirrorFeed();
+  return autoUpdater.checkForUpdates();
+}
+let updateDownloadInProgress = false;
 
 function setupMirrorFeed() {
   if (!MIRROR_URL || isDev) return;
   mirrorFailed = false;
-  const feedUrl = `${MIRROR_URL}?clientId=${getInstallId()}`;
+  const feedUrl = MIRROR_URL;
+  syncUsageHeaders();
   autoUpdater.setFeedURL({
     provider: "generic",
     url: feedUrl,
@@ -125,6 +130,7 @@ function setupMirrorFeed() {
 function fallbackToGitHub() {
   if (mirrorFailed) return; // already on GitHub
   mirrorFailed = true;
+  mirrorFailedAt = Date.now();
   autoUpdater.setFeedURL({
     provider: "github",
     owner: GITHUB_OWNER,
@@ -357,7 +363,7 @@ function setupAutoUpdater() {
 	autoUpdater.on("error", (err) => {
 	    console.error("[updater] error:", err.message);
 	    // If mirror fails, silently fall back to GitHub and retry
-	    if (!mirrorFailed && MIRROR_URL) {
+	    if (!mirrorFailed && MIRROR_URL && !updateDownloadInProgress && !hasDownloadedUpdate()) {
 	      fallbackToGitHub();
 	      return;
 	    }
@@ -383,7 +389,7 @@ function setupIPC() {
 
   ipcMain.handle("check-for-update", async () => {
     try {
-      const result = await autoUpdater.checkForUpdates();
+      const result = await checkForUpdatesWithRecovery();
       return { updateAvailable: !!result?.updateInfo, version: result?.updateInfo?.version };
     } catch (err) {
       return { error: err.message };
@@ -392,10 +398,13 @@ function setupIPC() {
 
   ipcMain.handle("start-update-download", async () => {
     try {
+      updateDownloadInProgress = true;
       await autoUpdater.downloadUpdate();
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err.message };
+    } finally {
+      updateDownloadInProgress = false;
     }
   });
 
@@ -745,10 +754,35 @@ if (!gotTheLock) {
   app.whenReady().then(() => {
     // Custom menu omits Cmd+W so the renderer can intercept it for tab close.
     const isMac = process.platform === "darwin";
+    if (!isDev) {
+      const { createUsageReporter } = require("./usage.cjs");
+      usageReporter = createUsageReporter({
+        userData: app.getPath("userData"), version: app.getVersion(),
+        disabled: process.env.ASHUB_USAGE_STATS === "0",
+        isActive: () => {
+          try { return !appIsSuspended && !!BrowserWindow.getFocusedWindow() && powerMonitor.getSystemIdleTime() < 300; }
+          catch { return false; }
+        },
+      });
+    }
     const template = [
       ...(isMac ? [{ role: "appMenu" }] : []),
       { role: "editMenu" },
       { role: "viewMenu" },
+      ...(!isDev ? [{ label: "隐私 / Privacy", submenu: [
+        { label: "分享安装活跃统计 / Share installation activity", type: "checkbox", checked: usageReporter.enabled,
+          click(item) {
+            const result = usageReporter.setEnabled(item.checked);
+            item.checked = result.enabled;
+            syncUsageHeaders();
+            if (!result.ok) dialog.showErrorBox("无法保存设置 / Could not save preference", "请检查应用数据目录的写入权限 / Check permission to write app data");
+          } },
+        { label: "统计说明 / About usage statistics", click() {
+          dialog.showMessageBox({ type: "info", title: "使用统计 / Usage statistics",
+            message: "仅统计安装活跃情况 / Installation activity only",
+            detail: "应用在前台且近期有操作时，通常每小时最多发送一次随机安装标识、应用版本及系统平台，跨北京时间日期可补报一次。不收集对话、文件内容、模型输入或 API 密钥。可在此菜单关闭，更新功能不受影响。\nWhen the app is focused and recently used, it sends a random installation ID, app version and platform at most hourly, with an extra report across a Shanghai date boundary. No conversations, files, prompts or API keys. Disabling this does not affect updates." });
+        } },
+      ] }] : []),
       {
         label: "Window",
         submenu: [
@@ -783,6 +817,10 @@ if (!gotTheLock) {
     if (!isDev) {
       setupAutoUpdater();
       setupMirrorFeed();
+      usageReporter.start();
+      usageReporter.tick();
+      app.on("browser-window-focus", () => usageReporter.tick());
+      app.once("will-quit", () => usageReporter.stop());
       autoUpdater.checkForUpdates().catch((err) => {
         console.error("[updater] initial check failed:", err.message);
       });
@@ -790,11 +828,14 @@ if (!gotTheLock) {
 
     // Pause / resume SSE and rendering when the system sleeps or wakes.
     powerMonitor.on("suspend", () => {
+      appIsSuspended = true;
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("app:suspend");
       }
     });
     powerMonitor.on("resume", () => {
+      appIsSuspended = false;
+      usageReporter?.tick();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("app:resume");
       }

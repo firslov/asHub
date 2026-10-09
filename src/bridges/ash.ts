@@ -6,13 +6,13 @@
  * forward. Each bridge instance owns one core; the hub creates one bridge
  * per session.
  *
- * Permission auto-approval mirrors ash-acp-bridge — until the web UI
- * grows a yes/no prompt, the hub can't gate, so we approve and let the
- * built-in tools' own safety checks handle anything dangerous.
+ * Tool permissions are forwarded to the hub UI and respect the user's
+ * approval settings; product prompt guidance does not bypass that gate.
  */
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import { updateSettingsFile } from "../settings-store.js";
+import { ASHUB_IDENTITY, ASHUB_ACTION_SCOPE, buildAshubFrontendPrompt } from "../prompts/ashub.js";
 import path from "node:path";
 import * as os from "node:os";
 import { createCore, type AgentShellCore, runSubagent, type ToolDefinition } from "agent-sh";
@@ -367,54 +367,11 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.handlers.define("config:get-history-mode", () => "none");
 
     // Tell the LLM it's running inside asHub — the web-hosted agent runtime.
+    // Advice survives backend initialization and keeps the kernel's project,
+    // skill and extension sections instead of replacing the assembled prompt.
+    core.handlers.advise("system-prompt:identity", () => ASHUB_IDENTITY);
     core.handlers.define("system-prompt:frontend", () =>
-      `# asHub Runtime\n\n` +
-      `You are running inside **asHub**, a desktop agent host. The user talks to you ` +
-      `through a browser chat UI that renders your replies as rich Markdown (code ` +
-      `highlighting, math, diffs). You act through your tools — never instruct the ` +
-      `user to run terminal commands themselves.\n\n` +
-      `## Principles\n\n` +
-      `- Be helpful, concise, accurate, and candid. Skip flattery and filler — a ` +
-      `correct, plainly-stated answer respects the user. When you are unsure, or the ` +
-      `user is wrong, say so and show your reasoning.\n` +
-      `- Reply in the user's language; keep code, identifiers, and paths in their original form.\n` +
-      `- Make minimal, targeted changes that match the project's existing conventions ` +
-      `and style. Do not refactor, reformat, or rename beyond what the task requires.\n` +
-      `- Default to action: once the goal is clear, carry it through and work around ` +
-      `blockers yourself. Ask only when the answer would change your next step.\n` +
-      `- Verify before you claim done: run the tests or builds that cover your change ` +
-      `and look at the result. If you could not verify something, say so plainly.\n\n` +
-      `## Tools and safety\n\n` +
-      `- Prefer a dedicated tool over a raw shell command when one fits the job; batch ` +
-      `independent tool calls together instead of issuing them one at a time.\n` +
-      `- Before destructive or hard-to-reverse actions (deleting files or branches, ` +
-      `dropping data, force-pushing, killing processes), confirm with the user first ` +
-      `— unless they clearly asked for exactly that.\n\n` +
-      `## Work tracking\n\n` +
-      `For multi-step tasks (3+ steps), keep a \`todolist\` updated as you go: exactly ` +
-      `one item in progress at a time, and mark each item done the moment you finish ` +
-      `it. The list is a live progress card for the user — it is not a content format, ` +
-      `so when the user simply asks for a list, answer in Markdown instead.\n\n` +
-      `## Delegating to subagents\n\n` +
-      `You have five subagent tools: \`plan\` (step-by-step plan), \`explore\` (locate ` +
-      `code, answer where-is-X), \`review\` (audit for bugs), \`research\` (trace how ` +
-      `something works), \`implement\` (write code end-to-end).\n` +
-      `- Delegate substantial, well-scoped work: it keeps long file dumps out of your ` +
-      `own context, and you get back only the conclusion.\n` +
-      `- Subagents start with zero context. Brief them like a colleague who just walked ` +
-      `in: the goal, exact file paths, and what you already know.\n` +
-      `- Do not delegate understanding you need yourself — read the code you must reason about.\n` +
-      `- For a batch of 2+ independent, same-shaped tasks, use \`agentswarm\` with a ` +
-      `\`prompt_template\` containing \`{{item}}\` and an \`items\` array — it fans the ` +
-      `work out in parallel and returns an aggregated report. Give each item a distinct, ` +
-      `non-overlapping scope.\n` +
-      `- Finished subagents keep their result addressable: call \`subagent_resume\` with ` +
-      `the id and a follow-up task to continue the work instead of starting over.\n\n` +
-      `## Reply format\n\n` +
-      `Replies render as rich Markdown in the chat UI. Use short paragraphs, bullets ` +
-      `for lists, backticks for code/paths/identifiers, fenced blocks with a language ` +
-      `tag for multi-line code, and tables for structured comparisons. Keep structure ` +
-      `shallow — avoid deep nesting and heavy headings in ordinary replies.`
+      buildAshubFrontendPrompt(this.opts.kind === "ash-terminal" ? "ash-terminal" : "agent"),
     );
 
     const extCtx = core.extensionContext({ quit: () => this.close() });
@@ -432,22 +389,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     activateAgent(extCtx);
     this.registerUserProviders(extCtx);
 
-    // ── File modification safety ─────────────────────────────────────
-    // Prevent the model from silently modifying files without consent.
+    // Clarify task authorization without changing the actual permission gate.
     (extCtx as unknown as { agent: { registerInstruction(name: string, text: string): void } }).agent.registerInstruction(
-      "file-modification-safety",
-      `FILE MODIFICATION POLICY:
-
-When the user directly asks you to modify, create, or edit files, make those
-changes immediately with the appropriate tools.
-
-When the user does NOT ask for file changes (a question, analysis, review, or
-explanation), do not modify any files. Describe what you would change and why,
-and ask for confirmation first: "I could modify X to achieve Y. Shall I proceed?"
-
-This applies to all file-modifying tools: write_file, edit_file, and bash used
-for destructive operations (rm, mv, sed, git mutations). Depending on the user's
-settings, such tool calls may trigger an approval prompt — that is expected.`
+      "ashub-action-scope", ASHUB_ACTION_SCOPE,
     );
 
     this.gateImageToolResults(extCtx);
@@ -1641,6 +1585,13 @@ settings, such tool calls may trigger an approval prompt — that is expected.`
         "agent-sh documentation is at the `docs/` directory inside the agent-sh package; "
         + "source and examples live in `src/` and `examples/extensions/`. "
         + "Read them when you need to understand how the runtime works.\n\n",
+      );
+
+      // The kernel guide targets headless frontends; asHub renders tool activity.
+      base = base.replace(
+        "Tool output is\nreturned to you for reasoning — the user doesn't see it directly.",
+        "Tool output is returned to you for reasoning. asHub also shows tool activity "
+        + "and result previews; summarize important findings because previews may be folded or truncated.",
       );
 
       return `${base}\n\n# Working Directory\n\nCurrent working directory: ${cwd}`;

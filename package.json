@@ -1,6 +1,6 @@
 {
   "name": "ashub",
-  "version": "0.20.2",
+  "version": "0.20.3",
   "description": "asHub: spawn and supervise headless agent-sh ACP sessions, expose them through a web UI on a single port.",
   "type": "module",
   "main": "electron/main.cjs",
@@ -22,7 +22,7 @@
     "electron:dist:mac": "npm run build && electron-builder --mac",
     "electron:dist:win": "bash scripts/pre-dist-win.sh && npm run build && electron-builder --win",
     "postinstall": "patch-package && electron-builder install-app-deps",
-    "test": "node tests/regression.cjs && node tests/regression-round2.cjs && node tests/regression-round3.cjs && node tests/regression-round4.cjs && node tests/regression-round5.cjs && node tests/regression-round6.cjs && node tests/regression-round7.cjs && node tests/regression-round8.cjs && node tests/regression-round9.cjs && node tests/regression-round10.cjs && node tests/regression-round11.cjs && node tests/regression-round12.cjs && node tests/regression-round13.cjs && node tests/regression-ui-refine.cjs && node tests/regression-tab-close.cjs && node tests/regression-panel-fixes.cjs && node tests/regression-round15.cjs && node tests/regression-round16.cjs && node tests/regression-round17.cjs && node tests/regression-round18.cjs && node tests/regression-round19.cjs && node tests/regression-round20.cjs && node tests/regression-stream-summary.cjs && node tests/regression-live-output.cjs",
+    "test": "node tests/regression.cjs && node tests/regression-round2.cjs && node tests/regression-round3.cjs && node tests/regression-round4.cjs && node tests/regression-round5.cjs && node tests/regression-round6.cjs && node tests/regression-round7.cjs && node tests/regression-round8.cjs && node tests/regression-round9.cjs && node tests/regression-round10.cjs && node tests/regression-round11.cjs && node tests/regression-round12.cjs && node tests/regression-round13.cjs && node tests/regression-ui-refine.cjs && node tests/regression-tab-close.cjs && node tests/regression-panel-fixes.cjs && node tests/regression-round15.cjs && node tests/regression-round16.cjs && node tests/regression-round17.cjs && node tests/regression-round18.cjs && node tests/regression-round19.cjs && node tests/regression-round20.cjs && node tests/regression-stream-summary.cjs && node tests/regression-live-output.cjs && node --test tests/regression-usage.cjs tests/regression-system-prompt.cjs",
     "test:http": "node tests/http-smoke.cjs && node tests/http-round5.cjs && node tests/http-round6.cjs && node tests/http-round7.cjs && node tests/http-round8.cjs && node tests/http-round18.cjs && node tests/http-round19.cjs && node tests/http-round20.cjs",
     "test:kernel": "npm run build && node tests/kernel-compat.mjs"
   },

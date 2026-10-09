@@ -56,11 +56,17 @@ try {
     defaultProvider: 'compat', providers: { compat: { apiKey: 'fake-test-key', baseURL: modelOrigin + '/v1', defaultModel: 'compat-model', models: ['compat-model'], contextWindow: 32000 } },
     startupBanner: false, disabledBuiltins: ['rolling-history'],
   }));
+  await fs.writeFile(path.join(dir, 'AGENTS.md'), 'GLOBAL_PROMPT_RULE_PRESERVED');
+  await fs.writeFile(path.join(dir, 'CLAUDE.md'), 'PROJECT_PROMPT_RULE_PRESERVED');
+  const skillDir = path.join(dir, 'skills', 'prompt-fixture');
+  await fs.mkdir(skillDir, { recursive: true });
+  await fs.writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: prompt-fixture\ndescription: GLOBAL_SKILL_PRESERVED\n---\nFixture skill');
   await fs.mkdir(path.join(dir, 'extensions'));
   await fs.writeFile(path.join(dir, 'extensions', 'compat.ts'), `
     await Promise.resolve();
     export default function activate(ctx: any) {
       ctx.bus.onPipe('compat:extension-loaded', () => ({ url: import.meta.url }));
+      ctx.agent.registerInstruction('compat-prompt', 'EXTENSION_PROMPT_RULE_PRESERVED');
     }
   `);
   const { AshBridge } = await import('../dist/bridges/ash.js');
@@ -82,6 +88,21 @@ try {
     assert.equal(JSON.parse(await fs.readFile(path.join(dir, 'extensions/package.json'))).type, 'module');
     assert.equal(bridge.core.handlers.call('agent:get-model').model, 'compat-model');
   });
+  await check('asHub prompt replaces identity while preserving kernel context', async () => {
+    const prompt = bridge.core.handlers.call('system-prompt:build');
+    assert.match(prompt, /^你是 asHub 中的 AI 助手/);
+    assert.match(prompt, /# asHub 协作方式/);
+    assert.match(prompt, /行动范围与授权/);
+    for (const marker of ['GLOBAL_PROMPT_RULE_PRESERVED', 'PROJECT_PROMPT_RULE_PRESERVED', 'GLOBAL_SKILL_PRESERVED', 'EXTENSION_PROMPT_RULE_PRESERVED']) assert(prompt.includes(marker), marker);
+    assert(prompt.includes('Current working directory: ' + dir));
+    assert.match(prompt, /result previews/);
+    assert(!prompt.includes('You are ash,'));
+    assert(!prompt.includes('FILE MODIFICATION POLICY:'));
+    assert(!prompt.includes('never instruct the user to run terminal commands themselves'));
+    assert(!prompt.includes("the user doesn't see it directly"));
+    assert.equal(prompt.split('# asHub 协作方式').length - 1, 1);
+    assert.equal(bridge.core.handlers.call('system-prompt:build'), prompt);
+  });
   await check('main agent streams a response and retains conversation', async () => {
     const events = []; const off = bridge.onEvent(e => events.push(e));
     try {
@@ -90,6 +111,10 @@ try {
       assert(snapshot.messages.some(m => JSON.stringify(m).includes('KERNEL_REPLY_OK')));
       assert(events.some(e => e.name === 'agent:response-chunk'));
       assert(requests.some(r => r.model === 'compat-model'));
+      const actualSystem = requests.at(-1).messages.find(m => m.role === 'system').content;
+      assert.match(actualSystem, /^你是 asHub 中的 AI 助手/);
+      assert(actualSystem.includes('GLOBAL_PROMPT_RULE_PRESERVED'));
+      assert(actualSystem.includes('EXTENSION_PROMPT_RULE_PRESERVED'));
     } finally { off(); }
   });
   await check('bridge subagent delegates through the actual 0.15.17 runner', async () => {
@@ -119,7 +144,14 @@ try {
   for (const kind of process.platform === 'win32' ? [] : ['terminal', 'ash-terminal']) await check(kind + ' real output/resize/natural exit/cleanup', async () => {
     const b = kind === 'terminal' ? new TerminalBridge({ cwd: dir }) : new AshBridge({ cwd: dir, kind, provider: 'compat', model: 'compat-model' }); bridges.add(b);
     const events = []; b.onEvent(e => events.push(e)); const closed = once(b, 'closed');
-    await within(b.ready()); b.resizePty(90, 25); b.writePty('printf "%s%s\\n" "ASH_NATIVE_" "OK"; exit 7\r');
+    await within(b.ready());
+    if (kind === 'ash-terminal') {
+      const prompt = b.core.handlers.call('system-prompt:build');
+      assert.match(prompt, /^你是 asHub 中的 AI 助手/);
+      assert.match(prompt, /当前是 asHub 的 agent 终端会话/);
+      assert(!prompt.includes('当前是 asHub 的会话界面'));
+    }
+    b.resizePty(90, 25); b.writePty('printf "%s%s\\n" "ASH_NATIVE_" "OK"; exit 7\r');
     await within(closed);
     assert(events.some(e => e.name === 'shell:pty-data' && e.payload.raw.includes('ASH_NATIVE_OK')));
     assert.equal(events.filter(e => e.name === 'shell:exit').length, 1); assert.equal(events.find(e => e.name === 'shell:exit').payload.exitCode, 7);

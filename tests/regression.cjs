@@ -99,7 +99,14 @@ await check('33 old Windows PTY exit does not close replacement',async()=>{
 });
 await check('34 directory picker uses requesting window',async()=>{const sf=ast('electron/main.cjs'),n=find(sf,n=>ts.isCallExpression(n)&&n.expression.getText(sf)==='ipcMain.handle'&&n.arguments[0]?.text==='pick-directory');const owner={isDestroyed:()=>false};let actual;const c=vm.createContext({BrowserWindow:{fromWebContents:()=>owner},dialog:{showOpenDialog:async w=>{actual=w;return {filePaths:['/project']};}}});const got=await vm.runInContext('('+n.arguments[1].getText(sf)+')',c)({sender:{}});assert(actual===owner&&got.cwd==='/project','main window required');});
 await check('36 ACP standard nested tool text is rendered',async()=>{const e=env(),t=new(e.load('src/bridges/translator.ts').Translator)();const events=t.translateUpdate({sessionUpdate:'tool_call_update',toolCallId:'t',status:'completed',content:[{type:'content',content:{type:'text',text:'result'}}]});assert(events[0].payload.resultDisplay.body.lines[0]==='result','tool result lost');});
-await check('37 download does not substitute ARM for Intel',async()=>{const html=fs.readFileSync(path.join(root,'website/download.html'),'utf8'),js=html.match(/<script>\s*([\s\S]*?)<\/script>/)[1],sf=ts.createSourceFile('download.js',js,ts.ScriptTarget.Latest,true),n=find(sf,n=>ts.isFunctionDeclaration(n)&&n.name?.text==='getAsset');const c=vm.createContext({FILES:[{os:'mac',ext:'dmg',arch:'arm64'}]});assert(vm.runInContext('('+n.getText(sf)+')("mac","dmg","x64")',c)===null,'wrong architecture returned');});
+await check('37 download does not substitute ARM for Intel',async()=>{
+ const html=fs.readFileSync(path.join(root,'website/download.html'),'utf8');
+ const script=html.match(/<script[^>]+src="([^"]+)"/)[1];
+ const link={dataset:{os:'mac',ext:'dmg',arch:'x64'},href:'https://github.com/firslov/asHub/releases',querySelector:()=>({})};
+ const c=vm.createContext({URL,window:{__RELEASE__:{assets:[{os:'mac',ext:'dmg',arch:'arm64',url:'https://example.test/arm64.dmg'}]}},document:{querySelectorAll:s=>s==='[data-download]'?[link]:[]}});
+ vm.runInContext(fs.readFileSync(path.join(root,'website',script),'utf8'),c);
+ assert(link.href==='https://github.com/firslov/asHub/releases','wrong architecture returned');
+});
 await check('update install failure recovers stopped backend',async()=>{
  const sf=ast('electron/main.cjs'),n=find(sf,n=>ts.isCallExpression(n)&&n.expression.getText(sf)==='ipcMain.handle'&&n.arguments[0]?.text==='quit-and-install');let stopped=false,restarted=false;
  const c=vm.createContext({hasDownloadedUpdate:()=>true,isAdhocSigned:false,prepareShutdown:async()=>stopped=true,restartHubRef:()=>restarted=true,app:{once(){},removeListener(){}},autoUpdater:{quitAndInstall(){}},setTimeout:f=>{f();},console:{log(){},error(){}},shutdownPromise:true});

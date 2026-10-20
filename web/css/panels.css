@@ -135,7 +135,7 @@
   border: 1px solid var(--error-border);
   color: var(--error);
 }
-.p-btn-danger:hover:not(:disabled) { background: var(--error); color: #fff; }
+.p-btn-danger:hover:not(:disabled) { background: var(--error); color: var(--on-error); }
 
 /* ── Inputs ───────────────────────────────────────────────────────── */
 .p-input,

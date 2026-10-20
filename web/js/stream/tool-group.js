@@ -1,3 +1,4 @@
+import { prepareActivityNode, refreshActivity } from "./activity.js";
 import { hideEmptyState, maybeScroll } from "./scroll.js";
 import { t } from "../i18n.js";
 import { refreshReasoningFailures } from "./compact.js";
@@ -28,6 +29,8 @@ export const insertStreamNode = (session, node) => {
     ? session._replayFrag
     : session?.streamEl;
   if (!target) return;
+  node = prepareActivityNode(session, node, target);
+  if (!node) return;
 
   if (replaying) {
     // Replay path: sequential frames in order — no pending boxes or
@@ -92,7 +95,8 @@ const updateToolGroupHead = (g) => {
     span.textContent = top;
     head.appendChild(span);
   }
-  // Keep failures visible even when the execution details are folded.
+  // Keep diagnostic failures available inside the outer activity details,
+  // including when this nested tool group is folded.
   const failures = g.querySelectorAll(".tool-row.err").length;
   if (failures) {
     const status = document.createElement("span");
@@ -105,6 +109,7 @@ const updateToolGroupHead = (g) => {
 // Update the row's owners rather than session.toolGroup.current: a parallel
 // tool may finish after the stream has moved on to another group or phase.
 export const refreshToolSummaries = (row) => {
+  refreshActivity(row);
   for (let g = row?.closest(".tool-group"); g; g = g.parentElement?.closest(".tool-group")) {
     if (groupState.has(g)) updateToolGroupHead(g);
   }
@@ -152,6 +157,7 @@ const openToolGroup = (session) => {
 export const appendToGroup = (session, node) => {
   const g = openToolGroup(session);
   groupState.get(g).body.appendChild(node);
+  refreshActivity(g);
   maybeScroll(session);
 };
 

@@ -1,3 +1,6 @@
+import { refreshActivity } from "./stream/activity.js";
+import { readSwarmOutcome } from "./stream/swarm-result.js";
+import { reasoningLabel } from "./reasoning.js";
 import { escape, stripAnsi, mdToHtml, highlightWithin, renderMathIn, blockToText, fmtNum } from "./utils.js";
 import { setBusy } from "./state.js";
 import { effect } from "../vendor/signals-core.js";
@@ -276,7 +279,7 @@ export const renderInstanceLabel = () => {
   if (!instanceLabel) return;
   const ai = activeSession.peek()?.agentInfo;
   const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off";
-  const inner = [ai?.model, showThink ? ai.thinkingLevel : ""].filter(Boolean).join(" • ");
+  const inner = [ai?.model, showThink ? reasoningLabel(ai.thinkingLevel, ai.provider) : ""].filter(Boolean).join(" • ");
   const tag = inner ? `[${inner}]` : "";
   instanceLabel.textContent = [ai?.name, tag].filter(Boolean).join(" ");
 };
@@ -396,6 +399,7 @@ const createSubagentBlock = (session, type, taskText) => {
 export const handlers = {
   "agent:info"(p) {
     if (p?.name === "web-renderer") return;
+    const previousProvider = this.agentInfo.provider;
     if (p?.name) this.agentInfo.name = p.name;
     if (p?.model) this.agentInfo.model = p.model;
     if (p?.provider) this.agentInfo.provider = p.provider;
@@ -415,6 +419,7 @@ export const handlers = {
     if (this === activeSession.peek()) {
       renderInstanceLabel();
       syncAllBalanceChips();
+      if (previousProvider !== this.agentInfo.provider) document.dispatchEvent(new Event("ash:provider-changed"));
     }
   },
 
@@ -771,7 +776,7 @@ export const handlers = {
       // aggregated output into the swarm block (covers branch rebuilds,
       // where no swarm/subagent frames exist).
       if (p?.name === SWARM_TOOL_NAME && p?.toolCallId) {
-        (this._pendingSwarmCalls ??= new Set()).add(p.toolCallId);
+        (this._pendingSwarmCalls ??= new Map()).set(p.toolCallId, p?.rawInput?.items);
       }
       return;
     }
@@ -847,19 +852,39 @@ export const handlers = {
       // belongs to a suppressed agentswarm call — render the aggregation
       // as a standalone result block instead of dropping it entirely.
       if (this._pendingSwarmCalls?.has(id)) {
+        const items = this._pendingSwarmCalls.get(id);
         this._pendingSwarmCalls.delete(id);
         const text = typeof p?.rawOutput === "string" ? p.rawOutput : "";
-        if (text.trim()) {
+        const launchFailed = p?.exitCode != null && p.exitCode !== 0;
+        const { failed, degraded } = readSwarmOutcome(text, items);
+        if (text.trim() || launchFailed) {
           const block = document.createElement("div");
           block.className = "subagent-block subagent-swarm";
-          block.innerHTML =
-            `<div class="subagent-head subagent-done">` +
-              `<span class="subagent-icon">⚡</span>` +
-              `<span class="subagent-label">${escape(t("swarm.title"))}</span>` +
-            `</div>` +
-            `<div class="subagent-result"></div>`;
+          const head = document.createElement("div");
+          head.className = "subagent-head subagent-done";
+          const icon = document.createElement("span");
+          icon.className = "subagent-icon";
+          icon.textContent = launchFailed || failed > 0 ? "✗" : degraded > 0 ? "◐" : "⚡";
+          const label = document.createElement("span");
+          label.className = "subagent-label";
+          label.textContent = t("swarm.title");
+          const status = document.createElement("span");
+          status.className = "swarm-status";
+          status.textContent = launchFailed ? t("subagent.failed")
+            : failed > 0 ? t("swarm.failed", { n: failed })
+            : degraded === null ? t("activity.ended") : t("swarm.done");
+          if (launchFailed || failed > 0) status.classList.add("swarm-failed");
+          if (degraded === null) status.classList.add("swarm-unknown");
+          if (degraded > 0) {
+            status.textContent += ` · ${t("swarm.degraded", { n: degraded })}`;
+            status.classList.add("swarm-degraded");
+          }
+          head.append(icon, label, status);
+          const result = document.createElement("div");
+          result.className = "subagent-result";
           const rendered = renderToolBody(text.split("\n"));
-          if (rendered) block.querySelector(".subagent-result")?.appendChild(rendered);
+          if (rendered) result.appendChild(rendered);
+          block.append(head, result);
           insertStreamNode(this, block);
         }
         return;
@@ -878,14 +903,46 @@ export const handlers = {
       : null;
     if (launchBlock) {
       const result = launchBlock.querySelector(".subagent-result");
-      if (result && p?.resultDisplay?.body) {
+      const body = p?.resultDisplay?.body;
+      // Rebuilt branches contain raw tool results, without resultDisplay or
+      // subagent lifecycle frames. Keep those results available in details.
+      const lines = body?.kind === "lines" && Array.isArray(body.lines) && body.lines.length
+        ? body.lines : typeof p?.rawOutput === "string" && p.rawOutput.trim()
+          ? p.rawOutput.split("\n") : null;
+      if (result && lines) {
         result.hidden = false;
-        const body = p.resultDisplay.body;
-        if (body.kind === "lines" && Array.isArray(body.lines) && body.lines.length) {
-          const block = renderToolBody(body.lines);
-          if (block) result.appendChild(block);
-        }
+        const rendered = renderToolBody(lines);
+        if (rendered) result.appendChild(rendered);
       }
+      const failed = p?.exitCode != null && p.exitCode !== 0;
+      // No linked lifecycle means a rebuilt historical call or a launch
+      // rejected before subagent:started. Its tool result is terminal.
+      // A linked background launch can finish its tool while still running.
+      if (!launchBlock._saId || failed) {
+        const head = launchBlock.querySelector(".subagent-head");
+        head?.querySelector(".subagent-spinner")?.remove();
+        const icon = head?.querySelector(".subagent-icon");
+        if (failed) {
+          launchBlock.classList.add("subagent-failed");
+          if (icon) { icon.textContent = "✗"; icon.style.color = "var(--error)"; }
+        } else if (icon && !head.classList.contains("subagent-done")) {
+          // Branch reconstruction has no subagent:done metadata. The kernel
+          // preserves early termination in the raw result despite exitCode 0.
+          const raw = typeof p?.rawOutput === "string" ? p.rawOutput : "";
+          const degraded = /\[Subagent terminated: completion-token budget/.test(raw) ? "budget"
+            : /\[Subagent terminated: max iterations/.test(raw) ? "iterations" : null;
+          icon.textContent = degraded ? "◐" : "✓";
+          if (degraded) {
+            icon.style.color = "var(--warning)";
+            const badge = document.createElement("span");
+            badge.className = "subagent-degraded";
+            badge.textContent = t(degraded === "budget" ? "subagent.partial.budget" : "subagent.partial.iterations");
+            head.appendChild(badge);
+          }
+        }
+        head?.classList.add("subagent-done");
+      }
+      refreshActivity(launchBlock);
       if (this._subagent === launchBlock) this._subagent = null;
       this._saBlocksByCallId?.delete(id);
       return;
@@ -929,6 +986,7 @@ export const handlers = {
         }
       }
     }
+    refreshActivity(row);
     maybeScroll(this);
   },
 
@@ -1243,6 +1301,7 @@ export const handlers = {
       else if (degraded) icon.style.color = "var(--warning)";
     }
     head?.classList.add("subagent-done");
+    if (err) block.classList.add("subagent-failed");
     if (degraded && head) {
       const badge = document.createElement("span");
       badge.className = "subagent-degraded";
@@ -1286,6 +1345,7 @@ export const handlers = {
     // and _subagentBlock must survive: on the sync path the launch's
     // agent:tool-completed arrives AFTER done and needs them to append the
     // result (it self-cleans the callId entry when it finalizes the block).
+    refreshActivity(block);
     if (saId) this._saBlocksBySaId?.delete(saId);
     if (this._subagent === block) this._subagent = null;
   },
@@ -1314,7 +1374,7 @@ export const handlers = {
     // tool-started and swarm-started fire in the same order, so the oldest
     // pending call belongs to this swarm.
     if (this._pendingSwarmCalls?.size) {
-      block._swarmCallId = this._pendingSwarmCalls.values().next().value;
+      block._swarmCallId = this._pendingSwarmCalls.keys().next().value;
       this._pendingSwarmCalls.delete(block._swarmCallId);
     }
     // Per-item subagent blocks are nested into the body by subagent:started —
@@ -1332,6 +1392,7 @@ export const handlers = {
     const block = p?.swarmId && this._swarms?.get(p.swarmId);
     if (!block) return;
     updateSwarmCount(block, p);
+    refreshActivity(block);
   },
 
   "subagent:swarm-done"(p) {
@@ -1360,6 +1421,7 @@ export const handlers = {
       const body = block.querySelector(".subagent-body");
       if (body) body.hidden = true;
     }
+    refreshActivity(block);
     // Terminal: release the map entry; the DOM block stays in the stream.
     this._swarms.delete(swarmId);
   },
@@ -1422,7 +1484,7 @@ const refreshModelChip = (session) => {
   const ai = session.agentInfo;
   const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off";
   const modelLabel = ai?.provider ? `${ai.model}@${ai.provider}` : ai?.model;
-  const modelText = [modelLabel, showThink ? `[${ai.thinkingLevel}]` : ""].filter(Boolean).join(" ");
+  const modelText = [modelLabel, showThink ? `[${reasoningLabel(ai.thinkingLevel, ai.provider)}]` : ""].filter(Boolean).join(" ");
 
   // Combined model + balance
   const balanceText = session.modelEl?._balanceLabel ?? "";
@@ -1698,6 +1760,7 @@ const selectModel = (session, modelId, provider) => {
     // The backend's agent:info owns confirmed capabilities. Avoid clearing
     // them if it already announced this model before the HTTP response.
     if (session.agentInfo.model !== modelId || (provider && session.agentInfo.provider !== provider)) {
+      const previousProvider = session.agentInfo.provider;
       session.agentInfo.model = modelId;
       if (provider) session.agentInfo.provider = provider;
       session.agentInfo.modalities = undefined;
@@ -1706,6 +1769,7 @@ const selectModel = (session, modelId, provider) => {
       if (activeSession.peek() === session) {
         const btn = document.getElementById("vision-indicator");
         if (btn) btn.hidden = true;
+        if (previousProvider !== session.agentInfo.provider) document.dispatchEvent(new Event("ash:provider-changed"));
       }
     }
   }).catch(err => {

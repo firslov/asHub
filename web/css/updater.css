@@ -1,5 +1,5 @@
 /* Update download card — see web/js/updater.js.
-   Uses global CSS tokens, so all three themes adapt automatically. */
+   Uses global CSS tokens, so both themes adapt automatically. */
 
 .update-card {
   position: fixed;

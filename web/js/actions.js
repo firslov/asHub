@@ -25,7 +25,14 @@ const rewindToTurn = async ({ sid, turn, entryId }) => {
 const rewindInFlightFor = new Set();
 
 const rewindFromBox = async (box) => {
-  if (state.isProcessing || state.readOnlyContext) return;
+  if (state.isProcessing) {
+    toast(t("rewind.busy"), { type: "info" });
+    return;
+  }
+  if (state.readOnlyContext) {
+    toast(t("rewind.readonly"), { type: "info" });
+    return;
+  }
   const sid = currentSessionId();
   if (rewindInFlightFor.has(sid)) return;
   const origin = activeSession.peek();
@@ -89,7 +96,7 @@ export const createUserBox = (queryText, images, ts, turn) => {
     const actions = document.createElement("div");
     actions.className = "msg-actions";
     actions.innerHTML =
-      `<button class="msg-action-btn" data-action="rewind" title="${t("rewind.here")}">↶</button>`;
+      `<button type="button" class="msg-action-btn" data-action="rewind" title="${t("rewind.here")}">↶</button>`;
     actions.querySelector('[data-action="rewind"]')?.addEventListener("click", () => rewindFromBox(box));
     box.appendChild(actions);
   }

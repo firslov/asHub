@@ -617,14 +617,6 @@
   border-bottom: 1px solid var(--border-light);
 }
 
-/* Academic 主题在 live.css 里给标题栏指定了 var(--bg) 与蓝色下边框，特异性同
-   为 0,2,0,而本文件后加载，那条会被静默压掉。补一层 [data-theme] 拿回来。 */
-[data-theme="academic"] .os-win32 .win-title-bar {
-  background: var(--bg);
-  /* academic --border is exactly rgba(30, 59, 92, 0.09) — the old 0.10
-     literal was the same navy hairline by hand */
-  border-bottom-color: var(--border);
-}
 
 .win-title-bar-drag {
   font-size: var(--fs-xs);
@@ -670,7 +662,6 @@
 }
 
 
-
 .main::before { display: none; }
 .title-bar .session-tabs,
 [data-theme="dark"] .title-bar .session-tabs { background: transparent; border-radius: 0; gap: 6px; }
@@ -698,9 +689,9 @@
 .stream-empty-mini { margin: 0 0 22px; gap: 0; }
 .stream-empty-mini .stream-empty-logo { opacity: 1; }
 .stream-empty-mini .stream-empty-logo svg { width: 64px; height: 64px; }
-.stream-empty-logo, .page-loader-logo { color: var(--text-dim); --brand-metal: #a58b5d; }
+.stream-empty-logo, .page-loader-logo { color: var(--text-dim); --brand-metal: var(--accent); }
 [data-theme="dark"] .stream-empty-logo,
-[data-theme="dark"] .page-loader-logo { --brand-metal: #c1a574; }
+[data-theme="dark"] .page-loader-logo { --brand-metal: var(--accent); }
 .stream-empty-line, .stream-empty-logo::before, .stream-empty-logo::after { display: none; }
 .logo-cursor { animation: none; }
 .welcome-title {

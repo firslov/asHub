@@ -38,7 +38,7 @@ await check('R05 shell failure preserves newly typed text',async()=>{
 });
 await check('R06 replay cannot clear an in-flight upload guard',async()=>{
  const u=ui(),c=u.composer(),sv=u.active.peek(),uploads=[];u.e.context.fetch=(url,opts)=>url==='/api/upload'?new Promise(r=>uploads.push(r)):Promise.resolve({ok:true});c.setImages([{data:'img',mimeType:'image/png'}]);const p=c.doSubmit('one');await tick();assert(sv.state.isSubmitting,'not uploading');
- Object.assign(u.e.context,{STATE_DEFAULTS:{isSubmitting:false,replaying:false},hideUsage(){},discardPendingThinking(){}});sv.streamEl=new El();method('web/js/session-view.js','resetForBranchSwitch',u.e.context).call(sv);
+ Object.assign(u.e.context,{STATE_DEFAULTS:{isSubmitting:false,replaying:false},hideUsage(){},discardPendingThinking(){},resetActivity(){}});sv.streamEl=new El();method('web/js/session-view.js','resetForBranchSwitch',u.e.context).call(sv);
  const p2=c.doSubmit('two');await tick();assert(uploads.length===1,'duplicate upload accepted');for(const resolve of uploads)resolve({ok:true,json:async()=>({id:'img'})});await Promise.all([p,p2]);return {uploadsOfSameDraft:uploads.length};
 });
 await check('R07 replay and live Markdown share one reply',async()=>{

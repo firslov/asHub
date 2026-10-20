@@ -1,29 +1,5 @@
 const {env,check,assert,results,fs,path,root,ts,vm}=require('./harness.cjs');
-// Tree DOM for disclosure/state tests; real layout is verified in the browser.
-class Node {
- constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.dataset={};this.style={};this.events={};this.attrs={};this.hidden=false;this.scrollHeight=200;this.offsetHeight=0;this._text='';this.classes=new Set();this.classList={contains:x=>this.classes.has(x),add:(...xs)=>xs.forEach(x=>this.classes.add(x)),remove:(...xs)=>xs.forEach(x=>this.classes.delete(x)),toggle:(x,on)=>{on=on??!this.classes.has(x);on?this.classes.add(x):this.classes.delete(x);return on;}};}
- set className(v){this.classes=new Set(v.split(/\s+/).filter(Boolean));}
- get className(){return [...this.classes].join(' ');}
- set textContent(v){this.children.forEach(c=>c.parentElement=null);this.children=[];this._text=String(v);}
- get textContent(){return this._text+this.children.map(c=>c.textContent).join('');}
- set innerHTML(v){this.textContent='';for(const m of v.matchAll(/<span class="([^"]+)">([^<]*)<\/span>/g)){const n=new Node('span');n.className=m[1];n.textContent=m[2];this.appendChild(n);}}
- get lastElementChild(){return this.children.at(-1)??null;}
- get parentNode(){return this.parentElement;}
- appendChild(n){n.remove();this.children.push(n);n.parentElement=this;return n;}
- append(...ns){ns.forEach(n=>this.appendChild(n));}
- insertBefore(n,b){n.remove();this.children.splice(this.children.indexOf(b),0,n);n.parentElement=this;return n;}
- remove(){if(this.parentElement){const a=this.parentElement.children;a.splice(a.indexOf(this),1);this.parentElement=null;}}
- contains(n){return n===this||this.children.some(c=>c.contains(n));}
- matches(s){return s.startsWith('.')&&s.slice(1).split('.').every(c=>this.classes.has(c));}
- closest(s){for(let n=this;n;n=n.parentElement)if(n.matches(s))return n;return null;}
- querySelectorAll(s){return this.children.flatMap(c=>[...(c.matches(s)?[c]:[]),...c.querySelectorAll(s)]);}
- querySelector(s){return this.querySelectorAll(s)[0]??null;}
- setAttribute(k,v){this.attrs[k]=String(v);}
- addEventListener(k,f){(this.events[k]??=[]).push(f);}
- removeEventListener(k,f){this.events[k]=(this.events[k]??[]).filter(x=>x!==f);}
- dispatchEvent(e){for(const f of this.events[e.type]??[])f(e);}
- click(){this.dispatchEvent({type:'click'});}
-}
+const {Node}=require('./stream-dom.cjs');
 function setup(extra={}){
  const document=new Node(),raf=[],cancelled=new Set();document.createElement=t=>new Node(t);let language='en',nextFrameId=0;
  const e=env({modules:{'../utils.js':{escape:s=>String(s??'')},'../i18n.js':{t:(key,p)=>language+':'+key+(p?.n??'')},...extra.modules},globals:{document,requestAnimationFrame:cb=>{const id=++nextFrameId;raf.push(()=>{if(!cancelled.has(id))cb();});return id;},cancelAnimationFrame:id=>cancelled.add(id),...extra.globals}});
@@ -40,10 +16,10 @@ function thinkingView(){
  const view=new SessionView();view.id='test';view.initStreamShell();view.enterReplayMode=()=>{view.state.replaying=true;};x.document.append(view);
  return {...x,view,think:x.e.load('web/js/stream/thinking.js'),flush:()=>{const pending=x.raf.splice(0);pending.forEach(f=>f());}};
 }
-function completed(ctx){
+function handler(ctx,name){
  const sf=ts.createSourceFile('sse.js',fs.readFileSync(path.join(root,'web/js/sse.js'),'utf8'),ts.ScriptTarget.Latest,true);let method;
- function walk(n){if(ts.isMethodDeclaration(n)&&n.name?.text==='agent:tool-completed')method=n;ts.forEachChild(n,walk);}walk(sf);
- return vm.runInContext('({'+method.getText(sf)+'})["agent:tool-completed"]',ctx);
+ function walk(n){if(ts.isMethodDeclaration(n)&&n.name?.text===name)method=n;ts.forEachChild(n,walk);}walk(sf);
+ return vm.runInContext('({'+method.getText(sf)+'})['+JSON.stringify(name)+']',ctx);
 }
 (async()=>{
  await check('Stream nested phase remains naturally sized after repeated disclosure changes',()=>{
@@ -98,6 +74,32 @@ function completed(ctx){
   x.think.finalizeThinking(x.view);x.think.appendThinkingChunk(x.view,'replayed');x.think.finalizeThinking(x.view);x.flush();
   const blocks=x.view.streamEl.querySelectorAll('.thinking-block-inner');assert(blocks.length===1&&blocks[0].textContent==='replayed','old buffered thought leaked into replay');assert(x.view._thinkingRaf===null);
  });
+ for(const reset of ['reconnect','resetForBranchSwitch','resync'])await check('Stream '+reset+' rebuilds active async children and clears stale swarm links',()=>{
+  const x=thinkingView(),s=x.view,activity=x.e.load('web/js/stream/activity.js');
+  const node=cls=>{const n=new Node();n.className=cls;return n;};
+  Object.assign(x.e.context,{
+   saMaps:v=>{v._saBlocksByCallId??=new Map();v._saBlocksBySaId??=new Map();},
+   createSubagentBlock:()=>{const b=node('subagent-block'),head=node('subagent-head');head.append(node('subagent-icon'),node('subagent-spinner'));b.append(head,node('subagent-result'));return b;},
+   insertStreamNode:x.groups.insertStreamNode,refreshActivity:activity.refreshActivity,t:k=>k,
+  });
+  const started=handler(x.e.context,'subagent:started'),done=handler(x.e.context,'subagent:done');
+  started.call(s,{subagentId:'async',type:'explore',task:'Inspect files'});
+  const old=s._saBlocksBySaId.get('async');
+  s._saBlocksByCallId.set('old-call',old);s._swarms=new Map([['swarm',node('subagent-block')]]);s._pendingSwarmCalls=new Map([['old-swarm-call',['a','b']]]);
+  if(reset==='reconnect')handler(x.e.context,'hub:replay-starting').call(s);else s[reset]();
+  assert(s._saBlocksBySaId.size===0&&s._saBlocksByCallId.size===0&&s._swarms.size===0&&s._pendingSwarmCalls.size===0,'detached execution links survived reset');
+  // Replayed swarm children must attach to the new parent, not the detached one.
+  const swarm=node('subagent-block'),body=node('subagent-body');swarm.append(body);s._swarms.set('swarm',swarm);x.groups.insertStreamNode(s,swarm);
+  started.call(s,{subagentId:'async',type:'explore'});started.call(s,{subagentId:'child',swarmId:'swarm',type:'explore'});
+  const current=s._saBlocksBySaId.get('async'),child=s._saBlocksBySaId.get('child');
+  assert(current!==old&&s.streamEl.contains(current)&&body.contains(child),'replayed children missing or routed to old DOM');
+  started.call(s,{subagentId:'async',type:'explore'});
+  assert(s.streamEl.querySelectorAll('.subagent-block').length===3,'duplicate start created an extra child');
+  done.call(s,{subagentId:'async'});done.call(s,{subagentId:'child',error:'New failure'});
+  assert(current.querySelector('.subagent-icon').textContent==='✓'&&!current.querySelector('.subagent-spinner'),'completion missed replayed child');
+  assert(child.querySelector('.subagent-result').textContent.includes('New failure')&&child.classList.contains('subagent-failed'),'failure routed to detached child');
+  assert(old.querySelector('.subagent-spinner')&&s._saBlocksBySaId.size===0,'completion changed old DOM or retained terminal links');
+ });
  await check('Stream closing a view cancels its pending thinking render',()=>{
   const x=thinkingView();x.think.appendThinkingChunk(x.view,'stale');x.view.disconnectedCallback();x.flush();
   assert(!x.view.streamEl.querySelector('.thinking-block')&&x.view._thinkingRaf===null,'closed view rendered stale thinking');
@@ -122,8 +124,8 @@ function completed(ctx){
  await check('Stream completion handler refreshes summaries before any final reply arrives',()=>{
   const x=setup(),group=x.addGroup(),row=group.querySelector('.tool-row');group.querySelector('.tool-group-head').click();
   x.session.streamEl.querySelector=()=>row;
-  Object.assign(x.e.context,{saIdFromToolId:()=>'',refreshToolSummaries:x.groups.refreshToolSummaries,absorbAsToolBody:()=>true,maybeScroll:()=>{},CSS:{escape:x=>x}});
-  completed(x.e.context).call(x.session,{toolCallId:'late-tool',exitCode:1,resultDisplay:{summary:'failed'}});
+  Object.assign(x.e.context,{saIdFromToolId:()=>'',refreshActivity(){},refreshToolSummaries:x.groups.refreshToolSummaries,absorbAsToolBody:()=>true,maybeScroll:()=>{},CSS:{escape:x=>x}});
+  handler(x.e.context,'agent:tool-completed').call(x.session,{toolCallId:'late-tool',exitCode:1,resultDisplay:{summary:'failed'}});
   assert(row.classList.contains('err')&&group.querySelector('.activity-error')?.textContent.includes('1'),'failure remains hidden until later reply');assert(group.classList.contains('collapsed'));
  });
  await check('Stream compacted phase counts late failures once and preserves language refresh',()=>{

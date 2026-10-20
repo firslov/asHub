@@ -8,7 +8,7 @@ function method(file,name,context){
  return vm.runInContext(ts.transpileModule('({'+found.getText(sf)+'})['+JSON.stringify(name)+']',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
 }
 function session(){
- const e=env({globals:{STATE_DEFAULTS:{replaying:false},hideUsage(){},discardPendingThinking(){},hidePageLoader(){},onReplayDone(){}}});
+ const e=env({globals:{STATE_DEFAULTS:{replaying:false},hideUsage(){},discardPendingThinking(){},resetActivity(){},hidePageLoader(){},onReplayDone(){}}});
  const stream=new El();Object.defineProperty(stream,'innerHTML',{set(){this.children=[]}});
  stream.querySelector=()=>null;
  const empty=new El(),loading=new El();empty.hidden=true;loading.hidden=false;

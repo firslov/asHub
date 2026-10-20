@@ -13,9 +13,9 @@
  * when the only problem is a stale install. Running this from `prebuild` puts
  * the real fix in front of the reader before tsc gets a chance to mislead.
  *
- * Only exact pins are version-checked (agent-sh is pinned); every declared
- * dependency must at least be present. Ranges are left to npm — reimplementing
- * semver here risks false positives that would block every build.
+ * Exact versions and Git commits are checked; every declared dependency must
+ * at least be present. Ranges are left to npm — reimplementing semver here
+ * risks false positives that would block every build.
  */
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
@@ -37,6 +37,20 @@ for (const [name, spec] of Object.entries(declared)) {
     problems.push(`${name}: not installed (package.json wants ${spec})`);
   } else if (/^\d+\.\d+\.\d+$/.test(spec) && installed !== spec) {
     problems.push(`${name}: installed ${installed}, package.json pins ${spec}`);
+  } else {
+    const commit = /^(?:github:|git\+(?:https|ssh):\/\/).+#([a-f0-9]{40})$/i.exec(spec)?.[1];
+    if (commit) {
+      // Unreleased upstream commits can retain the previous npm version.
+      // The install lock records what npm actually put in node_modules.
+      let resolved = "";
+      try {
+        const lock = JSON.parse(readFileSync(join(root, "node_modules", ".package-lock.json"), "utf8"));
+        resolved = lock.packages?.[`node_modules/${name}`]?.resolved ?? "";
+      } catch { /* A missing install record must not pass as the pinned commit. */ }
+      if (!resolved.endsWith(`#${commit}`)) {
+        problems.push(`${name}: installed Git commit is missing or stale (expected ${commit.slice(0, 7)})`);
+      }
+    }
   }
 }
 

@@ -1,0 +1,118 @@
+/* Gruvbox Light / Dark: one component language, two surface palettes.
+   Geometry and visibility preferences remain owned by their data-ui rules. */
+.title-bar {
+  background: var(--bg);
+  border-bottom-color: var(--border);
+}
+.title-brand .brand-wordmark { color: var(--text-dim); opacity: 1; }
+.title-bar .session-tab {
+  border-radius: var(--radius-sm);
+  color: var(--text-mid);
+}
+.title-bar .session-tab.active {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+}
+.title-bar .session-tab:hover { background: var(--bg2); }
+.title-bar .session-tab.active:hover { background: var(--bg-elevated); }
+.sidebar { background: var(--bg2); border-right: 1px solid var(--border-light); }
+.sidebar::after { display: none; }
+.sidebar-head .p-seg { background: transparent; border-color: transparent; gap: 4px; padding: 0; }
+.sidebar-head .p-seg-item { height: 38px; border-radius: var(--radius-sm); }
+.sidebar-head .p-seg-item.active { color: var(--accent-dim); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
+.sidebar-head .p-seg-item.active svg { transform: none; }
+.sidebar-new-btn { height: 40px; border-color: var(--accent-border); color: var(--accent-dim); background: var(--bg-elevated); border-radius: var(--radius-md); }
+.sidebar-new-btn:hover { background: var(--accent-glow); }
+.sidebar-filter { background: transparent; border-color: var(--border); border-radius: var(--radius-sm); }
+.session-list li.current,
+.terminal-list li.current,
+.workspace-children li.current { box-shadow: inset 2px 0 0 var(--accent); }
+.toolbar { background: var(--bg); border-left-color: var(--border-light); }
+.toolbar .toolbar-btn { border-radius: var(--radius-md); color: var(--text-mid); }
+.toolbar .toolbar-btn:hover { background: var(--bg2); color: var(--text); }
+.toolbar .toolbar-btn.active { background: var(--accent-soft); color: var(--accent-dim); }
+.toolbar .toolbar-btn.active::before { display: none; }
+
+/* Quiet reading canvas. User text and generated output have distinct surfaces. */
+.live-wrap .terminal,
+[data-theme="dark"] .live-wrap .terminal { border-color: var(--border); box-shadow: none; }
+.live-wrap .terminal::before { display: none; }
+.live-wrap .agent-box {
+  border-left-width: 1px;
+  border-color: var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+}
+.live-wrap .agent-box:hover { transform: none; box-shadow: none; border-color: var(--border-mid); }
+.live-wrap[data-ui-message-gradient="false"] .agent-box {
+  background: var(--ui-message-bg-color, var(--bg2));
+}
+.live-wrap .agent-reply h1,
+.live-wrap .agent-reply h2,
+.live-wrap .agent-reply h3 { letter-spacing: -0.025em; color: var(--text); }
+.live-wrap .agent-reply pre,
+[data-theme="dark"] .live-wrap .agent-reply pre {
+  background: var(--bg2);
+  border-color: var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+.live-wrap .agent-reply blockquote { border-left-color: var(--accent-border); background: var(--accent-glow); }
+.live-wrap .thinking-block,
+.live-wrap .tool-group { border-color: var(--border); border-radius: var(--radius-md); box-shadow: none; }
+.live-wrap .tool-group-head,
+.live-wrap .thinking-block-head { background: transparent; }
+.live-wrap .tool-group-head:hover,
+.live-wrap .thinking-block-head:hover { background: var(--bg2); }
+.live-wrap .diff-block,
+.live-wrap .shell-block { border-radius: var(--radius-md); border-color: var(--border); }
+
+/* Composer uses the brightest surface, anchored by a thin, clear edge. */
+.live-input {
+  border-color: var(--border-mid);
+  border-radius: 20px;
+  background: var(--bg-elevated);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.025), var(--shadow-md);
+}
+.live-input:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-sm); }
+.live-input .send-btn { border-radius: var(--radius-md); box-shadow: none; }
+.live-wrap .usage-strip { color: var(--text-mid); }
+.live-wrap .usage-chip { color: var(--text-mid); }
+.composer-help { color: var(--text-faint); }
+
+/* The same surfaces, edges and type hierarchy across every inspector. */
+.p-drawer { background: var(--bg); border-color: var(--border-mid); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); }
+.p-head { min-height: 80px; background: var(--bg-elevated); border-bottom-color: var(--border); }
+.p-title { font-size: var(--fs-xl); font-weight: 600; letter-spacing: -0.02em; }
+.p-meta { color: var(--text-mid); }
+.p-icon-btn { border-radius: var(--radius-sm); }
+.p-input, .p-select { background: var(--bg-elevated); border-color: var(--border-mid); border-radius: var(--radius-sm); }
+.p-seg { background: var(--bg2); border-color: var(--border); }
+.p-seg-item.active { color: var(--accent-dim); }
+.p-card { background: var(--bg-elevated); border-color: var(--border); border-radius: var(--radius-md); box-shadow: none; }
+.p-btn-primary { background: var(--accent); color: var(--on-accent); }
+.p-btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.p-section { color: var(--text-dim); letter-spacing: 0; }
+.p-row:hover { background: var(--bg2); }
+.p-row.active, .p-row.selected { background: var(--accent-soft); }
+.p-badge { background: var(--bg2); color: var(--text-mid); }
+
+/* A compact, monochrome brand mark gives the empty state room to breathe. */
+[data-theme] .stream-empty-logo,
+[data-theme] .no-session-empty .stream-empty-logo { color: var(--text-dim); --brand-metal: var(--accent); }
+[data-theme] .welcome-title { color: var(--text); font-weight: 450; letter-spacing: -0.04em; }
+.welcome-description { color: var(--text-mid); }
+[data-theme] .hint-chip { background: var(--bg-elevated); border-color: var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
+[data-theme] .hint-chip:hover { color: var(--accent-dim); border-color: var(--accent-border); background: var(--accent-glow); transform: translateY(-1px); }
+.os-win32 .win-title-bar { background: var(--bg); border-bottom-color: var(--border); }
+
+@media (max-width: 700px) {
+  .p-drawer { border-radius: var(--radius-lg); }
+  .p-head { min-height: 68px; }
+  .live-input { border-radius: var(--radius-lg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-theme] .hint-chip:hover { transform: none; }
+}

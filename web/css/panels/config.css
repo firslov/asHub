@@ -10,9 +10,7 @@
 .app:has(#config-overlay:not([hidden])) .live-wrap .terminal {
   margin-right: calc(var(--space-3) + var(--drawer-w));
 }
-/* Academic theme keeps UI chrome sans-serif
-   (was [data-theme="academic"] .config-overlay). */
-[data-theme="academic"] #config-overlay { font-family: var(--font-sans); }
+
 
 /* ── Bodies (flex column on top of .p-body; [hidden] must win over flex) ── */
 #config-body-simple,

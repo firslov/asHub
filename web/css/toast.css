@@ -1,5 +1,5 @@
 /* Toast notifications — see web/js/toast.js.
-   Uses global CSS tokens, so all three themes adapt automatically. */
+   Uses global CSS tokens, so both themes adapt automatically. */
 
 .toast-container {
   position: fixed;

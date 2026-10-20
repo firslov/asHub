@@ -1,0 +1,25 @@
+/* Softened Gruvbox syntax colors share the UI palette, so existing code blocks switch
+   immediately without re-highlighting or loading a second stylesheet.
+   Palette source: https://github.com/morhetz/gruvbox */
+pre code.hljs { display: block; overflow-x: auto; padding: 1em; }
+code.hljs { padding: 3px 5px; }
+.hljs { color: var(--text); background: var(--bg2); }
+.agent-reply pre code { color: var(--text); }
+.hljs-subst, .hljs-operator, .hljs-punctuation { color: var(--text); }
+.hljs-comment, .hljs-quote, .hljs-code, .hljs-formula { color: var(--text-mid); }
+.hljs-comment, .hljs-quote { font-style: italic; }
+.hljs-doctag, .hljs-keyword, .hljs-selector-tag, .hljs-template-tag { color: var(--red); }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-title, .hljs-section { color: var(--green); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: var(--purple); }
+.hljs-built_in, .hljs-type, .hljs-attribute { color: var(--amber); }
+.hljs-variable, .hljs-template-variable, .hljs-params, .hljs-attr { color: var(--cyan); }
+.hljs-name, .hljs-meta, .hljs-selector-id, .hljs-selector-class,
+.hljs-selector-attr, .hljs-selector-pseudo, .hljs-link { color: var(--aqua); }
+.hljs-meta .hljs-keyword { color: var(--accent); }
+.hljs-meta .hljs-string { color: var(--green); }
+.hljs-title.class_, .hljs-title.class_.inherited__ { color: var(--amber); }
+.hljs-deletion { color: var(--red); background: var(--error-bg); }
+.hljs-addition { background: var(--success-bg); }
+.hljs-section, .hljs-strong { font-weight: 700; }
+.hljs-emphasis { font-style: italic; }
+.hljs-link { text-decoration: underline; }

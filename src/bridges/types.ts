@@ -63,6 +63,7 @@ export interface Bridge {
   /** Explicitly supports returning queued and emitting queued-submit/done. */
   readonly supportsQueue?: boolean;
   readonly supportsCwdChange?: boolean;
+  /** Opt-in restriction; initialized bridges are writable by default. */
   readonly readOnlyContext?: boolean;
 
   /** Resolves once the underlying agent is initialized and ready for prompts. */

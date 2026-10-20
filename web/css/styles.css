@@ -10,64 +10,50 @@
 
 :root {
   --ui-chrome-height: var(--ui-title-bar-height, 52px);
-  /* Light palette — clean, warm paper tones for comfortable reading.
-     Surface ramp: bg (content) → bg2 (panel body) → bg3 (head/hover)
-     → bg4 (pressed); bg-elevated defines the input and control surface. */
-  --bg:           #fcfcfa;
-  --bg2:          #f3f3ef;
-  --bg3:          #eaeae5;
-  --bg4:          #dcdbd3;
-  --bg-elevated:  #fdfdfa;
-
-  /* Accent: warm amber/gold — the single brand accent. Every derived
-     state (glow/soft/border) is computed from --accent-rgb so it can
-     never drift into a second gold.
-     Deepened from #c2851a so white --on-accent text on it reaches
-     WCAG 4.6:1 (was 3.15:1); dim/hover keep a strict darkening ladder. */
-  --accent:        #9a6d0c;
-  --accent-rgb:    154, 109, 12;
-  --accent-dim:    #7c5607;
-  --accent-light:  #c99a3a;
-  --accent-hover:  #8a610a;
-  --accent-glow:   rgba(var(--accent-rgb), 0.10);
-  --accent-soft:   rgba(var(--accent-rgb), 0.16);
-  --accent-border: rgba(var(--accent-rgb), 0.32);
-
-  /* Cyan is a SEMANTIC color only (info / read / terminal kind), never a
-     decorative second accent.
-     Deepened from #2d8a94 for ≥4.5:1 text contrast on bg (now 5.05:1). */
-  --cyan:       #26767f;
-  --cyan-rgb:   38, 118, 127;
-  --cyan-dim:   #1f666e;
-  --cyan-light: #54b8c2;
-  --cyan-glow:  rgba(var(--cyan-rgb), 0.08);
-  --cyan-soft:  rgba(var(--cyan-rgb), 0.14);
-
-  /* Status colors — each with an RGB triplet so tinted states
-     (rgba(var(--X-rgb), a)) always match the base token.
-     green deepened from #4a8a5e to reach 4.77:1 on bg (was 3.95:1). */
-  --green:       #3f7c50;
-  --green-rgb:   63, 124, 80;
-  --green-dim:   #33634a;
-  --red:         #b33a3a;
-  --red-rgb:     179, 58, 58;
-  --red-dim:     #932e2e;
-  --purple:      #6c5fa7;
-  --purple-rgb:  108, 95, 167;
-  --amber:       #b8860b;
-
-  /* Status color light variants for highlight states */
-  --green-light: #6ab87e;
-  --red-light:   #e06c6c;
+  /* Gruvbox Soft Light — warm parchment with muted earth-tone accents.
+     Adapted from https://github.com/morhetz/gruvbox; softened for the app UI. */
+  color-scheme: light;
+  --bg: #f3eddf;
+  --bg2: #eae2d3;
+  --bg3: #e4dacb;
+  --bg4: #d3c6b3;
+  --bg-elevated: #f8f2e7;
+  --accent: #85552f;
+  --accent-rgb: 133, 85, 47;
+  --accent-dim: #80522e;
+  --accent-light: #98673d;
+  --accent-hover: #80522e;
+  --accent-glow: rgba(var(--accent-rgb), 0.065);
+  --accent-soft: rgba(var(--accent-rgb), 0.11);
+  --accent-border: rgba(var(--accent-rgb), 0.30);
+  --cyan: #466369;
+  --cyan-rgb: 70, 99, 105;
+  --cyan-dim: #415d63;
+  --cyan-light: #526f75;
+  --cyan-glow: rgba(var(--cyan-rgb), 0.08);
+  --cyan-soft: rgba(var(--cyan-rgb), 0.14);
+  --green: #59653b;
+  --green-rgb: 89, 101, 59;
+  --green-dim: #536037;
+  --green-light: #657244;
+  --red: #904c40;
+  --red-rgb: 144, 76, 64;
+  --red-dim: #85463c;
+  --red-light: #9c574a;
+  --purple: #74576c;
+  --purple-rgb: 116, 87, 108;
+  --amber: #775c2d;
+  --aqua: #456755;
 
   /* Semantic status tokens — single source for success/warning/error/info.
      Base tokens alias the per-theme palette, so theme overrides apply. */
   --success:        var(--green);
-  --warning:        #b05515;
-  --warning-rgb:    176, 85, 21;
+  --warning: #775c2d;
+  --warning-rgb: 119, 92, 45;
   --error:          var(--red);
   --info:           var(--cyan);
-  --on-accent:      #fff;
+  --on-accent: #f8f2e7;
+  --on-error: #f8f2e7;
 
   --success-bg:     color-mix(in srgb, var(--success) 8%, transparent);
   --success-border: color-mix(in srgb, var(--success) 30%, transparent);
@@ -90,38 +76,36 @@
   --shadow-panel-lg:  0 12px 40px rgba(0, 0, 0, 0.10);
   --shadow-elevated:  0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 8px rgba(0, 0, 0, 0.06);
 
-  /* Text hierarchy — WCAG contrast vs bg / bg2 (targets: text ≥12,
-     dim ≥7, mid ≥4.5, faint ≥3):
-     text 16.1/14.6 · dim 7.7/7.0 · mid 5.0/4.5 · faint 3.4/3.1 */
-  --text:         #1d1d22;
-  --text-dim:     #4f4f59;
-  --text-mid:     #6c6c76;
-  --text-faint:   #878791;
-  --text-muted:  #7a7a84;
-  --fg:          #1d1d22;
+  /* Text hierarchy, from primary content to quiet metadata. */
+  --text: #494239;
+  --text-dim: #5e554a;
+  --text-mid: #695e52;
+  --text-faint: #695e52;
+  --text-muted: #695e52;
+  --fg: #494239;
 
   /* Borders and surfaces */
-  --border:       rgba(0, 0, 0, 0.07);
-  --border-light: rgba(0, 0, 0, 0.04);
-  --border-mid:   rgba(0, 0, 0, 0.11);
+  --border: rgba(73, 66, 57, 0.12);
+  --border-light: rgba(73, 66, 57, 0.075);
+  --border-mid: rgba(73, 66, 57, 0.21);
   --border-accent: rgba(var(--accent-rgb), 0.25);
   /* Raised-edge highlight — a subtle "lit" line on the leading edge of an
      elevated surface.  Combined with the drop shadow it gives panels a
      machined/raised read instead of a flat 1px border. */
-  --edge-highlight: rgba(255, 255, 255, 0.55);
+  --edge-highlight: rgba(248, 242, 231, 0.4);
 
   /* Sophisticated shadows */
   --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.05);
   --shadow-md:   0 4px 14px rgba(0, 0, 0, 0.06);
   --shadow-lg:   0 8px 36px rgba(0, 0, 0, 0.07);
-  --shadow-glow: 0 0 40px rgba(var(--accent-rgb), 0.04);
+  --shadow-glow: none;
 
   /* Radius system */
   --radius-xs:  4px;
-  --radius-sm:  6px;
-  --radius-md:  10px;
-  --radius-lg:  14px;
-  --radius-xl:  20px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
   --radius-pill: 999px;
 
   /* Layout geometry — single source of truth for the app shell.
@@ -147,11 +131,11 @@
 
   /* Scrollbar — thumb at 1.6:1 vs bg2: visible at a glance without
      reading as a border. */
-  --scrollbar-thumb: #bdbdc7;
+  --scrollbar-thumb: #b7a994;
   --scrollbar-track: transparent;
 
   /* Logo / brand */
-  --logo-bg:      linear-gradient(135deg, #1a1a1f 0%, #252528 100%);
+  --logo-bg: var(--bg-elevated);
   --logo-border:  rgba(var(--accent-rgb), 0.14);
 
   /* Transitions */
@@ -187,7 +171,7 @@
   --tracking-btn:      0.06em;  /* uppercase button & field-label text */
 
   /* Canonical font stacks — use these vars instead of repeating literals.
-     Sans: UI text; Mono: code, tool rows, panel titles; Serif: academic theme. */
+     Sans: UI text; Mono: code and technical metadata. */
   --font-sans: 'Geist', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'SF Mono', monospace;
   --font-serif: 'Source Serif 4', 'Noto Serif SC', Georgia, serif;
@@ -205,179 +189,62 @@
   --brand-gradient:  linear-gradient(135deg, var(--accent) 0%, var(--accent-dim) 100%);
 }
 
-/* ── Dark theme ──────────────────────────────────────────────────── */
+/* Gruvbox Soft Dark — warm charcoal, sand text and muted accents. */
 [data-theme="dark"] {
-  /* Charcoal surfaces with a muted champagne accent for focused work. */
-  --bg:           #181a19;
-  --bg2:          #202321;
-  --bg3:          #292d2a;
-  --bg4:          #333834;
-  --bg-elevated:  #2c302d;
-
-  --accent:        #d6bd86;
-  --accent-rgb:    214, 189, 134;
-  --accent-dim:    #d6bd86;
-  --accent-light:  #e4cea3;
-  /* hover sits between accent and dim (was identical to dim) */
-  --accent-hover:  #e4cea3;
-  /* Alpha ladder slightly reined in (was 0.15/0.22/0.35): still a notch
-     above light's 0.10/0.16/0.32 so tints read equally on dark surfaces. */
-  --accent-glow:   rgba(var(--accent-rgb), 0.06);
-  --accent-soft:   rgba(var(--accent-rgb), 0.10);
-  --accent-border: rgba(var(--accent-rgb), 0.33);
-
-  --cyan:         #58c8d4;
-  --cyan-rgb:     88, 200, 212;
-  --cyan-dim:     #45b0bc;
-  --cyan-light:   #70d8e0;
-  --cyan-glow:    rgba(var(--cyan-rgb), 0.12);
-  --cyan-soft:    rgba(var(--cyan-rgb), 0.18);
-
-  --green:        #5a9e6f;
-  --green-rgb:    90, 158, 111;
-  --green-dim:    #4a8a5e;
-  --green-light:  #78c68e;
-  --red:          #c76a64;
-  --red-rgb:      199, 106, 100;
-  --red-dim:      #b55a54;
-  --red-light:    #e87670;
-  --purple:       #8b7bbf;
-  --purple-rgb:   139, 123, 191;
-  --amber:        #e0c060;
-
-  --warning:      #e08a4a;
-  --warning-rgb:  224, 138, 74;
-  --on-accent:    #1a1a1e;
-
-  /* Text hierarchy: prose, secondary labels, controls and metadata. */
-  --text:         #ecefe8;
-  --text-dim:     #bac1b7;
-  --text-mid:     #a1a99e;
-  --text-faint:   #91998f;
-  --text-muted:   #9696a2;
-  --fg:           #e8e8ec;
-
-  --border:       rgba(255, 255, 255, 0.10);
-  --border-light: rgba(255, 255, 255, 0.06);
-  --border-mid:   rgba(255, 255, 255, 0.14);
-  --border-accent: rgba(var(--accent-rgb), 0.30);
-  --edge-highlight: rgba(255, 255, 255, 0.07);
-  --surface-panel: var(--bg2);
-  --surface-head:  var(--bg3);
-
-  --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.25);
-  --shadow-md:   0 4px 14px rgba(0, 0, 0, 0.3);
-  --shadow-lg:   0 8px 36px rgba(0, 0, 0, 0.35);
-  --shadow-glow: 0 0 40px rgba(var(--accent-rgb), 0.06);
-
-  --shadow-panel-sm:  0 2px 8px rgba(0, 0, 0, 0.30);
-  --shadow-panel-md:  0 4px 18px rgba(0, 0, 0, 0.35);
-  --shadow-panel-lg:  0 12px 40px rgba(0, 0, 0, 0.40);
-  --shadow-elevated:  0 1px 2px rgba(0, 0, 0, 0.30), 0 4px 8px rgba(0, 0, 0, 0.25);
-
-  --scrollbar-thumb: #484854;
-
-  --logo-bg:      linear-gradient(135deg, #2a2a30 0%, #32323a 100%);
-  --logo-border:  rgba(var(--accent-rgb), 0.22);
-}
-
-/* ── Academic theme ────────────────────────────────────────────────── */
-/* Cool cream tones with scholarly burgundy accents.
-   Designed for focused, distraction-free reading with gravitas. */
-[data-theme="academic"] {
-  /* Surface ramp — bg2 deepened one notch (#eeeadf→#ede9de) so the OKLab
-     lightness steps even out: ΔL 0.037 / 0.036 / 0.039 (was 0.034/0.039/0.039). */
-  --bg:           #f8f5ef;
-  --bg2:          #ede9de;
-  --bg3:          #e2ddd0;
-  --bg4:          #d6d0c2;
-  --bg-elevated:  #fbfaf4;
-
-  --accent:       #1e3b5c;
-  --accent-rgb:   30, 59, 92;
-  --accent-dim:   #162d47;
-  --accent-light: #2e5a8c;
-  /* hover sits between accent and dim (was identical to dim) */
-  --accent-hover: #1a3450;
-  /* Alpha ladder raised from 0.07/0.12/0.22: the dark navy tint vanished
-     on cream at those levels; still lighter-handed than light's
-     0.10/0.16/0.32 because the accent itself is dark. */
-  --accent-glow:  rgba(var(--accent-rgb), 0.09);
-  --accent-soft:  rgba(var(--accent-rgb), 0.14);
-  --accent-border: rgba(var(--accent-rgb), 0.26);
-
-  --cyan:         #2d6b7a;
-  --cyan-rgb:     45, 107, 122;
-  --cyan-dim:     #225360;
-  --cyan-light:   #4a8e9e;
-  --cyan-glow:    rgba(var(--cyan-rgb), 0.08);
-  --cyan-soft:    rgba(var(--cyan-rgb), 0.13);
-
-  --green:        #3d6040;
-  --green-rgb:    61, 96, 64;
-  --green-dim:    #304d33;
-  --green-light:  #4e7a52;
-  --red:          #8b3a3a;
-  --red-rgb:      139, 58, 58;
-  --red-dim:      #702d2d;
-  --red-light:    #9e4848;
-  --purple:       #4a4468;
-  --purple-rgb:   74, 68, 104;
-  /* amber lifted from #7a5a30 — less muddy on cream, still desaturated
-     to match the scholarly palette */
-  --amber:        #7f6027;
-
-  --warning:      #a55a24;
-  --warning-rgb:  165, 90, 36;
-  --on-accent:    #fff;
-
-  /* Text hierarchy — WCAG contrast vs bg / bg2 (targets: text ≥12,
-     dim ≥7, mid ≥4.5, faint ≥3):
-     text 15.9/14.4 · dim 7.8/7.1 · mid 5.0/4.5 · faint 3.3/3.0 */
-  --text:         #1a1a1f;
-  --text-dim:     #4b4b56;
-  --text-mid:     #686873;
-  --text-faint:   #858590;
-  --text-muted:   #777781;
-  --fg:           #1a1a1f;
-
-  --border:       rgba(30, 59, 92, 0.09);
-  --border-light: rgba(30, 59, 92, 0.05);
-  --border-mid:   rgba(30, 59, 92, 0.14);
-  --border-accent: rgba(var(--accent-rgb), 0.25);
-  --edge-highlight: rgba(255, 255, 255, 0.5);
-  --surface-panel: var(--bg2);
-  --surface-head:  var(--bg3);
-
-  /* Shadows — cool blue-gray base rgba(30,35,45,*) per the academic
-     spec. Values intentionally match the "softer paper" overrides that
-     live.css duplicates at its academic section; keep these in sync and
-     let live.css drop its copies. */
-  --shadow-sm:   0 1px 2px rgba(30, 35, 45, 0.04);
-  --shadow-md:   0 3px 10px rgba(30, 35, 45, 0.06);
-  --shadow-lg:   0 6px 24px rgba(30, 35, 45, 0.08);
-  --shadow-glow: 0 0 40px rgba(var(--accent-rgb), 0.04);
-
-  --shadow-panel-sm:  0 1px 4px rgba(30, 35, 45, 0.05);
-  --shadow-panel-md:  0 3px 12px rgba(30, 35, 45, 0.06);
-  --shadow-panel-lg:  0 12px 44px rgba(30, 35, 45, 0.12);
-  --shadow-elevated:  0 1px 2px rgba(30, 35, 45, 0.04), 0 3px 8px rgba(30, 35, 45, 0.05);
-
-  --scrollbar-thumb: #c4bdb0;
-  --logo-bg:      linear-gradient(135deg, #1e3b5c 0%, #162d47 100%);
-  --logo-border:  rgba(var(--accent-rgb), 0.20);
-}
-
-[data-theme="dark"] ::selection {
-  background: var(--accent-soft);
-  color: var(--text);
-}
-
-[data-theme="dark"] .stream-empty {
-  background:
-    radial-gradient(ellipse 70% 40% at 50% 25%, var(--accent-glow) 0%, transparent 55%),
-    radial-gradient(ellipse 50% 30% at 30% 65%, var(--cyan-glow) 0%, transparent 50%),
-    radial-gradient(ellipse at 50% 95%, var(--bg) 0%, transparent 60%);
+  color-scheme: dark;
+  --bg: #2d2a26;
+  --bg2: #34302b;
+  --bg3: #403a33;
+  --bg4: #50483e;
+  --bg-elevated: #3a352f;
+  --accent: #c89d6e;
+  --accent-rgb: 200, 157, 110;
+  --accent-dim: #c89d6e;
+  --accent-light: #d4ac80;
+  --accent-hover: #d4ac80;
+  --accent-glow: rgba(var(--accent-rgb), 0.07);
+  --accent-soft: rgba(var(--accent-rgb), 0.12);
+  --accent-border: rgba(var(--accent-rgb), 0.32);
+  --cyan: #94b0b2;
+  --cyan-rgb: 148, 176, 178;
+  --cyan-dim: #94b0b2;
+  --cyan-light: #a1babe;
+  --green: #a5b080;
+  --green-rgb: 165, 176, 128;
+  --green-dim: #a5b080;
+  --green-light: #b0bc8d;
+  --red: #d59c8f;
+  --red-rgb: 213, 156, 143;
+  --red-dim: #d59c8f;
+  --red-light: #dfa99c;
+  --purple: #bba1b3;
+  --purple-rgb: 187, 161, 179;
+  --amber: #c5b17d;
+  --aqua: #91ae97;
+  --warning: #c5b17d;
+  --warning-rgb: 197, 177, 125;
+  --on-accent: #2d2a26;
+  --on-error: #2d2a26;
+  --text: #ded2bc;
+  --text-dim: #c3b59e;
+  --text-mid: #b5a48f;
+  --text-faint: #b5a48f;
+  --text-muted: #b5a48f;
+  --fg: #ded2bc;
+  --border: rgba(222, 210, 188, 0.12);
+  --border-light: rgba(222, 210, 188, 0.075);
+  --border-mid: rgba(222, 210, 188, 0.20);
+  --edge-highlight: rgba(222, 210, 188, 0.05);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.18);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.22);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.30);
+  --shadow-panel-sm: var(--shadow-sm);
+  --shadow-panel-md: var(--shadow-md);
+  --shadow-panel-lg: var(--shadow-lg);
+  --shadow-elevated: 0 1px 0 var(--edge-highlight), var(--shadow-md);
+  --shadow-glow: none;
+  --scrollbar-thumb: #716658;
+  --logo-bg: var(--bg-elevated);
 }
 
 /* ── Custom scrollbar ────────────────────────────────────────────── */

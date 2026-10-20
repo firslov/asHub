@@ -279,66 +279,6 @@
   border-color: var(--border);
 }
 
-/* Academic 主题补偿。live.css 里的 academic 覆盖规则与上面对应元素的基础规则
-   特异性相同（多为 0,2,x,个别如 .tool-row:hover 是 0,3,0），而 stream.css 在
-   index.html 里后加载，平局时取胜——academic 的纸色代码底、衬线标题、diff
-   配色、thinking-block 的蓝色左边框与 tool-row 悬停底都会静默失效。深色主题
-   上面已按同样方式补偿，这里补齐 academic：多一层 [data-theme] 后特异性高一
-   级（0,3,x 压 0,2,x、0,4,0 压 0,3,0），稳定取胜。 */
-/* 注意：这里不恢复 live.css academic 规则里的 inset 内阴影。新版基础规则
-   .live-wrap .agent-reply pre 用 box-shadow: none 刻意把内阴影拉平（层次交给
-   底色与徽章），深色主题也没有恢复它；两套主题保持一致。 */
-[data-theme="academic"] .live-wrap .agent-reply pre {
-  background: color-mix(in srgb, var(--bg2) 70%, var(--bg));
-  border-color: rgba(var(--accent-rgb), 0.12);
-}
-
-[data-theme="academic"] .live-wrap .agent-reply h1,
-[data-theme="academic"] .live-wrap .agent-reply h2,
-[data-theme="academic"] .live-wrap .agent-reply h3,
-[data-theme="academic"] .live-wrap .agent-reply h4 {
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-[data-theme="academic"] .live-wrap .diff-added {
-  background: color-mix(in srgb, var(--green-light) 12%, transparent);
-  border-left-color: var(--green-light);
-}
-
-/* removed 行的陶土墨色：red-light 偏暖（warning）再用 text-mid 去饱和。
-   color-mix 只接受两个颜色分量，嵌套分两步；先定义 ink，再派生 tint。 */
-[data-theme="academic"] .live-wrap .diff-block {
-  --diff-rm-ink: color-mix(in srgb,
-    color-mix(in srgb, var(--red-light) 60%, var(--warning)) 75%,
-    var(--text-mid));
-}
-
-[data-theme="academic"] .live-wrap .diff-removed {
-  background: color-mix(in srgb, var(--diff-rm-ink, var(--red)) 9%, transparent);
-  border-left-color: var(--diff-rm-ink, var(--red));
-}
-
-[data-theme="academic"] .live-wrap .diff-head {
-  background: color-mix(in srgb, var(--bg2) 75%, var(--bg3));
-  color: var(--text-dim);
-}
-
-[data-theme="academic"] .live-wrap .diff-sep {
-  background: color-mix(in srgb, var(--bg2) 70%, var(--bg));
-  color: color-mix(in srgb, var(--text-mid) 80%, var(--bg4));
-}
-
-[data-theme="academic"] .live-wrap .tool-row:hover {
-  background: color-mix(in srgb, var(--bg2) 80%, var(--bg3));
-}
-
-/* .live-wrap .thinking-block 用 border-left 简写，会连 border-left-color 一起
-   改写，所以 academic 的蓝色左边框同样会被压掉（基础规则见上方 458 行）。 */
-[data-theme="academic"] .live-wrap .thinking-block {
-  border-left-color: var(--accent-border);
-}
-
 .live-wrap .agent-reply pre code,
 .live-wrap .agent-reply pre code.hljs {
   font-size: var(--fs-sm);

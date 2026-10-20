@@ -1,3 +1,4 @@
+import { reasoningLevels, normalizeReasoning, reasoningLabel } from "./reasoning.js";
 import { currentSessionId, state, queryHistory } from "./state.js";
 import { escape, toBlobUrl } from "./utils.js";
 import { appendAfterPending } from "./stream/tool-group.js";
@@ -246,7 +247,6 @@ input?.addEventListener("keydown", (ev) => {
   }
 });
 
-const THINKING_LEVELS = ["off", "low", "medium", "high", "xhigh"];
 
 // Transient chip in the composer confirming the new thinking level.
 let thinkingChip = null;
@@ -268,12 +268,14 @@ input?.addEventListener("keydown", (ev) => {
   const session = activeSession.peek();
   if (!session?.agentInfo?.thinkingSupported) return;
   ev.preventDefault();
-  const cur = session.agentInfo.thinkingLevel || "off";
-  const idx = THINKING_LEVELS.indexOf(cur);
-  const next = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
+  const provider = session.agentInfo.provider;
+  const levels = reasoningLevels(provider);
+  const cur = normalizeReasoning(session.agentInfo.thinkingLevel || "off", provider);
+  const idx = levels.indexOf(cur);
+  const next = levels[(idx + 1) % levels.length];
   const sid = currentSessionId();
   if (!sid) return;
-  showThinkingChip(next);
+  showThinkingChip(reasoningLabel(next, provider));
   fetch(`/${sid}/thinking`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

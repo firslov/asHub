@@ -1,0 +1,33 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+test('dependency check rejects stale Git installs even when the package version matches', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ashub-dependency-check-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'scripts'));
+  fs.mkdirSync(path.join(root, 'node_modules/agent-sh'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '../scripts/check-deps.cjs'), path.join(root, 'scripts/check-deps.cjs'));
+  const write = (file, value) => fs.writeFileSync(path.join(root, file), JSON.stringify(value));
+  const run = () => spawnSync(process.execPath, [path.join(root, 'scripts/check-deps.cjs')], { encoding: 'utf8' });
+  const commit = 'a'.repeat(40);
+  const spec = `git+https://github.com/guanyilun/agent-sh.git#${commit}`;
+  write('package.json', { dependencies: { 'agent-sh': spec } });
+  write('node_modules/agent-sh/package.json', { version: '0.15.17' });
+  assert.equal(run().status, 1, 'no installed commit record');
+  write('node_modules/.package-lock.json', { packages: { 'node_modules/agent-sh': { resolved: spec.replace(commit, 'b'.repeat(40)) } } });
+  assert.equal(run().status, 1, 'different commit with the same version');
+  write('node_modules/.package-lock.json', { packages: { 'node_modules/agent-sh': { resolved: spec } } });
+  assert.equal(run().status, 0, 'matching commit');
+  write('package.json', { dependencies: { 'agent-sh': `github:guanyilun/agent-sh#${commit}` } });
+  assert.equal(run().status, 0, 'npm-normalized GitHub shorthand');
+  write('node_modules/.package-lock.json', { packages: {} });
+  assert.equal(run().status, 1, 'GitHub shorthand must also reject an unrecorded install');
+  write('package.json', { dependencies: { 'agent-sh': '0.15.18' } });
+  assert.equal(run().status, 1, 'exact npm version remains checked');
+  write('node_modules/agent-sh/package.json', { version: '0.15.18' });
+  assert.equal(run().status, 0);
+});

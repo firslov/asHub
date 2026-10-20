@@ -327,9 +327,8 @@
 /* Two-click confirm states (pinned visible via :has(.confirming) above). */
 .session-close.confirming,
 .terminal-close.confirming {
-  /* White on --red: mirrors the .p-btn-danger primitive (panels.css),
-     which also uses #fff on --error regardless of theme. */
-  color: #fff;
+  /* Keep confirmation actions legible in either palette. */
+  color: var(--on-error);
   background: var(--red);
   opacity: 1;
   pointer-events: auto;
@@ -561,7 +560,7 @@
 
 /* ── Sidebar shell: separation + collapse motion ──────────────────── */
 /* Overrides live.css .sidebar::after (accent gradient edge, opacity
-   .08): a flat full-height hairline reads cleaner in all three themes
+   .08): a flat full-height hairline reads cleaner in both themes
    and matches the panel system (border-light separators, no decorative
    gradients). Same specificity, this file loads later. */
 .sidebar::after {

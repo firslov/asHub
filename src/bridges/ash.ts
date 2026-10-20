@@ -9,6 +9,8 @@
  * Tool permissions are forwarded to the hub UI and respect the user's
  * approval settings; product prompt guidance does not bypass that gate.
  */
+import { clipHeadTail, unicodeSlice, guardLlmUnicode } from "../unicode.js";
+import { configureDeepSeek } from "../providers/deepseek.js";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import { updateSettingsFile } from "../settings-store.js";
@@ -228,20 +230,12 @@ const getSubagentBudgetOverrides = (): Record<string, SubagentBudgetOverride> =>
 const REASONING_LEVELS = new Set(["off", "low", "medium", "high", "xhigh"]);
 
 /** The kernel's termination notes mark early exits in the returned text.
- *  The patched kernel also reports this via outMeta.degraded; this sniff
- *  is the fallback for an unpatched kernel (and costs nothing). */
+ *  The upstream kernel also reports this via outMeta.degraded; this sniff
+ *  remains a fallback for text-only results. */
 function sniffDegraded(text: string): "budget" | "iterations" | null {
   if (/\[Subagent terminated: completion-token budget/.test(text)) return "budget";
   if (/\[Subagent terminated: max iterations/.test(text)) return "iterations";
   return null;
-}
-
-/** Head+tail clip: keeps the opening context AND the trailing
- *  termination note (a plain head-slice would cut the
- *  "[Subagent terminated: ...]" line off degraded results). */
-function clipHeadTail(s: string, head: number, tail: number): string {
-  if (s.length <= head + tail) return s;
-  return `${s.slice(0, head)}\n[... ${s.length - head - tail} chars truncated ...]\n${s.slice(-tail)}`;
 }
 
 /** Names of the five subagent preset tools (plus the swarm/resume tools) —
@@ -387,7 +381,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     // so ctx.shell.compositor + tui-renderer are wired before the input mode prompt fires.
     if (exposeTerminal) registerShellHandlers(extCtx);
     activateAgent(extCtx);
+    guardLlmUnicode(core.handlers.call("llm:get-client"));
     this.registerUserProviders(extCtx);
+    configureDeepSeek(extCtx);
 
     // Clarify task authorization without changing the actual permission gate.
     (extCtx as unknown as { agent: { registerInstruction(name: string, text: string): void } }).agent.registerInstruction(
@@ -508,8 +504,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     // endpoint) so DeepSeek's thinking.type / GLM's enabled-only shapes and
     // OpenRouter's reasoning_effort all come out right; falls back to a
     // plain reasoning_effort when the endpoint has no hook. Returns
-    // undefined when nothing should be sent — an unpatched kernel then
-    // behaves exactly as before.
+    // undefined when no extra reasoning parameters should be sent.
     const resolveSubagentReasoningParams = (level: string | undefined, modelId: string | undefined): Record<string, unknown> | undefined => {
       if (!level) return undefined;
       try {
@@ -554,7 +549,7 @@ export class AshBridge extends EventEmitter implements Bridge {
         "subagent:started", { task, subagentId: id, type, ...(swarmId ? { swarmId } : {}) });
 
       // Retry is only safe when the run is side-effect-free SO FAR.  The
-      // patched kernel reports mutating tool executions via outMeta; the
+      // upstream kernel reports mutating tool executions via outMeta; the
       // wrapper callback below tracks the same thing kernel-independently.
       // A subagent whose toolset includes file-modifying tools (implement
       // preset has ["*"]) may have already executed tools when a later LLM
@@ -577,7 +572,7 @@ export class AshBridge extends EventEmitter implements Bridge {
           reasoningParams,
           outMeta: meta,
           onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
-            "subagent:usage", { ...(u as Record<string, unknown>), type }),
+            "subagent:usage", { ...u, type }),
           signal,
         });
       };
@@ -647,7 +642,7 @@ export class AshBridge extends EventEmitter implements Bridge {
                     : "Completed";
                 completed.push(
                   `<subagent_result id="${eid}" type="${e.type}">\n` +
-                  `${status}: "${e.task.slice(0, 80)}"\n` +
+                  `${status}: "${unicodeSlice(e.task, 0, 80)}"\n` +
                   body +
                   `\n</subagent_result>`
                 );
@@ -956,7 +951,7 @@ export class AshBridge extends EventEmitter implements Bridge {
             reasoningParams,
             outMeta: meta,
             onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
-              "subagent:usage", { ...(u as Record<string, unknown>), type: opts.type }),
+              "subagent:usage", { ...u, type: opts.type }),
           });
         };
         const result = await runSubagentWithRetry(runOnce, {
@@ -1004,7 +999,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       if (!entry || (!entry.result && !entry.error)) {
         return `Error: no completed subagent run with id '${opts.id}' — only runs that already returned a result can be resumed, and results are only kept for the ${MAX_SUBAGENT_ENTRIES} most recent runs.`;
       }
-      const prev = (entry.result ?? `Error: ${entry.error}`).slice(0, 2000);
+      const prev = unicodeSlice(entry.result ?? `Error: ${entry.error}`, 0, 2000);
       const task =
         `Continuation of subagent ${entry.id}.\n\n` +
         `Previous task: ${entry.task}\n\n` +
@@ -1056,7 +1051,7 @@ export class AshBridge extends EventEmitter implements Bridge {
         },
         formatResult(_args, result) {
           const text = String((result as { content?: unknown })?.content ?? "");
-          return { summary: text.slice(0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
+          return { summary: unicodeSlice(text, 0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
         },
       });
     };
@@ -1096,7 +1091,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       },
       formatResult(_args, result) {
         const text = String((result as { content?: unknown })?.content ?? "");
-        return { summary: text.slice(0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
+        return { summary: unicodeSlice(text, 0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
       },
     });
 
@@ -1277,7 +1272,7 @@ export class AshBridge extends EventEmitter implements Bridge {
         const lines = items.map((item, i) => {
           const r = results[i];
           const flat = item.replace(/\s+/g, " ").trim();
-          const short = flat.length > 60 ? `${flat.slice(0, 60)}…` : flat;
+          const short = flat.length > 60 ? `${unicodeSlice(flat, 0, 60)}…` : flat;
           const conclusion = (r?.text ?? "no result").trim();
           // Head+tail clip keeps the trailing "[Subagent terminated: ...]"
           // note on budget/iteration-degraded results.
@@ -1285,12 +1280,15 @@ export class AshBridge extends EventEmitter implements Bridge {
           const mark = r?.ok ? (r.degraded ? "~" : "✓") : "✗";
           return `[${i + 1}/${total}] ${short} → ${mark} ${clipped}`;
         });
-        const header = `Swarm ${swarmId} (${type}) finished: ${done} succeeded, ${failed} failed, ${total} total.`;
+        // Persist the partial count: replay must not infer state from child
+        // findings, which can themselves quote old reports or status markers.
+        const degraded = results.filter((r) => r?.ok && r.degraded).length;
+        const header = `Swarm ${swarmId} (${type}) finished: ${done} succeeded, ${failed} failed, ${degraded} partial, ${total} total.`;
         return { exitCode: 0, content: `${header}\n${lines.join("\n")}`, isError: false };
       },
       formatResult(_args, result) {
         const text = String((result as { content?: unknown })?.content ?? "");
-        return { summary: text.split("\n")[0]?.slice(0, 200) ?? "", body: { kind: "lines" as const, lines: text.split("\n") } };
+        return { summary: unicodeSlice(text.split("\n")[0] ?? "", 0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
       },
     });
 
@@ -1369,7 +1367,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       },
       formatResult(_args, result) {
         const text = String((result as { content?: unknown })?.content ?? "");
-        return { summary: text.split("\n")[0]?.slice(0, 200) ?? "", body: { kind: "lines" as const, lines: text.split("\n") } };
+        return { summary: unicodeSlice(text.split("\n")[0] ?? "", 0, 200), body: { kind: "lines" as const, lines: text.split("\n") } };
       },
     });
 
@@ -2135,9 +2133,8 @@ export class AshBridge extends EventEmitter implements Bridge {
       name: string,
       payload: ContextSnapshot & { skipTokens?: boolean },
     ) => ContextSnapshot;
-    // skipTokens is honored by the patched agent-sh context:snapshot pipe
-    // (patches/agent-sh+*.patch); an unpatched kernel ignores the flag and
-    // still computes the estimate — harmless, just slower.
+    // The upstream context:snapshot pipe supports skipTokens, avoiding an
+    // unnecessary token estimate when only the messages are needed.
     const snap = emitPipe("context:snapshot", {
       messages: [], contextWindow: 0, activeTokens: 0,
       skipTokens: opts?.skipTokens === true,

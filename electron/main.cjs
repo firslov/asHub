@@ -198,7 +198,18 @@ function resolveWebRoot() {
   return path.join(process.resourcesPath, "web");
 }
 
-// Independent of `mainWindow` so theme/update handlers stay scoped to the primary window.
+// Apply the shared palette to both the main window and detached tabs.
+function applyWindowTheme(win, isDark) {
+  if (!win || win.isDestroyed()) return;
+  const color = isDark ? "#2d2a26" : "#f3eddf";
+  win.setBackgroundColor(color);
+  if (process.platform === "darwin") {
+    try {
+      win.setTitleBarOverlay?.({ color, symbolColor: isDark ? "#ded2bc" : "#494239" });
+    } catch {}
+  }
+}
+
 function createTearOutWindow(loadPath, screenPos) {
   const isDark = nativeTheme.shouldUseDarkColors;
   const opts = {
@@ -207,14 +218,14 @@ function createTearOutWindow(loadPath, screenPos) {
     minWidth: 900,
     minHeight: 600,
     title: "asHub",
-    backgroundColor: isDark ? "#18181c" : "#fafaf7",
+    backgroundColor: isDark ? "#2d2a26" : "#f3eddf",
     // Same chrome policy as the main window: frameless on Windows so the
     // in-page custom title bar is the only one; hiddenInset on macOS.
     frame: process.platform !== "win32",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     titleBarOverlay: process.platform === "darwin" ? {
-      color: isDark ? "#18181c" : "#fafaf7",
-      symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
+      color: isDark ? "#2d2a26" : "#f3eddf",
+      symbolColor: isDark ? "#ded2bc" : "#494239",
     } : undefined,
     acceptFirstMouse: true,
     show: false,
@@ -258,15 +269,15 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "asHub",
-    backgroundColor: isDark ? "#18181c" : "#fafaf7",
+    backgroundColor: isDark ? "#2d2a26" : "#f3eddf",
     // hiddenInset: traffic-light buttons overlay content; titleBarOverlay
     // lets us style the native toolbar background through CSS.
     // Windows: frameless + custom title bar for theme integration.
     frame: process.platform !== "win32",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     titleBarOverlay: process.platform === "darwin" ? {
-      color: isDark ? "#18181c" : "#fafaf7",
-      symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
+      color: isDark ? "#2d2a26" : "#f3eddf",
+      symbolColor: isDark ? "#ded2bc" : "#494239",
     } : undefined,
     acceptFirstMouse: true,
     show: false,
@@ -636,21 +647,10 @@ function setupIPC() {
   });
 
   // Sync native title bar with web UI theme changes
-  ipcMain.on("theme-changed", (_event, theme) => {
-    if (mainWindow) {
-      const isDark = theme === "dark";
-      mainWindow.setBackgroundColor(isDark ? "#18181c" : "#fafaf7");
-      if (process.platform === "darwin") {
-        try {
-          if (typeof mainWindow.setTitleBarOverlay === "function") {
-            mainWindow.setTitleBarOverlay({
-              color: isDark ? "#18181c" : "#fafaf7",
-              symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
-            });
-          }
-        } catch {}
-      }
-    }
+  ipcMain.on("theme-changed", (event, theme) => {
+    if (theme !== "light" && theme !== "dark") return;
+    nativeTheme.themeSource = theme;
+    applyWindowTheme(BrowserWindow.fromWebContents(event.sender), theme === "dark");
   });
 }
 
@@ -798,19 +798,8 @@ if (!gotTheLock) {
 
     // Sync window background with system theme
     nativeTheme.on("updated", () => {
-      if (mainWindow) {
-        const isDark = nativeTheme.shouldUseDarkColors;
-        mainWindow.setBackgroundColor(isDark ? "#18181c" : "#fafaf7");
-        if (process.platform === "darwin") {
-          try {
-            if (typeof mainWindow.setTitleBarOverlay === "function") {
-              mainWindow.setTitleBarOverlay({
-                color: isDark ? "#18181c" : "#fafaf7",
-                symbolColor: isDark ? "#e8e8ec" : "#1d1d22",
-              });
-            }
-          } catch {}
-        }
+      for (const win of BrowserWindow.getAllWindows()) {
+        applyWindowTheme(win, nativeTheme.shouldUseDarkColors);
       }
     });
 

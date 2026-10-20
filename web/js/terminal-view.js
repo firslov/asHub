@@ -34,6 +34,12 @@ class TerminalView extends HTMLElement {
       theme: themeFromCss(),
     });
     this.term.open(this.hostEl);
+    this.themeObserver = new MutationObserver(() => {
+      if (this.term) this.term.options.theme = themeFromCss();
+    });
+    this.themeObserver.observe(document.documentElement, {
+      attributes: true, attributeFilter: ["data-theme"],
+    });
 
     this.term.onData((data) => {
       if (!this.id || this.ended) return;
@@ -55,6 +61,7 @@ class TerminalView extends HTMLElement {
 
   disconnectedCallback() {
     this.resizeObserver?.disconnect();
+    this.themeObserver?.disconnect();
     if (this.fitTimer) { clearTimeout(this.fitTimer); this.fitTimer = null; }
     if (this.id) unsubscribeSession(this.id);
     unregisterSession(this);
@@ -118,9 +125,28 @@ function themeFromCss() {
   const styles = getComputedStyle(document.documentElement);
   const v = (name, fallback) => (styles.getPropertyValue(name).trim() || fallback);
   return {
-    background: v("--bg", "#0b0e14"),
-    foreground: v("--fg", "#cdd6f4"),
-    cursor: v("--accent", "#89b4fa"),
+    background: v("--bg", "#2d2a26"),
+    foreground: v("--fg", "#ded2bc"),
+    cursor: v("--accent", "#c89d6e"),
+    cursorAccent: v("--bg", "#2d2a26"),
+    selectionBackground: v("--accent-soft", "rgba(200, 157, 110, 0.12)"),
+    // Both ANSI families follow the softened palette when the theme changes.
+    black: v("--bg", "#2d2a26"),
+    red: v("--red", "#d59c8f"),
+    green: v("--green", "#a5b080"),
+    yellow: v("--amber", "#c5b17d"),
+    blue: v("--cyan", "#94b0b2"),
+    magenta: v("--purple", "#bba1b3"),
+    cyan: v("--aqua", "#91ae97"),
+    white: v("--text-dim", "#c3b59e"),
+    brightBlack: v("--text-muted", "#b5a48f"),
+    brightRed: v("--red-light", "#dfa99c"),
+    brightGreen: v("--green-light", "#b0bc8d"),
+    brightYellow: v("--amber", "#c5b17d"),
+    brightBlue: v("--cyan-light", "#a1babe"),
+    brightMagenta: v("--purple", "#bba1b3"),
+    brightCyan: v("--aqua", "#91ae97"),
+    brightWhite: v("--text", "#ded2bc"),
   };
 }
 

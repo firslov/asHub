@@ -5,8 +5,6 @@
    class display values would otherwise beat the UA [hidden] rule. */
 #prompt-overlay [hidden] { display: none !important; }
 
-/* Academic theme: legacy .prompt-overlay rule carried the sans override. */
-[data-theme="academic"] #prompt-overlay { font-family: var(--font-sans); }
 
 /* ── Segmented tab bar under the head ─────────────────────────────── */
 .prompt-seg-wrap {

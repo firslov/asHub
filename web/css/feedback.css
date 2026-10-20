@@ -191,15 +191,6 @@
 [data-theme="dark"] .permission-card { background: var(--bg-elevated); }
 [data-theme="dark"] .permission-btn.approve { background: var(--success-bg); }
 [data-theme="dark"] .permission-btn.approve-all { background: transparent; }
-[data-theme="academic"] .permission-card {
-  font-family: var(--font-sans);
-  border-left-width: 2px;
-}
-[data-theme="academic"] .permission-head { font-family: var(--font-sans); }
-[data-theme="academic"] .permission-btn {
-  border-radius: var(--radius-sm);
-  font-family: var(--font-sans);
-}
 
 /* ══ Todo progress card ═════════════════════════════════════════════ */
 .todo-block {

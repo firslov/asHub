@@ -8,6 +8,7 @@
  * lifecycle to whatever Bridge factory the CLI selected (AshBridge,
  * AcpBridge, or anything else conforming to ./bridges/types.ts).
  */
+import { DEEPSEEK_MODELS } from "./providers/deepseek.js";
 import * as http from "node:http";
 import { settingsValidationError } from "./config-validation.js";
 import { updateSettingsFile } from "./settings-store.js";
@@ -1157,9 +1158,16 @@ async function getModels(
         continue;
       }
       const resolved = resolveProvider(id);
-      const set = new Set<string>(resolved?.models ?? []);
+      const defaults = id === "deepseek" ? DEEPSEEK_MODELS : [];
+      const models = resolved?.modelsExplicit && resolved.models.length
+        ? resolved.models
+        : defaults.length ? defaults.map(m => m.id) : resolved?.models ?? [];
+      const set = new Set<string>(models);
       if (resolved?.defaultModel) set.add(resolved.defaultModel);
-      byName.set(id, { defaultModel: resolved?.defaultModel, models: set });
+      for (const model of defaults) {
+        if (set.has(model.id)) modelModalities.set(`${id}:${model.id}`, resolved?.modelCapabilities?.get(model.id)?.modalities ?? model.modalities);
+      }
+      byName.set(id, { defaultModel: resolved?.defaultModel ?? (defaults.length ? models[0] : undefined), models: set });
     }
 
     // OpenRouter fetches its catalog asynchronously after registration.
@@ -2851,7 +2859,7 @@ async function openSseMulti(
         const meta = { source: id, ts: Date.now(), id: `hub:${id}:reemit:agent:info`, name: "agent:info" };
         try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta, payload: session.lastAgentInfo })}\n\n`); } catch { return; }
       }
-      for (const [name, payload] of [["session:title", { title: session.title }], ["shell:cwd-change", { cwd: session.cwd }], ["hub:capabilities", { readOnlyContext: session.bridge?.readOnlyContext ?? true, supportsCwdChange: !!session.bridge?.supportsCwdChange }]] as const) {
+      for (const [name, payload] of [["session:title", { title: session.title }], ["shell:cwd-change", { cwd: session.cwd }], ["hub:capabilities", { readOnlyContext: !session.bridge || !!session.bridge.readOnlyContext, supportsCwdChange: !!session.bridge?.supportsCwdChange }]] as const) {
         try { res.write(sseFrame({ source: id, ts: Date.now(), name }, payload)); } catch { return; }
       }
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };

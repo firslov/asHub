@@ -1,3 +1,4 @@
+import { reasoningLevels, normalizeReasoning, reasoningLabel } from "./reasoning.js";
 import { t } from "./i18n.js";
 import { escape } from "./utils.js";
 import { currentSessionId, agentInfo } from "./state.js";
@@ -56,8 +57,6 @@ const FALLBACK_TYPES = {
   },
 };
 
-const REASONING_LEVELS = ["off", "low", "medium", "high", "xhigh"];
-
 // 60000 → "60k", 64000 → "64k", 32500 → "32.5k", 900 → "900".
 const fmtTokens = (n) => {
   const v = Number(n);
@@ -80,6 +79,7 @@ const formatTools = (tools) => {
 // Session the cards were built for — repeat opens of the same session
 // reuse the DOM; only a session switch re-renders.
 let _renderedSid = null;
+let _renderedProvider = "";
 // Signature of the model list currently baked into the selects — options
 // are rebuilt only when the catalog (or provider filter) changes.
 let _optionsSig = "";
@@ -169,6 +169,7 @@ export const renderSubagentPanel = function renderSubagentPanel() {
         return;
       }
       _renderedSid = sid;
+      _renderedProvider = agentInfo.provider;
       _optionsSig = "";
       renderCards(list);
       document.dispatchEvent(new Event("ash:subagent-budget-rendered"));
@@ -341,8 +342,11 @@ const makeReasoningSelect = (type, current) => {
   const select = document.createElement("select");
   select.className = "p-select sa-reasoning";
   select.title = t("sa.reasoning.title");
-  select.innerHTML = REASONING_LEVELS.map(l => `<option value="${l}">${l}</option>`).join("");
-  const initial = REASONING_LEVELS.includes(current) ? current : (FALLBACK_TYPES[type]?.reasoning ?? "low");
+  const provider = agentInfo.provider;
+  const levels = reasoningLevels(provider);
+  select.innerHTML = levels.map(l => `<option value="${l}">${reasoningLabel(l, provider)}</option>`).join("");
+  const normalized = normalizeReasoning(current ?? FALLBACK_TYPES[type]?.reasoning ?? "low", provider);
+  const initial = levels.includes(normalized) ? normalized : "low";
   select.value = initial;
   select.dataset.prev = initial;
   select.addEventListener("change", () => {
@@ -353,7 +357,8 @@ const makeReasoningSelect = (type, current) => {
     select.dataset.prev = value;
     commitBudgetField(card, "reasoning", value, (entry) => {
       const v = typeof entry?.reasoning === "string" ? entry.reasoning : prev;
-      select.value = REASONING_LEVELS.includes(v) ? v : prev;
+      const normalized = normalizeReasoning(v, provider);
+      select.value = levels.includes(normalized) ? normalized : prev;
       select.dataset.prev = select.value;
     });
   });
@@ -537,6 +542,10 @@ const refreshDeferredBudget = () => {
     || saTypes.querySelectorAll(".sa-meta-input").length) return;
   renderSubagentPanel();
 };
+document.addEventListener("ash:provider-changed", () => {
+  budgetRefreshPending = true;
+  refreshDeferredBudget();
+});
 document.addEventListener("ash:subagent-budget-changed", () => {
   budgetRefreshPending = true;
   refreshDeferredBudget();
@@ -556,7 +565,7 @@ export const setSgOpen = (on) => {
     // Repeat opens of the same session reuse the rendered cards and
     // selects — only the override values are re-read.  A session switch
     // (or first open) re-renders from scratch.
-    if (_renderedSid === currentSessionId() && saTypes?.childElementCount) {
+    if (_renderedSid === currentSessionId() && _renderedProvider === agentInfo.provider && saTypes?.childElementCount) {
       refreshModelDropdowns();
     } else {
       renderSubagentPanel();

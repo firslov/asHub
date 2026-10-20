@@ -3,8 +3,7 @@
 /* Windows custom title bar offset — replaces the dead live.css rule
    `.os-win32 .tree-panel` (shell is now .p-drawer). */
 .os-win32 #tree-panel { top: calc(var(--ui-chrome-height) + 10px); }
-/* UI chrome stays sans in academic (mirrors skills/config/prompt). */
-[data-theme="academic"] #tree-panel { font-family: var(--font-sans); }
+
 
 /* Rows share the global type ramp: preview = sans fs-md (.p-row-main),
    timestamp = mono fs-xs (.p-row-meta). Guides are CSS-drawn hairlines,
@@ -102,9 +101,9 @@
 }
 
 /* Two-step fork confirm: inline danger state (mirrors .p-btn-danger —
-   white glyph on --error in every theme, same as the primitive). */
+   contrasting glyph on --error in each theme, same as the primitive). */
 .tree-row.confirming { background: var(--error-bg); color: var(--text); }
-.tree-row.confirming .tree-leaf-badge { background: var(--error); color: #fff; }
+.tree-row.confirming .tree-leaf-badge { background: var(--error); color: var(--on-error); }
 
 .tree-row { min-height: 42px; border-radius: 8px; }
 .tree-row.selected { background: var(--accent-glow); }

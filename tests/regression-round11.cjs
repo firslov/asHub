@@ -74,6 +74,7 @@ await check('AB02 normal exit blocks input and replay restores a live terminal',
   u.e.context.HTMLElement = El;
   u.e.context.customElements = { define: (name, cls) => { TerminalView = cls; } };
   u.e.context.ResizeObserver = class { observe() {} };
+  u.e.context.MutationObserver = class { observe() {} disconnect() {} };
   u.e.context.getComputedStyle = () => ({ getPropertyValue: () => '' });
   u.e.context.window.Terminal = class {
     constructor() { this.options = {}; this.output = ''; }

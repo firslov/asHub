@@ -235,7 +235,7 @@
 }
 .image-preview-item:hover .image-preview-remove,
 .image-preview-remove:focus-visible { opacity: 1; }
-.image-preview-remove:hover { background: var(--red); }
+.image-preview-remove:hover { background: var(--red); color: var(--on-error); }
 
 /* ══ Thinking-level chip (Shift+Tab feedback) ══════════════════════ */
 

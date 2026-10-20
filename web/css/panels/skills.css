@@ -1,13 +1,10 @@
 /* skills.css — panel-specific styles for the skills panel. Shared primitives live in ../panels.css. */
 
-/* ── Shell replacements for legacy .config-overlay rules that the
-   skills drawer used to inherit (terminal shift, Windows title-bar
-   offset, narrow-viewport width, academic-theme font). ────────────── */
+
 .app:has(#skills-overlay:not([hidden])) .live-wrap .terminal {
   margin-right: calc(var(--space-3) + var(--drawer-w));
 }
 .os-win32 #skills-overlay { top: calc(var(--ui-chrome-height) + 10px); }
-[data-theme="academic"] #skills-overlay { font-family: var(--font-sans); }
 
 /* ── Top segmented control (Marketplace / Installed) ──────────────── */
 .sk-controls {

@@ -5,7 +5,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-787868.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-22-787868.svg)](.nvmrc)
-[![agent-sh](https://img.shields.io/badge/agent--sh-0.15.17-a58b5d.svg)](package.json)
+[![agent-sh](https://img.shields.io/badge/agent--sh-6ea34cc-a58b5d.svg)](https://github.com/guanyilun/agent-sh/commit/6ea34cc9247344715e16c7becf49d4dc46ccb71a)
 
 asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌面 AI Agent 工作台。把多会话、模型选择、子代理、终端和文件放在同一个界面，既能专注阅读结果，也能展开审阅完整执行过程。
 
@@ -26,7 +26,7 @@ asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌�
 | 可审阅的操作 | 权限审批、改动预览、会话级放行；后台完成与审批通知 |
 | 项目工具 | PTY 终端、文件浏览、图片输入、技能市场、用户扩展 |
 | 保留工作脉络 | 会话持久化、对话分支与回退、Markdown 导出 |
-| 统一的界面 | 浅色、深色与暖白主题，中英文切换、显示缩放、可折叠状态栏 |
+| 统一的界面 | Gruvbox 浅色与深色主题，中英文切换、显示缩放、可折叠状态栏 |
 
 <details>
 <summary>查看执行过程：任务、代码差异与工具输出</summary>
@@ -36,7 +36,7 @@ asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌�
 </details>
 
 <details>
-<summary>查看文件侧栏与暖白主题</summary>
+<summary>查看文件侧栏</summary>
 
 ![文件侧栏与对话并排展示](website/assets/showcase-files.png)
 
@@ -80,7 +80,7 @@ chmod +x ./asHub-*.AppImage
 
 ## 从源码运行
 
-项目固定使用 **Node.js 22.23.3**（最低 **22.12.0**），内核为 **agent-sh 0.15.17**。使用 nvm 时：
+项目固定使用 **Node.js 22.23.3**（最低 **22.12.0**），内核固定到官方 **agent-sh 提交 `6ea34cc`**，包含尚未发布到 npm 的 Unicode 修复。安装依赖需要 Git。使用 nvm 时：
 
 ```sh
 git clone https://github.com/firslov/asHub.git

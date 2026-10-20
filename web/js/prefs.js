@@ -23,36 +23,30 @@ const SUN_PATHS = `
 
 const MOON_PATHS = `
   <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>`;
-const BOOK_PATHS = `
-  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-  <line x1="8" y1="7" x2="16" y2="7"/>
-  <line x1="8" y1="11" x2="14" y2="11"/>`;
-const hljsDark = document.getElementById("hljs-dark");
-const hljsLight = document.getElementById("hljs-light");
 const sidebarToggle = document.getElementById("sidebar-toggle");
 const langToggle = document.getElementById("lang-toggle");
 
-const setTheme = (theme) => {
-  document.documentElement.setAttribute("data-theme", theme);
-  if (hljsDark) hljsDark.disabled = theme !== "dark";
-  if (hljsLight) hljsLight.disabled = theme === "dark";
-  if (themeIcon) {
-    themeIcon.innerHTML = theme === "dark" ? MOON_PATHS : theme === "academic" ? BOOK_PATHS : SUN_PATHS;
-  }
-  try { localStorage.setItem(LS_THEME, theme); } catch {}
-  // Show current theme in button tooltip
+const updateThemeLabel = () => {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  const label = t(dark ? "theme.switch.light" : "theme.switch.dark");
   if (themeToggle) {
-    const names = { light: "Light", dark: "Dark", academic: "Academic" };
-    themeToggle.title = `${t("toggle.theme")} (${names[theme] || theme})`;
+    themeToggle.title = label;
+    themeToggle.setAttribute("aria-label", label);
   }
+  if (themeIcon) themeIcon.innerHTML = dark ? SUN_PATHS : MOON_PATHS;
+};
+
+const setTheme = (theme, persist = true) => {
+  document.documentElement.setAttribute("data-theme", theme);
+  if (persist) { try { localStorage.setItem(LS_THEME, theme); } catch {} }
+  updateThemeLabel();
   // Sync native window chrome with theme
   if (window.electronAPI?.onThemeChange) {
     window.electronAPI.onThemeChange(theme);
   }
 };
 
-const THEMES = ["light", "dark", "academic"];
+const THEMES = ["light", "dark"];
 
 const toggleTheme = () => {
   const current = document.documentElement.getAttribute("data-theme") || "light";
@@ -61,7 +55,8 @@ const toggleTheme = () => {
 };
 
 try {
-  const stored = localStorage.getItem(LS_THEME);
+  const saved = localStorage.getItem(LS_THEME);
+  const stored = saved === "academic" ? "light" : saved;
   if (THEMES.includes(stored ?? "")) {
     setTheme(stored);
   } else {
@@ -73,6 +68,13 @@ try {
 } catch { setTheme("light"); }
 
 themeToggle?.addEventListener("click", toggleTheme);
+document.addEventListener("langchange", updateThemeLabel);
+// Detached tabs share the preference; avoid writing it back on a storage event.
+window.addEventListener("storage", (event) => {
+  if (event.key === LS_THEME && THEMES.includes(event.newValue ?? "")) {
+    setTheme(event.newValue, false);
+  }
+});
 
 const setSidebarCollapsed = (on, persist = true) => {
   app.classList.toggle("sidebar-collapsed", on);

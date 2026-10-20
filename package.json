@@ -21,13 +21,13 @@
     "electron:pack": "npm run build && electron-builder --dir",
     "electron:dist:mac": "npm run build && electron-builder --mac",
     "electron:dist:win": "bash scripts/pre-dist-win.sh && npm run build && electron-builder --win",
-    "postinstall": "patch-package && electron-builder install-app-deps",
-    "test": "node tests/regression.cjs && node tests/regression-round2.cjs && node tests/regression-round3.cjs && node tests/regression-round4.cjs && node tests/regression-round5.cjs && node tests/regression-round6.cjs && node tests/regression-round7.cjs && node tests/regression-round8.cjs && node tests/regression-round9.cjs && node tests/regression-round10.cjs && node tests/regression-round11.cjs && node tests/regression-round12.cjs && node tests/regression-round13.cjs && node tests/regression-ui-refine.cjs && node tests/regression-tab-close.cjs && node tests/regression-panel-fixes.cjs && node tests/regression-round15.cjs && node tests/regression-round16.cjs && node tests/regression-round17.cjs && node tests/regression-round18.cjs && node tests/regression-round19.cjs && node tests/regression-round20.cjs && node tests/regression-stream-summary.cjs && node tests/regression-live-output.cjs && node --test tests/regression-usage.cjs tests/regression-system-prompt.cjs",
+    "postinstall": "electron-builder install-app-deps",
+    "test": "node tests/regression.cjs && node tests/regression-round2.cjs && node tests/regression-round3.cjs && node tests/regression-round4.cjs && node tests/regression-round5.cjs && node tests/regression-round6.cjs && node tests/regression-round7.cjs && node tests/regression-round8.cjs && node tests/regression-round9.cjs && node tests/regression-round10.cjs && node tests/regression-round11.cjs && node tests/regression-round12.cjs && node tests/regression-round13.cjs && node tests/regression-ui-refine.cjs && node tests/regression-tab-close.cjs && node tests/regression-panel-fixes.cjs && node tests/regression-theme.cjs && node tests/regression-round15.cjs && node tests/regression-round16.cjs && node tests/regression-round17.cjs && node tests/regression-round18.cjs && node tests/regression-round19.cjs && node tests/regression-round20.cjs && node tests/regression-stream-summary.cjs && node tests/regression-activity.cjs && node tests/regression-rewind.cjs && node tests/regression-live-output.cjs && node --test tests/regression-usage.cjs tests/regression-system-prompt.cjs tests/regression-deepseek.cjs tests/regression-unicode.cjs tests/regression-dependencies.cjs",
     "test:http": "node tests/http-smoke.cjs && node tests/http-round5.cjs && node tests/http-round6.cjs && node tests/http-round7.cjs && node tests/http-round8.cjs && node tests/http-round18.cjs && node tests/http-round19.cjs && node tests/http-round20.cjs",
     "test:kernel": "npm run build && node tests/kernel-compat.mjs"
   },
   "dependencies": {
-    "agent-sh": "0.15.17",
+    "agent-sh": "github:guanyilun/agent-sh#6ea34cc9247344715e16c7becf49d4dc46ccb71a",
     "electron-updater": "^6.8.3",
     "tsx": "^4.22.4"
   },
@@ -36,7 +36,6 @@
     "@types/node": "^22.20.5",
     "electron": "^40.0.0",
     "electron-builder": "^26.8.1",
-    "patch-package": "^8.0.0",
     "typescript": "^6.0.3"
   },
   "optionalDependencies": {

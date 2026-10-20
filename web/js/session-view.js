@@ -1,3 +1,4 @@
+import { resetActivity, disposeActivity, activityEvent } from "./stream/activity.js";
 import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
 import { compactReasoning } from "./stream/compact.js";
@@ -72,6 +73,7 @@ class SessionView extends HTMLElement {
   }
 
   initStreamShell() {
+    resetActivity(this);
     discardPendingThinking(this);
     this.controller = new AbortController();
 
@@ -104,6 +106,11 @@ class SessionView extends HTMLElement {
     this.shellBlock = { current: null };
     this._subagent = null;
     this._subagentBlock = null;
+    // These indexes refer to DOM nodes from the previous stream shell.
+    this._saBlocksByCallId?.clear();
+    this._saBlocksBySaId?.clear();
+    this._swarms?.clear();
+    this._pendingSwarmCalls?.clear();
     this.scroll = { stickToBottom: true, lastSeen: 0 };
     this.replayFlushTimer = null;
 
@@ -157,6 +164,7 @@ class SessionView extends HTMLElement {
   }
 
   resetForBranchSwitch() {
+    resetActivity(this);
     discardPendingThinking(this);
     const wasReplaying = this.state.replaying;
     if (this.streamEl) {
@@ -190,6 +198,11 @@ class SessionView extends HTMLElement {
     this.shellBlock = { current: null };
     this._subagent = null;
     this._subagentBlock = null;
+    // Full replay reuses subagent IDs, but must build fresh DOM blocks.
+    this._saBlocksByCallId?.clear();
+    this._saBlocksBySaId?.clear();
+    this._swarms?.clear();
+    this._pendingSwarmCalls?.clear();
     // Drop the todo card reference so its sticky watcher (rAF loop waiting
     // for attachment) exits instead of spinning forever on detached DOM.
     this._todoBlock = null;
@@ -200,6 +213,7 @@ class SessionView extends HTMLElement {
   }
 
   disconnectedCallback() {
+    disposeActivity(this);
     discardPendingThinking(this);
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);
     this.controller?.abort();
@@ -228,6 +242,7 @@ class SessionView extends HTMLElement {
       try { fn.call(this, frame.payload, frame.meta); }
       catch (e) { console.error(frame.meta.name, e); }
     }
+    activityEvent(this, frame?.meta?.name);
     // Keepalive frame resets safety timer manually; skip the 12ms debounce
     // since _ensureBridge may take 200ms+ before real frames arrive.
     if (frame?.meta?.name !== "hub:replay-starting") {

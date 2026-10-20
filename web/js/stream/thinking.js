@@ -1,3 +1,4 @@
+import { refreshActivity } from "./activity.js";
 import { hideEmptyState, maybeScroll } from "./scroll.js";
 import { append, insertStreamNode } from "./tool-group.js";
 import { t } from "../i18n.js";
@@ -10,10 +11,12 @@ export const showThinking = (session) => {
   if (!session || session.thinking.el) return;
   const el = document.createElement("div");
   el.className = "thinking";
+  el.setAttribute("role", "status");
   el.innerHTML =
     `<span class="thinking-dot"></span>` +
     `<span class="thinking-dot"></span>` +
-    `<span class="thinking-dot"></span>`;
+    `<span class="thinking-dot"></span>` +
+    `<span class="thinking-status-label">${t("activity.thinking")}</span>`;
   hideEmptyState(session);
   // Route thinking dots into the active subagent if one is running.
   const subBody = session._subagent?.querySelector(".subagent-body");
@@ -144,6 +147,7 @@ export const finalizeThinking = (session) => {
   flushThinkingBuf(session);
   const block = session?.thinking.block;
   if (!block) return;
+  block.dataset.activityDone = "1";
   const inner = block.querySelector(".thinking-block-inner");
   if (!inner || !inner.textContent?.trim()) {
     block.remove();
@@ -158,11 +162,13 @@ export const finalizeThinking = (session) => {
     }
     setThinkingCollapsed(block, true);
   }
+  refreshActivity(block);
   session.thinking.block = null;
 };
 
 // Refresh translated labels on language change
 document.addEventListener("langchange", () => {
+  document.querySelectorAll(".thinking-status-label").forEach((el) => { el.textContent = t("activity.thinking"); });
   document.querySelectorAll(".thinking-block-head").forEach((head) => {
     const block = head.closest(".thinking-block");
     const isCollapsed = block?.classList?.contains("collapsed") ?? false;

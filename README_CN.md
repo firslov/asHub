@@ -9,7 +9,7 @@
 
 asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌面 AI Agent 工作台。把多会话、模型选择、子代理、终端和文件放在同一个界面，既能专注阅读结果，也能展开审阅完整执行过程。
 
-支持 **macOS（Apple Silicon / Intel）、Windows x64 与 Linux x64**。桌面版与浏览器版使用同一套客户端；使用前需配置自己的模型提供商与 API 凭据，模型调用费用由提供商收取。
+支持 **macOS（Apple Silicon / Intel）、Windows x64 与 Linux x64**。桌面版与本地浏览器版使用同一套客户端；使用前需配置自己的模型提供商与 API 凭据，模型调用费用由提供商收取。
 
 ![asHub 多会话工作台：项目分析、格式化表格与会话管理](website/assets/showcase-workspace.png)
 
@@ -27,6 +27,7 @@ asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌�
 | 项目工具 | PTY 终端、文件浏览、图片输入、技能市场、用户扩展 |
 | 保留工作脉络 | 会话持久化、对话分支与回退、Markdown 导出 |
 | 统一的界面 | Gruvbox 浅色与深色主题，中英文切换、显示缩放、可折叠状态栏 |
+| 移动访问 · 预览 | 手机上继续已授权的桌面对话，共享历史、流式回复与单次权限审批 |
 
 <details>
 <summary>查看执行过程：任务、代码差异与工具输出</summary>
@@ -77,6 +78,16 @@ curl -fsSL https://raw.githubusercontent.com/firslov/asHub/main/install.sh | bas
 chmod +x ./asHub-*.AppImage
 ./asHub-*.AppImage
 ```
+
+## 移动访问 · 预览
+
+通过 [asHub 移动网页版](https://ashub.aihao.world/mobile/) 继续电脑上的对话。**需使用 asHub v0.20.5 或更新版本。**
+
+1. 在桌面右侧工具栏打开「移动访问」，登录或注册账号，授权需要共享的项目目录
+2. 保存恢复码后点击「我已保存」；未确认的恢复码在切换菜单后仍可查看，但需在退出应用或刷新前保存
+3. 手机登录同一账号，选择电脑，即可继续已有对话或新建对话
+
+电脑需保持唤醒且 asHub 正在运行。仅共享授权范围内且工作目录仍有效的对话，归档对话需先在桌面恢复。支持流式回复、图片、模型切换与单次权限审批。中转服务转发内容但不持久保存对话正文，不属于端到端加密。
 
 ## 从源码运行
 

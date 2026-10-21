@@ -9,7 +9,7 @@
 
 asHub is an open-source desktop workspace powered by [agent-sh](https://github.com/guanyilun/agent-sh). Keep conversations, models, subagents, terminals and project files together, with a readable result and an inspectable execution trail.
 
-Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The desktop app and browser share the same client. Bring your own model provider and API credentials; model usage is billed by your provider.
+Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The desktop app and local browser view share the same client. Bring your own model provider and API credentials; model usage is billed by your provider.
 
 ![asHub workspace with session tabs, project analysis and a formatted table](website/assets/showcase-workspace.png)
 
@@ -27,6 +27,7 @@ Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The 
 | Project tools | PTY terminals, file browsing, image input, a skills marketplace and user extensions |
 | Persistent work | Saved conversations, branches, rewind and Markdown export |
 | A consistent interface | Gruvbox light and dark themes; English and Chinese; display scaling and a collapsible status bar |
+| Mobile access · preview | Continue authorized desktop conversations from a phone; shared history, streaming replies and one-time approvals |
 
 <details>
 <summary>Execution detail: tasks, code changes and tool output</summary>
@@ -77,6 +78,16 @@ After downloading the AppImage, run these commands in its directory:
 chmod +x ./asHub-*.AppImage
 ./asHub-*.AppImage
 ```
+
+## Mobile access · preview
+
+Continue desktop conversations at [asHub Mobile](https://ashub.aihao.world/mobile/). **Requires asHub v0.20.5 or later.**
+
+1. Open **Mobile Access (移动访问)** in the desktop toolbar, sign in or create an account, and authorize project directories
+2. Save the recovery code, then select **I have saved it (我已保存)**. Unconfirmed codes survive menu switches, but must be saved before quitting or refreshing the app
+3. Sign in with the same account on your phone, select your computer, and continue a conversation or start a new one
+
+Keep the computer awake and asHub running. Only conversations in authorized, existing directories are shared; restore archived conversations on the desktop first. Mobile supports streamed replies, images, model switching and one-time approvals. The relay forwards content without persisting conversation bodies; it is not end-to-end encrypted.
 
 ## Run from source
 

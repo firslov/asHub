@@ -8,6 +8,7 @@
  * lifecycle to whatever Bridge factory the CLI selected (AshBridge,
  * AcpBridge, or anything else conforming to ./bridges/types.ts).
  */
+import { RemoteConnector, type RemoteSecretStore } from "./remote/connector.js";
 import { DEEPSEEK_MODELS } from "./providers/deepseek.js";
 import * as http from "node:http";
 import { settingsValidationError } from "./config-validation.js";
@@ -31,6 +32,7 @@ import { invalidateGlobalSkillsCache } from "agent-sh/skills";
 
 export interface HubOpts {
   port: number;
+  remoteSecretStore?: RemoteSecretStore;
   host: string;
   webRoot: string;
   /** Factory the hub uses to spawn one bridge per session. */
@@ -808,6 +810,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   const sessions = new Map<string, Session>();
 
   const access = createAccessGuard(opts.host);
+  const mobile = new RemoteConnector({ store: opts.remoteSecretStore, dataDir: path.join(SESSIONS_DIR, "remote"), localToken: access.token });
   if (access.token) console.error(`[hub] Access token: ${access.token} (sign in at /auth)`);
   const handleRequest = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     const url = req.url ?? "/";
@@ -822,6 +825,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     }
 
     if (!await access.allow(req, res)) return;
+    if (url === "/api/mobile" || url.startsWith("/api/mobile/")) return mobile.handle(req, res);
 
     if (req.method === "GET" && url === "/api/config") return getConfig(res);
     if (req.method === "GET" && url.startsWith("/api/config/apikey")) return getApiKey(req, res);
@@ -966,6 +970,8 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   }).then(() => {
     if (stopping) return;
     server.listen(opts.port, opts.host, () => {
+      const address = server.address();
+      if (address && typeof address !== "string") mobile.start(address.port);
       console.error(`asHub listening on http://${opts.host}:${opts.port}/`);
     });
   });
@@ -974,6 +980,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     server,
     shutdown: () => {
       stopping = true;
+      mobile.close();
       lifecycle.abort();
       return shutdownTask ??= restoring.then(() => shutdownHub(server, sessions));
     },

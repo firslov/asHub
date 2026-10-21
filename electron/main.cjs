@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor, safeStorage } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -676,7 +676,20 @@ async function startServer() {
 
   let server;
   try {
+    const credentialFile = path.join(app.getPath("userData"), "mobile-access.bin");
+    const secureStorage = safeStorage.isEncryptionAvailable()
+      && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text");
+    const remoteSecretStore = secureStorage ? {
+      read() { return fs.existsSync(credentialFile) ? safeStorage.decryptString(fs.readFileSync(credentialFile)) : null; },
+      write(value) {
+        if (value === null) { fs.rmSync(credentialFile, { force: true }); return; }
+        const temp = credentialFile + ".tmp";
+        fs.writeFileSync(temp, safeStorage.encryptString(value), { mode: 0o600 });
+        fs.renameSync(temp, credentialFile);
+      },
+    } : undefined;
     const hubOptions = {
+      remoteSecretStore,
       port: HUB_PORT,
       host: "127.0.0.1",
       webRoot,

@@ -7,15 +7,13 @@ The public site at https://ashub.aihao.world uses the same visual identity as th
 - `index.html`: static preview, with working GitHub Releases download fallbacks
 - `download.html`: the same page, used by the production mirror renderer
 - `assets/site-20261024.css` / `assets/site-20261008.js`: layout and progressive enhancements
-- `assets/showcase-*.png`: actual v0.20.2 UI renders with isolated, illustrative demo data
+- `assets/showcase-workspace-0206-{en,zh}.jpg`: v0.20.6 main UI in English and Chinese
+- `assets/showcase-*.png`: earlier v0.20.2 detail captures; all screenshots use isolated, illustrative demo data
 - `assets/brand-20261008.svg`: the application icon from `web/assets/brand/icon.svg`
 
 Keep `index.html` and `download.html` identical. Use a new asset filename when replacing a cached production resource.
 
-The mobile access section requires v0.20.5 or later. The development section
-separately describes source-only features; it must not imply they are in the
-current v0.20.5 download. The matching mobile enhancements are not deployed yet. Its phone graphic is a labeled HTML/CSS
-usage illustration, not a screenshot or a claim about real task results.
+Basic mobile access requires v0.20.5 or later. Project collaboration and thinking controls require v0.20.6 with the updated gateway. The phone graphic is a labeled HTML/CSS usage illustration, not a screenshot or a claim about real task results.
 
 ## Preview
 
@@ -39,13 +37,14 @@ Platforms match **both OS and architecture**. Missing packages keep their Releas
 
 ## Recreate screenshots
 
-Install the project dependencies and make Playwright plus its Chromium browser available in a separate tooling environment. Then:
+Start the isolated showcase server for each language:
 
 ```sh
-PLAYWRIGHT_MODULE=/absolute/path/to/playwright node scripts/capture-showcase.cjs
+SHOWCASE_LANG=en node scripts/showcase-server.cjs
+SHOWCASE_LANG=zh node scripts/showcase-server.cjs
 ```
 
-The script runs the real HTTP hub and UI with the test harness, renders demonstration content through the actual app renderers, and captures three 2160 × 1500 PNGs. It makes no model calls and does not read personal settings. Its dedicated `/tmp/ashub-showcase` directory must not already exist and is cleaned up on exit. The screenshots illustrate interface capabilities, not results of a real coding task or performance benchmarks.
+Open the printed URL in a browser, choose the matching interface language, switch the sidebar to Projects, and capture the main conversation at 1440 × 1000. Save the English and Chinese captures separately. The server uses the current Hub and UI with demo messages, makes no model calls, and removes its temporary project on shutdown. Do not use personal conversations for public screenshots.
 
 ## Production deployment
 

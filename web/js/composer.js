@@ -1,4 +1,4 @@
-import { reasoningLevels, normalizeReasoning, reasoningLabel } from "./reasoning.js";
+import { loadThinking, saveThinking, thinkingChoices, thinkingLabel } from "./thinking-control.js";
 import { currentSessionId, state, queryHistory } from "./state.js";
 import { escape, toBlobUrl } from "./utils.js";
 import { appendAfterPending } from "./stream/tool-group.js";
@@ -263,24 +263,22 @@ const showThinkingChip = (level) => {
   thinkingChip.classList.add("show");
 };
 
-input?.addEventListener("keydown", (ev) => {
+input?.addEventListener("keydown", async (ev) => {
   if (ev.key !== "Tab" || !ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const session = activeSession.peek();
   if (!session?.agentInfo?.thinkingSupported) return;
   ev.preventDefault();
-  const provider = session.agentInfo.provider;
-  const levels = reasoningLevels(provider);
-  const cur = normalizeReasoning(session.agentInfo.thinkingLevel || "off", provider);
-  const idx = levels.indexOf(cur);
-  const next = levels[(idx + 1) % levels.length];
-  const sid = currentSessionId();
-  if (!sid) return;
-  showThinkingChip(reasoningLabel(next, provider));
-  fetch(`/${sid}/thinking`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ level: next }),
-  }).catch(() => {});
+  if (session._thinkingPending || session._thinkingCycleLoading) return;
+  try {
+    session._thinkingCycleLoading = true;
+    if (!Array.isArray(session.agentInfo.thinkingLevels) && !(await loadThinking(session))) return;
+    if (activeSession.peek() !== session) return;
+    const levels = thinkingChoices(session.agentInfo);
+    if (!levels.length) return;
+    const next = levels[(levels.indexOf(session.agentInfo.thinkingLevel) + 1) % levels.length];
+    if (await saveThinking(session, next) && activeSession.peek() === session) showThinkingChip(thinkingLabel(next));
+  } catch (err) { toast(t("model.thinking.failed"), { type: "error", detail: String(err?.message ?? err) }); }
+  finally { session._thinkingCycleLoading = false; }
 });
 
 const shellSupported = document.documentElement.dataset.platform !== "win32";

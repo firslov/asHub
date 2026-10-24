@@ -1,3 +1,4 @@
+import { loadThinking, saveThinking, thinkingChoices, thinkingLabel } from "./thinking-control.js";
 import { refreshActivity } from "./stream/activity.js";
 import { readSwarmOutcome } from "./stream/swarm-result.js";
 import { reasoningLabel } from "./reasoning.js";
@@ -278,8 +279,8 @@ if (dot) dot.parentElement?.addEventListener("click", () => {
 export const renderInstanceLabel = () => {
   if (!instanceLabel) return;
   const ai = activeSession.peek()?.agentInfo;
-  const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off";
-  const inner = [ai?.model, showThink ? reasoningLabel(ai.thinkingLevel, ai.provider) : ""].filter(Boolean).join(" • ");
+  const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off" && ai.thinkingLevel !== "default";
+  const inner = [ai?.model, showThink ? (Array.isArray(ai.thinkingLevels) ? thinkingLabel(ai.thinkingLevel) : reasoningLabel(ai.thinkingLevel, ai.provider)) : ""].filter(Boolean).join(" • ");
   const tag = inner ? `[${inner}]` : "";
   instanceLabel.textContent = [ai?.name, tag].filter(Boolean).join(" ");
 };
@@ -397,15 +398,33 @@ const createSubagentBlock = (session, type, taskText) => {
 
 // Handlers run with `this` bound to the owning SessionView.
 export const handlers = {
+  "agent:providers:changed"() {
+    invalidateModelCache();
+    document.dispatchEvent(new CustomEvent("ash:models-changed"));
+  },
   "agent:info"(p) {
     if (p?.name === "web-renderer") return;
+    // A confirmed identity supersedes pending model-switch HTTP responses.
+    // Thinking-only updates must not cancel an unrelated model selection.
+    if ((p?.model && p.model !== this.agentInfo.model) || (p?.provider && p.provider !== this.agentInfo.provider)) {
+      this._modelRequestSeq = (this._modelRequestSeq ?? 0) + 1;
+    }
+    const thinkingChanged = !!(p?.model || p?.provider) || typeof p?.thinkingLevel === "string"
+      || typeof p?.thinkingSupported === "boolean" || Array.isArray(p?.thinkingLevels);
+    // Live confirmation wins over older HTTP snapshots, including A → B → A
+    // model changes where checking the final identity alone is insufficient.
+    if (thinkingChanged) this._thinkingRequestSeq = (this._thinkingRequestSeq || 0) + 1;
     const previousProvider = this.agentInfo.provider;
     if (p?.name) this.agentInfo.name = p.name;
     if (p?.model) this.agentInfo.model = p.model;
     if (p?.provider) this.agentInfo.provider = p.provider;
     if (typeof p?.thinkingLevel === "string") this.agentInfo.thinkingLevel = p.thinkingLevel;
     if (typeof p?.thinkingSupported === "boolean") this.agentInfo.thinkingSupported = p.thinkingSupported;
+    if (Array.isArray(p?.thinkingLevels)) this.agentInfo.thinkingLevels = p.thinkingLevels;
+    else if (p?.model) this.agentInfo.thinkingLevels = undefined;
+    if (p?.thinkingDefault !== undefined) this.agentInfo.thinkingDefault = p.thinkingDefault;
     if (Array.isArray(p?.modalities)) this.agentInfo.modalities = p.modalities;
+    else if (p?.model) this.agentInfo.modalities = [];
     // Update image upload button visibility for the active session.
     if (this === activeSession.peek()) {
       const btn = document.getElementById("vision-indicator");
@@ -421,6 +440,7 @@ export const handlers = {
       syncAllBalanceChips();
       if (previousProvider !== this.agentInfo.provider) document.dispatchEvent(new Event("ash:provider-changed"));
     }
+    if (thinkingChanged) document.dispatchEvent(new CustomEvent("ash:thinking-changed", { detail: { session: this } }));
   },
 
   "hub:capabilities"(p) {
@@ -1482,9 +1502,9 @@ const refreshModelChip = (session) => {
   const wrap = session.modelEl.closest(".terminal-wrap");
   if (wrap?.dataset.uiUsageModelShow !== "true") { session.modelEl.hidden = true; return; }
   const ai = session.agentInfo;
-  const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off";
+  const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off" && ai.thinkingLevel !== "default";
   const modelLabel = ai?.provider ? `${ai.model}@${ai.provider}` : ai?.model;
-  const modelText = [modelLabel, showThink ? `[${reasoningLabel(ai.thinkingLevel, ai.provider)}]` : ""].filter(Boolean).join(" ");
+  const modelText = [modelLabel, showThink ? `[${(Array.isArray(ai.thinkingLevels) ? thinkingLabel(ai.thinkingLevel) : reasoningLabel(ai.thinkingLevel, ai.provider))}]` : ""].filter(Boolean).join(" ");
 
   // Combined model + balance
   const balanceText = session.modelEl?._balanceLabel ?? "";
@@ -1551,10 +1571,13 @@ let _sharedDropdown = null;
 let _dropdownOwner = null;    // session the open dropdown is anchored to
 let _dropdownAnchor = null;   // chip node the open dropdown was positioned on
 let _dropdownObserver = null; // MutationObserver watching for anchor removal
+let _thinkingLoadSeq = 0;
+let _modelSelectionPending = false;
 let _dropdownBuiltFor = null; // _allModelsCache reference the DOM was built from
 
 const hideModelDropdown = () => {
   const dd = _sharedDropdown;
+  _thinkingLoadSeq++;
   _dropdownOwner = null;
   _dropdownAnchor = null;
   if (_dropdownObserver) {
@@ -1576,13 +1599,49 @@ const getSharedDropdown = () => {
   dd.hidden = true;
   // Event delegation: a single click listener for every .model-option,
   // bound once — no per-option listeners to re-attach on rebuild.
-  dd.addEventListener("click", (ev) => {
+  dd.addEventListener("click", async (ev) => {
+    // Rendering a new selection replaces the clicked button; stop bubbling
+    // before the outside-click listener sees that now-detached target.
+    ev.stopPropagation();
+    const session = _dropdownOwner;
+    if (!session || _modelSelectionPending || session._thinkingPending) return;
+    if (ev.target.closest(".model-thinking-retry")) { void refreshThinkingDropdown(session); return; }
+    const effort = ev.target.closest(".model-thinking-option");
+    if (effort) {
+      const pending = saveThinking(session, effort.dataset.level);
+      renderThinkingDropdown(session);
+      try { await pending; }
+      catch (err) { toast(t("model.thinking.failed"), { type: "error", detail: String(err?.message ?? err) }); }
+      finally {
+        if (_dropdownOwner === session) {
+          renderThinkingDropdown(session);
+          if (document.activeElement === document.body) {
+            _sharedDropdown.querySelector(`.model-thinking-option[data-level="${effort.dataset.level}"]`)?.focus();
+          }
+        }
+      }
+      return;
+    }
     const opt = ev.target.closest(".model-option");
-    if (!opt || !_dropdownOwner) return;
-    const modelId = opt.dataset.model;
-    const provider = opt.dataset.provider;
-    if (modelId) selectModel(_dropdownOwner, modelId, provider);
-    hideModelDropdown();
+    if (!opt) return;
+    const modelId = opt.dataset.model, provider = opt.dataset.provider;
+    if (!modelId) return;
+    _modelSelectionPending = true;
+    dd.querySelectorAll(".model-option").forEach(el => { el.disabled = true; });
+    renderThinkingDropdown(session, "loading");
+    try { await selectModel(session, modelId, provider); }
+    finally {
+      _modelSelectionPending = false;
+      dd.querySelectorAll(".model-option").forEach(el => { el.disabled = false; });
+      if (_dropdownOwner === session) {
+        updateModelDropdownSelection(dd, session);
+        await refreshThinkingDropdown(session);
+      }
+    }
+  });
+  dd.addEventListener("keydown", ev => {
+    ev.stopPropagation();
+    if (ev.key === "Escape") { ev.preventDefault(); const anchor = _dropdownAnchor; hideModelDropdown(); anchor?.focus(); }
   });
   document.body.appendChild(dd);
   _sharedDropdown = dd;
@@ -1613,11 +1672,11 @@ const buildModelDropdown = (dropdown) => {
         return `<div class="model-group" data-provider="${escapeAttr(p.name)}">` +
           `<div class="model-group-head">${escapeAttr(p.name)}</div>` +
           models.map((m) =>
-            `<div class="model-option" data-model="${escapeAttr(m.id)}" data-provider="${escapeAttr(p.name)}">${escapeAttr(m.id)}</div>`
+            `<button type="button" class="model-option" data-model="${escapeAttr(m.id)}" data-provider="${escapeAttr(p.name)}">${escapeAttr(m.id)}</button>`
           ).join("") +
         `</div>`;
       }).join("") +
-    `</div>`;
+    `</div><div class="model-thinking"></div>`;
 
   const searchInput = dropdown.querySelector(".model-search-input");
   searchInput.addEventListener("input", () => {
@@ -1653,10 +1712,53 @@ const updateModelDropdownSelection = (dropdown, session) => {
       badge.remove();
     }
     group.querySelectorAll(".model-option").forEach((opt) => {
-      opt.classList.toggle("selected", isCurrent && opt.dataset.model === currentModel);
+      const selected = isCurrent && opt.dataset.model === currentModel;
+      opt.classList.toggle("selected", selected);
+      opt.setAttribute("aria-pressed", String(selected));
     });
   });
 };
+
+const renderThinkingDropdown = (session, state = "ready") => {
+  if (_dropdownOwner !== session || !_sharedDropdown) return;
+  const root = _sharedDropdown.querySelector(".model-thinking");
+  if (!root) return;
+  const focusedLevel = root.contains(document.activeElement) ? document.activeElement?.dataset.level : undefined;
+  const choices = thinkingChoices(session.agentInfo);
+  root.innerHTML = `<div class="model-thinking-head"><span>${escapeAttr(t("model.thinking.title"))}</span><span class="model-thinking-value">${escapeAttr(state === "loading" ? t("model.thinking.loading") : state === "error" ? "" : thinkingLabel(session.agentInfo.thinkingLevel || "default"))}</span></div>`;
+  if (state === "loading") { root.setAttribute("aria-busy", "true"); return; }
+  root.removeAttribute("aria-busy");
+  if (state === "error") {
+    root.innerHTML += `<button type="button" class="model-thinking-retry">${escapeAttr(t("model.thinking.retry"))}</button>`;
+    return;
+  }
+  if (!choices.length) { root.innerHTML += `<p class="model-thinking-note">${escapeAttr(t("model.thinking.unavailable"))}</p>`; return; }
+  const disabled = session._thinkingPending || _modelSelectionPending;
+  root.innerHTML += `<div class="model-thinking-options" role="group" aria-label="${escapeAttr(t("model.thinking.title"))}">${choices.map(level => `<button type="button" class="model-thinking-option" data-level="${escapeAttr(level)}" aria-pressed="${level === session.agentInfo.thinkingLevel}" ${disabled ? "disabled" : ""}>${escapeAttr(thinkingLabel(level))}</button>`).join("")}</div>`;
+  if (focusedLevel && !disabled && choices.includes(focusedLevel)) {
+    root.querySelector(`.model-thinking-option[data-level="${focusedLevel}"]`)?.focus();
+  }
+};
+const refreshThinkingDropdown = async session => {
+  const seq = ++_thinkingLoadSeq;
+  renderThinkingDropdown(session, "loading");
+  try {
+    await loadThinking(session);
+    if (seq === _thinkingLoadSeq && _dropdownOwner === session) renderThinkingDropdown(session);
+  } catch {
+    if (seq === _thinkingLoadSeq && _dropdownOwner === session) renderThinkingDropdown(session, "error");
+  }
+};
+document.addEventListener("ash:thinking-changed", ev => {
+  const session = ev.detail?.session;
+  if (!session) return;
+  refreshModelChip(session);
+  if (activeSession.peek() === session) renderInstanceLabel();
+  if (_dropdownOwner === session) {
+    updateModelDropdownSelection(_sharedDropdown, session);
+    renderThinkingDropdown(session);
+  }
+});
 
 const toggleModelDropdown = async (session) => {
   const dropdown = getSharedDropdown();
@@ -1720,13 +1822,17 @@ const toggleModelDropdown = async (session) => {
   // replaced by resync() while the dropdown was closed.
   if (!session.modelEl?.isConnected) return;
   const chipRect = session.modelEl.getBoundingClientRect();
-  dropdown.style.left = `${chipRect.left}px`;
+  const width = Math.min(360, window.innerWidth - 24);
+  dropdown.style.width = `${width}px`;
+  dropdown.style.left = `${Math.max(12, Math.min(chipRect.left, window.innerWidth - width - 12))}px`;
+  dropdown.style.maxHeight = `${Math.max(0, Math.min(460, chipRect.top - 18))}px`;
   dropdown.style.top = `${chipRect.top}px`;
   dropdown.style.transform = "translateY(-100%) translateY(-6px)";
 
   dropdown.hidden = false;
   _dropdownOwner = session;
   _dropdownAnchor = session.modelEl;
+  void refreshThinkingDropdown(session);
 
   // resync() (rewind, session-view refresh) rebuilds the shell and swaps
   // the chip node without changing activeSessionId, so the effect above
@@ -1764,6 +1870,8 @@ const selectModel = (session, modelId, provider) => {
       session.agentInfo.model = modelId;
       if (provider) session.agentInfo.provider = provider;
       session.agentInfo.modalities = undefined;
+      session.agentInfo.thinkingLevels = undefined;
+      session.agentInfo.thinkingSupported = false;
       if (provider && !BALANCE_PROVIDERS.has(provider) && session.modelEl) session.modelEl._balanceLabel = "";
       refreshModelChip(session);
       if (activeSession.peek() === session) {

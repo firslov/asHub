@@ -6,11 +6,16 @@ The public site at https://ashub.aihao.world uses the same visual identity as th
 
 - `index.html`: static preview, with working GitHub Releases download fallbacks
 - `download.html`: the same page, used by the production mirror renderer
-- `assets/site-20261008.css` / `.js`: layout and progressive enhancements
+- `assets/site-20261024.css` / `assets/site-20261008.js`: layout and progressive enhancements
 - `assets/showcase-*.png`: actual v0.20.2 UI renders with isolated, illustrative demo data
 - `assets/brand-20261008.svg`: the application icon from `web/assets/brand/icon.svg`
 
 Keep `index.html` and `download.html` identical. Use a new asset filename when replacing a cached production resource.
+
+The mobile access section requires v0.20.5 or later. The development section
+separately describes source-only features; it must not imply they are in the
+current v0.20.5 download. The matching mobile enhancements are not deployed yet. Its phone graphic is a labeled HTML/CSS
+usage illustration, not a screenshot or a claim about real task results.
 
 ## Preview
 

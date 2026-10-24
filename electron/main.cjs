@@ -660,6 +660,7 @@ async function startServer() {
 
   let startHub, AshBridge, TerminalBridge;
   try {
+    await import(pathToFileURL(path.join(distRoot, "network-bootstrap.js")).href);
     const hubMod = await import(pathToFileURL(path.join(distRoot, "hub.js")).href);
     startHub = hubMod.startHub;
     ({ AshBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "ash.js")).href));

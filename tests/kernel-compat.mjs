@@ -97,7 +97,10 @@ try {
     try { const exit = await within(new Promise(resolve => proc.onExit(resolve))); assert.equal(exit.exitCode, 7); assert.match(output, /NATIVE_PTY_OK/); }
     finally { try { proc.kill(); } catch {} }
   });
-  const bridge = new AshBridge({ cwd: dir, provider: 'compat', model: 'compat-model' }); bridges.add(bridge);
+  const bridge = new AshBridge({ cwd: dir, provider: 'compat', model: 'compat-model', conversationAccess: {
+    list: () => ({ currentId: 'fixture', project: { name: 'Fixture' }, conversations: [] }),
+    read: async () => ({ messages: [] }), send: async () => ({ ok: true }),
+  } }); bridges.add(bridge);
   await check('real AshBridge initializes with ESM TypeScript extension', async () => {
     await within(bridge.ready());
     assert.match(bridge.core.bus.emitPipe('compat:extension-loaded', { url: '' }).url, /compat\.ts/);
@@ -133,6 +136,19 @@ try {
       assert(actualSystem.includes('EXTENSION_PROMPT_RULE_PRESERVED'));
     } finally { off(); }
   });
+  await check('project tools reach the model and execute through the kernel', async () => {
+    const names = requests.at(-1).tools.map(t => t.function.name);
+    for (const name of ['conversation_list', 'conversation_read', 'conversation_send']) assert(names.includes(name), name);
+    let round = 0;
+    modelReply = () => ++round === 1
+      ? { tool_calls: [{ index: 0, id: 'project-list', type: 'function', function: { name: 'conversation_list', arguments: '{}' } }] }
+      : { content: 'PROJECT_TOOLS_OK' };
+    try {
+      await within(bridge.submit('List project conversations'));
+      const result = (await bridge.snapshot()).messages.find(m => m.role === 'tool' && m.tool_call_id === 'project-list');
+      assert.equal(JSON.parse(result.content).currentId, 'fixture');
+    } finally { modelReply = () => ({ content: 'KERNEL_REPLY_OK' }); }
+  });
   await check('bridge subagent delegates through the installed upstream runner', async () => {
     const result = await within(bridge.core.handlers.call('subagent:run', { task: 'compatibility child', systemPrompt: 'Reply briefly', tools: [], maxIterations: 2 }));
     assert.match(typeof result === 'string' ? result : JSON.stringify(result), /KERNEL_REPLY_OK/);
@@ -160,8 +176,8 @@ try {
       assert.equal(model.modalities.includes('image'), model.id !== 'deepseek-v4-pro');
     }
   });
-  await check('DeepSeek maps all persisted thinking levels on the actual request', async () => {
-    for (const [level, expected] of [['off', null], ['low', 'low'], ['medium', 'high'], ['high', 'high'], ['xhigh', 'max']]) {
+  await check('DeepSeek sends each supported native thinking level on the actual request', async () => {
+    for (const [level, expected] of [['off', null], ['low', 'low'], ['high', 'high'], ['max', 'max']]) {
       deepseek.setThinking(level);
       await within(deepseek.submit('thinking ' + level));
       const request = requests.at(-1);
@@ -172,14 +188,14 @@ try {
   });
   await check('DeepSeek new and legacy Flash IDs send images, Pro stays text-only', async () => {
     for (const id of ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-v4-pro']) {
-      deepseek.execCommand('/model', id + '@deepseek');
+      await deepseek.execCommand('/model', id + '@deepseek');
       await within(deepseek.submit(JSON.stringify({ query: 'image test', images: [{ data: 'AA==', mimeType: 'image/png' }] })));
       const request = requests.at(-1);
       assert.equal(request.model, id);
       const message = request.messages.filter(m => m.role === 'user').at(-1);
       assert.equal(Array.isArray(message.content) && message.content.some(c => c.type === 'image_url'), id !== 'deepseek-v4-pro');
     }
-    deepseek.execCommand('/model', 'deepseek-flash@deepseek');
+    await deepseek.execCommand('/model', 'deepseek-flash@deepseek');
   });
   await check('DeepSeek tool continuation preserves reasoning_content', async () => {
     let round = 0;
@@ -204,8 +220,10 @@ try {
     const endpoint = deepseek.core.handlers.call('agent:resolve-endpoint', { provider: 'deepseek', id: 'deepseek-flash' });
     assert.equal(endpoint.extractCachedTokens({ prompt_cache_hit_tokens: 123 }), 123);
     // Provider changes keep the generic kernel vocabulary valid.
-    deepseek.execCommand('/model', 'compat-model@compat');
-    deepseek.setThinking('xhigh');
+    await deepseek.execCommand('/model', 'compat-model@compat');
+    assert.equal(deepseek.getThinking().supported, false);
+    assert.throws(() => deepseek.setThinking('xhigh'));
+    deepseek.core.bus.emit('config:set-thinking', {level:'xhigh'});
     await within(deepseek.submit('generic provider'));
     assert.equal(requests.at(-1).reasoning_effort, 'high');
     assert.equal(requests.at(-1).thinking, undefined);

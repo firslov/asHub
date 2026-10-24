@@ -38,7 +38,9 @@ export const renderUsage = (session) => {
   // SVG ring: r=9, circumference ≈ 56.5487
   const ringCircum = 56.5487;
   const ringOffset = ringCircum * (1 - cacheRatio);
-  const cacheHtml = (cacheHit > 0 || cacheMiss > 0)
+  const cacheHtml = st.lastUsage.cache_reported === false
+    ? `<span class="usage-chip usage-cache" title="${t("usage.cache.unreported")}">${t("usage.cache.unknown")}</span>`
+    : (cacheHit > 0 || cacheMiss > 0)
     ? `<span class="usage-chip usage-cache" title="${cacheTooltip}">` +
         `<svg class="cache-ring" viewBox="0 0 24 24" width="16" height="16">` +
           `<circle class="cache-ring-track" cx="12" cy="12" r="9"/>` +

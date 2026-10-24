@@ -1,3 +1,4 @@
+import { openArtifact } from "../artifacts.js";
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, createHmac } from 'node:crypto';
@@ -168,10 +169,78 @@ export class RemoteConnector {
   private projectId(root: string) {
     return createHmac('sha256', this.config!.deviceToken).update(root).digest('hex');
   }
+  private current(epoch: number) {
+    if (epoch !== this.generation || this.stopped || !this.config || this.config.enabled === false)
+      throw error('移动访问授权已变更，请重新确认', 403);
+  }
+  private async groups(epoch: number) {
+    const shared = new Set((await this.sessions()).map((s: any) => s.instanceId));
+    const groups = await this.local('/api/projects');
+    this.current(epoch);
+    return groups.map((p: any) => ({ id: p.id, name: p.name, sessionIds: p.sessionIds.filter((id: string) => shared.has(id)) }))
+      .filter((p: any) => p.sessionIds.length);
+  }
+  private async projectTasks(args: any, epoch: number) {
+    const group = (await this.groups(epoch)).find((p: any) => p.id === args.projectId);
+    if (!group) throw error('项目未共享或已不存在', 403);
+    const query = new URLSearchParams({ projectId: group.id });
+    const tasks = (await this.local('/api/projects/tasks?' + query)).filter((t: any) =>
+      group.sessionIds.includes(t.sourceId) && group.sessionIds.includes(t.recipientId));
+    let result = tasks;
+    if (args.taskId !== undefined) {
+      if (!tasks.some((t: any) => t.id === args.taskId)) throw error('协作任务未共享或已不存在', 403);
+      const offset = args.offset ?? 0;
+      if (!Number.isSafeInteger(offset) || offset < 0) throw error('读取位置无效');
+      query.set('taskId', args.taskId); query.set('offset', String(offset));
+      result = await this.local('/api/projects/tasks?' + query);
+    }
+    // Authorization may change while an output page is being retrieved.
+    const latest = (await this.groups(epoch)).find((p: any) => p.id === group.id);
+    this.current(epoch);
+    const allowed = (t: any) => latest?.sessionIds.includes(t.sourceId) && latest.sessionIds.includes(t.recipientId);
+    if (args.taskId !== undefined) {
+      if (!allowed(tasks.find((t: any) => t.id === args.taskId))) throw error('协作任务授权已变更', 403);
+      return result;
+    }
+    return result.filter(allowed);
+  }
+  private async artifact(args: any, session: any, epoch: number) {
+    if (typeof args.path !== 'string' || args.path.length > 8192) throw error('文件路径无效');
+    const offset = args.offset;
+    if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0)) throw error('读取位置无效');
+    let opened: Awaited<ReturnType<typeof openArtifact>> | undefined;
+    try {
+      opened = await openArtifact(session.cwd, args.path);
+      this.current(epoch);
+      const { file, stat, candidate } = opened;
+      const fingerprint = (st: fs.Stats) => createHmac('sha256', this.config!.deviceToken)
+        .update(JSON.stringify([session.instanceId, candidate, st.dev, st.ino, st.size, st.mtimeMs, st.ctimeMs])).digest('hex');
+      const version = fingerprint(stat);
+      if (args.version !== undefined && args.version !== version) throw error('文件已更新，请重新下载', 409);
+      if (offset === undefined) return { name: path.basename(candidate), size: stat.size, version };
+      if (typeof args.version !== 'string' || offset > stat.size) throw error('文件下载参数无效');
+      const bytes = Buffer.alloc(Math.min(256 * 1024, stat.size - offset));
+      let used = 0;
+      while (used < bytes.length) {
+        const { bytesRead } = await file.read(bytes, used, bytes.length - used, offset + used);
+        if (!bytesRead) throw error('文件已更新，请重新下载', 409);
+        used += bytesRead;
+      }
+      if (fingerprint(await file.stat()) !== version) throw error('文件已更新，请重新下载', 409);
+      this.current(epoch);
+      return { data: bytes.toString('base64'), nextOffset: offset + used, size: stat.size, version };
+    } catch (e: any) {
+      if (e.status) throw e;
+      throw error('文件不存在或无法读取', 404);
+    } finally { await opened?.file.close(); }
+  }
   async execute(op: string, args: any): Promise<any> {
     if (!this.config || this.config.enabled === false || this.stopped) throw error('移动访问已关闭', 403);
     const epoch = this.generation;
-    if (op === 'sessions') return this.sessions();
+    if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, thinking: true };
+    if (op === 'project-groups') return this.groups(epoch);
+    if (op === 'project-tasks') return this.projectTasks(args, epoch);
+    if (op === 'sessions') { const result = await this.sessions(); this.current(epoch); return result; }
     if (op === 'projects') return this.config.roots.map(p => ({ id: this.projectId(p), name: path.basename(p) || p }));
     if (op === 'models') return this.local('/api/models');
     if (op === 'request-status') {
@@ -188,6 +257,15 @@ export class RemoteConnector {
     const session = await this.session(args.session);
     // Disabling or rebinding advances the generation while session lookup may be awaiting the Hub.
     if (epoch !== this.generation || this.stopped) throw error('移动访问授权已变更，请重新确认', 403);
+    if (op === 'artifact') return this.artifact(args, session, epoch);
+    if (op === 'thinking') return this.local(`/${session.instanceId}/thinking`);
+    if (op === 'set-thinking') {
+      if (session.isProcessing) throw error('请等待本轮回复结束', 409);
+      if (typeof args.model !== 'string' || !args.model || typeof args.provider !== 'string' || !args.provider
+        || typeof args.level !== 'string' || !args.level || args.level.length > 32) throw error('思考深度参数无效');
+      // The Hub validates native levels and rejects a model changed since the phone read it.
+      return this.local(`/${session.instanceId}/thinking`, { model: args.model, provider: args.provider, level: args.level });
+    }
     if (op === 'cancel') return this.local(`/${session.instanceId}/cancel`, {});
     if (op === 'permission') {
       if (!['approved', 'denied'].includes(args.outcome) || typeof args.requestId !== 'string') throw error('审批参数无效');

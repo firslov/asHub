@@ -18,10 +18,10 @@
 /* ══ Permission approval card ═══════════════════════════════════════ */
 .permission-card {
   margin: var(--space-2) 0;
-  border: 1px solid var(--border);
+  border: 0;
   border-left: 2px solid var(--warning);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
   transition: border-color var(--dur-quick) var(--ease-out-expo),
               box-shadow var(--dur-quick) var(--ease-out-expo),
@@ -30,7 +30,7 @@
 .permission-card:hover {
   border-color: var(--border-mid);
   border-left-color: var(--warning);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 /* State spine colors (slim 2px, replacing the heavy 4px bar) */
@@ -44,7 +44,7 @@
 .permission-card.timeout:hover { border-left-color: var(--border-mid); }
 
 /* Decided = quiet audit trail */
-.permission-card.decided { opacity: 0.6; }
+.permission-card.decided { opacity: 1; }
 .permission-card.decided:hover { box-shadow: none; }
 
 .permission-head {
@@ -54,11 +54,11 @@
 }
 .permission-icon { color: var(--warning); }
 
-/* Kind chip → p-badge language: mono data chip, no heavy fill */
+/* Operation kind is quiet metadata, without another enclosing badge. */
 .permission-kind-badge {
-  padding: 1px 6px;
-  border-radius: var(--radius-pill);
-  background: var(--bg3);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-weight: 500;
@@ -73,13 +73,13 @@
 .permission-path { font-size: var(--fs-xs); color: var(--accent-dim); }
 .permission-desc { color: var(--text-faint); }
 
-/* Diff preview: recessed mono inset. max-height MUST stay 130px —
+/* Diff preview shares the approval rail. max-height MUST stay 130px —
    sse.js measureDiffClip() hardcodes that threshold. */
 .permission-diff {
   margin: var(--space-1) var(--space-3) 0;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
   max-height: 130px;
   font-size: var(--fs-xs);
@@ -92,7 +92,7 @@
   font-size: var(--fs-xs);
 }
 .permission-diff-wrap.clipped:not(.expanded) .permission-diff::after {
-  background: linear-gradient(to bottom, transparent, var(--bg-elevated));
+  background: linear-gradient(to bottom, transparent, var(--bg));
 }
 .permission-diff-toggle {
   width: calc(100% - var(--space-5));
@@ -109,7 +109,7 @@
 .permission-actions {
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border-top: 1px solid var(--border-light);
+  border-top: 0;
 }
 .permission-actions-left,
 .permission-actions-right { gap: var(--space-2); }
@@ -188,7 +188,7 @@
 }
 
 /* Theme overrides — must match the [data-theme] specificity of live.css */
-[data-theme="dark"] .permission-card { background: var(--bg-elevated); }
+[data-theme="dark"] .permission-card { background: transparent; }
 [data-theme="dark"] .permission-btn.approve { background: var(--success-bg); }
 [data-theme="dark"] .permission-btn.approve-all { background: transparent; }
 

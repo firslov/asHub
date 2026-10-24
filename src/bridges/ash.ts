@@ -1,3 +1,4 @@
+import { conversationTools } from "../conversation-tools.js";
 /**
  * AshBridge — runs agent-sh's kernel in-process and forwards bus events.
  *
@@ -10,8 +11,11 @@
  * approval settings; product prompt guidance does not bypass that gate.
  */
 import { clipHeadTail, unicodeSlice, guardLlmUnicode } from "../unicode.js";
+import { SessionThinking, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
 import { configureDeepSeek } from "../providers/deepseek.js";
 import { EventEmitter } from "node:events";
+import { randomUUID } from "node:crypto";
+import type { CodexUsage } from "../providers/codex-usage.js";
 import * as fs from "node:fs";
 import { updateSettingsFile } from "../settings-store.js";
 import { ASHUB_IDENTITY, ASHUB_ACTION_SCOPE, buildAshubFrontendPrompt } from "../prompts/ashub.js";
@@ -21,6 +25,7 @@ import { createCore, type AgentShellCore, runSubagent, type ToolDefinition } fro
 import { activateAgent } from "agent-sh/agent";
 import { loadExtensions } from "agent-sh/extension-loader";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
+import { CodexProviderHost, codexStatus } from "../providers/codex.js";
 import { getSettings, reloadSettings, resolveProvider, getProviderNames, CONFIG_DIR } from "agent-sh/settings";
 import { resolveApiKey } from "agent-sh/auth";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
@@ -68,6 +73,7 @@ function defaultShell(): string {
 // Bus events to forward verbatim. Names line up with what the web client
 // already handles (see web/js/client.js handler map).
 const FORWARDED = [
+  "agent:providers:changed",
   "agent:info",
   "agent:response-chunk",
   "agent:thinking-chunk",
@@ -304,6 +310,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private opts: BridgeOpts;
   private extCtx: ReturnType<AgentShellCore["extensionContext"]> | null = null;
   private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
+  private preparingTurn: typeof this.pendingTurn = null;
   private queryQueue: string[] = [];
   private shellQueue: string[] = [];
   private closed = false;
@@ -313,6 +320,11 @@ export class AshBridge extends EventEmitter implements Bridge {
   private permissionSessionApproved = new Set<string>();
   private autoApprove = false;
   private _contextProducerUnsubscribe: (() => void) | null = null;
+  private codexHost: CodexProviderHost | null = null;
+  private codexUsage: CodexUsage | undefined;
+  private codexFailure: string | null = null;
+  private codexBackendActivation: Promise<void> | null = null;
+  private loadedExtensionNames: string[] = [];
   private _subagents: Map<string, SubagentEntry> = new Map();
   private _todos: TodoItem[] = [];
   private shell: Shell | null = null;
@@ -324,11 +336,14 @@ export class AshBridge extends EventEmitter implements Bridge {
   private shellNextId = 1;
 
   readonly backendId = "ash";
+  readonly readOnlyContext = false;
+  private thinking?: SessionThinking;
 
   constructor(opts: BridgeOpts) {
     super();
     if ((opts.restoreBackend && opts.restoreBackend !== this.backendId) || opts.restoreState?.acpSessionId) throw new Error("This session belongs to another backend; restart with its original backend.");
     this.opts = opts;
+    this.thinking = new SessionThinking(opts.restoreState?.thinkingSelections);
     this.initPromise = this.init().catch(err => {
       // An extension/backend may finish after close(). Drain resources again
       // when initialization settles, without emitting a second closed event.
@@ -353,6 +368,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.assertOpen();
     const core = createCore({ model: this.opts.model, provider: this.opts.provider });
     this.core = core;
+    const sessionId = this.opts.sessionId || randomUUID();
+    core.handlers.define("session:current-id", () => sessionId);
 
     this.wire(core);
 
@@ -381,6 +398,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     // so ctx.shell.compositor + tui-renderer are wired before the input mode prompt fires.
     if (exposeTerminal) registerShellHandlers(extCtx);
     activateAgent(extCtx);
+    if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
+      const agent = (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent;
+      for (const tool of conversationTools(this.opts.conversationAccess)) agent.registerTool(tool);
+    }
     guardLlmUnicode(core.handlers.call("llm:get-client"));
     this.registerUserProviders(extCtx);
     configureDeepSeek(extCtx);
@@ -393,11 +414,15 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.gateImageToolResults(extCtx);
     const settings = getSettings();
     const headlessDisabled = [
+      "codex-provider", // Loaded with a managed session lifetime below.
       "file-autocomplete",
       "overlay-agent",
       ...(settings.disabledBuiltins ?? []),
     ];
     const builtinNames = await loadBuiltinExtensions(extCtx, headlessDisabled);
+    this.assertOpen();
+    this.codexHost = new CodexProviderHost(extCtx, usage => { this.codexUsage = usage; });
+    await this.syncCodexProvider();
     this.assertOpen();
 
     // In Electron (ASHUB_UNDER), tsx's module.register() spawns a
@@ -511,8 +536,8 @@ export class AshBridge extends EventEmitter implements Bridge {
         const current = core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
         const targetModel = modelId ?? current?.model;
         if (!current?.provider || !targetModel) return undefined;
-        const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; reasoning?: boolean }>;
-        if (modes.find((m) => m.id === targetModel)?.reasoning === false) return undefined;
+        const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; reasoning?: boolean }>;
+        if (modes.find((m) => m.id === targetModel && m.provider === current.provider)?.reasoning === false) return undefined;
         const endpoint = core.handlers.call("agent:resolve-endpoint", { provider: current.provider, id: targetModel }) as
           { buildReasoningParams?: (level: string) => Record<string, unknown> } | undefined;
         const built = endpoint?.buildReasoningParams?.(level);
@@ -1371,7 +1396,8 @@ export class AshBridge extends EventEmitter implements Bridge {
       },
     });
 
-    core.bus.emit("core:extensions-loaded", { names: [...builtinNames, ...userNames] });
+    this.loadedExtensionNames = [...builtinNames, ...userNames];
+    core.bus.emit("core:extensions-loaded", { names: this.loadedExtensionNames });
 
     // Permission gate for file-modifying tools
     core.handlers.advise("tool:execute", async (next: (ctx: unknown) => Promise<unknown>, ctx) => {
@@ -1400,9 +1426,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     // (read_file on a PNG) still inject image_url unconditionally.
     core.handlers.advise("conversation:prepare", (next, messages) => {
       try {
-        const modeInfo = core.handlers.call("agent:get-model") as { model?: string } | undefined;
-        const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[] }>;
-        const activeMode = modes.find((m) => m.id === modeInfo?.model);
+        const modeInfo = core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+        const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; modalities?: string[] }>;
+        const activeMode = modes.find((m) => m.id === modeInfo?.model && (!modeInfo?.provider || m.provider === modeInfo.provider));
         if (activeMode?.modalities?.includes("image")) return next(messages);
       } catch { /* fall through — strip to be safe */ }
       // Fast path: only mutate messages with array content.
@@ -1426,8 +1452,8 @@ export class AshBridge extends EventEmitter implements Bridge {
       setTimeout(() => {
         try {
           const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[]; provider?: string; contextWindow?: number }>;
-          const modeInfo = core.handlers.call("agent:get-model") as { model?: string } | undefined;
-          const m = modes.find((x) => x.id === modeInfo?.model);
+          const modeInfo = core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+          const m = modes.find((x) => x.id === modeInfo?.model && (!modeInfo?.provider || x.provider === modeInfo.provider));
           if (!m || !m.modalities?.length) return;
           this.emit("event", {
             name: "agent:info",
@@ -1653,10 +1679,11 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   private activeModelSupportsImage(): boolean {
     if (!this.core) return false;
-    const model = (this.core.handlers.call("llm:get-client") as { model?: string } | undefined)?.model;
+    const active = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+    const model = active?.model ?? (this.core.handlers.call("llm:get-client") as { model?: string } | undefined)?.model;
     if (!model) return false;
-    const modes = (this.core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[] }>;
-    return modes.some((m) => m.id === model && m.modalities?.includes("image"));
+    const modes = (this.core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; modalities?: string[] }>;
+    return modes.some((m) => m.id === model && (!active?.provider || m.provider === active.provider) && m.modalities?.includes("image"));
   }
 
   // Fail closed for kernels lacking the gate: non-vision models error on image content.
@@ -1689,6 +1716,13 @@ export class AshBridge extends EventEmitter implements Bridge {
     // into future turns.
     let lastCacheHit = 0;
     let lastCacheMiss = 0;
+    onAny("llm:request", (payload) => {
+      this.codexUsage = undefined;
+      const model = this.reasoningModel();
+      if (model && payload && typeof payload === "object") {
+        (this.thinking ??= new SessionThinking()).apply(payload as Record<string, unknown>, model, this.kernelThinkingLevel());
+      }
+    });
     onAny("agent:submit", () => {
       lastCacheHit = 0;
       lastCacheMiss = 0;
@@ -1717,16 +1751,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       }
     });
 
-    const readThinking = (): { level: string; supported: boolean } | null => {
-      try {
-        const emitPipe = bus.emitPipe.bind(bus) as unknown as (
-          n: string,
-          p: { level: string; levels: string[]; supported: boolean },
-        ) => { level: string; levels: string[]; supported: boolean };
-        const r = emitPipe("config:get-thinking", { level: "", levels: [], supported: false });
-        return { level: r?.level ?? "off", supported: !!r?.supported };
-      } catch { return null; }
-    };
+    const readThinking = () => this.getThinking();
 
     for (const name of FORWARDED) {
       onAny(name, (payload) => {
@@ -1735,14 +1760,14 @@ export class AshBridge extends EventEmitter implements Bridge {
           // Query multimodal capabilities from agent-sh's mode system.
           let modalities: string[] | undefined;
           try {
-            const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[] }>;
+            const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; modalities?: string[] }>;
             const info = payload as Record<string, unknown>;
-            const currentMode = modes.find((m) => m.id === info.model);
+            const currentMode = modes.find((m) => m.id === info.model && (!info.provider || m.provider === info.provider));
             modalities = currentMode?.modalities;
           } catch { /* not available yet */ }
           const enriched = {
             ...(payload as Record<string, unknown>),
-            ...(think ? { thinkingLevel: think.level, thinkingSupported: think.supported } : {}),
+            ...(think ? { thinkingLevel: think.level, thinkingSupported: think.supported, thinkingLevels: think.levels, thinkingDefault: think.defaultLevel } : {}),
             ...(modalities ? { modalities } : {}),
           };
           this.emit("event", { name, payload: enriched } satisfies BusEvent);
@@ -1750,6 +1775,28 @@ export class AshBridge extends EventEmitter implements Bridge {
         }
         // Enrich agent:usage with cache fields that agent-sh core drops.
         if (name === "agent:usage") {
+          const active = core.handlers.call("agent:get-model") as { provider?: string } | undefined;
+          if (this.codexHost && active?.provider === codexStatus().providerId) {
+            const raw = this.codexUsage;
+            const hit = raw?.input_tokens_details?.cached_tokens;
+            const reported = typeof hit === "number";
+            const enriched = { ...(payload as Record<string, unknown>),
+              cache_reported: reported, codex_usage: raw ?? {},
+            } as Record<string, unknown>;
+            // The upstream translator replaces missing cached_tokens with 0.
+            // Trust the observed response instead, including an explicit zero.
+            delete enriched.cached_prompt_tokens;
+            delete enriched.prompt_cache_hit_tokens;
+            delete enriched.prompt_cache_miss_tokens;
+            if (reported) {
+              enriched.cached_prompt_tokens = enriched.prompt_cache_hit_tokens = hit;
+              enriched.prompt_cache_miss_tokens = Math.max(0, Number(enriched.prompt_tokens ?? 0) - hit);
+            }
+            this.emit("event", { name, payload: enriched } satisfies BusEvent);
+            this.codexUsage = undefined;
+            lastCacheHit = lastCacheMiss = 0;
+            return;
+          }
           // Always attach cache fields if we have accumulated any; this
           // ensures the usage bar shows cache info even when one of the
           // two counters happens to be zero. Reset immediately after so
@@ -1776,7 +1823,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       if (!think) return;
       this.emit("event", {
         name: "agent:info",
-        payload: { thinkingLevel: think.level, thinkingSupported: think.supported },
+        payload: { thinkingLevel: think.level, thinkingSupported: think.supported, thinkingLevels: think.levels, thinkingDefault: think.defaultLevel },
       } satisfies BusEvent);
     });
 
@@ -1905,19 +1952,41 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   async submit(text: string): Promise<{ stopReason: string }> {
-    await this.initPromise;
-    if (!this.core) throw new Error("core not initialized");
-    if (!this.backendRegistered) throw new Error("No agent backend configured. Check your API key and model in Settings.");
+    this.assertOpen();
     if (this.pendingTurn || this.queryQueue.length > 0) {
       this.queryQueue.push(text);
       return { stopReason: "queued" };
     }
-    const { query, images } = this.parseSubmission(text);
     return new Promise<{ stopReason: string }>((resolve, reject) => {
-      this.pendingTurn = { resolve, reject };
-      // agent-sh 0.14.11+ handles images natively: auto-drops for
-      // non-multimodal models and builds multimodal content from images.
-      this.core!.bus.emit("agent:submit", { query, images });
+      // Reserve the turn before yielding so the hub can correctly classify
+      // subsequent messages as queued while the provider is being prepared.
+      const turn = { resolve, reject };
+      this.pendingTurn = this.preparingTurn = turn;
+      void (async () => {
+        try {
+          await this.initPromise;
+          if (this.pendingTurn !== turn) return;
+          await this.syncCodex();
+          if (this.pendingTurn !== turn) return;
+          this.assertOpen();
+          this.assertCodexAvailable();
+          if (!this.core) throw new Error("core not initialized");
+          if (!this.backendRegistered) throw new Error("No agent backend configured. Check your API key and model in Settings.");
+          this.preparingTurn = null;
+          // The kernel handles multimodal content and drops unsupported images.
+          this.core.bus.emit("agent:submit", this.parseSubmission(text));
+        } catch (err) {
+          if (this.pendingTurn === turn) {
+            this.pendingTurn = null;
+            // No kernel turn started, so there will be no event to drain the
+            // queue. Clear it explicitly rather than leaving ghost messages.
+            this.dropQueued();
+          }
+          reject(err);
+        } finally {
+          if (this.preparingTurn === turn) this.preparingTurn = null;
+        }
+      })();
     });
   }
 
@@ -1972,6 +2041,16 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   cancel(): void {
+    // A preparing turn has not reached the kernel, which cannot cancel it.
+    // Settle it now; the asynchronous preparation checks its identity before
+    // dispatching, so it also cannot interfere with a newer submission.
+    const preparing = this.preparingTurn;
+    if (preparing && this.pendingTurn === preparing) {
+      this.pendingTurn = this.preparingTurn = null;
+      preparing.resolve({ stopReason: "cancelled" });
+      this.emit("event", { name: "agent:cancelled", payload: {} } satisfies BusEvent);
+      this.dropQueued();
+    }
     for (const entry of this.pendingPermissions.values()) {
       entry.resolve({ outcome: "denied", reason: "cancelled" });
     }
@@ -1992,7 +2071,22 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
   }
 
-  execCommand(name: string, args: string): void {
+  execCommand(name: string, args: string): void | Promise<void> {
+    if (name === "/model" && this.codexHost) {
+      return this.syncCodex().then(() => this.dispatchCommand(name, args));
+    }
+    return this.dispatchCommand(name, args);
+  }
+
+  private dispatchCommand(name: string, args: string): void {
+    if (name === "/think") {
+      if (args.trim()) this.setThinking(args.trim());
+      else {
+        const state = this.getThinking();
+        this.emit("event", { name: "ui:info", payload: { message: `${state.model}: ${state.level} (${["default", ...state.levels].join(", ")})` } });
+      }
+      return;
+    }
     if (name === "/model" && args) {
       // Bypass slash-commands; resolve the string (id or id@provider) to the
       // (id, provider) pair the switch event now carries.
@@ -2018,8 +2112,39 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.core?.bus.emit("command:execute", { name, args });
   }
 
+  private reasoningModel(): ReasoningModel | null {
+    if (!this.core) return null;
+    const active = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+    if (!active?.model || !active.provider) return null;
+    const models = (this.core.handlers.call("agent:get-models") ?? []) as ReasoningModel[];
+    return models.find(m => m.id === active.model && m.provider === active.provider)
+      ?? { id: active.model, provider: active.provider };
+  }
+
+  private kernelThinkingLevel(): string {
+    if (!this.core) return "off";
+    const emitPipe = this.core.bus.emitPipe.bind(this.core.bus) as unknown as
+      (name: string, initial: { level: string }) => { level?: string };
+    return emitPipe("config:get-thinking", { level: "off" })?.level ?? "off";
+  }
+
+  getThinking(): ThinkingState {
+    const model = this.reasoningModel();
+    if (!model) return { model: "", provider: "", level: "default", levels: [], supported: false };
+    return (this.thinking ??= new SessionThinking()).state(model, this.kernelThinkingLevel());
+  }
+
+  getRestoreState(): Record<string, unknown> | undefined {
+    const thinkingSelections = this.thinking?.restoreState();
+    return thinkingSelections ? { thinkingSelections } : undefined;
+  }
+
   setThinking(level: string): void {
-    this.core?.bus.emit("config:set-thinking", { level });
+    if (!this.core || this.closed) throw new Error("backend not ready");
+    const model = this.reasoningModel();
+    if (!model) throw new Error("No active model");
+    (this.thinking ??= new SessionThinking()).set(model, level);
+    this.core.bus.emit("config:changed", {});
   }
 
   reloadProviders(): void {
@@ -2087,8 +2212,8 @@ export class AshBridge extends EventEmitter implements Bridge {
       });
       this.core!.bus.emit("agent:providers:changed", {});
       const modes = (this.core!.handlers.call("agent:get-models") ?? []) as Array<{ id: string; modalities?: string[]; provider?: string; contextWindow?: number }>;
-      const modeInfo = this.core!.handlers.call("agent:get-model") as { model?: string } | undefined;
-      const m = modes.find((x) => x.id === modeInfo?.model);
+      const modeInfo = this.core!.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+      const m = modes.find((x) => x.id === modeInfo?.model && (!modeInfo?.provider || x.provider === modeInfo.provider));
       if (m) {
         this.emit("event", {
           name: "agent:info",
@@ -2151,10 +2276,56 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   async getModels() {
     await this.initPromise;
+    await this.syncCodex();
     if (!this.core) throw new Error("core not initialized");
     const modes = (this.core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; modalities?: string[] }>;
     const models = modes.map((m) => ({ model: m.id, provider: m.provider ?? "", modalities: m.modalities }));
     return { models, active: null };
+  }
+
+  /** Match the kernel loader: a failed optional extension must not kill other providers. */
+  private async syncCodexProvider(): Promise<boolean> {
+    try {
+      await this.codexHost?.sync();
+      this.codexFailure = null;
+      return true;
+    } catch (err) {
+      const message = `Codex provider could not be loaded: ${err instanceof Error ? err.message : String(err)}`;
+      if (!this.closed && this.codexFailure !== message) {
+        this.emit("event", { name: "ui:error", payload: { message } } satisfies BusEvent);
+      }
+      this.codexFailure = message;
+      return false;
+    }
+  }
+
+  private assertCodexAvailable(): void {
+    if (!this.codexFailure || !this.core) return;
+    const active = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
+    const models = (this.core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string }>;
+    // Also covers a renamed Codex provider whose previous endpoint was released.
+    if (active?.provider === codexStatus().providerId || (active?.model && !models.some(m => m.id === active.model && m.provider === active.provider))) {
+      throw new Error(this.codexFailure);
+    }
+  }
+
+  private async syncCodex(): Promise<void> {
+    if (!await this.syncCodexProvider()) return;
+    if (this.codexBackendActivation) {
+      await this.codexBackendActivation;
+      return;
+    }
+    if (!this.core || this.closed || this.backendRegistered || !this.codexHost || !codexStatus().configured) return;
+    // A session opened before its first OAuth login has no agent backend.
+    // Register it once credentials arrive, preserving the existing bridge.
+    if (!this.codexBackendActivation) {
+      this.codexBackendActivation = (async () => {
+        this.core!.bus.emit("core:extensions-loaded", { names: this.loadedExtensionNames });
+        await this.core!.activateBackend();
+        if (this.closed) this.releaseResources();
+      })().finally(() => { this.codexBackendActivation = null; });
+    }
+    await this.codexBackendActivation;
   }
 
   async complete(
@@ -2164,6 +2335,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     await this.initPromise;
     if (!this.core) return null;
     try {
+      await this.syncCodex();
+      this.assertCodexAvailable();
       const text = (await this.core.handlers.call("llm:invoke", messages, opts)) as string;
       return text?.trim() ? text : null;
     } catch (err) {
@@ -2279,6 +2452,13 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   private releaseResources(): void {
+    const preparing = this.preparingTurn;
+    if (preparing && this.pendingTurn === preparing) {
+      this.pendingTurn = this.preparingTurn = null;
+      this.queryQueue.length = 0;
+      preparing.reject(new Error("bridge closed during initialization"));
+    }
+    this.codexHost?.close();
     // Abort and clean up any async subagents still running.
     for (const [, entry] of (this as any)._subagents as Map<any, any>) {
       try { entry.controller?.abort(); } catch {}

@@ -81,9 +81,10 @@
 
 .live-wrap .compaction-marker .cm-pill {
   background: transparent;
-  border: 1px solid var(--border-mid);
+  border: 0;
+  border-radius: 0;
   color: var(--text-dim);
-  letter-spacing: var(--tracking-label-sm);
+  letter-spacing: 0;
   padding: 0.14rem 0.6rem;
 }
 
@@ -461,11 +462,11 @@
 
 .live-wrap .reasoning-phase .rp-stat {
   background: transparent;
-  border: 1px solid var(--border-light);
-  color: var(--text-dim);
+  border: 0;
+  color: var(--text-mid);
   font-size: var(--fs-xs);
-  padding: 0.08rem 0.5rem;
-  border-radius: var(--radius-pill);
+  padding: 0;
+  border-radius: 0;
 }
 
 .live-wrap .reasoning-phase-body {
@@ -570,8 +571,8 @@
 
 /* ── Diff blocks：低饱和语义 tint ────────────────────────────────── */
 .live-wrap .diff-block {
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: var(--radius-xs);
   box-shadow: none;
 }
 
@@ -584,9 +585,9 @@
 .live-wrap .diff-stat { color: var(--text-faint); }
 
 .live-wrap .diff-btn {
-  border-color: var(--border-light);
-  color: var(--text-faint);
-  background: var(--bg-elevated);
+  border-color: transparent;
+  color: var(--text-mid);
+  background: transparent;
 }
 
 .live-wrap .diff-btn:hover {
@@ -649,51 +650,78 @@
   line-height: 1.6;
 }
 
-/* ── Error card ──────────────────────────────────────────────────── */
+/* ── Interruptions and notices: readable inline feedback ────────── */
 .live-wrap .err-card {
-  border: 1px solid var(--error-border);
-  border-radius: var(--radius-md);
-  background: var(--error-bg);
+  margin: 16px 0;
+  border: 0;
+  border-left: 2px solid var(--error-border);
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
+  font-family: var(--font-sans);
+  overflow: visible;
 }
-
 .live-wrap .err-card-head {
-  background: rgba(var(--red-rgb), 0.07);
-  color: var(--red);
+  padding: 4px 0 4px 12px;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  background: transparent;
+  color: var(--error);
 }
-
 .live-wrap .err-card-icon {
-  width: 1rem;
-  height: 1rem;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--error);
   box-shadow: none;
 }
-
+.live-wrap .err-card-title {
+  min-width: 0;
+  flex: 1 1 180px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
 .live-wrap .err-card-toggle {
-  border-color: var(--border-light);
-  background: var(--bg-elevated);
+  min-height: 32px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-mid);
+  text-decoration: underline;
+  text-decoration-color: var(--border-mid);
+  text-underline-offset: 4px;
 }
-
-.live-wrap .err-card-toggle:hover {
-  color: var(--text);
-  border-color: var(--border-mid);
-}
-
+.live-wrap .err-card-toggle:hover { color: var(--text); background: transparent; text-decoration-color: currentColor; }
 .live-wrap .err-card-body {
-  border-top: 1px solid var(--error-border);
+  margin: 6px 0 0 12px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--activity-surface);
   color: var(--text-dim);
+  font-family: var(--font-mono);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
 }
-
-/* ── Cancelled stamp / ui-info ───────────────────────────────────── */
 .live-wrap .cancelled-stamp {
-  border: 1px solid var(--error-border);
-  background: var(--error-bg);
-  color: var(--red);
-  letter-spacing: var(--tracking-label-sm);
+  padding: 4px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-mid);
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+  text-transform: none;
 }
-
 .live-wrap .ui-info {
-  border-left: 2px solid var(--border-mid);
+  border: 0;
+  padding: 6px 0;
+  font-family: var(--font-sans);
   color: var(--text-mid);
 }
 
@@ -815,14 +843,17 @@
 [data-theme] .live-wrap :is(.thinking-block, .tool-group, .reasoning-phase) {
   margin: 8px 0;
   padding-left: 12px;
+  border: 0;
   border-left: 1px solid var(--border-mid);
+  border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
 .live-wrap :is(.thinking-block-head, .tool-group-head, .reasoning-phase-head) {
   min-height: 32px;
   padding: 5px 4px;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
   font-family: var(--font-sans);
   font-size: var(--fs-sm);
   font-weight: 500;
@@ -831,7 +862,7 @@
   border-radius: var(--radius-xs);
 }
 .live-wrap :is(.thinking-block-head, .tool-group-head, .reasoning-phase-head):hover {
-  background: var(--activity-surface);
+  background: transparent;
   color: var(--text);
 }
 .live-wrap :is(.thinking-block-head, .tool-group-head, .reasoning-phase-head)::after {
@@ -850,6 +881,9 @@
 /* The shared CSS chevron replaces the phase's decorative text arrow. */
 .live-wrap .reasoning-phase .rp-arrow { display: none; }
 .live-wrap :is(.thinking-preview, .tool-group-names) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
   color: var(--text-dim);
   font-style: normal;
   font-size: var(--fs-xs);
@@ -863,9 +897,10 @@
   overflow-wrap: anywhere;
   scrollbar-width: thin;
 }
-.live-wrap .reasoning-phase-body { padding: 4px 0; border-top-color: var(--activity-border); }
+.live-wrap .reasoning-phase-body { padding: 4px 0 4px 12px; border: 0; }
 .live-wrap .reasoning-phase-body :is(.thinking-block, .tool-group) {
-  border-left-color: var(--activity-border);
+  border: 0;
+  padding-left: 0;
   margin: 4px 0;
 }
 
@@ -891,7 +926,7 @@
   line-height: 1.65;
 }
 [data-theme] .live-wrap .tool-row:hover { background: var(--activity-surface); color: var(--text); }
-[data-theme] .live-wrap .tool-row.err { background: var(--error-bg); }
+[data-theme] .live-wrap .tool-row.err { background: transparent; }
 .live-wrap .tool-row .tool-name,
 .live-wrap .tool-row .tool-icon { color: var(--text-dim); }
 .live-wrap .tool-name { margin-right: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
@@ -927,16 +962,17 @@
 
 /* Output surfaces: stable footer controls never cover log text. */
 .live-wrap .tool-body,
-.live-wrap .tool-body-live:not(.final) {
+.live-wrap .tool-body-live {
   margin: 2px 0 10px;
   padding: 10px 12px;
-  border: 1px solid var(--activity-border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
   background: var(--activity-surface);
   font-size: var(--fs-sm);
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
+.live-wrap .tool-body-live:not(.final) { border: 0; background: var(--activity-surface); }
 .live-wrap .tool-body-text { overflow-wrap: anywhere; scrollbar-width: thin; }
 .live-wrap .tool-body-actions {
   position: static;
@@ -956,21 +992,29 @@
 .live-wrap .tool-body-btn.copy-btn { opacity: 1; background: transparent; border-color: transparent; }
 .live-wrap .tool-body-btn:hover { background: var(--bg3); color: var(--text); }
 
-/* Delegated work and task lists share the same quiet surface. */
-.live-wrap :is(.subagent-block, .todo-block) {
-  border-color: var(--activity-border);
-  border-radius: 8px;
-  background: var(--bg);
+/* Delegated work reads as an outline, not nested cards. */
+.live-wrap .subagent-block {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
 }
-.live-wrap :is(.subagent-head, .todo-head) { background: var(--activity-surface); padding: 10px 12px; }
-.live-wrap .subagent-head { flex-wrap: wrap; gap: 6px 8px; }
+.live-wrap .subagent-head {
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-height: 36px;
+  padding: 6px 0;
+  background: transparent;
+}
+.live-wrap .subagent-head:hover { background: transparent; color: var(--text); }
 .live-wrap .subagent-head.subagent-done { opacity: 1; background: transparent; }
 .live-wrap .subagent-type-badge {
-  color: var(--text-dim);
-  background: var(--bg2);
-  border-color: var(--activity-border);
-  font-weight: 500;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-mid);
+  font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -978,16 +1022,29 @@
 .live-wrap .subagent-icon { color: var(--text-dim); }
 .live-wrap .subagent-spinner { border-color: var(--border-mid); border-top-color: var(--accent); }
 .live-wrap .subagent-label { white-space: normal; overflow-wrap: anywhere; flex-basis: 140px; }
-.live-wrap :is(.subagent-body, .subagent-result) { border-color: var(--activity-border); padding: 8px 12px; }
+.live-wrap :is(.subagent-body, .subagent-result) { border: 0; padding: 4px 0 4px 12px; }
 .live-wrap .subagent-body .tool-row { margin-left: 0; padding-left: 4px; border: 0; }
-.live-wrap .subagent-swarm > .subagent-body { margin-left: 10px; padding-left: 10px; border-left-width: 1px; }
-.live-wrap .todo-head { font-size: var(--fs-sm); }
-.live-wrap .todo-progress { color: var(--text-dim); background: var(--bg3); }
+.live-wrap .subagent-swarm > .subagent-body { margin-left: 0; padding-left: 12px; border: 0; }
+
+/* Plans use spacing and a fine progress line. Keep the sticky surface opaque. */
+.live-wrap .todo-block {
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
+  box-shadow: none;
+}
+.live-wrap .todo-block.stuck { border: 0; border-radius: 0; box-shadow: 0 1px 0 var(--border); }
+.live-wrap .todo-head { background: transparent; padding: 10px 0; font-size: var(--fs-sm); }
+.live-wrap .todo-head:hover { color: var(--text); background: transparent; }
+.live-wrap :is(.todo-icon, .todo-progress) { background: transparent; border-radius: 0; }
+.live-wrap .todo-progress { padding: 0; color: var(--text-mid); }
+.live-wrap .todo-row { padding: 6px 0; }
+.live-wrap .todo-row.is-active { background: transparent; box-shadow: none; }
 
 /* Shell is another execution surface; running/queued labels remain. */
 .live-wrap .shell-block {
-  border: 1px solid var(--activity-border) !important;
-  border-radius: 8px !important;
+  border: 0 !important;
+  border-radius: var(--radius-xs) !important;
   background: var(--activity-surface) !important;
 }
 .live-wrap .shell-block-head {
@@ -997,7 +1054,7 @@
   border-bottom-color: var(--activity-border) !important;
 }
 .live-wrap .shell-block-cmd { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.live-wrap .shell-block-head::after { color: var(--text-dim) !important; background: var(--bg3) !important; letter-spacing: 0 !important; }
+.live-wrap .shell-block-head::after { color: var(--text-dim) !important; background: transparent !important; padding: 0 !important; letter-spacing: 0 !important; }
 .live-wrap .shell-block-prompt { color: var(--text-dim); }
 
 /* Reading and controls: restrained decoration, visible keyboard focus. */
@@ -1005,13 +1062,12 @@
 .live-wrap .agent-reply :not(pre) > code { color: var(--text); font-weight: 400; }
 [data-theme] .live-wrap .agent-reply pre { background: var(--activity-surface); }
 .live-wrap .agent-reply blockquote { background: transparent; border-left-color: var(--border-mid); }
-.live-wrap :is(.thinking-block-head, .tool-group-head, .reasoning-phase-head, .tool-body-btn, .diff-btn):focus-visible {
+.live-wrap :is(.thinking-block-head, .tool-group-head, .reasoning-phase-head, .tool-body-btn, .diff-btn, .err-card-toggle, .todo-head):focus-visible {
   outline: 2px solid var(--accent-border);
   outline-offset: 2px;
 }
 @media (max-width: 700px) {
   [data-theme] .live-wrap :is(.thinking-block, .tool-group, .reasoning-phase) { padding-left: 8px; }
-  .live-wrap .tool-mark { flex-basis: 100%; padding-left: 25px; }
   .live-wrap .tool-body { padding: 8px 10px; }
   .live-wrap :is(.subagent-body, .subagent-result) { padding: 6px 8px; }
 }

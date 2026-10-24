@@ -1,8 +1,14 @@
 /* Gruvbox Light / Dark: one component language, two surface palettes.
    Geometry and visibility preferences remain owned by their data-ui rules. */
+/* Continuous chrome surrounds the reading canvas without a ruled corner. */
+.app { background: var(--bg2); }
 .title-bar {
-  background: var(--bg);
-  border-bottom-color: var(--border);
+  background: var(--bg2);
+  border-bottom: 0;
+}
+.main {
+  border-top-left-radius: var(--radius-xl);
+  border-top-right-radius: var(--radius-xl);
 }
 .title-brand .brand-wordmark { color: var(--text-dim); opacity: 1; }
 .title-bar .session-tab {
@@ -15,23 +21,16 @@
   border-color: var(--border);
   box-shadow: var(--shadow-sm);
 }
-.title-bar .session-tab:hover { background: var(--bg2); }
+.title-bar .session-tab:hover { background: var(--bg3); }
 .title-bar .session-tab.active:hover { background: var(--bg-elevated); }
-.sidebar { background: var(--bg2); border-right: 1px solid var(--border-light); }
+.sidebar { background: var(--bg2); border-right: 0; }
 .sidebar::after { display: none; }
-.sidebar-head .p-seg { background: transparent; border-color: transparent; gap: 4px; padding: 0; }
-.sidebar-head .p-seg-item { height: 38px; border-radius: var(--radius-sm); }
-.sidebar-head .p-seg-item.active { color: var(--accent-dim); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
-.sidebar-head .p-seg-item.active svg { transform: none; }
 .sidebar-new-btn { height: 40px; border-color: var(--accent-border); color: var(--accent-dim); background: var(--bg-elevated); border-radius: var(--radius-md); }
 .sidebar-new-btn:hover { background: var(--accent-glow); }
 .sidebar-filter { background: transparent; border-color: var(--border); border-radius: var(--radius-sm); }
-.session-list li.current,
-.terminal-list li.current,
-.workspace-children li.current { box-shadow: inset 2px 0 0 var(--accent); }
-.toolbar { background: var(--bg); border-left-color: var(--border-light); }
+.toolbar { background: var(--bg2); border-left: 0; }
 .toolbar .toolbar-btn { border-radius: var(--radius-md); color: var(--text-mid); }
-.toolbar .toolbar-btn:hover { background: var(--bg2); color: var(--text); }
+.toolbar .toolbar-btn:hover { background: var(--bg3); color: var(--text); }
 .toolbar .toolbar-btn.active { background: var(--accent-soft); color: var(--accent-dim); }
 .toolbar .toolbar-btn.active::before { display: none; }
 
@@ -60,14 +59,6 @@
   box-shadow: none;
 }
 .live-wrap .agent-reply blockquote { border-left-color: var(--accent-border); background: var(--accent-glow); }
-.live-wrap .thinking-block,
-.live-wrap .tool-group { border-color: var(--border); border-radius: var(--radius-md); box-shadow: none; }
-.live-wrap .tool-group-head,
-.live-wrap .thinking-block-head { background: transparent; }
-.live-wrap .tool-group-head:hover,
-.live-wrap .thinking-block-head:hover { background: var(--bg2); }
-.live-wrap .diff-block,
-.live-wrap .shell-block { border-radius: var(--radius-md); border-color: var(--border); }
 
 /* Composer uses the brightest surface, anchored by a thin, clear edge. */
 .live-input {
@@ -106,7 +97,7 @@
 .welcome-description { color: var(--text-mid); }
 [data-theme] .hint-chip { background: var(--bg-elevated); border-color: var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
 [data-theme] .hint-chip:hover { color: var(--accent-dim); border-color: var(--accent-border); background: var(--accent-glow); transform: translateY(-1px); }
-.os-win32 .win-title-bar { background: var(--bg); border-bottom-color: var(--border); }
+.os-win32 .win-title-bar { background: var(--bg2); border-bottom: 0; }
 
 @media (max-width: 700px) {
   .p-drawer { border-radius: var(--radius-lg); }

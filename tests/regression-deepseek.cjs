@@ -40,17 +40,23 @@ test('UI shows native DeepSeek levels and preserves other provider choices', () 
   assert.equal(reasoningLabel('xhigh', 'openai'), 'xhigh');
 });
 
-test('composer cycles native DeepSeek choices using compatible persisted values', async () => {
+test('composer cycles only the current model native choices and waits for confirmation', async () => {
   const u = ui(); u.composer();
-  const session = u.active.peek(); session.agentInfo = { provider: 'deepseek', thinkingSupported: true, thinkingLevel: 'high' };
-  const key = { key: 'Tab', shiftKey: true, preventDefault() {} };
-  const press = async () => { for (const handler of u.ids.get('query').events.keydown) await handler(key); };
-  await press();
-  assert.equal(JSON.parse(u.calls.at(-1).opts.body).level, 'xhigh');
-  session.agentInfo.thinkingLevel = 'xhigh'; await press();
-  assert.equal(JSON.parse(u.calls.at(-1).opts.body).level, 'off');
-  session.agentInfo.provider = 'openai'; session.agentInfo.thinkingLevel = 'low'; await press();
-  assert.equal(JSON.parse(u.calls.at(-1).opts.body).level, 'medium');
+  const session = u.active.peek();
+  session.agentInfo = { model:'deepseek-v4-flash', provider:'deepseek', thinkingSupported:true,
+    thinkingLevel:'high', thinkingLevels:['off','low','high','max'] };
+  u.e.context.fetch = async (url, opts) => {
+    u.calls.push({url,opts});
+    return {ok:true,json:async()=>({model:session.agentInfo.model,provider:session.agentInfo.provider,
+      level:JSON.parse(opts.body).level,levels:session.agentInfo.thinkingLevels,supported:true})};
+  };
+  const press = async () => { for (const handler of u.ids.get('query').events.keydown) await handler({key:'Tab',shiftKey:true,preventDefault(){}}); };
+  await press(); assert.equal(session.agentInfo.thinkingLevel,'max');
+  await press(); assert.equal(session.agentInfo.thinkingLevel,'default');
+  await press(); assert.equal(session.agentInfo.thinkingLevel,'off');
+  session.agentInfo = {model:'gpt-5.1',provider:'openai',thinkingSupported:true,thinkingLevel:'high',thinkingLevels:['none','low','medium','high']};
+  await press(); assert.equal(session.agentInfo.thinkingLevel,'default');
+  assert(!u.calls.some(c=>JSON.parse(c.opts.body).level==='xhigh'));
 });
 
 test('subagent selector shows max, normalizes legacy medium, and follows provider changes', () => {

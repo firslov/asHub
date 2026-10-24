@@ -16,7 +16,7 @@ try {
  const key=Object.keys(process.env).find(k=>k.toLowerCase()==='path');
  // Reproduce a standard Git installer PATH, excluding CI's extra Bash paths.
  const gitRoot=path.join(process.env.ProgramFiles,'Git');
- process.env[key]=[path.join(process.env.SystemRoot,'System32'),path.join(gitRoot,'cmd'),path.dirname(process.execPath)].join(';');
+ process.env[key]=[path.join(process.env.SystemRoot,'System32'),path.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0'),path.join(gitRoot,'cmd'),path.dirname(process.execPath)].join(';');
  await load('dist/windows-bootstrap.js');
  const {executeCommand,findBash}=await import(pathToFileURL(requireApp.resolve('agent-sh/executor')).href);
  assert.match(findBash(),/Git[\\/]bin[\\/]bash\.exe$/i);
@@ -42,7 +42,7 @@ try {
   await terminal.ready();
   const until=Date.now()+10000;while(!output && Date.now()<until)await new Promise(r=>setTimeout(r,50));
   assert(output,'ConPTY must render a prompt');terminal.resizePty(110,32);
-  terminal.writePty('echo ASHUB_CONPTY_OK\r');
+  terminal.writePty("echo ('ASHUB_CONPTY_' + 'OK')\r");
   const deadline=Date.now()+10000;while(!output.includes('ASHUB_CONPTY_OK')&&Date.now()<deadline)await new Promise(r=>setTimeout(r,50));
   assert(output.includes('ASHUB_CONPTY_OK'),output);
   terminal.writePty('exit\r');await closed;

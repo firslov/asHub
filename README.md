@@ -100,7 +100,7 @@ Project views, task receipts, result downloads and thinking controls require des
 
 ## Run from source
 
-The project pins **Node.js 22.23.3** (minimum **22.12.0**) and **agent-sh 0.16.0**, including the upstream Unicode fix and built-in Codex provider. With nvm:
+The project pins **Node.js 22.23.3** (minimum **22.12.0**) and **agent-sh 0.16.0** with the [Codex streaming fix](https://github.com/guanyilun/agent-sh/pull/280) pinned to a Git commit until the next upstream release. With nvm:
 
 ```sh
 git clone https://github.com/firslov/asHub.git

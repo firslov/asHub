@@ -23,6 +23,7 @@ jobs:
       - run: node tests/http-artifacts.cjs
       - run: node tests/http-projects.cjs
       - run: node tests/kernel-codex.mjs
+      - run: node tests/kernel-codex-liveness.mjs
       - run: node tests/windows-runtime.mjs
       - run: node --test tests/desktop-network.cjs
       - run: npm run test:desktop-network

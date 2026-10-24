@@ -26,12 +26,12 @@
     "test:http": "node tests/http-artifacts.cjs && node tests/http-projects.cjs && node tests/http-smoke.cjs && node tests/http-round5.cjs && node tests/http-round6.cjs && node tests/http-round7.cjs && node tests/http-round8.cjs && node tests/http-round18.cjs && node tests/http-round19.cjs && node tests/http-round20.cjs && node tests/http-network-mobile.cjs",
     "test:worktrees": "npm run build && node --test tests/worktrees.mjs",
     "test:network": "npm run build && node --test tests/network-proxy.mjs tests/desktop-network.cjs tests/network-policy.mjs tests/regression-network-settings.cjs",
-    "test:kernel": "npm run build && node tests/kernel-compat.mjs && node tests/kernel-codex.mjs",
+    "test:kernel": "npm run build && node tests/kernel-compat.mjs && node tests/kernel-codex.mjs && node tests/kernel-codex-liveness.mjs",
     "test:windows": "node --test tests/regression-windows.cjs",
     "test:desktop-network": "electron tests/electron-network.cjs"
   },
   "dependencies": {
-    "agent-sh": "0.16.0",
+    "agent-sh": "git+https://github.com/firslov/agent-sh.git#a2214a87718f0ffcd5119ff5412ff5d2c65ae28f",
     "electron-updater": "^6.8.3",
     "tsx": "^4.22.4",
     "undici": "6.26.0"

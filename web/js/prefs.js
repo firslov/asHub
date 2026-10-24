@@ -77,6 +77,7 @@ window.addEventListener("storage", (event) => {
 });
 
 const setSidebarCollapsed = (on, persist = true) => {
+  if (on) document.getElementById("sidebar-view-menu")?.hidePopover?.();
   app.classList.toggle("sidebar-collapsed", on);
   sidebarToggle?.setAttribute("aria-expanded", String(!on));
   const label = on ? "expand.sidebar" : "collapse.sidebar";
@@ -110,7 +111,7 @@ document.getElementById("sidebar-backdrop")?.addEventListener("click", () => {
 // Keep the desktop preference intact when merely navigating on mobile.
 document.getElementById("sidebar")?.addEventListener("click", (ev) => {
   if (!window.matchMedia?.("(max-width: 700px)").matches) return;
-  if (!ev.target.closest(".session-list a, .workspace-children a, .terminal-list a, #new-session, #new-terminal")) return;
+  if (!ev.target.closest(".session-list a, .workspace-children a, .project-chat, .terminal-list a, #new-session, #new-terminal")) return;
   setSidebarCollapsed(true, false);
 });
 // The mobile navigation overlays the workspace, so Escape closes it before
@@ -118,6 +119,9 @@ document.getElementById("sidebar")?.addEventListener("click", (ev) => {
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape" || !window.matchMedia?.("(max-width: 700px)").matches
       || app.classList.contains("sidebar-collapsed")) return;
+  // Foreground overlays own Escape, including dialogs that may block closing
+  // while saving. Do not consume their key in this capture-phase listener.
+  if (ev.target?.closest?.("#sidebar-view-menu:popover-open, dialog[open]")) return;
   setSidebarCollapsed(true, false);
   sidebarToggle?.focus();
   ev.preventDefault();
@@ -161,7 +165,10 @@ sidebarResize?.addEventListener("mousedown", (ev) => {
 sidebarResize?.addEventListener("keydown", (ev) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
   ev.preventDefault();
-  const current = document.getElementById("sidebar")?.getBoundingClientRect().width || SIDEBAR_MIN;
+  // Accumulate key repeats from the requested width, not an intermediate
+  // grid-animation frame. Read layout only before a width has been chosen.
+  const current = Number.parseFloat(app.style.getPropertyValue("--sidebar-w"))
+    || document.getElementById("sidebar")?.getBoundingClientRect().width || SIDEBAR_MIN;
   const width = ev.key === "Home" ? SIDEBAR_MIN : ev.key === "End" ? SIDEBAR_MAX
     : current + (ev.key === "ArrowRight" ? 16 : -16);
   const applied = setSidebarWidth(width);

@@ -1,3 +1,5 @@
+import { initSidebarViewPicker } from "./sidebar-view-picker.js";
+import { showProjects } from "./projects.js";
 import { escape } from "./utils.js";
 import { state, homeDir, headerTopic, headerCwd } from "./state.js";
 import { signal, effect } from "../vendor/signals-core.js";
@@ -9,8 +11,7 @@ import { toast } from "./toast.js";
 const sessionList = document.getElementById("sessions");
 const workspaceList = document.getElementById("workspaces");
 const terminalList = document.getElementById("terminals");
-const viewButtons = document.querySelectorAll(".sidebar-view-btn");
-const VIEWS = new Set(["sessions", "workspaces", "terminals", "archive"]);
+const VIEWS = new Set(["sessions", "workspaces", "terminals", "archive", "projects"]);
 const sessionTopic = document.getElementById("session-topic");
 const sessionCwdMeta = document.getElementById("session-cwd-meta");
 const newBtn = document.getElementById("new-session");
@@ -114,7 +115,9 @@ const shortenCwd = (cwd) => {
 // All four views share: [icon slot (.side-icon)] [title + meta (.side-body)]
 // [hover actions (.side-btn)]. Session items use an absolutely-positioned
 // status dot as their icon slot instead of an inline .side-icon.
-const ARCHIVE_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>`;
+const ARCHIVE_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="5" rx="1.5"/><path d="M5 8v12h14V8M10 12h4"/></svg>`;
+const TERMINAL_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></svg>`;
+const WORKSPACE_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/></svg>`;
 
 /** Unified empty-state row for all four sidebar views. */
 const sideEmpty = (iconHtml, text) => {
@@ -769,7 +772,7 @@ const renderWorkspaces = () => {
   if (!agentList.length) {
     if (workspacesHash === "empty") return;
     workspacesHash = "empty";
-    workspaceList.replaceChildren(sideEmpty("◆", t("no.workspaces")));
+    workspaceList.replaceChildren(sideEmpty(WORKSPACE_ICON_SVG, t("no.workspaces")));
     return;
   }
   const buckets = new Map();
@@ -807,7 +810,7 @@ const renderWorkspaces = () => {
 
     const caret = document.createElement("span");
     caret.className = "workspace-caret";
-    caret.textContent = "▾";
+    caret.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg>`;
     head.appendChild(caret);
 
     const pathSpan = document.createElement("span");
@@ -875,7 +878,7 @@ const renderWorkspaces = () => {
       const hasTitle = s.title && s.title !== s.instanceId;
       const titleText = hasTitle ? s.title : t("untitled");
       a.innerHTML =
-        `<span class="workspace-child-kind side-icon">◆</span>` +
+        `<span class="workspace-child-kind side-icon" aria-hidden="true"></span>` +
         sideBody(titleText, { ts: s.lastModified ?? s.startedAt });
       child.appendChild(a);
       children.appendChild(child);
@@ -886,7 +889,7 @@ const renderWorkspaces = () => {
     anyRendered = true;
   }
   if (!anyRendered) {
-    workspaceList.replaceChildren(sideEmpty("◆", query ? t("filter.no.match") : t("no.workspaces")));
+    workspaceList.replaceChildren(sideEmpty(WORKSPACE_ICON_SVG, query ? t("filter.no.match") : t("no.workspaces")));
   }
 };
 
@@ -904,7 +907,7 @@ const renderTerminals = () => {
 
   terminalList.innerHTML = "";
   if (items.length === 0) {
-    terminalList.appendChild(sideEmpty("❯", t("no.terminals")));
+    terminalList.appendChild(sideEmpty(TERMINAL_ICON_SVG, t("no.terminals")));
     return;
   }
   for (const s of items) {
@@ -921,7 +924,7 @@ const renderTerminals = () => {
     const hasTitle = s.title && s.title !== s.instanceId;
     const titleText = hasTitle ? s.title : t("untitled");
     a.innerHTML =
-      `<span class="terminal-kind side-icon">❯</span>` +
+      `<span class="terminal-kind side-icon">${TERMINAL_ICON_SVG}</span>` +
       sideBody(titleText, { cwd: s.cwd, ts: s.lastModified ?? s.startedAt });
     li.appendChild(a);
 
@@ -964,14 +967,11 @@ const renderTerminals = () => {
   }
 };
 
-for (const btn of viewButtons) {
-  btn.addEventListener("click", () => {
-    const v = btn.dataset.view;
-    if (!VIEWS.has(v)) return;
-    sidebarView.value = v;
-    try { localStorage.setItem(LS_SIDEBAR_VIEW, v); } catch {}
-  });
-}
+const updateViewPicker = initSidebarViewPicker(view => {
+  if (!VIEWS.has(view)) return;
+  sidebarView.value = view;
+  try { localStorage.setItem(LS_SIDEBAR_VIEW, view); } catch {}
+});
 
 // ── Archive view ──────────────────────────────────────────────────────
 
@@ -1034,6 +1034,7 @@ const renderArchive = async () => {
 
 effect(() => {
   const view = sidebarView.value;
+  showProjects(view === "projects");
   if (sessionList) sessionList.hidden = view !== "sessions";
   if (workspaceList) workspaceList.hidden = view !== "workspaces";
   if (terminalList) terminalList.hidden = view !== "terminals";
@@ -1041,12 +1042,7 @@ effect(() => {
   if (sessionFilter) sessionFilter.hidden = view !== "sessions" && view !== "archive" && view !== "workspaces";
   if (newSessionAction) newSessionAction.hidden = view !== "sessions";
   if (newTerminalAction) newTerminalAction.hidden = view !== "terminals";
-  for (const btn of viewButtons) {
-    const on = btn.dataset.view === view;
-    btn.classList.toggle("current", on);
-    btn.classList.toggle("active", on);
-    btn.setAttribute("aria-pressed", String(on));
-  }
+  updateViewPicker(view);
 });
 
 // Sidebar filter: substring match on title + cwd for sessions, workspaces

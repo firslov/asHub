@@ -5,11 +5,11 @@
 
 [![License](https://img.shields.io/badge/license-MIT-787868.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-22-787868.svg)](.nvmrc)
-[![agent-sh](https://img.shields.io/badge/agent--sh-6ea34cc-a58b5d.svg)](https://github.com/guanyilun/agent-sh/commit/6ea34cc9247344715e16c7becf49d4dc46ccb71a)
+[![agent-sh](https://img.shields.io/badge/agent--sh-0.16.0-a58b5d.svg)](https://github.com/guanyilun/agent-sh/releases/tag/v0.16.0)
 
 asHub is an open-source desktop workspace powered by [agent-sh](https://github.com/guanyilun/agent-sh). Keep conversations, models, subagents, terminals and project files together, with a readable result and an inspectable execution trail.
 
-Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The desktop app and local browser view share the same client. Bring your own model provider and API credentials; model usage is billed by your provider.
+Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The desktop app and local browser view share the same client. Connect your own model provider with API credentials or supported Codex sign-in; provider billing and plan limits apply.
 
 ![asHub workspace with session tabs, project analysis and a formatted table](website/assets/showcase-workspace.png)
 
@@ -17,15 +17,18 @@ Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The 
 
 ## Highlights
 
+These features describe the current source branch. Project collaboration, Codex sign-in and per-model thinking controls are not included in the v0.20.5 packages.
+
 | Capability | Experience |
 | --- | --- |
-| Sessions & workspaces | Switch tabs, group by working directory, search, pin, archive and restore history |
-| Readable execution | Markdown, highlighted code, diffs, thinking and tool calls with expandable details and copyable output |
+| Sessions & projects | Group conversations into projects; switch views, search, pin, archive and restore history |
+| Conversation collaboration | Send tasks within a project, follow receipts and read results; optional Git worktrees keep file changes separate |
+| Readable execution | Replies and progress first; thinking and tool output stay in expandable details |
 | Tasks & subagents | Task progress and five specialists: plan, explore, review, research and implement; configurable models and budgets |
-| Models & context | Search and switch models; inspect context use, cache hits and supported provider balances |
+| Models & context | Codex sign-in, model search and native thinking levels; inspect context and reported cache usage |
 | Reviewable actions | Permission prompts, change previews, session-wide approval and background notifications |
 | Project tools | PTY terminals, file browsing, image input, a skills marketplace and user extensions |
-| Persistent work | Saved conversations, branches, rewind and Markdown export |
+| Persistent work | Saved conversations, branches, rewind, Markdown export and downloadable workspace results |
 | A consistent interface | Gruvbox light and dark themes; English and Chinese; display scaling and a collapsible status bar |
 | Mobile access · preview | Continue authorized desktop conversations from a phone; shared history, streaming replies and one-time approvals |
 
@@ -55,7 +58,7 @@ Download from the [website](https://ashub.aihao.world/#download) or [GitHub Rele
 | Linux x64 | `.AppImage` |
 
 1. Install and open asHub
-2. Open the configuration panel on the right and set your provider, API credentials and default model
+2. Configure your provider and default model in the right panel; source builds also support Codex sign-in
 3. Create a session, choose a project directory and start a conversation; open files, terminals and other panels as needed
 
 ### macOS one-line install
@@ -89,9 +92,11 @@ Continue desktop conversations at [asHub Mobile](https://ashub.aihao.world/mobil
 
 Keep the computer awake and asHub running. Only conversations in authorized, existing directories are shared; restore archived conversations on the desktop first. Mobile supports streamed replies, images, model switching and one-time approvals. The relay forwards content without persisting conversation bodies; it is not end-to-end encrypted.
 
+Project views, task receipts, result downloads and thinking controls have also been adapted locally for mobile. They require matching desktop and gateway updates and are not yet deployed to the hosted mobile site.
+
 ## Run from source
 
-The project pins **Node.js 22.23.3** (minimum **22.12.0**) and official **agent-sh commit `6ea34cc`**, which includes the Unicode fix pending an npm release. Git is required to install dependencies. With nvm:
+The project pins **Node.js 22.23.3** (minimum **22.12.0**) and **agent-sh 0.16.0**, including the upstream Unicode fix and built-in Codex provider. With nvm:
 
 ```sh
 git clone https://github.com/firslov/asHub.git
@@ -195,7 +200,9 @@ examples/extensions/  Example extensions
 | `npm run typecheck:web` | Frontend project checking |
 | `npm test` | Isolated regression suite |
 | `npm run test:http` | HTTP and session endpoint checks |
-| `npm run test:kernel` | Build and check kernel compatibility |
+| `npm run test:kernel` | Build and check kernel and Codex compatibility |
+| `npm run test:network` | Proxy and network behavior |
+| `npm run test:worktrees` | Isolated Git worktree behavior |
 | `npm run electron:pack` | Create an unpacked desktop app |
 | `npm run electron:dist:mac` | Build macOS packages |
 | `npm run electron:dist:win` | Build Windows packages |

@@ -15,7 +15,17 @@ export interface BusEvent {
 
 export type SessionKind = "agent" | "terminal" | "ash-terminal";
 
+export interface ConversationAccess {
+  task(id: string, offset?: number, waitMs?: number, signal?: AbortSignal): Promise<unknown>;
+  list(): unknown;
+  read(id: string, limit: number, signal?: AbortSignal): Promise<unknown>;
+  send(id: string, message: string, signal?: AbortSignal): Promise<unknown>;
+}
+
 export interface BridgeOpts {
+  /** Hub-owned identity, stable across lazy restore and application restarts. */
+  sessionId?: string;
+  conversationAccess?: ConversationAccess;
   cwd?: string;
   /** What kind of session to spawn. Defaults to "agent". */
   kind?: SessionKind;
@@ -69,7 +79,7 @@ export interface Bridge {
   /** Resolves once the underlying agent is initialized and ready for prompts. */
   ready(): Promise<void>;
 
-  getRestoreState?(): Record<string, unknown>;
+  getRestoreState?(): Record<string, unknown> | undefined;
 
   /** Submit a prompt; resolves at end of turn. */
   submit(text: string): Promise<{ stopReason: string }>;
@@ -88,6 +98,7 @@ export interface Bridge {
 
   /** Set thinking level silently (no echo, no toast). */
   setThinking?(level: string): void;
+  getThinking?(): import("../providers/reasoning.js").ThinkingState;
 
   /** Resolve completions for a partial input. Returns suggestions or null if unsupported. */
   autocomplete?(buffer: string): Promise<Array<{ name: string; description: string }> | null>;

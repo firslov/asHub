@@ -1,16 +1,17 @@
 /* Default conversation view: one calm disclosure per consecutive work phase.
-   Permission cards, replies, task plans and explicit shell commands stay outside. */
+   Replies, task plans, approvals and explicit shell commands stay outside.
+   Process disclosures are text rows, never another card around their children. */
 .execution-activity { margin: 12px 0 18px; color: var(--text-mid); }
 .execution-activity-head {
   display: flex; align-items: center; flex-wrap: wrap; gap: 7px 10px;
   width: fit-content; max-width: 100%; min-height: 36px;
-  padding: 6px 9px; margin-left: -9px;
-  border: 1px solid transparent; border-radius: var(--radius-sm);
+  padding: 6px 0; margin-left: 0;
+  border: 0; border-radius: 0;
   background: transparent; color: var(--text-mid); cursor: pointer;
   font: 400 var(--fs-sm)/1.6 var(--font-sans); text-align: left;
-  transition: background var(--dur-fast), border-color var(--dur-fast);
+  transition: color var(--dur-fast);
 }
-.execution-activity-head:hover { background: var(--bg2); border-color: var(--border-light); }
+.execution-activity-head:hover :is(.execution-activity-label, .execution-activity-hint, .execution-activity-arrow) { color: var(--text); }
 .execution-activity-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .execution-activity-dot { flex: 0 0 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .45; }
 .execution-activity[data-state="running"] .execution-activity-dot {
@@ -22,12 +23,17 @@
 .execution-activity-arrow { color: var(--text-faint); font-size: 16px; line-height: 1; }
 .execution-activity-changes { color: var(--text-dim); }
 .execution-activity-changes:not([hidden]) {
-  padding: 1px 7px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: var(--fs-xs);
+  font-size: var(--fs-xs);
 }
-.execution-activity[data-attention="true"] .execution-activity-head { border-color: var(--warning-border); }
+.execution-activity[data-attention="true"] :is(.execution-activity-dot, .execution-activity-label) { color: var(--warning); opacity: 1; }
 .execution-activity-body { margin-top: 7px; padding: 4px 0 4px 15px; border-left: 1px solid var(--border-mid); }
 .execution-activity-body[hidden] { display: none !important; }
+/* One guide line for the whole disclosure; indentation carries inner levels. */
+[data-theme] .live-wrap .execution-activity-body :is(.thinking-block, .tool-group, .reasoning-phase) {
+  border: 0; padding-left: 0;
+}
 .live-wrap .execution-activity-body > :is(.thinking-block, .tool-group, .subagent-block, .reasoning-phase) { margin: 8px 0; }
+.live-wrap .execution-activity-body .reasoning-phase-body { padding-left: 12px; }
 .thinking-status-label { margin-left: 5px; font: 400 var(--fs-sm)/1.6 var(--font-sans); color: var(--text-mid); }
 @keyframes activity-breathe {
   0%, 100% { opacity: .35; transform: scale(.85); }

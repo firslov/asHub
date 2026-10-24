@@ -147,7 +147,7 @@ for (const change of ['disable', 'rebind']) {
     t.after(() => { connector.close(); fs.rmSync(dir, { recursive: true, force: true }); });
     const effects = [];
     t.mock.method(globalThis, 'fetch', async (url) => { effects.push(String(url)); return new Response('{}', { headers: { 'content-type': 'image/png' } }); });
-    for (const op of ['cancel', 'permission', 'model', 'image']) {
+    for (const op of ['cancel', 'permission', 'model', 'thinking', 'set-thinking', 'image']) {
       connector.config = { ...config }; connector.stopped = false;
       let release;
       connector.local = async route => {
@@ -168,3 +168,89 @@ for (const change of ['disable', 'rebind']) {
     }
   });
 }
+
+function adapterFixture(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ashub-remote-adapter-'));
+  const shared = path.join(dir, 'shared'), privateDir = path.join(dir, 'private');
+  fs.mkdirSync(shared); fs.mkdirSync(privateDir);
+  const connector = new RemoteConnector({ dataDir: dir });
+  connector.config = { deviceId: 'desktop', deviceToken: 'secret', username: 'alice', deviceName: 'Desktop', roots: [fs.realpathSync(shared)] };
+  let members = ['aaaaaa', 'bbbbbb', 'cccccc'];
+  const chats = [{ instanceId: 'aaaaaa', kind: 'agent', cwd: shared }, { instanceId: 'bbbbbb', kind: 'agent', cwd: shared }, { instanceId: 'cccccc', kind: 'agent', cwd: privateDir }];
+  const tasks = [{ id: 'shared-task', sourceId: 'aaaaaa', recipientId: 'bbbbbb', state: 'completed' }, { id: 'private-task', sourceId: 'cccccc', recipientId: 'aaaaaa', state: 'completed' }];
+  connector.local = async route => {
+    if (route === '/sessions') return chats;
+    if (route === '/api/projects') return [{ id: 'project', name: 'Mixed project', sessionIds: members }, { id: 'private', name: 'Secret', sessionIds: ['cccccc'] }];
+    const params = new URL(route, 'http://local').searchParams;
+    return params.has('taskId') ? { ...tasks[0], text: 'shared output 🟡', nextOffset: 16, hasMore: false } : tasks;
+  };
+  t.after(() => { connector.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  return { connector, dir, shared, privateDir, chats, members: next => { members = next; } };
+}
+test('remote groups and task receipts expose only shared conversations on both sides', async t => {
+  const { connector } = adapterFixture(t);
+  assert.deepEqual(await connector.execute('project-groups', {}), [{ id: 'project', name: 'Mixed project', sessionIds: ['aaaaaa', 'bbbbbb'] }]);
+  assert.deepEqual((await connector.execute('project-tasks', { projectId: 'project' })).map(t => t.id), ['shared-task']);
+  assert.equal((await connector.execute('project-tasks', { projectId: 'project', taskId: 'shared-task' })).text, 'shared output 🟡');
+  await assert.rejects(connector.execute('project-tasks', { projectId: 'project', taskId: 'private-task' }), e => e.status === 403);
+  await assert.rejects(connector.execute('project-tasks', { projectId: 'private' }), e => e.status === 403);
+  await assert.rejects(connector.execute('project-tasks', { projectId: 'project', taskId: 'shared-task', offset: -1 }), e => e.status === 400);
+});
+test('remote task pages recheck membership after reading output', async t => {
+  const f = adapterFixture(t), original = f.connector.local;
+  f.connector.local = async route => { const result = await original(route); if (route.includes('taskId=')) f.members(['aaaaaa']); return result; };
+  await assert.rejects(f.connector.execute('project-tasks', { projectId: 'project', taskId: 'shared-task' }), e => e.status === 403);
+});
+test('group responses cannot outlive desktop revocation', async t => {
+  const { connector } = adapterFixture(t), original = connector.local;
+  connector.local = async route => { const result = await original(route); if (route === '/api/projects') connector.close(); return result; };
+  await assert.rejects(connector.execute('project-groups', {}), e => e.status === 403);
+});
+test('remote artifacts transfer exact bounded bytes and Unicode names', async t => {
+  const { connector, shared } = adapterFixture(t);
+  const bytes = Buffer.alloc(800123); for (let i = 0; i < bytes.length; i++) bytes[i] = i % 251;
+  fs.writeFileSync(path.join(shared, '成果 #1 🟡.zip'), bytes);
+  const args = { session: 'aaaaaa', path: '成果 #1 🟡.zip' };
+  const meta = await connector.execute('artifact', args); assert.equal(meta.size, bytes.length); assert.equal(meta.name, args.path);
+  const chunks = [];
+  for (let offset = 0; offset < meta.size;) {
+    const part = await connector.execute('artifact', { ...args, version: meta.version, offset });
+    const b = Buffer.from(part.data, 'base64'); assert.ok(b.length <= 256 * 1024); chunks.push(b); offset = part.nextOffset;
+  }
+  assert.deepEqual(Buffer.concat(chunks), bytes);
+  fs.writeFileSync(path.join(shared, 'empty'), ''); assert.equal((await connector.execute('artifact', { session: 'aaaaaa', path: 'empty' })).size, 0);
+});
+test('artifact chunks reject updates, traversal, unshared owners and escaped symlinks', async t => {
+  const { connector, shared, privateDir } = adapterFixture(t);
+  fs.writeFileSync(path.join(shared, 'result'), 'original'); fs.writeFileSync(path.join(privateDir, 'secret'), 'secret');
+  fs.symlinkSync(path.join(privateDir, 'secret'), path.join(shared, 'link'));
+  const args = { session: 'aaaaaa', path: 'result' }, meta = await connector.execute('artifact', args);
+  fs.writeFileSync(path.join(shared, 'result'), 'changed content');
+  await assert.rejects(connector.execute('artifact', { ...args, version: meta.version, offset: 0 }), e => e.status === 409);
+  for (const path of ['../private/secret', 'link']) await assert.rejects(connector.execute('artifact', { session: 'aaaaaa', path }), e => e.status === 403);
+  await assert.rejects(connector.execute('artifact', { session: 'cccccc', path: 'secret' }), e => e.status === 403);
+  await assert.rejects(connector.execute('artifact', { ...args, offset: -1 }), e => e.status === 400);
+  await assert.rejects(connector.execute('artifact', { ...args, offset: 0 }), e => e.status === 400);
+});
+
+test('remote thinking reads stay available while running but writes require idle shared sessions and identity', async t => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-remote-thinking-'));
+  const connector=new RemoteConnector({gateway:'http://127.0.0.1/mobile/',dataDir:dir});
+  connector.config={deviceId:'test',deviceToken:'test',username:'test',roots:[fs.realpathSync(dir)]};
+  t.after(()=>{connector.close();fs.rmSync(dir,{recursive:true,force:true});});
+  let running=true; const writes=[];
+  connector.local=async(route,body)=>{
+    if(route==='/sessions')return [{instanceId:'abcdef',kind:'agent',cwd:dir,isProcessing:running}];
+    writes.push({route,body});return {model:'deepseek-v4-flash',provider:'deepseek',level:body?.level||'high',levels:['off','low','high','max'],supported:true};
+  };
+  assert.equal((await connector.execute('capabilities',{})).thinking,true);
+  assert.equal((await connector.execute('thinking',{session:'abcdef'})).level,'high');writes.length=0;
+  const args={session:'abcdef',model:'deepseek-v4-flash',provider:'deepseek',level:'max'};
+  await assert.rejects(()=>connector.execute('set-thinking',args),e=>e.status===409);
+  running=false;
+  await assert.rejects(()=>connector.execute('set-thinking',{session:'abcdef',level:'max'}),e=>e.status===400);
+  await assert.rejects(()=>connector.execute('thinking',{session:'ffffff'}),e=>e.status===403);
+  assert.equal(writes.length,0);
+  assert.equal((await connector.execute('set-thinking',args)).level,'max');
+  assert.deepEqual(writes,[{route:'/abcdef/thinking',body:{model:args.model,provider:args.provider,level:'max'}}]);
+});

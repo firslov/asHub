@@ -27,7 +27,7 @@ function panelUi() {
 function pickerUi() {
  const c=cacheUi(),u=c.u,s=u.active.peek(),dropdown=new El();dropdown.hidden=true;
  s.modelEl=new El();s.modelEl.getBoundingClientRect=()=>({left:0,top:100});
- Object.assign(u.e.context,{activeSession:u.active,getSharedDropdown:()=>dropdown,hideModelDropdown:()=>{dropdown.hidden=true},_dropdownOwner:null,_dropdownBuiltFor:null,_dropdownAnchor:null,_dropdownObserver:null,
+ Object.assign(u.e.context,{activeSession:u.active,refreshThinkingDropdown:async()=>{},getSharedDropdown:()=>dropdown,hideModelDropdown:()=>{dropdown.hidden=true},_dropdownOwner:null,_dropdownBuiltFor:null,_dropdownAnchor:null,_dropdownObserver:null,
  buildModelDropdown(){},updateModelDropdownSelection(){},MutationObserver:class{observe(){}},toast:(...x)=>u.toasts.push(x),t:x=>x});
  const toggle=variable('web/js/sse.js','toggleModelDropdown',u.e.context);
  return {...c,dropdown,open:()=>toggle(s)};

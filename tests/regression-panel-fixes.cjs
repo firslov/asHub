@@ -101,5 +101,54 @@ function keydown(file,context){
   const html=fs.readFileSync(path.join(root,'web/index.html'),'utf8');
   assert(html.includes('os-mac"><kbd>Ctrl+⇧Tab')&&html.includes('os-mac"><kbd>Ctrl+Tab'),'wrong Mac tab key help');
  });
+ for(const [mobile,target] of [[true,'.project-chat'],[false,'.project-chat'],[true,'.project-manage']])await check('PANEL '+(mobile?'narrow':'desktop')+' project navigation '+target+' preserves sidebar intent',()=>{
+  const u=ui(),app=u.doc.querySelector('.app'),writes=[];u.e.context.window.matchMedia=()=>({matches:mobile});
+  u.e.context.localStorage={getItem:()=>null,setItem:(...x)=>writes.push(x),removeItem(){}};
+  u.e.load('web/js/prefs.js');app.classList.remove('sidebar-collapsed');writes.length=0;
+  // A click on a label inside the link bubbles to the sidebar delegate.
+  u.doc.getElementById('sidebar').dispatchEvent({type:'click',target:{closest:selector=>selector.split(',').some(s=>s.trim()===target)?{}:null}});
+  assert(app.classList.contains('sidebar-collapsed')===(mobile&&target==='.project-chat'),'project navigation left the wrong sidebar state');
+  assert(!writes.some(x=>x[0]==='ash.sidebar-collapsed'),'project navigation changed the saved desktop preference');
+ });
+ for(const overlay of ['#sidebar-view-menu:popover-open','dialog[open]'])await check('PANEL narrow Escape defers to '+overlay,()=>{
+  const u=ui(),app=u.doc.querySelector('.app');u.e.context.window.matchMedia=()=>({matches:true});
+  u.e.context.localStorage={getItem:()=>null,setItem(){},removeItem(){}};
+  u.e.load('web/js/prefs.js');app.classList.remove('sidebar-collapsed');
+  let consumed=false;
+  u.doc.dispatchEvent({type:'keydown',key:'Escape',target:{closest:selector=>selector.split(',').some(s=>s.trim()===overlay)?{}:null},
+   preventDefault(){consumed=true},stopImmediatePropagation(){consumed=true}});
+  assert(!consumed&&!app.classList.contains('sidebar-collapsed'),'sidebar consumed Escape intended for the foreground overlay');
+ });
+ await check('PANEL collapsing the sidebar clears its open view menu without consuming other keys',()=>{
+  const u=ui(),app=u.doc.querySelector('.app');u.e.context.window.matchMedia=()=>({matches:true});
+  u.e.context.localStorage={getItem:()=>null,setItem(){},removeItem(){}};
+  const menu=u.doc.getElementById('sidebar-view-menu');let open=false;menu.hidePopover=()=>{open=false};
+  u.e.load('web/js/prefs.js');app.classList.remove('sidebar-collapsed');open=true;
+  let consumed=false;const event={type:'keydown',key:'Enter',target:{closest:()=>null},preventDefault(){consumed=true},stopImmediatePropagation(){consumed=true}};
+  u.doc.dispatchEvent(event);assert(open&&!consumed&&!app.classList.contains('sidebar-collapsed'),'unrelated key collapsed navigation');
+  u.doc.dispatchEvent({...event,key:'Escape'});
+  assert(consumed&&app.classList.contains('sidebar-collapsed')&&!open,'collapsed sidebar retained its top-layer menu');
+ });
+ await check('PANEL rapid keyboard resize accumulates target widths while layout is animating',()=>{
+  const u=ui(),app=u.doc.querySelector('.app'),values=new Map(),writes=[];
+  app.style.setProperty=(key,value)=>values.set(key,value);
+  app.style.getPropertyValue=key=>values.get(key)||'';
+  // The grid transition has not caught up with the requested width yet.
+  u.doc.getElementById('sidebar').getBoundingClientRect=()=>({width:260});
+  u.e.context.localStorage={getItem:()=>null,setItem:(...args)=>writes.push(args),removeItem(){}};
+  u.e.load('web/js/prefs.js');
+  const handle=u.doc.getElementById('sidebar-resize');
+  const press=key=>handle.dispatchEvent({type:'keydown',key,preventDefault(){}});
+  const width=()=>Number.parseFloat(values.get('--sidebar-w'));
+  press('Home');
+  for(let i=0;i<4;i++)press('ArrowRight');
+  assert(width()===264,'rapid presses reused an intermediate animation width');
+  press('ArrowLeft');assert(width()===248,'direction reversal lost the last target');
+  press('End');press('ArrowRight');assert(width()===480,'maximum width not respected');
+  press('ArrowLeft');assert(width()===464,'step after End used stale layout width');
+  press('Home');press('ArrowLeft');assert(width()===200,'minimum width not respected');
+  assert(handle.getAttribute('aria-valuenow')==='200','accessible width is stale');
+  assert(writes.filter(([key])=>key==='ash.sidebar-width').at(-1)[1]==='200','saved width differs from target');
+ });
  console.log(JSON.stringify({checks:results.length,passed:results.filter(x=>x.passed).length,failed:results.filter(x=>!x.passed).length}));
 })();

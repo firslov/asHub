@@ -3,13 +3,13 @@
    Terminals), aligned with the panel design system in panels.css.
 
    Type ramp and interaction language follow the panels.css discipline:
-   item titles sans --fs-md, meta mono --fs-xs --text-faint, group
-   labels mono --fs-xs uppercase --tracking-label-sm, hover --bg3,
+   item titles sans --fs-sm, meta sans --fs-xs --text-faint, group
+   labels sans with quiet counts, matching the Projects view, hover --bg3,
    current item --accent-soft + --accent-dim (mirrors .p-row.selected).
    Legacy rules for these views were removed from live.css.
    ──────────────────────────────────────────────────────────────────── */
 
-/* ── Sidebar head: segmented view switcher (reuses .p-seg) ────────── */
+/* ── Sidebar head: compact view picker ──────────────────────────── */
 .sidebar-head {
   display: flex;
   align-items: center;
@@ -20,10 +20,6 @@
   height: var(--ui-title-bar-height, 40px);
   box-sizing: border-box;
 }
-.sidebar-head .p-seg { width: 100%; }
-.sidebar-head .p-seg-item { flex: 1; padding: 0; }
-.sidebar-head .p-seg-item svg { display: block; }
-.sidebar-head .p-seg-item.active { color: var(--accent-dim); }
 
 /* ── "New" action rows (top of sessions / terminals views) ────────── */
 .sidebar-action {
@@ -51,6 +47,7 @@
     border-color var(--dur-fast) var(--ease-out-expo);
 }
 .sidebar-new-btn svg { flex-shrink: 0; }
+.sidebar-new-btn:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 2px; }
 .sidebar-new-btn:hover {
   color: var(--accent-dim);
   background: var(--accent-glow);
@@ -162,18 +159,18 @@
   transition: color var(--dur-fast) var(--ease-out-expo);
 }
 
-/* Icon slot — fixed 1em, centered; glyph varies per view. */
+/* Fixed vector icon slot, independent of font glyph metrics. */
 .side-icon {
   flex-shrink: 0;
-  width: 1em;
+  width: 12px;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 .side-icon svg { width: 12px; height: 12px; }
-.terminal-kind { color: var(--cyan, var(--accent)); font-weight: 600; }
-.workspace-child-kind { color: var(--accent); font-size: var(--fs-xs); opacity: 0.6; }
+.terminal-kind { color: var(--text-faint); }
+.workspace-child-kind { width: 4px; height: 4px; border-radius: 50%; background: currentColor; color: var(--border-mid); }
 .archive-icon { color: var(--text-faint); }
 
 /* Title + meta column. */
@@ -195,14 +192,14 @@
   min-width: 0;
 }
 
-/* Item titles: sans fs-md 500 — dim at rest, full on hover, accent-dim
+/* Item titles: sans fs-sm 400 — dim at rest, full on hover, accent-dim
    when current. */
 .session-title,
 .side-title {
   color: var(--text-dim);
-  font-weight: 500;
-  font-size: var(--fs-md);
-  line-height: 1.3;
+  font-weight: 400;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -216,18 +213,18 @@
 .terminal-list li.current .side-title,
 .workspace-children li.current .side-title { color: var(--accent-dim); }
 
-/* Meta rows: mono fs-xs text-faint, tabular numerals for times. */
+/* Meta rows: sans fs-xs text-faint, tabular numerals for times. */
 .session-meta,
 .side-meta {
   display: flex;
   align-items: baseline;
   gap: var(--space-3);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--fs-xs);
-  line-height: 1.45;
+  line-height: 1.6;
   color: var(--text-faint);
 }
-.session-meta { margin-top: 2px; }
+.session-meta { margin-top: 4px; }
 .session-cwd,
 .side-cwd {
   flex: 1;
@@ -240,6 +237,8 @@
 .side-time {
   flex-shrink: 0;
   font-weight: 400;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
   font-feature-settings: "tnum" 1;
   font-variant-numeric: tabular-nums;
 }
@@ -263,6 +262,7 @@
   border: none;
   background: transparent;
   color: var(--text-faint);
+  font-family: var(--font-sans);
   font-size: var(--fs-md);
   line-height: 1;
   cursor: pointer;
@@ -310,6 +310,7 @@
   border: none;
   background: transparent;
   color: var(--text-faint);
+  font-family: var(--font-sans);
   font-size: var(--fs-md);
   line-height: 1;
   cursor: pointer;
@@ -360,11 +361,10 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3) var(--space-1);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--fs-xs);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label-sm);
+  font-weight: 400;
+  letter-spacing: normal;
   color: var(--text-faint);
   user-select: none;
 }
@@ -372,39 +372,36 @@
 .session-group-head:first-child { padding-top: var(--space-1); }
 .session-list li.session-group-head:hover { background: transparent; }
 .workspace-head {
+  padding: 8px;
+  border-radius: 6px;
+  font-size: var(--fs-sm);
+  color: var(--text);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out-expo);
 }
 .workspace-head:hover { background: var(--bg3); }
-/* CJK labels: mono + wide tracking reads poorly for Chinese. */
-:lang(zh) .session-group-head,
-:lang(zh) .workspace-head {
-  font-family: var(--font-sans);
-  letter-spacing: normal;
-}
 
-/* Count badges — .p-badge style. */
+/* Quiet counts, matching project group headers. */
 .bucket-count,
 .workspace-count {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 18px;
-  padding: 0 6px;
-  font-family: var(--font-mono);
+  min-width: 12px;
+  padding: 0;
+  font-family: var(--font-sans);
   font-size: var(--fs-xs);
   line-height: 1;
   letter-spacing: 0;
-  color: var(--text-mid);
-  background: var(--bg3);
-  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .workspace-group { margin: var(--space-1) 0 var(--space-2); }
 .workspace-caret {
   flex-shrink: 0;
-  width: 1em;
+  width: 12px;
   line-height: 1;
   display: inline-flex;
   align-items: center;
@@ -424,21 +421,14 @@
 .workspace-actions { display: flex; }
 .workspace-actions .side-btn { margin-right: 0; }
 
-/* Child items indent one step under the group head, with a 1px guide
-   line at the caret axis (same technique as the Files panel). */
+/* Child rows share project chat indentation without another visual rail. */
 .workspace-children {
   list-style: none;
   margin: 0;
   padding: 0;
-  background-image: linear-gradient(var(--border-light), var(--border-light));
-  background-size: 1px 100%;
-  background-repeat: no-repeat;
-  /* Guide line on the caret axis: head padding-left + half caret width
-     (caret is 1em at --fs-xs = 0.68rem). */
-  background-position: calc(var(--space-3) + 0.34rem) 0;
 }
 .workspace-group.collapsed .workspace-children { display: none; }
-.workspace-children li a { padding-left: 1.75rem; }
+.workspace-children li a { padding-left: 24px; gap: 9px; }
 
 /* ── Empty state (aligns with .p-empty) ───────────────────────────── */
 .side-empty {
@@ -523,9 +513,9 @@
   color: var(--text);
   caret-color: var(--accent);
   font-family: inherit;
-  font-size: var(--fs-md);
-  font-weight: 500;
-  line-height: 1.3;
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: 1.6;
   padding: 1px 0.5rem;
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-glow);
@@ -589,14 +579,6 @@
     visibility 0s var(--dur-fast);
 }
 
-/* ── View switcher (p-seg): icon micro-motion ─────────────────────── */
-.sidebar-head .p-seg-item svg {
-  transition: transform var(--dur-fast) var(--ease-out-expo);
-}
-.sidebar-head .p-seg-item.active svg { transform: scale(1.08); }
-.sidebar-head .p-seg-item:active svg { transform: scale(0.9); }
-.sidebar-head .p-seg-item.active:active svg { transform: scale(0.98); }
-
 /* ── View-switch fade + scroll fade masks ─────────────────────────── */
 /* Lists are shown/hidden via the [hidden] attribute; display none→block
    restarts this animation, giving each view switch a light entrance.
@@ -658,22 +640,6 @@
   }
 }
 
-/* ── Current item: accent edge strip ──────────────────────────────── */
-/* A 2px accent-dim strip at the row's left edge (flat background-image
-   technique, same as the workspace guide line) disambiguates the
-   current row from hover, and keeps the status dot + accent-soft wash
-   combination legible. Overrides the plain accent-soft wash above. */
-.session-list li.current,
-.terminal-list li.current,
-.workspace-children li.current,
-.session-list li.current:hover,
-.terminal-list li.current:hover,
-.workspace-children li.current:hover {
-  background:
-    linear-gradient(var(--accent-dim), var(--accent-dim)) 0 0 / 2px 100% no-repeat,
-    var(--accent-soft);
-}
-
 /* ── Time buckets: vertical rhythm ────────────────────────────────── */
 /* More air before each subsequent bucket head; the first bucket stays
    snug under the filter (overrides the shared space-2 padding above;
@@ -681,10 +647,7 @@
 .session-group-head { padding-top: var(--space-3); }
 .session-group-head:first-child { padding-top: var(--space-1); }
 
-/* ── Workspace children: streaming / unread tint on the kind glyph ── */
-/* Sessions show a status dot; workspace children carry the same state
-   classes but no dot element — tint the ◆ glyph instead (semantic
-   cyan / warning only, mirrors the dot colors). */
+/* Workspace dots preserve the same running / unread states as sessions. */
 .workspace-children li.session-streaming .workspace-child-kind {
   color: var(--cyan);
   opacity: 1;
@@ -745,19 +708,61 @@
 /* Navigation has its own quiet surface; labels make every destination explicit. */
 .sidebar { background: var(--bg2); }
 .sidebar-head { height: auto; padding: 14px 12px 0; border: 0; }
-.sidebar-head .p-seg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; height: auto; padding: 3px; border-radius: 10px; }
-.sidebar-head .p-seg-item { height: 36px; justify-content: flex-start; gap: 7px; padding: 0 8px; font-size: 0.75rem; letter-spacing: 0; border-radius: 7px; min-width: 0; }
-.sidebar-head .p-seg-item svg { flex-shrink: 0; }
-.sidebar-head .p-seg-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-head .p-seg-item.active { color: var(--text); background: var(--bg-elevated); box-shadow: var(--shadow-sm); }
 .sidebar-action { padding: 18px 14px 0; }
-.sidebar-new-btn { height: 38px; border: 1px solid var(--border-mid); background: var(--bg-elevated); border-radius: 9px; font-size: var(--fs-md); font-weight: 500; color: var(--text); }
+.sidebar-new-btn { height: 38px; border: 1px solid var(--border-mid); background: var(--bg-elevated); border-radius: 9px; font-size: var(--fs-sm); font-weight: 400; color: var(--text); }
 .sidebar-filter { height: 36px; margin: 10px 14px 16px; padding: 0 10px; background: transparent; border-color: var(--border); border-radius: 8px; font-size: var(--fs-sm); }
-.session-list, .workspace-list, .terminal-list, .archive-list { padding: 0 8px 16px; }
-.session-list li, .terminal-list li, .workspace-children li, .archive-list li { border-radius: 8px; margin-bottom: 4px; }
+.session-list, .workspace-list, .terminal-list, .archive-list { padding: 0 12px 16px; }
+.session-list li, .terminal-list li, .workspace-children li, .archive-list li { border-radius: 7px; margin-bottom: 0; }
 .session-list li.current, .terminal-list li.current, .workspace-children li.current,
-.session-list li.current:hover, .terminal-list li.current:hover, .workspace-children li.current:hover { background: var(--accent-glow); }
-.session-list li a { padding-top: 11px; padding-bottom: 11px; }
+.session-list li.current:hover, .terminal-list li.current:hover, .workspace-children li.current:hover { background: var(--accent-soft); }
+.session-list li a { padding: 9px 10px 9px 24px; }
+.terminal-list li a, .workspace-children li a, .archive-list li a { padding-top: 9px; padding-bottom: 9px; }
+.terminal-list { margin-top: 16px; }
 .session-list li.current a { color: var(--text); }
 .sidebar-new-btn span { display: inline; }
 .session-list li:focus-within .session-actions { opacity: 1; pointer-events: auto; }
+
+/* View switcher uses the same warm surfaces and restrained accent as panels.
+   The popover enters the top layer, outside sidebar containment and clipping. */
+.sidebar-view-picker { width: 100%; min-width: 0; }
+.sidebar-view-select {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; height: 40px; padding: 0 12px;
+  border: 1px solid var(--border-light); border-radius: var(--radius-md);
+  background: var(--bg-elevated); color: var(--text);
+  font: inherit; font-size: var(--fs-md); font-weight: 500; text-align: left;
+  cursor: pointer; transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.sidebar-view-select:hover { background: var(--bg3); border-color: var(--border-mid); }
+.sidebar-view-select[aria-expanded="true"] { border-color: var(--accent-border); }
+.sidebar-view-current-icon { display: flex; color: var(--text-dim); }
+.sidebar-view-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-view-chevron { flex-shrink: 0; width: 14px; color: var(--text-faint); transition: transform var(--dur-fast); }
+.sidebar-view-select[aria-expanded="true"] .sidebar-view-chevron { transform: rotate(180deg); }
+.sidebar-view-select:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 2px; }
+.sidebar-view-menu {
+  position: fixed; inset: auto; margin: 0; padding: 6px;
+  box-sizing: border-box; overflow-y: auto;
+  background: var(--bg-elevated); color: var(--text);
+  border: 1px solid var(--border-mid); border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+.sidebar-view-menu:popover-open { display: grid; gap: 3px; animation: sidebar-view-enter 120ms ease-out; }
+.sidebar-view-option {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px;
+  padding: 8px 10px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--text-dim); font: inherit; font-size: var(--fs-sm);
+  text-align: left; cursor: pointer;
+}
+.sidebar-view-option > span { flex: 1; }
+.sidebar-view-symbol, .sidebar-view-check { flex-shrink: 0; }
+.sidebar-view-option:hover, .sidebar-view-option:focus-visible { background: var(--bg3); color: var(--text); outline: none; }
+.sidebar-view-option[aria-checked="true"] { background: var(--accent-soft); color: var(--accent-dim); }
+.sidebar-view-option:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-border); }
+.sidebar-view-check { width: 14px; opacity: 0; }
+.sidebar-view-option[aria-checked="true"] .sidebar-view-check { opacity: 1; }
+@keyframes sidebar-view-enter { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-view-menu:popover-open { animation: none; }
+  .sidebar-view-chevron { transition: none; }
+}

@@ -1,0 +1,135 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {env, Bridge, fs, path, req, Res} = require('./harness.cjs');
+const tick = () => new Promise(resolve => setImmediate(resolve));
+async function setup(t) {
+  const e = env(); t.after(() => fs.rmSync(e.dir, {recursive:true, force:true}));
+  const {CollaborationTasks} = e.load('src/collaboration.ts');
+  const tasks = new CollaborationTasks(path.join(e.dir, 'tasks'));
+  const {ProjectStore} = e.load('src/projects.ts');
+  const projects = new ProjectStore(path.join(e.dir,'projects.json'));
+  const {createSession,conversationAccess,routeEvent,listSessions,closeSession} = e.load('src/hub.ts','export {createSession,conversationAccess,routeEvent,listSessions,closeSession};');
+  const sessions = new Map();
+  const opts = {collaboration:tasks, makeBridge:o=>new Bridge(o), conversationAccess:id=>conversationAccess(id,sessions,projects,tasks)};
+  const a = await createSession(sessions,opts,e.dir), b = await createSession(sessions,opts,e.dir);
+  const project = projects.update({action:'create',name:'Team',add:[a.id,b.id]},()=>true)[0];
+  return {e,tasks,projects,project,sessions,a,b,access:a.bridge.opts.conversationAccess,routeEvent,listSessions,closeSession,CollaborationTasks};
+}
+test('receipts track exact turn, preserve long Unicode output, wait without polling, and survive restart',async t=>{
+  const f=await setup(t);let done;
+  f.b.bridge.submit=()=>new Promise(r=>done=r);
+  const receipt=await f.access.send(f.b.id,'Review');
+  assert.equal((await f.access.task(receipt.taskId)).state,'running');
+  let finished=false;const wait=f.access.task(receipt.taskId,0,30000).then(v=>{finished=true;return v;});
+  await tick();assert.equal(finished,false);
+  const text='a'.repeat(7999)+'😀'+'z'.repeat(10000);
+  f.routeEvent(f.b,{name:'agent:response-chunk',payload:{blocks:[{type:'text',text}]}});
+  f.routeEvent(f.b,{name:'agent:tool-completed',payload:{isError:true}});
+  assert.equal(f.tasks.get(receipt.taskId).state,'running','tool retry is not task failure');
+  done({stopReason:'done'});await tick();
+  const first=await wait;assert.equal(first.state,'completed');assert.equal(first.text.length,7999);
+  let result='',offset=0,page;
+  do {page=await f.access.task(receipt.taskId,offset);result+=page.text;offset=page.nextOffset;}while(page.hasMore);
+  assert.equal(result,text);
+  assert.throws(()=>f.tasks.page(receipt.taskId,8000),/offset/);
+  assert.equal(new f.CollaborationTasks(path.join(f.e.dir,'tasks')).page(receipt.taskId).state,'completed');
+});
+for (const queued of [false,true]) test(`collaboration preserves reply boundaries around tools (${queued?'queued':'direct'})`,async t=>{
+  const f=await setup(t);let done;
+  f.b.bridge.supportsQueue=true;
+  f.b.bridge.isProcessing=()=>queued;
+  f.b.bridge.submit=queued?async()=>({stopReason:'queued'}):()=>new Promise(r=>done=r);
+  const receipt=await f.access.send(f.b.id,'Check formatting');
+  if(queued)f.routeEvent(f.b,{name:'agent:queued-submit',payload:{query:f.tasks.get(receipt.taskId).query}});
+  const chunk=text=>f.routeEvent(f.b,{name:'agent:response-chunk',payload:{blocks:[{type:'text',text}]}});
+  chunk('```text\n');chunk('准备\n```');
+  const first=await f.access.task(receipt.taskId);
+  assert.equal(first.text,'```text\n准备\n```','stream chunks must remain contiguous');
+  f.routeEvent(f.b,{name:'agent:tool-started',payload:{name:'read_file',toolCallId:'one'}});
+  f.routeEvent(f.b,{name:'agent:tool-started',payload:{name:'read_file',toolCallId:'two'}});
+  chunk('## 结果\n');chunk('\n完成');
+  if(queued)f.routeEvent(f.b,{name:'agent:queued-done',payload:{}});
+  else done({stopReason:'done'});
+  await tick();
+  const result=await f.access.task(receipt.taskId);
+  assert.equal(result.text,'```text\n准备\n```\n\n## 结果\n\n完成','separate replies must not merge into one malformed Markdown block');
+  assert.equal(result.state,'completed');
+  assert.equal((await f.access.task(receipt.taskId,first.nextOffset)).text,'\n\n## 结果\n\n完成','live pagination offsets remain valid');
+  assert.equal(new f.CollaborationTasks(path.join(f.e.dir,'tasks')).get(receipt.taskId).text,result.text);
+});
+test('queued task output belongs to its own turn; dropped tasks cannot finish the active task',async t=>{
+  const f=await setup(t);let done;
+  f.b.bridge.submit=()=>new Promise(r=>done=r);
+  const first=await f.access.send(f.b.id,'first');
+  f.b.bridge.supportsQueue=true;f.b.bridge.isProcessing=()=>true;f.b.bridge.submit=async()=>({stopReason:'queued'});
+  const second=await f.access.send(f.b.id,'second'), dropped=await f.access.send(f.b.id,'third');await tick();
+  assert.equal(f.b.queuedQueries.length,2);
+  f.routeEvent(f.b,{name:'agent:queued-done',payload:{query:f.tasks.get(dropped.taskId).query,dropped:true}});
+  assert.equal(f.b.isProcessing,true,'dropping a queued task must not end the running turn');
+  assert.equal(f.tasks.get(dropped.taskId).state,'cancelled');assert.equal(f.tasks.get(first.taskId).state,'running');
+  done({stopReason:'done'});await tick();
+  f.routeEvent(f.b,{name:'agent:queued-submit',payload:{query:f.tasks.get(second.taskId).query}});
+  assert.equal(f.b.queuedQueries.length,0);
+  f.routeEvent(f.b,{name:'agent:response-chunk',payload:{blocks:[{type:'text',text:'SECOND'}]}});
+  f.routeEvent(f.b,{name:'agent:queued-done',payload:{}});
+  assert.equal(f.tasks.get(second.taskId).text,'SECOND');assert.equal(f.tasks.get(second.taskId).state,'completed');
+  assert.equal(f.tasks.get(first.taskId).text,'');
+});
+test('final errors, cancellation and restart are distinct from completion; membership rechecked after wait',async t=>{
+  const f=await setup(t);let fail;
+  f.b.bridge.submit=()=>new Promise((_,r)=>fail=r);
+  const failed=await f.access.send(f.b.id,'fail');fail(Error('upstream unavailable'));await tick();
+  assert.equal((await f.access.task(failed.taskId)).state,'failed');assert.equal(f.b.lastTurnError,true);
+  let done;f.b.bridge.submit=()=>new Promise(r=>done=r);
+  const next=await f.access.send(f.b.id,'next');assert.equal(f.b.lastTurnError,false);
+  const pending=f.access.task(next.taskId,0,30000);
+  f.projects.update({action:'members',id:f.project.id,remove:[f.b.id]},()=>true);
+  done({stopReason:'done'});await assert.rejects(pending,/outside this project/);
+  f.projects.update({action:'members',id:f.project.id,add:[f.b.id]},()=>true);
+  const third=await f.access.send(f.b.id,'cancel');
+  f.routeEvent(f.b,{name:'agent:cancelled',payload:{}});done({stopReason:'cancelled'});await tick();
+  assert.equal((await f.access.task(third.taskId)).state,'cancelled');
+  const queued=f.tasks.create(f.a.id,f.b.id,'pending','pending');
+  const reload=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+  assert.equal(reload.get(queued.id).state,'interrupted');
+});
+test('waiting can be cancelled; closing recipient settles receipts; status excludes expired permissions',async t=>{
+  const f=await setup(t);f.b.bridge.submit=()=>new Promise(()=>{});
+  const task=await f.access.send(f.b.id,'wait'),controller=new AbortController();
+  const pending=f.access.task(task.taskId,0,30000,controller.signal);controller.abort();await assert.rejects(pending);
+  f.b.pendingPermissions.set('expired',{expiresAt:0});f.b.pendingPermissions.set('live',{expiresAt:200000});
+  const response=new Res();f.listSessions(response,f.sessions);
+  assert.equal(response.json().find(s=>s.instanceId===f.b.id).waitingApproval,true);
+  f.b.pendingPermissions.delete('live');const response2=new Res();f.listSessions(response2,f.sessions);
+  assert.equal(response2.json().find(s=>s.instanceId===f.b.id).waitingApproval,false);
+  const closed=new Res();await f.closeSession(closed,f.sessions,f.b.id);
+  assert.equal((await f.access.task(task.taskId)).state,'cancelled');
+});
+test('project status prioritizes approval and failures; workspace conflicts include other projects',t=>{
+  const e=env();const {projectSessionStatus:status,sharesActiveWorkspace:shared}=e.load('web/js/project-status.js');
+  assert.equal(status({waitingApproval:true,isProcessing:true}),'approval');
+  assert.equal(status({isProcessing:true,lastTurnError:true}),'running');
+  assert.equal(status({hasUnread:true,lastTurnError:true}),'failed');
+  assert.equal(status({hasUnread:true}),'unread');assert.equal(status({queuedCount:1}),'queued');
+  const a={instanceId:'a',cwd:'/repo/sub',isProcessing:true},b={instanceId:'b',cwd:'/repo',isProcessing:true};
+  assert(shared(a,[a,b],{'/repo/sub':{root:'/repo'}}));
+  assert(!shared(a,[a,{...b,cwd:'/isolated'}],{'/repo/sub':{root:'/repo'}}));
+});
+
+test('corrupt receipt cannot prevent startup or overwrite the damaged file', async t=>{
+ const f=await setup(t),file=path.join(f.e.dir,'tasks','00000000-0000-0000-0000-000000000000.json');
+ fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,'{broken');
+ const store=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+ assert.equal(store.list().length,0);assert.equal(fs.readFileSync(file,'utf8'),'{broken');
+});
+
+test('structurally invalid receipt is excluded without hiding valid collaboration history',async t=>{
+ const f=await setup(t),valid=f.tasks.create(f.a.id,f.b.id,'valid','valid');
+ const id='00000000-0000-0000-0000-000000000000';
+ const file=path.join(f.e.dir,'tasks',id+'.json');
+ const damaged=JSON.stringify({id,text:'',sourceId:f.a.id,recipientId:f.b.id,state:'completed'});
+ fs.writeFileSync(file,damaged);
+ const store=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+ assert.equal(store.list().length,1,'malformed metadata must not enter the task list');
+ assert.equal(store.list()[0].id,valid.id);assert.equal(fs.readFileSync(file,'utf8'),damaged);
+});

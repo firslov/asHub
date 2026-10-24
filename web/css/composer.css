@@ -728,3 +728,21 @@
 .live-input.shell-mode::after { top: 0; right: 18px; transform: translateY(-50%); }
 .live-input.shell-mode .send-btn:not(:disabled):not(.busy) { background: var(--cyan); color: var(--on-accent); }
 .live-input.shell-mode:focus-within { box-shadow: 0 0 0 3px var(--cyan-glow); }
+
+/* Model and thinking share one quiet surface. Only the model list scrolls. */
+.model-dropdown { min-width:0; max-width:calc(100vw - 24px); box-sizing:border-box; }
+.model-dropdown-search { flex-shrink:0; }
+.model-dropdown-list { min-height:48px; }
+.model-option { display:block; width:100%; border:0; background:transparent; text-align:left; }
+.model-option:focus-visible, .model-thinking button:focus-visible { outline:2px solid var(--accent-dim); outline-offset:-2px; }
+.model-option:disabled { cursor:wait; opacity:.6; }
+.model-thinking { flex-shrink:0; padding:12px 14px 14px; border-top:1px solid var(--border-light); font-family:var(--font-sans); }
+.model-thinking-head { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--text-dim); font-size:var(--fs-xs); }
+.model-thinking-value { color:var(--text-faint); }
+.model-thinking-options { display:flex; flex-wrap:wrap; gap:4px; margin-top:9px; }
+.model-thinking-option, .model-thinking-retry { border:0; border-radius:6px; background:transparent; color:var(--text-dim); font:inherit; font-size:var(--fs-xs); padding:6px 9px; min-height:30px; cursor:pointer; }
+.model-thinking-option:hover, .model-thinking-retry:hover { background:var(--bg3); color:var(--text); }
+.model-thinking-option[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent-dim); }
+.model-thinking-option:disabled { opacity:.5; cursor:wait; }
+.model-thinking-note { margin:9px 0 0; color:var(--text-faint); font-size:var(--fs-xs); line-height:1.6; }
+.model-thinking-retry { padding-left:0; margin-top:6px; }

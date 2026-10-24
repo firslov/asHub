@@ -5,11 +5,11 @@
 
 [![License](https://img.shields.io/badge/license-MIT-787868.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-22-787868.svg)](.nvmrc)
-[![agent-sh](https://img.shields.io/badge/agent--sh-6ea34cc-a58b5d.svg)](https://github.com/guanyilun/agent-sh/commit/6ea34cc9247344715e16c7becf49d4dc46ccb71a)
+[![agent-sh](https://img.shields.io/badge/agent--sh-0.16.0-a58b5d.svg)](https://github.com/guanyilun/agent-sh/releases/tag/v0.16.0)
 
 asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌面 AI Agent 工作台。把多会话、模型选择、子代理、终端和文件放在同一个界面，既能专注阅读结果，也能展开审阅完整执行过程。
 
-支持 **macOS（Apple Silicon / Intel）、Windows x64 与 Linux x64**。桌面版与本地浏览器版使用同一套客户端；使用前需配置自己的模型提供商与 API 凭据，模型调用费用由提供商收取。
+支持 **macOS（Apple Silicon / Intel）、Windows x64 与 Linux x64**。桌面版与本地浏览器版使用同一套客户端；可使用自己的模型 API 凭据，源码版也支持 Codex 登录；计费及订阅额度以提供商为准。
 
 ![asHub 多会话工作台：项目分析、格式化表格与会话管理](website/assets/showcase-workspace.png)
 
@@ -17,15 +17,18 @@ asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌�
 
 ## 核心体验
 
+以下功能以当前源码分支为准；项目协作、Codex 登录和按模型选择思考深度尚未包含在 v0.20.5 安装包中。
+
 | 能力 | 使用体验 |
 | --- | --- |
-| 多会话与工作区 | 标签切换，按工作目录组织，搜索、置顶、归档与历史恢复 |
-| 清晰的执行过程 | Markdown、代码高亮、Diff、思考与工具调用分层展示；详情可展开，输出可复制 |
+| 会话与项目 | 将多个对话归入项目，统一切换视图，支持搜索、置顶、归档与历史恢复 |
+| 对话协作 | 在同项目对话间派发任务、跟踪回执和读取结果；可选独立 Git 工作树隔离文件改动 |
+| 清晰的执行过程 | 优先展示回复与进度，思考和工具输出收纳在可展开的详情中 |
 | 任务与子代理 | 任务清单与进度；规划、探索、审查、调研、实现五类子代理，支持模型与预算配置 |
-| 模型与上下文 | 搜索与切换模型，查看上下文用量、缓存命中率，以及支持的提供商余额 |
+| 模型与上下文 | Codex 登录、模型搜索与原生思考等级，查看上下文和实际返回的缓存用量 |
 | 可审阅的操作 | 权限审批、改动预览、会话级放行；后台完成与审批通知 |
 | 项目工具 | PTY 终端、文件浏览、图片输入、技能市场、用户扩展 |
-| 保留工作脉络 | 会话持久化、对话分支与回退、Markdown 导出 |
+| 保留工作脉络 | 会话持久化、对话分支与回退、Markdown 导出及工作目录成果下载 |
 | 统一的界面 | Gruvbox 浅色与深色主题，中英文切换、显示缩放、可折叠状态栏 |
 | 移动访问 · 预览 | 手机上继续已授权的桌面对话，共享历史、流式回复与单次权限审批 |
 
@@ -55,7 +58,7 @@ asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌�
 | Linux x64 | `.AppImage` |
 
 1. 安装并打开 asHub
-2. 在右侧配置面板设置模型提供商、API 凭据与默认模型
+2. 在右侧配置面板设置模型提供商与默认模型；源码版也可使用 Codex 登录
 3. 新建会话，选择项目目录，开始对话；需要时打开文件、终端或其他辅助面板
 
 ### macOS 一行安装
@@ -89,9 +92,11 @@ chmod +x ./asHub-*.AppImage
 
 电脑需保持唤醒且 asHub 正在运行。仅共享授权范围内且工作目录仍有效的对话，归档对话需先在桌面恢复。支持流式回复、图片、模型切换与单次权限审批。中转服务转发内容但不持久保存对话正文，不属于端到端加密。
 
+项目视图、协作回执、成果下载和思考深度选择已完成本地移动端适配，需桌面与网关配套更新，目前尚未部署到线上移动站。
+
 ## 从源码运行
 
-项目固定使用 **Node.js 22.23.3**（最低 **22.12.0**），内核固定到官方 **agent-sh 提交 `6ea34cc`**，包含尚未发布到 npm 的 Unicode 修复。安装依赖需要 Git。使用 nvm 时：
+项目固定使用 **Node.js 22.23.3**（最低 **22.12.0**），内核固定到 **agent-sh 0.16.0**，包含上游 Unicode 修复及内置 Codex provider。使用 nvm 时：
 
 ```sh
 git clone https://github.com/firslov/asHub.git
@@ -192,7 +197,9 @@ examples/extensions/  扩展示例
 | `npm run typecheck:web` | 前端工程检查 |
 | `npm test` | 隔离回归测试 |
 | `npm run test:http` | HTTP 与会话接口测试 |
-| `npm run test:kernel` | 构建并检查内核兼容性 |
+| `npm run test:kernel` | 构建并检查内核及 Codex 兼容性 |
+| `npm run test:network` | 代理与网络行为测试 |
+| `npm run test:worktrees` | 独立 Git 工作树测试 |
 | `npm run electron:pack` | 生成解包应用 |
 | `npm run electron:dist:mac` | 构建 macOS 安装包 |
 | `npm run electron:dist:win` | 构建 Windows 安装包 |

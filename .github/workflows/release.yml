@@ -13,7 +13,11 @@ permissions:
   contents: write
 
 jobs:
+  windows-compat:
+    uses: ./.github/workflows/windows-compat.yml
+
   tag:
+    needs: windows-compat
     runs-on: ubuntu-latest
     outputs:
       version: ${{ inputs.version }}
@@ -31,7 +35,7 @@ jobs:
           CUR=$(node -p "require('./package.json').version")
           if [ "$CUR" != "${{ inputs.version }}" ]; then
             npm version ${{ inputs.version }} --no-git-tag-version
-            git add package.json
+            git add package.json package-lock.json
             git commit -m "chore: bump version to ${{ inputs.version }}"
           fi
       - run: |
@@ -66,8 +70,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - if: matrix.target == 'win'
-        run: bash scripts/pre-dist-win.sh
-        shell: bash
+        run: node scripts/pre-dist-win.cjs
       - run: npx electron-builder ${{ matrix.flags }} --publish never
       - uses: actions/upload-artifact@v4
         with:

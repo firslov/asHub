@@ -1,0 +1,35 @@
+name: Windows compatibility
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck:web
+      - run: node --test tests/regression-windows.cjs tests/regression-thinking.cjs tests/regression-links.cjs tests/regression-projects.cjs tests/regression-collaboration.cjs tests/worktrees.mjs
+      - run: node tests/http-artifacts.cjs
+      - run: node tests/http-projects.cjs
+      - run: node tests/kernel-codex.mjs
+      - run: node tests/windows-runtime.mjs
+      - run: npx electron-builder --win --x64 --dir --publish never
+      - name: Verify packaged Windows runtime
+        env:
+          ELECTRON_RUN_AS_NODE: '1'
+        run: |
+          $app = Resolve-Path 'release/win-unpacked/asHub.exe'
+          $test = Resolve-Path 'tests/windows-runtime.mjs'
+          & $app $test (Resolve-Path 'release/win-unpacked/resources/app')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

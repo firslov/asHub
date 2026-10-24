@@ -5,6 +5,7 @@
  *   ashub --port 8080
  *   ashub --backend acp --cmd "claude-code-acp"
  */
+import "./windows-bootstrap.js";
 import "./network-bootstrap.js";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";

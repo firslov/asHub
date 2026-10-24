@@ -100,7 +100,7 @@ chmod +x ./asHub-*.AppImage
 
 ## 从源码运行
 
-项目固定使用 **Node.js 22.23.3**（最低 **22.12.0**），内核基于 **agent-sh 0.16.0**，暂时固定到包含 [Codex 流式超时修复](https://github.com/guanyilun/agent-sh/pull/280) 的 Git 提交，待上游发布后切回正式版本。使用 nvm 时：
+项目固定使用 **Node.js 22.23.3**（最低 **22.12.0**），内核基于 **agent-sh 0.16.0**，暂时固定到包含 [Codex 流式超时修复](https://github.com/guanyilun/agent-sh/pull/281) 的 Git 提交，待上游发布后切回正式版本。使用 nvm 时：
 
 ```sh
 git clone https://github.com/firslov/asHub.git

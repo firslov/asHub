@@ -15,6 +15,7 @@ import { clipHeadTail, unicodeSlice, guardLlmUnicode } from "../unicode.js";
 import { SessionThinking, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
 import { configureDeepSeek } from "../providers/deepseek.js";
 import { EventEmitter } from "node:events";
+import { setTimeout as waitForRetry } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import type { CodexUsage } from "../providers/codex-usage.js";
 import * as fs from "node:fs";
@@ -615,6 +616,7 @@ export class AshBridge extends EventEmitter implements Bridge {
         });
       };
       const promise = runSubagentWithRetry(runOnce, {
+        signal,
         canRetry: () => !attemptState.mutatingExecuted,
         onRetry: (info) => {
           (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {
@@ -716,6 +718,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     const runSubagentWithRetry = async <R,>(
       launch: () => Promise<R>,
       opts?: {
+        signal?: AbortSignal;
         canRetry?: () => boolean;
         onRetry?: (info: { attempt: number; delayMs: number; err: Error }) => void;
       },
@@ -725,20 +728,28 @@ export class AshBridge extends EventEmitter implements Bridge {
       const RETRYABLE = /econnreset|econnrefused|etimedout|fetch failed|network|socket hang up|connection error/i;
       const isRetryable = (err: unknown): boolean => {
         if (!(err instanceof Error)) return false;
+        // Codex acknowledges SSE before upstream headers. Its explicit retry
+        // decision survives in the SDK error envelope, not APIError.status.
+        // Honor false before message matching (partial output, TLS, deadlines).
+        const proxy = err as Error & { type?: string; error?: { status?: unknown; retryable?: unknown } };
+        if (proxy.type === "codex_proxy_error" && typeof proxy.error?.status === "number"
+            && Number.isInteger(proxy.error.status) && proxy.error.status >= 400 && proxy.error.status <= 599
+            && typeof proxy.error.retryable === "boolean") return proxy.error.retryable;
         if (RETRYABLE.test(err.message)) return true;
         const status = (err as { status?: number }).status;
         return status === 429 || status === 500 || status === 502 || status === 503 || status === 529;
       };
       let lastErr: unknown;
       for (let attempt = 0; attempt <= RETRIES; attempt++) {
+        opts?.signal?.throwIfAborted();
         try {
           return await launch();
         } catch (err) {
           lastErr = err;
-          if (attempt >= RETRIES || !isRetryable(err) || opts?.canRetry?.() === false) throw err;
+          if (opts?.signal?.aborted || attempt >= RETRIES || !isRetryable(err) || opts?.canRetry?.() === false) throw err;
           const delayMs = DELAYS[attempt] ?? 4_000;
           opts?.onRetry?.({ attempt: attempt + 1, delayMs, err: err instanceof Error ? err : new Error(String(err)) });
-          await new Promise((r) => setTimeout(r, delayMs));
+          await waitForRetry(delayMs, undefined, { signal: opts?.signal });
         }
       }
       throw lastErr; // unreachable — kept for type completeness
@@ -993,6 +1004,7 @@ export class AshBridge extends EventEmitter implements Bridge {
           });
         };
         const result = await runSubagentWithRetry(runOnce, {
+          signal,
           canRetry: () => !attemptState.mutatingExecuted,
           onRetry: (info) => {
             (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {

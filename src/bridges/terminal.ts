@@ -75,9 +75,13 @@ export class TerminalBridge extends EventEmitter implements Bridge {
       this.emit("event", { name: "shell:pty-data", payload: { raw: data } } satisfies BusEvent);
     });
     proc.onExit(({ exitCode, signal }) => {
-      if (this.respawning || this.proc !== proc) return; // intentional kill for shell fallback
-      this.emit("event", { name: "shell:exit", payload: { exitCode, signal } } satisfies BusEvent);
+      if (this.respawning || this.proc !== proc || this.closed) return;
+      this.proc = null;
       this.closed = true;
+      // A naturally exited Windows shell can leave node-pty's ConPTY worker alive.
+      // Release its native resources after output has drained and onExit fires.
+      if (process.platform === "win32") { try { proc.kill(); } catch {} }
+      this.emit("event", { name: "shell:exit", payload: { exitCode, signal } } satisfies BusEvent);
       this.emit("closed");
     });
 
@@ -159,7 +163,9 @@ export class TerminalBridge extends EventEmitter implements Bridge {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    try { this.proc?.kill(); } catch {}
+    const proc = this.proc;
+    this.proc = null;
+    try { proc?.kill(); } catch {}
     this.emit("closed");
   }
 

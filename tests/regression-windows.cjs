@@ -19,3 +19,20 @@ test('missing Git Bash and non-Windows environments keep their PATH intact',()=>
  const e={PATH:'/usr/bin'};setup(git)(e,'darwin');assert.equal(e.PATH,'/usr/bin');
  setup([])(e,'win32');assert.equal(e.PATH,'/usr/bin');
 });
+
+test('Windows terminal releases ConPTY on natural exit and emits closure once',async()=>{
+ let exit, killed=0, closed=0;
+ const proc={onData(){},onExit(fn){exit=fn;},kill(){killed++;exit({exitCode:0});},write(){},resize(){}};
+ const e=env({globals:{process:{...process,platform:'win32',env:{COMSPEC:'cmd.exe'}}},modules:{'node-pty':{spawn:()=>proc}}});
+ const terminal=new(e.load('src/bridges/terminal.ts').TerminalBridge)({cwd:e.dir});
+ terminal.onClose(()=>closed++);await terminal.ready();exit({exitCode:0});terminal.close();
+ assert.equal(killed,1);assert.equal(closed,1);assert.equal(terminal.proc,null);
+});
+test('closing Windows terminal ignores its later exit callback',async()=>{
+ let exit, killed=0, closed=0;
+ const proc={onData(){},onExit(fn){exit=fn;},kill(){killed++;},write(){},resize(){}};
+ const e=env({globals:{process:{...process,platform:'win32',env:{COMSPEC:'cmd.exe'}}},modules:{'node-pty':{spawn:()=>proc}}});
+ const terminal=new(e.load('src/bridges/terminal.ts').TerminalBridge)({cwd:e.dir});
+ terminal.onClose(()=>closed++);await terminal.ready();terminal.close();exit({exitCode:0});terminal.close();
+ assert.equal(killed,1);assert.equal(closed,1);assert.equal(terminal.proc,null);
+});

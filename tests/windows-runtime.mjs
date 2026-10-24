@@ -11,7 +11,7 @@ const appRoot=path.resolve(process.argv[2] || '.');
 const requireApp=createRequire(path.join(appRoot,'package.json'));
 const load=rel=>import(pathToFileURL(path.join(appRoot,rel)).href);
 const dir=await fs.mkdtemp(path.join(os.tmpdir(),'asHub 空格 Windows-'));
-const watchdog=setTimeout(()=>{console.error('Windows runtime timed out');process.exit(1);},45000);
+const watchdog=setTimeout(()=>{console.error('Windows runtime timed out');process.exit(1);},45000).unref();
 try {
  const key=Object.keys(process.env).find(k=>k.toLowerCase()==='path');
  // Reproduce a standard Git installer PATH, excluding CI's extra Bash paths.
@@ -48,4 +48,4 @@ try {
   terminal.writePty('exit\r');await closed;
  } finally {terminal.close();}
  console.log('PASS native ConPTY startup, output, resize and exit');
-} finally {clearTimeout(watchdog);await fs.rm(dir,{recursive:true,force:true,maxRetries:20,retryDelay:200});}
+} finally {await fs.rm(dir,{recursive:true,force:true,maxRetries:20,retryDelay:200});}

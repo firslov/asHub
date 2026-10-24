@@ -183,6 +183,7 @@ async function finish(code) {
   // Give node-pty's close callbacks time to drain before Electron tears down V8.
   await new Promise(resolve => setTimeout(resolve, 150));
   clearTimeout(watchdog);
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); }
+  catch { /* Windows can retain Chromium cache handles until app.exit(). */ }
   app.exit(code);
 }

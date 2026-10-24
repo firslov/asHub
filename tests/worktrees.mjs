@@ -10,7 +10,8 @@ test('isolated worktrees keep the source dirty files intact and use a different 
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'ashub-worktree-'));
  t.after(()=>fs.rm(dir,{recursive:true,force:true}));
  const repo=path.join(dir,'repo'),outputs=path.join(dir,'isolated');await fs.mkdir(repo);
- const git=(...args)=>execFileSync('git',['-C',repo,...args],{encoding:'utf8',env:{...process.env,GIT_CONFIG_GLOBAL:os.devNull,GIT_CONFIG_NOSYSTEM:'1'}}).trim();
+ await fs.writeFile(path.join(dir,'empty.gitconfig'),'');
+ const git=(...args)=>execFileSync('git',['-C',repo,...args],{encoding:'utf8',env:{...process.env,GIT_CONFIG_GLOBAL:path.join(dir,'empty.gitconfig'),GIT_CONFIG_NOSYSTEM:'1'}}).trim();
  git('init','-q');git('config','user.name','Test');git('config','user.email','test@example.invalid');
  await fs.mkdir(path.join(repo,'src'));await fs.writeFile(path.join(repo,'src','file.txt'),'committed');
  git('add','.');git('commit','-qm','Initial');
@@ -33,7 +34,8 @@ test('a committed symlink must not select a working directory outside the isolat
  t.after(()=>fs.rm(dir,{recursive:true,force:true}));
  const repo=path.join(dir,'repo'),external=path.join(dir,'external');
  await fs.mkdir(repo);await fs.mkdir(external);
- const git=(...args)=>execFileSync('git',['-C',repo,...args],{encoding:'utf8',env:{...process.env,GIT_CONFIG_GLOBAL:os.devNull,GIT_CONFIG_NOSYSTEM:'1'}}).trim();
+ await fs.writeFile(path.join(dir,'empty.gitconfig'),'');
+ const git=(...args)=>execFileSync('git',['-C',repo,...args],{encoding:'utf8',env:{...process.env,GIT_CONFIG_GLOBAL:path.join(dir,'empty.gitconfig'),GIT_CONFIG_NOSYSTEM:'1'}}).trim();
  git('init','-q');git('config','user.name','Test');git('config','user.email','test@example.invalid');
  await fs.symlink(external,path.join(repo,'src'));git('add','.');git('commit','-qm','Directory link');
  // The source has an uncommitted replacement directory, but HEAD still has a link.

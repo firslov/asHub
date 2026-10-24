@@ -31,7 +31,7 @@
     "test:desktop-network": "electron tests/electron-network.cjs"
   },
   "dependencies": {
-    "agent-sh": "git+https://github.com/firslov/agent-sh.git#a2214a87718f0ffcd5119ff5412ff5d2c65ae28f",
+    "agent-sh": "git+https://github.com/firslov/agent-sh.git#a8ef8d5c0af1d5a40f9736ebcd220b6c6d206469",
     "electron-updater": "^6.8.3",
     "tsx": "^4.22.4",
     "undici": "6.26.0"

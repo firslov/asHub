@@ -42,10 +42,10 @@ try {
   await terminal.ready();
   const until=Date.now()+10000;while(!output && Date.now()<until)await new Promise(r=>setTimeout(r,50));
   assert(output,'ConPTY must render a prompt');terminal.resizePty(110,32);
-  terminal.writePty("echo ('ASHUB_CONPTY_' + 'OK')\r");
+  terminal.writePty("powershell.exe -NoProfile -Command \"Write-Output ('ASHUB_CONPTY_' + 'OK')\"\r");
   const deadline=Date.now()+10000;while(!output.includes('ASHUB_CONPTY_OK')&&Date.now()<deadline)await new Promise(r=>setTimeout(r,50));
   assert(output.includes('ASHUB_CONPTY_OK'),output);
   terminal.writePty('exit\r');await closed;
  } finally {terminal.close();}
  console.log('PASS native ConPTY startup, output, resize and exit');
-} finally {clearTimeout(watchdog);await fs.rm(dir,{recursive:true,force:true});}
+} finally {clearTimeout(watchdog);await fs.rm(dir,{recursive:true,force:true,maxRetries:20,retryDelay:200});}

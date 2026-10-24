@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor, safeStorage } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor, safeStorage, net } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -79,7 +79,7 @@ function detectAdhocSignature() {
     const r = require("child_process").spawnSync(
       "/usr/bin/codesign", ["-dv", process.execPath], { encoding: "utf8" }
     );
-    return /Signature=adhoc/i.test(r.stderr || "");
+    return /Signature=adhoc|code object is not signed at all/i.test(r.stderr || "");
   } catch {
     // codesign missing or failed — assume signed (fail open to the normal
     // flow; a wrong guess only shows the same broken button as today).
@@ -329,7 +329,9 @@ const { autoUpdater } = require("electron-updater");
 
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // Ad-hoc macOS builds cannot pass Squirrel's cross-version signature check.
+  // Keep the verified ZIP in the updater cache without invoking native install.
+  autoUpdater.autoInstallOnAppQuit = !isAdhocSigned;
   autoUpdater.logger = { info: console.log, warn: console.warn, error: console.error, debug: console.log };
 
   autoUpdater.on("update-available", (info) => {
@@ -478,8 +480,9 @@ function setupIPC() {
   // was opened.
   async function openUpdateDownload() {
     try {
-      if (cachedUpdateFile && fs.existsSync(cachedUpdateFile)) {
-        shell.showItemInFolder(cachedUpdateFile);
+      const file = cachedUpdateFile || autoUpdater.downloadedUpdateHelper?.file;
+      if (file && fs.existsSync(file)) {
+        shell.showItemInFolder(file);
         return { ok: true, target: "file" };
       }
     } catch (err) {
@@ -662,6 +665,9 @@ async function startServer() {
   try {
     await import(pathToFileURL(path.join(distRoot, "windows-bootstrap.js")).href);
     await import(pathToFileURL(path.join(distRoot, "network-bootstrap.js")).href);
+    const { createPolicyFetch } = await import(pathToFileURL(path.join(distRoot, "network-policy.js")).href);
+    const { nodeFetch } = await import(pathToFileURL(path.join(distRoot, "network.js")).href);
+    globalThis.fetch = createPolicyFetch(require("./network.cjs").createDesktopFetch(net.fetch.bind(net), nodeFetch), nodeFetch);
     const hubMod = await import(pathToFileURL(path.join(distRoot, "hub.js")).href);
     startHub = hubMod.startHub;
     ({ AshBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "ash.js")).href));

@@ -21,6 +21,16 @@ globalThis.fetch = (input, init) => {
   if (!['127.0.0.1', 'localhost'].includes(url.hostname)) throw new Error('External requests disabled');
   return originalFetch(input, init);
 };
+const { createPolicyFetch } = await import('../dist/network-policy.js');
+const guardedFetch = globalThis.fetch;
+let routingPolicy = { proxyEnabled: true, sessions: {} };
+const networkRoutes = [];
+const recordRoute = route => (input, init) => {
+  const target = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
+  if (target.endsWith('/responses')) networkRoutes.push(route);
+  return guardedFetch(input, init);
+};
+globalThis.fetch = createPolicyFetch(recordRoute('proxy'), recordRoute('direct'), () => routingPolicy);
 const upstreamBodies = [];
 const upstreamSessions = [];
 let cachedTokens = 5;
@@ -156,7 +166,7 @@ try {
 
   // Existing sessions must gain models after another session signs in.
   await fs.rm(path.join(dir,'codex-provider/auth.json'));
-  const late = new AshBridge({cwd:dir}); bridges.push(late); await late.ready();
+  const late = new AshBridge({cwd:dir,sessionId:"aabbcc"}); bridges.push(late); await late.ready();
   assert(!(await late.getModels()).models.some(m=>m.provider==='codex'));
   await fs.writeFile(path.join(dir,'codex-provider/auth.json'), JSON.stringify({access:'fake-access-2',refresh:'fake-refresh-2',accountId:'fake-account-2',expires:Date.now()+3600000}));
   let releaseActivation, activationStarted;
@@ -172,7 +182,17 @@ try {
   releaseActivation();await Promise.all([firstDiscovery,secondDiscovery]);
   late.core.activateBackend=activateBackend;
   await late.execCommand('/model', 'audit-codex-model@codex');
+  routingPolicy = { proxyEnabled: false, sessions: { aabbcc: true } };
   await late.submit('First request after sign-in');
+  assert.equal(networkRoutes.at(-1), 'proxy');
+  const lateChild = await late.core.handlers.call('subagent:run',{task:'Late login child',systemPrompt:'Reply briefly',tools:[],maxIterations:2});
+  assert(JSON.stringify(lateChild).includes('CODEX_PROXY_OK'));
+  assert.equal(networkRoutes.at(-1), 'proxy', 'late-login child must inherit its parent conversation proxy override');
+  routingPolicy = { proxyEnabled: true, sessions: { aabbcc: false } };
+  await late.core.handlers.call('subagent:run',{task:'Direct child',systemPrompt:'Reply briefly',tools:[],maxIterations:2});
+  assert.equal(networkRoutes.at(-1), 'direct', 'parent direct mode must also apply after late login');
+  routingPolicy = { proxyEnabled: true, sessions: {} };
+  console.log('PASS late-login Codex child requests inherit their parent network setting');
   assert(JSON.stringify((await late.snapshot()).messages).includes('CODEX_PROXY_OK'));
   const firstEndpoint=late.core.handlers.call('agent:resolve-endpoint',{provider:'codex',id:'audit-codex-model'});
   await late.core.handlers.call('command:/codex-logout','');

@@ -125,7 +125,7 @@ export class RemoteConnector {
         else if (m.type === 'request' && typeof m.id === 'string') {
           void this.execute(m.op, m.args || {}).then(data => this.send(ws, { type: 'response', id: m.id, data }),
             e => this.send(ws, { type: 'response', id: m.id, status: e.status || 500, error: e.status ? e.message : '本地操作失败' }));
-        } else if (m.type === 'subscribe') void this.subscribe(ws, m.id, m.session);
+        } else if (m.type === 'subscribe') void this.subscribe(ws, m.id, m.session, m.history === "recent");
         else if (m.type === 'unsubscribe') { this.streams.get(m.id)?.abort(); this.streams.delete(m.id); }
       } catch { ws.close(1008, 'invalid message'); }
     };
@@ -321,16 +321,24 @@ export class RemoteConnector {
     }).finally(() => { try { this.saveJournal(); } catch { this.lastError = '发送状态保存失败，请检查磁盘'; } this.operations.delete(key); });
     this.operations.set(key, task); return entry;
   }
-  private async subscribe(ws: WebSocket, id: string, sessionId: string) {
+  private async subscribe(ws: WebSocket, id: string, sessionId: string, recent = false) {
     if (typeof id !== 'string' || id.length > 80 || this.streams.size >= 8 || this.streams.has(id)) { this.send(ws, { type: 'end', id }); return; }
     const c = new AbortController(); this.streams.set(id, c);
     const permissionCheck = setInterval(() => { void this.session(sessionId).catch(() => c.abort()); }, 15000);
     try {
       await this.session(sessionId);
       if (c.signal.aborted || ws.readyState !== WebSocket.OPEN) return;
-      const r = await fetch(this.localUrl + `/events?subs=${sessionId}:all`, { headers: this.headers(), signal: c.signal });
+      const r = await fetch(this.localUrl + `/events?subs=${sessionId}:all${recent ? "&view=mobile" : ""}`, { headers: this.headers(), signal: c.signal });
       if (!r.ok || !r.body) throw Error('stream unavailable');
-      const reader = r.body.getReader(), decoder = new TextDecoder(); let buffer = '';
+      const reader = r.body.getReader(), decoder = new TextDecoder(); let buffer = '', outgoing = '';
+      const flush = () => {
+        while (outgoing) {
+          let next = Math.min(60000, outgoing.length);
+          if (next < outgoing.length && /[\uD800-\uDBFF]/.test(outgoing[next - 1]!)) next--;
+          this.send(ws, { type: 'event', id, data: outgoing.slice(0, next) });
+          outgoing = outgoing.slice(next);
+        }
+      };
       while (!c.signal.aborted) {
         const { value, done } = await reader.read(); if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -342,14 +350,11 @@ export class RemoteConnector {
           const data = JSON.parse(line.slice(6));
           if (data.meta?.name === 'shell:cwd-change' && !this.inside(data.payload?.cwd || '')) throw Error('project no longer shared');
           if (data.meta?.name === 'shell:pty-data' || data.meta?.name === 'shell:output' || data.meta?.name === 'pty:data' || data.meta?.name === 'pty:resize' || data.meta?.name?.startsWith('terminal:')) continue;
-          // Split transport chunks on code point boundaries; browser receives the original SSE bytes.
-          const text = frame + '\n\n';
-          for (let at = 0; at < text.length;) {
-            let next = Math.min(at + 60000, text.length);
-            if (next < text.length && /[\uD800-\uDBFF]/.test(text[next - 1])) next--;
-            this.send(ws, { type: 'event', id, data: text.slice(at, next) }); at = next;
-          }
+          // Coalesce small replay events per HTTP read; retain exact SSE bytes.
+          outgoing += frame + '\n\n';
+          if (outgoing.length >= 60000) flush();
         }
+        flush();
       }
     } catch { /* reconnect always requests a fresh replay, never a partial stale history */ }
     finally { c.abort(); clearInterval(permissionCheck); if (this.streams.get(id) === c) this.streams.delete(id); this.send(ws, { type: 'end', id }); }

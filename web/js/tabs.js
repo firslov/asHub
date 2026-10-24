@@ -1,3 +1,4 @@
+import { networkPolicy, saveNetworkPolicy } from "./network-settings.js";
 import { effect } from "../vendor/signals-core.js";
 import { activeSessionId, openTabs, openTab, closeTab, sessionKinds, setSessionKind } from "./session-manager.js";
 import { getSession, setSessions, allSessions, pinnedIds } from "./store.js";
@@ -17,6 +18,7 @@ const labelFor = (id) => {
 let dragId = null;
 let dragDropped = false;
 let editingId = null;
+const savingNetwork = new Set();
 // Label for the ghost placeholder while a cross-window drag is hovering.
 let externalDragLabel = "";
 let externalDropTargetId = null;
@@ -141,7 +143,7 @@ const render = (force = false) => {
   }
 
   const sig = JSON.stringify([
-    tabs, active, externalDragLabel, app?.dataset.uiTabsEnabled === "true",
+    networkPolicy.value, tabs, active, externalDragLabel, app?.dataset.uiTabsEnabled === "true",
     tabs.map((id) => [labelFor(id), pins.has(id)]),
   ]);
   if (!force && sig === lastRenderSig) return;
@@ -165,6 +167,36 @@ const render = (force = false) => {
     if (id === active) btn.classList.add("active");
     const label = escape(labelFor(id));
     btn.innerHTML = `<span class="session-tab-label" title="${label}">${label}</span>`;
+
+    const action = (cls, title, svg, run) => {
+      const control = document.createElement("span");
+      control.className = `session-tab-action ${cls}`; control.title = title;
+      control.role = "button"; control.tabIndex = 0; control.ariaLabel = title; control.innerHTML = svg;
+      control.addEventListener("mousedown", ev => { if (ev.button === 0) ev.preventDefault(); });
+      control.addEventListener("click", ev => { ev.preventDefault(); ev.stopPropagation(); run(ev); });
+      control.addEventListener("dblclick", ev => { ev.preventDefault(); ev.stopPropagation(); });
+      control.addEventListener("keydown", ev => { if (["Enter", " "].includes(ev.key)) { ev.preventDefault(); ev.stopPropagation(); run(ev); } });
+      btn.appendChild(control); return control;
+    };
+    const svg = body => `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+    action("session-tab-edit", t("network.rename"), svg('<path d="m16 3 5 5-12 12-6 1 1-6Z"/><path d="m14 5 5 5"/>'), () => startRename(btn, id));
+    if (sessionKinds.get(id) !== "terminal") {
+      const policy = networkPolicy.value;
+      const enabled = policy?.sessions?.[id] ?? policy?.proxyEnabled ?? true;
+      const inherited = policy?.sessions?.[id] === undefined;
+      const change = async value => {
+        if (savingNetwork.has(id) || !networkPolicy.peek()) return;
+        savingNetwork.add(id);
+        try { await saveNetworkPolicy(value, id); }
+        catch (err) { toast(t("network.failed"), { type: "error", detail: String(err) }); }
+        finally { savingNetwork.delete(id); }
+      };
+      const proxy = action("session-tab-proxy", `${t(enabled ? "network.on" : "network.off")} · ${t(inherited ? "network.inherit" : "network.custom")}
+${t("network.tabHint")}`,
+        svg('<path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6Z"/>' + (enabled ? '<path d="m8 12 3 3 5-6"/>' : '<path d="m9 9 6 6m0-6-6 6"/>')), () => change(!((networkPolicy.peek()?.sessions?.[id]) ?? networkPolicy.peek()?.proxyEnabled ?? true)));
+      proxy.dataset.enabled = String(enabled); proxy.ariaPressed = String(enabled);
+      proxy.addEventListener("contextmenu", ev => { ev.preventDefault(); ev.stopPropagation(); void change(null); });
+    }
 
     const close = document.createElement("span");
     close.className = "session-tab-close";
@@ -191,7 +223,7 @@ const render = (force = false) => {
       // Double-clicking the × is a frustrated "close" — renaming there opens
       // an invisible trap: the input hides in the tab, the editingId guard
       // freezes the strip, and clicks on the draggable strip never blur it.
-      if (ev.target.closest?.(".session-tab-close")) return;
+      if (ev.target.closest?.(".session-tab-close, .session-tab-action")) return;
       startRename(btn, id);
     });
     // Track where the primary-button press landed: a press on the × that
@@ -207,7 +239,7 @@ const render = (force = false) => {
         closeTab(id);
         return;
       }
-      pressOnClose = ev.button === 0 && !!ev.target.closest?.(".session-tab-close");
+      pressOnClose = ev.button === 0 && !!ev.target.closest?.(".session-tab-close, .session-tab-action");
     });
 
     btn.draggable = true;

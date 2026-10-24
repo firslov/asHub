@@ -1,3 +1,4 @@
+import { registerNetworkEndpoint } from "../network-policy.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR, getSettings } from "agent-sh/settings";
@@ -75,11 +76,12 @@ export class CodexProviderHost {
     const agent = this.ctx.agent;
     if (!agent) return;
     const sessionId = this.ctx.call("session:current-id");
-    if (this.onUsage && typeof sessionId === "string" && sessionId) {
+    if (typeof sessionId === "string" && sessionId) {
       const config = this.ctx.getExtensionSettings("codex-provider", {
         upstreamURL: "https://chatgpt.com/backend-api/codex/responses",
       });
-      cleanups.push(observeCodexUsage(config.upstreamURL, sessionId, this.onUsage));
+      cleanups.push(registerNetworkEndpoint(config.upstreamURL, sessionId));
+      if (this.onUsage) cleanups.push(observeCodexUsage(config.upstreamURL, sessionId, this.onUsage));
     }
     const context = {
       ...this.ctx,

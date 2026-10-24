@@ -1,3 +1,5 @@
+import { mobileReplayStart, mobileReplayFrame } from "./remote/replay.js";
+import { readNetworkPolicy, writeNetworkPolicy } from "./network-policy.js";
 import { workspaceInfo, createIsolatedWorkspace } from "./worktrees.js";
 import { CollaborationTasks } from "./collaboration.js";
 import { serveArtifact } from "./artifacts.js";
@@ -918,6 +920,23 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (req.method === "GET" && url.startsWith("/api/config/apikey")) return getApiKey(req, res);
     if (req.method === "PUT" && url === "/api/config") return updateConfig(req, res, sessions);
     if (req.method === "POST" && url === "/api/config/reload") return reloadConfig(res);
+    if (url === "/api/settings/network" && ["GET", "PUT"].includes(req.method || "")) {
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(readNetworkPolicy())); return;
+      }
+      let data: any;
+      try { data = JSON.parse(await readBody(req)); } catch { res.writeHead(400); res.end("invalid JSON"); return; }
+      if (!data || (data.enabled !== null && typeof data.enabled !== "boolean")
+          || (data.session !== undefined && (typeof data.session !== "string" || !sessions.has(data.session)))
+          || (data.enabled === null && !data.session)) {
+        res.writeHead(400); res.end("invalid network setting"); return;
+      }
+      try {
+        const policy = writeNetworkPolicy(data.enabled, data.session);
+        res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(policy));
+      } catch { res.writeHead(500); res.end("network setting could not be saved"); }
+      return;
+    }
     if (req.method === "GET" && url === "/api/settings/auto-approve") return getAutoApprove(res);
     if (req.method === "PUT" && url === "/api/settings/auto-approve") return setAutoApprove(req, res, sessions);
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
@@ -938,7 +957,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (req.method === "GET" && url === "/api/sessions/pinned") return listPinnedSessions(res);
     if (req.method === "GET" && url.startsWith("/events")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
-      return openSseMulti(req, res, sessions, params.get("subs") ?? "", params.get("since") ?? "");
+      return openSseMulti(req, res, sessions, params.get("subs") ?? "", params.get("since") ?? "", params.get("view") === "mobile");
     }
     if (req.method === "GET" && url.startsWith("/fs")) {
       const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -1450,7 +1469,7 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
   try {
     delete parsed.anyProviderConfigured;
     updateSettingsFile(fp, (old) => {
-      for (const key of [AUTO_APPROVE_KEY, "subagentModels", "subagentBudgets"]) {
+      for (const key of [AUTO_APPROVE_KEY, "ashub.network", "subagentModels", "subagentBudgets"]) {
         if (old[key] !== undefined) parsed[key] = old[key];
         else delete parsed[key];
       }
@@ -2910,6 +2929,7 @@ async function openSseMulti(
   sessions: Map<string, Session>,
   subsParam: string,
   sinceParam: string,
+  mobile = false,
 ): Promise<void> {
   const subs = subsParam.split(",").map((s) => {
     const [id, tailStr, cursor] = s.split(":");
@@ -2982,9 +3002,10 @@ async function openSseMulti(
       // empty turn. Live clients already rendered the chunks and skip the
       // segment frame (hasReply/sawLiveSegment guard in the frontend).
       flushSegment(session);
-      const start = tail === Infinity ? 0 : Math.max(0, session.replay.length - tail);
+      const start = mobile ? mobileReplayStart(session.replay) : tail === Infinity ? 0 : Math.max(0, session.replay.length - tail);
+      if (mobile) res.write(sseFrame({ source: id, ts: Date.now(), name: "hub:history-window" }, { recent: true, hasEarlier: start > 0 }));
       for (let i = start; i < session.replay.length; i++) {
-        try { res.write(permissionReplayFrame(session, session.replay[i]!)); } catch { return; }
+        try { res.write(permissionReplayFrame(session, mobile ? mobileReplayFrame(session.replay[i]!) : session.replay[i]!)); } catch { return; }
       }
       if (session.lastAgentInfo) {
         const meta = { source: id, ts: Date.now(), id: `hub:${id}:reemit:agent:info`, name: "agent:info" };

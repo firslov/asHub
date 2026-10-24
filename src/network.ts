@@ -1,3 +1,4 @@
+import { createPolicyFetch } from "./network-policy.js";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 
 /** Node fetch does not automatically inherit the browser/system proxy. */
@@ -11,10 +12,12 @@ export function createEnvironmentProxy(env: NodeJS.ProcessEnv = process.env): En
   return new EnvHttpProxyAgent({ httpProxy, httpsProxy, noProxy });
 }
 
+export const nodeFetch = globalThis.fetch;
 let configured = false;
 export function configureNetwork(): void {
   if (configured) return;
   const dispatcher = createEnvironmentProxy();
   if (dispatcher) setGlobalDispatcher(dispatcher);
+  globalThis.fetch = createPolicyFetch(nodeFetch, nodeFetch);
   configured = true;
 }

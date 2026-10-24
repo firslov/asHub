@@ -1,3 +1,4 @@
+import { networkPolicy, saveNetworkPolicy } from "./network-settings.js";
 import { initSidebarViewPicker } from "./sidebar-view-picker.js";
 import { showProjects } from "./projects.js";
 import { escape } from "./utils.js";
@@ -245,6 +246,39 @@ const startTitleEdit = (li, instanceId, currentTitle) => {
   });
 };
 
+const networkSaving = new Set();
+const updateNetworkButton = button => {
+  const id = button.dataset.sessionId, policy = networkPolicy.peek();
+  const enabled = policy?.sessions?.[id] ?? policy?.proxyEnabled ?? true;
+  button.disabled = !policy || networkSaving.has(id);
+  button.dataset.enabled = String(enabled); button.ariaPressed = String(enabled);
+  button.title = `${t(enabled ? "network.on" : "network.off")} · ${t(policy?.sessions?.[id] === undefined ? "network.inherit" : "network.custom")}\n${t("network.tabHint")}`;
+  button.ariaLabel = button.title;
+  button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6Z"/>${enabled ? '<path d="m8 12 3 3 5-6"/>' : '<path d="m9 9 6 6m0-6-6 6"/>'}</svg>`;
+};
+const refreshNetworkButtons = () => sessionList?.querySelectorAll(".session-proxy").forEach(updateNetworkButton);
+const createNetworkButton = id => {
+  const button = document.createElement("button"); button.type = "button"; button.className = "session-proxy"; button.dataset.sessionId = id;
+  const change = async (ev, inherit = false) => {
+    ev.preventDefault(); ev.stopPropagation();
+    if (!networkPolicy.peek() || networkSaving.has(id)) return;
+    const policy = networkPolicy.peek(), enabled = policy.sessions[id] ?? policy.proxyEnabled;
+    networkSaving.add(id); updateNetworkButton(button);
+    try { await saveNetworkPolicy(inherit ? null : !enabled, id); }
+    catch (e) { toast(t("network.failed"), { type: "error", detail: String(e) }); }
+    // Filtering may have replaced the original row while saving. Refresh the
+    // visible controls so its replacement also leaves the pending state.
+    finally { networkSaving.delete(id); refreshNetworkButtons(); }
+  };
+  button.addEventListener("click", ev => { void change(ev); });
+  button.addEventListener("contextmenu", ev => { void change(ev, true); });
+  updateNetworkButton(button); return button;
+};
+effect(() => {
+  networkPolicy.value;
+  refreshNetworkButtons();
+});
+
 const renderSessionItem = (s, isPinned = false) => {
   const li = document.createElement("li");
   li.dataset.sessionId = s.instanceId;
@@ -461,10 +495,10 @@ const renderSessionItem = (s, isPinned = false) => {
   });
 
   // Hover action cluster — .session-actions lays these out as a 3×2 grid
-  // (cwd / archive / pin over edit / close) overlaying the row's right edge.
+  // (cwd / archive / pin over edit / proxy / close) overlaying the row's right edge.
   const actions = document.createElement("span");
   actions.className = "session-actions";
-  actions.append(cwdBtn, archiveBtn, pinBtn, editBtn, close);
+  actions.append(cwdBtn, archiveBtn, pinBtn, editBtn, createNetworkButton(s.instanceId), close);
   li.appendChild(actions);
 
   sessionList.appendChild(li);
@@ -490,6 +524,8 @@ const renderSessionItem = (s, isPinned = false) => {
     if (s.instanceId === activeSessionId.peek()) li.classList.add("current");
     li.dataset.isPinned = isPinned ? "1" : "0";
 
+    const networkButton = li.querySelector(".session-proxy");
+    if (networkButton) updateNetworkButton(networkButton);
     // Sync pin button state (only updated in renderSessionItem for new DOM)
     const pinBtn = li.querySelector(".session-pin-btn");
     if (pinBtn) {

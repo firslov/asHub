@@ -27,13 +27,27 @@ function setup({terminal=false}={}){
  const sf=ts.createSourceFile('session-manager.js',fs.readFileSync(path.join(root,'web/js/session-manager.js'),'utf8'),ts.ScriptTarget.Latest,true);
  let initializer;function visit(n){if(ts.isVariableDeclaration(n)&&n.name?.text==='closeTab')initializer=n.initializer.getText(sf);ts.forEachChild(n,visit)}visit(sf);
  const closeTab=vm.runInContext('('+initializer+')',e.context);
- modules['./session-manager.js']={openTabs,activeSessionId,closeTab,openTab(id){if(!openTabs.peek().includes(id))openTabs.value=[...openTabs.peek(),id];switchTo(id)}};
+ modules['./session-manager.js']={sessionKinds,openTabs,activeSessionId,closeTab,openTab(id){if(!openTabs.peek().includes(id))openTabs.value=[...openTabs.peek(),id];switchTo(id)}};
+ const networkPolicy=signal({proxyEnabled:true,sessions:{}}),networkSaves=[];
+ modules['./network-settings.js']={networkPolicy,async saveNetworkPolicy(enabled,id){networkSaves.push({enabled,id});const p=structuredClone(networkPolicy.peek());if(enabled===null)delete p.sessions[id];else p.sessions[id]=enabled;networkPolicy.value=p;}};
  modules['./store.js']={allSessions,pinnedIds,getSession:id=>({title:id})};
  modules['./i18n.js']={t:s=>s};modules['./utils.js']={escape:s=>s};modules['./toast.js']={toast(){}};
  e.load('web/js/tabs.js');
- return {strip,openTabs,activeSessionId,allSessions,closeTab,posts,resolveDelete,tab:id=>strip.children.find(c=>c.dataset.sessionId===id),assertSynced(){assert(JSON.stringify(strip.children.map(c=>c.dataset.sessionId))===JSON.stringify(openTabs.peek()),'visible tabs differ from open sessions')}};
+ return {networkPolicy,networkSaves,strip,openTabs,activeSessionId,allSessions,closeTab,posts,resolveDelete,tab:id=>strip.children.find(c=>c.dataset.sessionId===id),assertSynced(){assert(JSON.stringify(strip.children.map(c=>c.dataset.sessionId))===JSON.stringify(openTabs.peek()),'visible tabs differ from open sessions')}};
 }
 (async()=>{
+ await check('TAB proxy toggles only its conversation and resets to global without opening or closing tabs',async()=>{
+  const s=setup();const tab=s.tab('aaaa');
+  assert(tab.children.map(c=>c.className).join(',').includes('session-tab-edit,session-tab-action session-tab-proxy,session-tab-close'),'tab action order');
+  const proxy=tab.children.find(c=>c.className.includes('session-tab-proxy'));
+  proxy.dispatch('click'); await new Promise(r=>setImmediate(r));
+  assert(s.networkPolicy.peek().sessions.aaaa===false && s.networkPolicy.peek().sessions.bbbb===undefined);
+  assert(s.activeSessionId.peek()==='cccc' && s.openTabs.peek().length===3);
+  const updated=s.tab('aaaa').children.find(c=>c.className.includes('session-tab-proxy'));
+  updated.dispatch('contextmenu'); await new Promise(r=>setImmediate(r));
+  assert(s.networkPolicy.peek().sessions.aaaa===undefined);
+ });
+
  await check('TAB rapid close plus trailing dblclick never freezes remaining tabs',async()=>{
   const s=setup();
   const first=s.tab('aaaa').querySelector('.session-tab-close');first.dispatch('click');

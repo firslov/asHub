@@ -24,6 +24,8 @@ jobs:
       - run: node tests/http-projects.cjs
       - run: node tests/kernel-codex.mjs
       - run: node tests/windows-runtime.mjs
+      - run: node --test tests/desktop-network.cjs
+      - run: npm run test:desktop-network
       - run: npx electron-builder --win --x64 --dir --publish never
       - name: Verify packaged Windows runtime
         env:

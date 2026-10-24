@@ -766,3 +766,6 @@
   .sidebar-view-menu:popover-open { animation: none; }
   .sidebar-view-chevron { transition: none; }
 }
+
+.session-actions > .session-proxy[data-enabled="true"] { color: var(--accent-dim); }
+.session-actions > .session-proxy:disabled { opacity: .4; cursor: wait; }

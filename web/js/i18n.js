@@ -4,6 +4,18 @@ const LS_LANG = "ash.lang";
 
 const translations = {
   en: {
+    "network.enable": "Use proxy",
+    "network.title": "VPN / proxy",
+    "network.hint": "Use the system or environment proxy for model requests. Conversations can override this default. Does not control your VPN app or shell tools.",
+    "network.on": "Proxy on",
+    "network.off": "Direct connection",
+    "network.inherit": "Following global setting",
+    "network.custom": "Conversation override",
+    "network.reset": "Follow global setting",
+    "network.tabHint": "Click to switch; right-click to follow global. Applies to subsequent model requests.",
+    "network.failed": "Could not save network setting",
+    "network.rename": "Edit title",
+
     "files.downloadFailed": "File unavailable. It may have moved, or be outside this conversation’s working directory.",
     "sidebar.view.switch": "Switch sidebar view",
     "projects.title": "Projects",
@@ -450,6 +462,18 @@ const translations = {
   },
 
   zh: {
+    "network.enable": "使用代理",
+    "network.title": "VPN / 代理",
+    "network.hint": "模型请求默认使用系统或环境代理，对话可单独设置。不控制 VPN 软件或终端工具。",
+    "network.on": "代理已开启",
+    "network.off": "直接连接",
+    "network.inherit": "跟随全局",
+    "network.custom": "此对话单独设置",
+    "network.reset": "跟随全局设置",
+    "network.tabHint": "点击切换，右键恢复跟随全局；对后续模型请求生效",
+    "network.failed": "网络设置保存失败",
+    "network.rename": "编辑标题",
+
     "files.downloadFailed": "文件暂时无法下载，可能已移动或不在此对话的工作目录内",
     "sidebar.view.switch": "切换侧栏视图",
     "projects.title": "项目",

@@ -1,3 +1,5 @@
+import { effect as networkEffect } from "../vendor/signals-core.js";
+import { networkPolicy, loadNetworkPolicy, saveNetworkPolicy } from "./network-settings.js";
 import { t } from "./i18n.js";
 import { toast } from "./toast.js";
 import { invalidateModelCache, setModelCache, getModelCacheGeneration } from "./sse.js";
@@ -877,4 +879,19 @@ const createNotifyField = () => {
 
 createNotifyField();
 
-registerPanel('config', { toggleBtnId: 'config-toggle', panelId: 'config-overlay', open: () => { setConfigOpen(true).then(loadAutoApprove); }, close: () => setConfigOpen(false) });
+registerPanel('config', { toggleBtnId: 'config-toggle', panelId: 'config-overlay', open: () => { setConfigOpen(true).then(loadAutoApprove); void loadNetworkPolicy(); }, close: () => setConfigOpen(false) });
+
+// Network preferences save immediately, like the other system toggles.
+const proxyToggle = document.getElementById("config-network-proxy");
+let proxySaving = false;
+networkEffect(() => {
+  const policy = networkPolicy.value;
+  if (proxyToggle && policy && !proxySaving) { proxyToggle.checked = policy.proxyEnabled; proxyToggle.disabled = false; }
+});
+proxyToggle?.addEventListener("change", async () => {
+  if (proxySaving) return;
+  proxySaving = true; proxyToggle.disabled = true;
+  try { await saveNetworkPolicy(proxyToggle.checked); }
+  catch (e) { toast(t("network.failed"), { type: "error", detail: String(e) }); }
+  finally { proxySaving = false; proxyToggle.checked = networkPolicy.peek()?.proxyEnabled ?? true; proxyToggle.disabled = false; }
+});

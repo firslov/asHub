@@ -1,3 +1,4 @@
+import { withNetworkSession } from "../network-policy.js";
 import { conversationTools } from "../conversation-tools.js";
 /**
  * AshBridge — runs agent-sh's kernel in-process and forwards bus events.
@@ -344,7 +345,19 @@ export class AshBridge extends EventEmitter implements Bridge {
     if ((opts.restoreBackend && opts.restoreBackend !== this.backendId) || opts.restoreState?.acpSessionId) throw new Error("This session belongs to another backend; restart with its original backend.");
     this.opts = opts;
     this.thinking = new SessionThinking(opts.restoreState?.thinkingSelections);
-    this.initPromise = this.init().catch(err => {
+    // Bind all model-entry paths, including queued turns and title generation.
+    const scoped = <A extends unknown[], R>(fn: (...args: A) => R) =>
+      (...args: A): R => withNetworkSession(opts.sessionId, () => fn.apply(this, args));
+    this.submit = scoped(this.submit);
+    this.execCommand = scoped(this.execCommand);
+    this.complete = scoped(this.complete);
+    this.compact = scoped(this.compact);
+    this.drainQueue = scoped(this.drainQueue);
+    this.reloadProviders = scoped(this.reloadProviders);
+    // Discovery may activate Codex after another conversation signs in. Its
+    // HTTP server must retain this scope for child requests and token refresh.
+    this.getModels = scoped(this.getModels);
+    this.initPromise = withNetworkSession(opts.sessionId, () => this.init()).catch(err => {
       // An extension/backend may finish after close(). Drain resources again
       // when initialization settles, without emitting a second closed event.
       if (this.closed) this.releaseResources();

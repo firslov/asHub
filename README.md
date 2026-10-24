@@ -11,13 +11,13 @@ asHub is an open-source desktop workspace powered by [agent-sh](https://github.c
 
 Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The desktop app and local browser view share the same client. Connect your own model provider with API credentials or supported Codex sign-in; provider billing and plan limits apply.
 
-![asHub workspace with session tabs, project analysis and a formatted table](website/assets/showcase-workspace.png)
+![asHub workspace with session tabs, project analysis and a formatted table](website/assets/showcase-workspace-0206-en.jpg)
 
-*Screenshots show the real v0.20.2 interface with an isolated demo project and illustrative conversations. No personal conversations or API credentials are included.*
+*Main screenshot: v0.20.6, English interface, with an isolated demo project and illustrative conversations. The detail screenshots below are from v0.20.2. No personal conversations or API credentials are included.*
 
 ## Highlights
 
-These features describe the current source branch. Project collaboration, Codex sign-in and per-model thinking controls are not included in the v0.20.5 packages.
+Project collaboration, Codex sign-in and per-model thinking controls require v0.20.6 or later.
 
 | Capability | Experience |
 | --- | --- |
@@ -58,7 +58,7 @@ Download from the [website](https://ashub.aihao.world/#download) or [GitHub Rele
 | Linux x64 | `.AppImage` |
 
 1. Install and open asHub
-2. Configure your provider and default model in the right panel; source builds also support Codex sign-in
+2. Configure your provider and default model in the right panel; v0.20.6 also supports Codex sign-in
 3. Create a session, choose a project directory and start a conversation; open files, terminals and other panels as needed
 
 ### macOS one-line install
@@ -72,6 +72,10 @@ The script detects Apple Silicon or Intel, installs to `/Applications` and remov
 ```sh
 /usr/bin/xattr -dr com.apple.quarantine "/Applications/asHub.app"
 ```
+
+### Windows
+
+Install [Git for Windows](https://git-scm.com/download/win) to use Bash commands and Git worktrees. asHub detects standard and per-user Git installations automatically.
 
 ### Linux
 
@@ -92,7 +96,7 @@ Continue desktop conversations at [asHub Mobile](https://ashub.aihao.world/mobil
 
 Keep the computer awake and asHub running. Only conversations in authorized, existing directories are shared; restore archived conversations on the desktop first. Mobile supports streamed replies, images, model switching and one-time approvals. The relay forwards content without persisting conversation bodies; it is not end-to-end encrypted.
 
-Project views, task receipts, result downloads and thinking controls have also been adapted locally for mobile. They require matching desktop and gateway updates and are not yet deployed to the hosted mobile site.
+Project views, task receipts, result downloads and thinking controls require desktop v0.20.6 or later and an updated mobile gateway.
 
 ## Run from source
 

@@ -14,15 +14,17 @@ function setup(options = {}) {
     showModal(){this.open=true;}
     close(){this.open=false;this.dispatchEvent({type:'close'});}
   }
-  const root=new Node(),body=new Node(); const calls=[];
+  const root=new Node(),body=new Node(); const calls=[], events=[], closed=[];
+  const activeSessionId={value:options.active || ''};
+  const window=Object.assign(new Node(),{location:{}});
   const project={id:'project',name:'Existing',sessionIds:['a','archived']};
   let fail=false;
-  const document={body,activeElement:null,createElement:tag=>new Node(tag),getElementById:id=>id==='projects'?root:null,addEventListener(){}};
+  const document={body,activeElement:null,createElement:tag=>new Node(tag),getElementById:id=>id==='projects'?root:null,addEventListener(){},dispatchEvent(e){events.push(e.type);}};
   const e=env({modules:{
     './store.js':{setSessions(){},allSessions:{value:[{instanceId:'a',title:'Alpha',kind:'agent',cwd:'/workspace'},{instanceId:'b',title:'Beta',kind:'agent'}]}},
-    './session-manager.js':{activeSessionId:{value:''},spaEnabled:()=>false},
+    './session-manager.js':{activeSessionId,spaEnabled:()=>options.spa || false,openTabs:{peek:()=>options.tabs || []},closeTab:async id=>{closed.push(id);if(activeSessionId.value===id)activeSessionId.value='';},sessions:new Map()},
     '../vendor/signals-core.js':{effect:fn=>fn()}, './i18n.js':{t:key=>key},
-  }, globals:{document,window:Object.assign(new Node(),{location:{}}),localStorage:{getItem:()=>null,setItem(){}},fetch:async(url,opts)=>{
+  }, globals:{document,window,localStorage:{getItem:()=>null,setItem(){}},fetch:async(url,opts)=>{
     if (url === '/sessions') return {ok:true,json:async()=>[]};
     if (url === '/api/projects/workspaces') return {ok:true,json:async()=>({})};
     calls.push({url,body:opts?.body?JSON.parse(opts.body):null});
@@ -30,7 +32,7 @@ function setup(options = {}) {
     return {ok:!fail,json:async()=>[project]};
   }}});
   const mod=e.load('web/js/projects.js','export const audit={edit,taskHistory,newProjectChat};');
-  return {mod,root,body,calls,project,fail:()=>fail=true};
+  return {mod,root,body,calls,events,closed,project,window,activeSessionId,fail:()=>fail=true};
 }
 test('project picker preserves hidden and archived selections and sends only membership deltas',async()=>{
  const s=setup();s.mod.showProjects(true);await tick();s.mod.audit.edit(s.project);
@@ -160,4 +162,44 @@ test('partial project creation opens the retained conversation instead of creati
  create.dispatchEvent({type:'click'});await tick();
  assert.equal(s.calls.filter(c=>c.url==='/api/projects/session').length,1);
  assert.equal(dialog.open,false);
+});
+
+for (const keep of [true,false]) test(`project deletion explicitly ${keep ? 'keeps' : 'deletes'} conversations`,async()=>{
+ const s=setup();s.mod.audit.edit(s.project);
+ const dialog=s.body.children.at(-1),form=dialog.children[0];
+ const remove=form.querySelectorAll('button').find(n=>n.textContent==='projects.delete');
+ remove.dispatchEvent({type:'click'});
+ assert.equal(s.calls.length,0,'first click must only reveal confirmation');
+ const options=form.children.find(n=>n.className==='project-delete-options');
+ assert.equal(options.hidden,false);
+ assert.equal(form.querySelectorAll('input')[0].readOnly,true);
+ assert.equal(form.querySelectorAll('button').find(n=>n.textContent==='projects.save').hidden,true);
+ form.dispatchEvent({type:'submit',preventDefault(){}});await tick();assert.equal(s.calls.length,0);
+ const checkbox=options.querySelectorAll('input')[0]; assert.equal(checkbox.checked,true);
+ checkbox.checked=keep;checkbox.dispatchEvent({type:'change'});
+ assert.equal(options.children[1].textContent,keep?'projects.deleteHint':'projects.deleteAllHint');
+ remove.dispatchEvent({type:'click'});await tick();
+ assert.deepEqual(s.calls.at(-1).body,{action:'delete',id:'project',deleteConversations:!keep});
+ assert.equal(dialog.open,false); assert(s.events.includes('ash:sessions-changed'));
+});
+
+test('project deletion closes only the conversations actually deleted by the server',async()=>{
+ const s=setup({tabs:['a','b'],fetch:async()=>({ok:true,json:async()=>({projects:[],deletedSessionIds:['b']})})});
+ s.mod.audit.edit(s.project);const form=s.body.children.at(-1).children[0];
+ const remove=form.querySelectorAll('button').find(n=>n.textContent==='projects.delete');
+ remove.dispatchEvent({type:'click'});
+ form.children.find(n=>n.className==='project-delete-options').querySelectorAll('input')[0].checked=false;
+ remove.dispatchEvent({type:'click'});await tick();
+ assert.deepEqual(s.closed,['b'],'a conversation moved out since opening the dialog must retain its tab');
+});
+
+for (const spa of [false,true]) test(`deleting the active project conversation returns home with SPA ${spa}`,async()=>{
+ const s=setup({active:'a',tabs:['a'],spa,fetch:async()=>({ok:true,json:async()=>({projects:[],deletedSessionIds:['a']})})});
+ s.mod.audit.edit(s.project);const form=s.body.children.at(-1).children[0];
+ const remove=form.querySelectorAll('button').find(n=>n.textContent==='projects.delete');
+ remove.dispatchEvent({type:'click'});
+ form.children.find(n=>n.className==='project-delete-options').querySelectorAll('input')[0].checked=false;
+ remove.dispatchEvent({type:'click'});await tick();
+ if(spa){assert.deepEqual(s.closed,['a']);assert.equal(s.activeSessionId.value,'');assert.equal(s.window.location.href,undefined);}
+ else assert.equal(s.window.location.href,'/');
 });

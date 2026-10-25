@@ -826,6 +826,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   opts = { ...opts, signal: lifecycle.signal };
   const sessions = new Map<string, Session>();
   const projects = new ProjectStore(path.join(SESSIONS_DIR, "projects.json"));
+  let deletingProject = false;
   opts.collaboration = new CollaborationTasks(path.join(SESSIONS_DIR, "collaboration"));
   opts.conversationAccess = id => conversationAccess(id, sessions, projects, opts.collaboration);
 
@@ -855,6 +856,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         if (!input || typeof input.projectId !== 'string' || (input.isolated !== undefined && typeof input.isolated !== 'boolean')) throw new Error("Invalid project conversation request");
         const legacy = url === "/api/projects/worktree";
         const check = () => {
+          if (deletingProject) throw new Error("Project deletion in progress; retry shortly");
           const project = projects.list().find(p => p.id === input.projectId);
           if (!project) throw new Error("Project no longer exists");
           const source = legacy ? sessions.get(input.sourceId) : undefined;
@@ -917,9 +919,26 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (url === "/api/projects") {
       try {
         if (req.method !== "GET" && req.method !== "POST") { res.writeHead(405); res.end(); return; }
-        const result = req.method === "GET" ? projects.list() : projects.update(JSON.parse(await readBody(req)), id => {
-          const s = sessions.get(id); return !!s && s.kind === "agent" && !s._closed && !s._closing;
-        });
+        let result;
+        if (req.method === "GET") result = projects.list();
+        else {
+          const input = JSON.parse(await readBody(req));
+          if (deletingProject) throw new Error("Project deletion in progress; retry shortly");
+          if (input?.action === 'delete' && input.deleteConversations !== undefined && typeof input.deleteConversations !== 'boolean') throw new Error("Invalid deleteConversations option");
+          if (input?.action === 'delete' && input.deleteConversations === true) {
+            const project = projects.list().find(p => p.id === input.id);
+            if (!project) throw new Error("Project no longer exists");
+            // Keep membership stable until deletion finishes. If cleanup fails,
+            // retain the group so retry can finish the idempotent session deletes.
+            deletingProject = true;
+            try {
+              for (const id of project.sessionIds) await deleteSession(sessions, id);
+              result = { projects: projects.update(input, () => false), deletedSessionIds: project.sessionIds };
+            } finally { deletingProject = false; }
+          } else result = projects.update(input, id => {
+            const s = sessions.get(id); return !!s && s.kind === "agent" && !s._closed && !s._closing;
+          });
+        }
         res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(result));
       } catch (e) { res.writeHead(req.method === "GET" ? 500 : 400); res.end(String(e)); }
       return;
@@ -994,7 +1013,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (req.method === "POST" && url === "/api/skills/install") return installSkill(req, res);
     if (req.method === "POST" && url === "/api/skills/uninstall") return uninstallSkill(req, res);
     if (req.method === "GET" && url.startsWith("/api/skills")) return searchSkills(req, res);
-    if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions);
+    if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions, projects);
     if (req.method === "GET" && url === "/api/sessions/archived") return listArchivedSessions(res);
     if (req.method === "POST" && url === "/api/sessions/archive") return archiveSession(req, res, sessions);
     if (req.method === "POST" && url === "/api/sessions/unarchive") return unarchiveSession(req, res, sessions, opts);
@@ -2548,11 +2567,13 @@ async function generateTitleAsync(session: Session): Promise<void> {
 
 // ── HTTP handlers ───────────────────────────────────────────────────
 
-function listSessions(res: http.ServerResponse, sessions: Map<string, Session>): void {
+function listSessions(res: http.ServerResponse, sessions: Map<string, Session>, projects: ProjectStore): void {
+  const membership = new Map(projects.list().flatMap(p => p.sessionIds.map(id => [id, p.id] as const)));
   const list = Array.from(sessions.values())
     .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0))
     .map((s) => ({
       instanceId: s.id,
+      projectId: membership.get(s.id) ?? null,
       title: s.title,
       kind: s.kind,
       model: s.model,
@@ -2892,7 +2913,7 @@ async function listFiles(res: http.ServerResponse, session: Session, subdir?: st
   res.end(JSON.stringify({ cwd: targetDir, files }));
 }
 
-async function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, id: string): Promise<void> {
+async function deleteSession(sessions: Map<string, Session>, id: string): Promise<void> {
   let pending = _pendingDeletes.get(id);
   if (!pending) {
     pending = (async () => {
@@ -2930,7 +2951,11 @@ async function closeSession(res: http.ServerResponse, sessions: Map<string, Sess
     _pendingDeletes.set(id, pending);
     void pending.finally(() => _pendingDeletes.delete(id)).catch(() => {});
   }
-  try { await pending; }
+  await pending;
+}
+
+async function closeSession(res: http.ServerResponse, sessions: Map<string, Session>, id: string): Promise<void> {
+  try { await deleteSession(sessions, id); }
   catch (err) { res.writeHead(500); res.end(`delete failed; retry DELETE: ${err instanceof Error ? err.message : err}`); return; }
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));

@@ -576,7 +576,7 @@ const renderSessions = async (force = false, opts = null) => {
     // Include the filter query in the hash so typing/clearing the filter
     // invalidates this early return even when the session list is unchanged.
     const fullHash = JSON.stringify([filterQuery(), list.map((s) => [
-      s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt, s.kind ?? "agent",
+      s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt, s.kind ?? "agent", s.projectId,
     ])]);
     if (!force && fullHash === fullHashCache) return;
 
@@ -585,7 +585,7 @@ const renderSessions = async (force = false, opts = null) => {
     // do it when UI-substantive fields change. lastModified bumps on every
     // turn end; those are synced into the cached objects in place instead.
     const contentHash = JSON.stringify(list.map((s) => [
-      s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.kind ?? "agent",
+      s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.kind ?? "agent", s.projectId,
     ]));
     let storeInSync = !force && contentHash === storeContentHash;
     if (storeInSync) {
@@ -618,14 +618,14 @@ const renderSessions = async (force = false, opts = null) => {
     // Moving a focused rename input can blur/commit it. Reconcile after editing.
     if (editingId) {
       const editing = list.find(s => s.instanceId === editingId);
-      if (editing && matchesFilter(editing.title || t("untitled"), editing.cwd)) {
+      if (editing && !editing.projectId && matchesFilter(editing.title || t("untitled"), editing.cwd)) {
         fullHashCache = ""; // Replay deferred pin/language refreshes after the edit.
         return;
       }
       editingId = null; // A removed/filtered row must not strand reconciliation.
     }
     fullHashCache = fullHash;
-    const agentList = list.filter((s) => (s.kind ?? "agent") === "agent")
+    const agentList = list.filter((s) => (s.kind ?? "agent") === "agent" && !s.projectId)
       .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
     const pinIds = pinnedIds.peek();
 

@@ -57,6 +57,16 @@ app.whenReady().then(async () => {
   }
   await js(`document.querySelector('dialog').close()`);
   await wait(`!document.querySelector('dialog')`);
+  await js(`document.querySelector('.project-group .project-manage').click();document.querySelector('dialog .project-delete').click()`);
+  assert.equal(await js(`document.querySelector('.project-delete-options').hidden`),false);
+  assert.equal(await js(`document.querySelector('.project-delete-options input').checked`),true);
+  for (const width of [1180,390]) {
+    win.setContentSize(width,850);await new Promise(r=>setTimeout(r,80));
+    const bounds=await js(`(()=>{const d=document.querySelector('dialog'),r=d.getBoundingClientRect();return {left:r.left,right:r.right,screen:innerWidth,overflow:d.scrollWidth-d.clientWidth};})()`);
+    assert(bounds.left>=0&&bounds.right<=bounds.screen&&bounds.overflow<=1,JSON.stringify(bounds));
+    await fs.promises.writeFile('/tmp/ashub-project-delete-'+width+'.png',(await win.webContents.capturePage()).toPNG());
+  }
+  await js(`document.querySelector('dialog').close()`);
   await js(`document.querySelector('.project-chat-delete').click()`);
   assert.equal(deletes,0,'opening confirmation deleted the conversation');
   await js(`document.querySelector('dialog').close()`);
@@ -119,6 +129,17 @@ app.whenReady().then(async () => {
   sessions.splice(0,1);
   await refresh('bbbbbb,cccccc');
   assert.equal(await js(`!!document.querySelector('#sessions .session-title-edit')`),false,'removed rename row stranded reconciliation');
+  // Project membership changes must invalidate both sidebar and store caches.
+  sessions[0].projectId='project'; await refresh('cccccc');
+  assert(await js(`import('/js/store.js').then(m=>m.allSessions.value.some(s=>s.instanceId==='bbbbbb'&&s.projectId==='project'))`));
+  sessions.push({instanceId:'dddddd',title:'Created in project',kind:'agent',cwd:'/workspace',startedAt:now,projectId:'project'});
+  await js(`import('/js/sidebar.js').then(m=>m.auditRenderSessions())`);
+  assert.equal(await js(order),'cccccc');
+  sessions[0].projectId=null; await refresh('bbbbbb,cccccc');
+  // A row moved into a project while being renamed must not remain stuck here.
+  await js(`document.querySelector('#sessions [data-session-id="cccccc"] .session-edit').click()`);
+  sessions[1].projectId='project'; await refresh('bbbbbb');
+  assert.equal(await js(`!!document.querySelector('#sessions .session-title-edit')`),false);
   console.log('PASS project creation, confirmed deletion/failure/retry/tab cleanup, sidebar creation/activity/buckets/pinning/rename order');
  }finally{win?.destroy();server?.closeAllConnections();await new Promise(r=>server?server.close(r):r());clearTimeout(watchdog);fs.rmSync(tmp,{recursive:true,force:true});}
 }).then(()=>app.exit(0),e=>{console.error(e);app.exit(1);});

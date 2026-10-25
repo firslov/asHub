@@ -16,7 +16,9 @@ const chats = () => allSessions.value.filter(s => s.kind === "agent");
 async function request(body) {
   const res = await fetch("/api/projects", body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   if (!res.ok) throw new Error(body ? t("projects.saveFailed") : t("projects.loadFailed"));
-  return res.json();
+  const result = await res.json();
+  if (body) document.dispatchEvent(new CustomEvent("ash:sessions-changed"));
+  return result;
 }
 async function refresh() {
   const seq = ++generation;
@@ -310,11 +312,23 @@ function edit(project) {
   const status = el("p", "project-error"); status.setAttribute("role", "alert");
   const footer = el("div", "project-footer");
   let busy = false, deleting = false;
+  const deleteOptions = el('div', 'project-delete-options'); deleteOptions.hidden = true;
+  const keepLabel = el('label', 'project-option');
+  const keep = el('input'); keep.type = 'checkbox'; keep.checked = true;
+  keepLabel.append(keep, el('span', '', t('projects.keepChats')));
+  const deleteHint = el('p', 'project-note', t('projects.deleteHint'));
+  keep.addEventListener('change', () => { deleteHint.textContent = t(keep.checked ? 'projects.deleteHint' : 'projects.deleteAllHint'); });
+  deleteOptions.append(keepLabel, deleteHint);
   const save = el("button", "project-button primary", t("projects.save")); save.type = "submit";
   const cancel = button(t("projects.cancel"), () => dialog.close());
   const remove = project ? button(t("projects.delete"), () => {
-    if (!deleting) { deleting = true; remove.textContent = t("projects.confirmDelete"); status.textContent = t("projects.deleteHint"); return; }
-    void persist({ action: "delete", id: project.id });
+    if (!deleting) {
+      deleting = true; heading.textContent = t("projects.delete"); remove.textContent = t("projects.confirmDelete");
+      name.readOnly = true;
+      hint.hidden = search.hidden = picker.hidden = save.hidden = true;
+      deleteOptions.hidden = false; keep.focus(); return;
+    }
+    void persist({ action: "delete", id: project.id, deleteConversations: !keep.checked });
   }, "project-delete") : null;
   if (remove) footer.append(remove);
   footer.append(cancel, save);
@@ -325,19 +339,42 @@ function edit(project) {
       const result = await request(body);
       // Invalidate older reads only after a successful write. A failed save
       // must leave the pending list request able to finish and clear loading.
-      ++generation; groups = result; loading = false; error = "";
+      ++generation; groups = Array.isArray(result) ? result : result.projects; loading = false; error = "";
       render(); currentDialog.close();
+      if (body.action === 'delete' && body.deleteConversations) {
+        // Use the server's deletion snapshot, not membership from when the
+        // dialog opened: another window may have moved conversations since.
+        const deleted = result.deletedSessionIds || [];
+        ++statusGeneration;
+        setSessions(allSessions.value.filter(s => !deleted.includes(s.instanceId)));
+        // closeTab changes activeSessionId. Full-page mode must navigate before
+        // that mutation, just like deleting an individual conversation.
+        if (!spaEnabled() && deleted.includes(activeSessionId.value)) {
+          window.location.href = '/'; return;
+        }
+        for (const id of deleted) {
+          if (openTabs.peek().includes(id)) await closeTab(id, { backendClosed: true });
+          else sessions.get(id)?.remove();
+        }
+      }
     }
-    catch (e) { status.textContent = e.message; }
+    catch (e) {
+      status.textContent = e.message;
+      if (body.action === "delete" && body.deleteConversations) {
+        ++statusGeneration; void pollStatus();
+        document.dispatchEvent(new CustomEvent("ash:sessions-changed"));
+      }
+    }
     finally { busy = false; for (const control of form.querySelectorAll("button, input")) control.disabled = false; }
   }
   form.addEventListener("submit", ev => {
     ev.preventDefault();
+    if (deleting) return; // Only the explicit confirmation button deletes a project.
     if (!name.value.trim()) { name.focus(); return; }
     void persist({ action: project ? "edit" : "create", id: project?.id, name: name.value,
       add: [...selected].filter(id => !initial.has(id)), remove: [...initial].filter(id => !selected.has(id)) });
   });
-  form.append(top, nameLabel, hint, search, picker, status, footer); dialog.append(form);
+  form.append(top, nameLabel, hint, search, picker, deleteOptions, status, footer); dialog.append(form);
   // Modal keyboard actions must not reach global shortcuts (Escape cancels a turn).
   dialog.addEventListener("keydown", ev => ev.stopPropagation());
   dialog.addEventListener("cancel", ev => { if (busy) ev.preventDefault(); });

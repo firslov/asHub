@@ -98,9 +98,9 @@ test('waiting can be cancelled; closing recipient settles receipts; status exclu
   const task=await f.access.send(f.b.id,'wait'),controller=new AbortController();
   const pending=f.access.task(task.taskId,0,30000,controller.signal);controller.abort();await assert.rejects(pending);
   f.b.pendingPermissions.set('expired',{expiresAt:0});f.b.pendingPermissions.set('live',{expiresAt:200000});
-  const response=new Res();f.listSessions(response,f.sessions);
+  const response=new Res();f.listSessions(response,f.sessions,f.projects);
   assert.equal(response.json().find(s=>s.instanceId===f.b.id).waitingApproval,true);
-  f.b.pendingPermissions.delete('live');const response2=new Res();f.listSessions(response2,f.sessions);
+  f.b.pendingPermissions.delete('live');const response2=new Res();f.listSessions(response2,f.sessions,f.projects);
   assert.equal(response2.json().find(s=>s.instanceId===f.b.id).waitingApproval,false);
   const closed=new Res();await f.closeSession(closed,f.sessions,f.b.id);
   assert.equal((await f.access.task(task.taskId)).state,'cancelled');

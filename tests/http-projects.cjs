@@ -22,6 +22,11 @@ const {once}=require('node:events');
   assert.equal((await fetch(base+'/api/projects/session',{method:'POST',headers:{...headers,Origin:'https://foreign.invalid'},body:'{}'})).status,403);
   const direct=await api('/api/projects/session',{projectId:p.id,cwd:e.dir,isolated:false});
   assert.equal(direct.cwd,e.dir);assert((await api('/api/projects'))[0].sessionIds.includes(direct.instanceId));
+  assert.equal((await api('/sessions')).find(s=>s.instanceId===direct.instanceId).projectId,p.id);
+  assert.equal((await api('/sessions')).find(s=>s.instanceId===a.instanceId).projectId,p.id);
+  await api('/api/projects',{action:'members',id:p.id,remove:[a.instanceId]});
+  assert.equal((await api('/sessions')).find(s=>s.instanceId===a.instanceId).projectId,null);
+  await api('/api/projects',{action:'members',id:p.id,add:[a.instanceId]});
   await api('/'+direct.instanceId+'/',null,'DELETE');
   const empty=(await api('/api/projects',{action:'create',name:'Empty'})).find(p=>p.name==='Empty');
   const first=await api('/api/projects/session',{projectId:empty.id,cwd:e.dir});
@@ -99,6 +104,38 @@ const {once}=require('node:events');
   assert(JSON.stringify(ctx).includes('Restored communication'));
   await api('/api/projects',{action:'delete',id:p.id});
   assert.equal((await api('/sessions')).length,2);
+  assert.equal((await api('/api/projects')).length,0);
+  assert((await api('/sessions')).every(s=>s.projectId===null),'kept chats become independent');
+  const x=await api('/sessions',{cwd:e.dir}), y=await api('/sessions',{cwd:e.dir});
+  const doomed=(await api('/api/projects',{action:'create',name:'Delete together',add:[x.instanceId,y.instanceId]}))[0];
+  await api('/api/sessions/archive',{id:y.instanceId});
+  const invalid=await fetch(base+'/api/projects',{method:'POST',headers,body:JSON.stringify({action:'delete',id:doomed.id,deleteConversations:'true'})});
+  assert.equal(invalid.status,400);assert((await api('/sessions')).some(s=>s.instanceId===x.instanceId));
+  // Pause deletion at its durable marker to exercise concurrent membership edits.
+  const write=fs.promises.writeFile;let release,entered;
+  const paused=new Promise(r=>entered=r);
+  fs.promises.writeFile=async function(file,...args){if(String(file).endsWith(x.instanceId+'.deleted')){entered();await new Promise(r=>release=r);}return write.call(this,file,...args);};
+  const deleting=api('/api/projects',{action:'delete',id:doomed.id,deleteConversations:true});
+  try {
+    await paused;
+    const conflict=await fetch(base+'/api/projects',{method:'POST',headers,body:JSON.stringify({action:'members',id:doomed.id,remove:[x.instanceId]})});
+    assert.equal(conflict.status,400,'membership cannot change during destructive deletion');
+  } finally {release();fs.promises.writeFile=write;}
+  const deletedResult=await deleting;assert.deepEqual(deletedResult.deletedSessionIds,[x.instanceId,y.instanceId]);
+  assert(!(await api('/sessions')).some(s=>[x.instanceId,y.instanceId].includes(s.instanceId)));
+  assert(!(await api('/api/sessions/archived')).some(s=>s.id===y.instanceId));
+  assert.equal((await api('/sessions')).length,2,'unrelated chats survive');
+  assert.equal(fs.readFileSync(path.join(repo,'file.txt'),'utf8'),'local edits');
+  // Failed cleanup retains the group for an idempotent retry.
+  const retryChat=await api('/sessions',{cwd:e.dir});
+  const retryGroup=(await api('/api/projects',{action:'create',name:'Retry',add:[retryChat.instanceId]}))[0];
+  const unlink=fs.promises.unlink;
+  fs.promises.unlink=async function(file){if(String(file).endsWith(retryChat.instanceId+'.meta.json'))throw Error('fixture cleanup failed');return unlink.call(this,file);};
+  try {
+    const failed=await fetch(base+'/api/projects',{method:'POST',headers,body:JSON.stringify({action:'delete',id:retryGroup.id,deleteConversations:true})});
+    assert.equal(failed.status,400);assert((await api('/api/projects')).some(p=>p.id===retryGroup.id));
+  } finally {fs.promises.unlink=unlink;}
+  await api('/api/projects',{action:'delete',id:retryGroup.id,deleteConversations:true});
   assert.equal((await api('/api/projects')).length,0);
   console.log('PASS project HTTP authentication, origin guard, archive/unarchive, restart, lazy tool wiring and non-destructive deletion');
  } finally {await hub.shutdown();fs.rmSync(e.dir,{recursive:true,force:true});}

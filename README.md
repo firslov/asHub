@@ -17,17 +17,20 @@ Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The 
 
 ## Highlights
 
-Project collaboration, Codex sign-in and per-model thinking controls require v0.20.6 or later.
+**New in v0.20.8:** a dedicated plugin panel, opt-in background mode, and conversation creation and deletion directly within projects.
 
 | Capability | Experience |
 | --- | --- |
-| Sessions & projects | Group conversations into projects; switch views, search, pin, archive and restore history |
+| Sessions & projects | Create and delete conversations within projects; sort sessions by recent activity, search, pin, archive and restore history |
 | Conversation collaboration | Send tasks within a project, follow receipts and read results; optional Git worktrees keep file changes separate |
 | Readable execution | Replies and progress first; thinking and tool output stay in expandable details |
 | Tasks & subagents | Task progress and five specialists: plan, explore, review, research and implement; configurable models and budgets |
 | Models & context | Codex sign-in, model search and native thinking levels; inspect context and reported cache usage |
 | Reviewable actions | Permission prompts, change previews, session-wide approval and background notifications |
-| Project tools | PTY terminals, file browsing, image input, a skills marketplace and user extensions |
+| Project tools | PTY terminals, file browsing, image input and a skills marketplace |
+| Plugins | A dedicated panel for built-in status, local extension toggles and configuration |
+| Background mode | Keep tasks and remote access running when windows close; reopen or quit from the tray |
+| Proxy controls | Choose a global proxy default and override it per conversation |
 | Persistent work | Saved conversations, branches, rewind, Markdown export and downloadable workspace results |
 | A consistent interface | Gruvbox light and dark themes; English and Chinese; display scaling and a collapsible status bar |
 | Mobile access · preview | Continue authorized desktop conversations from a phone; shared history, streaming replies and one-time approvals |
@@ -58,7 +61,7 @@ Download from the [website](https://ashub.aihao.world/#download) or [GitHub Rele
 | Linux x64 | `.AppImage` |
 
 1. Install and open asHub
-2. Configure your provider and default model in the right panel; v0.20.6 also supports Codex sign-in
+2. Configure your provider and default model in the right panel, or use supported Codex sign-in
 3. Create a session, choose a project directory and start a conversation; open files, terminals and other panels as needed
 
 ### macOS one-line install
@@ -94,9 +97,15 @@ Continue desktop conversations at [asHub Mobile](https://ashub.aihao.world/mobil
 2. Save the recovery code, then select **I have saved it (我已保存)**. Unconfirmed codes survive menu switches, but must be saved before quitting or refreshing the app
 3. Sign in with the same account on your phone, select your computer, and continue a conversation or start a new one
 
-Keep the computer awake and asHub running. Only conversations in authorized, existing directories are shared; restore archived conversations on the desktop first. Mobile supports streamed replies, images, model switching and one-time approvals. The relay forwards content without persisting conversation bodies; it is not end-to-end encrypted.
+Keep the computer online, awake and asHub running. In v0.20.8, enable **Settings → Background activity → Keep running when the window closes** to keep remote access available after closing the window. Background mode is off by default; quitting the app stops it. Optional sleep prevention allows the display to turn off, but does not guarantee access during lid-close or manual sleep.
+
+Only conversations in authorized, existing directories are shared; restore archived conversations on the desktop first. Mobile supports streamed replies, images, model switching and one-time approvals. The relay forwards content without persisting conversation bodies; it is not end-to-end encrypted.
 
 Project views, task receipts, result downloads and thinking controls require desktop v0.20.6 or later and an updated mobile gateway.
+
+## Plugins
+
+Open **Plugins** in the right toolbar to inspect built-in components, enable or disable local extensions, and edit their configuration. Place trusted extensions in `~/.agent-sh/extensions/` or add their paths to `settings.extensions`. Changes apply when a conversation kernel next starts; finish active tasks and restart asHub to update existing conversations.
 
 ## Run from source
 

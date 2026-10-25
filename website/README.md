@@ -13,6 +13,8 @@ The public site at https://ashub.aihao.world uses the same visual identity as th
 
 Keep `index.html` and `download.html` identical. Use a new asset filename when replacing a cached production resource.
 
+The v0.20.8 overview covers opt-in background mode, dedicated plugin management and project conversation actions. Download versions come from the live release payload, independently of the overview.
+
 Basic mobile access requires v0.20.5 or later. Project collaboration and thinking controls require v0.20.6 with the updated gateway. The phone graphic is a labeled HTML/CSS usage illustration, not a screenshot or a claim about real task results.
 
 ## Preview

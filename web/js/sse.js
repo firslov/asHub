@@ -17,6 +17,7 @@ import {
   showThinking, hideThinking,
   appendThinkingChunk, finalizeThinking,
   sweepOrphanThinking,
+  updateRequestStatus,
 } from "./stream/thinking.js";
 import {
   appendReplyChunk, fillFinalReply, closeReply, cancelReply, hasReply,
@@ -597,6 +598,10 @@ export const handlers = {
     // launch tool-completed (callId map) and subagent:done (saId map).
     // _subagentBlock survives — async subagents need it to find their block on completion.
     showThinking(this);
+  },
+
+  "agent:request-status"(p) {
+    updateRequestStatus(this, p);
   },
 
   "agent:response-chunk"(p) {

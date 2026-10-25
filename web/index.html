@@ -157,6 +157,12 @@
             <button type="button" class="sidebar-view-option" data-view="terminals" role="menuitemradio" aria-checked="false" tabindex="-1"><svg class="sidebar-view-symbol" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></svg><span data-i18n="sidebar.view.terminals">Terminals</span><svg class="sidebar-view-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
           </div>
         </div>
+        <button type="button" id="sidebar-search-toggle" class="sidebar-icon-btn" aria-controls="sidebar-search" aria-expanded="false" data-i18n-title="sidebar.search" data-i18n-aria="sidebar.search" title="Search conversations" aria-label="Search conversations"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button>
+      </div>
+      <div id="sidebar-search" class="sidebar-search" role="search" hidden>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+        <input id="session-filter" data-i18n-aria="filter.sessions" aria-label="Search title or folder" class="sidebar-filter" type="text" data-i18n-placeholder="filter.sessions" placeholder="Search title or folder…" autocomplete="off" spellcheck="false" />
+        <button type="button" id="sidebar-search-close" class="sidebar-icon-btn" data-i18n-title="sidebar.search.close" data-i18n-aria="sidebar.search.close" title="Clear and close search" aria-label="Clear and close search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M7 17 17 7"/></svg></button>
       </div>
       <div class="sidebar-action" id="sidebar-action-sessions">
         <button id="new-session" class="sidebar-new-btn" data-i18n-title="new.session" title="New session">
@@ -165,7 +171,6 @@
         </button>
       </div>
       <section id="projects" hidden data-i18n-aria="projects.title" aria-label="Projects"></section>
-      <input id="session-filter" data-i18n-aria="filter.sessions" aria-label="Filter sessions" class="sidebar-filter" type="text" data-i18n-placeholder="filter.sessions" placeholder="Filter sessions…" autocomplete="off" spellcheck="false" />
       <ul id="sessions" class="session-list"></ul>
       <ul id="workspaces" class="workspace-list" hidden></ul>
       <div class="sidebar-action" id="sidebar-action-terminals" hidden>

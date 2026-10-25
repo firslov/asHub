@@ -23,3 +23,14 @@ test('short histories and command queries do not cut away the active turn', () =
   for(let i=0;i<30;i++)frames.push(frame('agent:query',{query:'/model',command:true}));
   assert.equal(mobileReplayStart(frames),0);
 });
+
+
+test('large collaborator records preserve identifiers used to pair start and completion',()=>{
+  for(const name of ['subagent:started','subagent:done']) {
+    const raw=frame(name,{subagentId:'reviewer-1',task:'Review',result:'🟡'.repeat(4000)});
+    const preview=mobileReplayFrame(raw),data=JSON.parse(preview.split('data: ')[1]);
+    assert.equal(data.payload.subagentId,'reviewer-1');assert.equal(data.payload.detailsOmitted,true);
+    assert.equal(data.payload.text.isWellFormed(),true);assert(preview.length<1800);
+    assert(raw.includes('🟡'.repeat(4000)),'stored source remains untouched');
+  }
+});

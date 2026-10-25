@@ -88,22 +88,27 @@ app.whenReady().then(async () => {
   const { AshBridge } = await import(pathToFileURL(path.join(root, 'dist', 'bridges', 'ash.js')).href);
   bridge = new AshBridge({ cwd: dir, sessionId: 'aabbcc' });
   await bridge.ready(); await bridge.execCommand('/model', 'http2-fixture@codex');
-  let text = '', tools = 0, retryAnnouncements = 0;
+  let text = '', tools = 0, retryAnnouncements = 0, requestStates = [];
   bridge.on('event', event => {
     if (event.name === 'agent:response-chunk') text += (event.payload?.blocks ?? []).filter(block => block.type === 'text').map(block => block.text).join('');
     if (event.name === 'agent:tool-started') tools++;
-    if (event.name === 'ui:info' && /retrying/.test(event.payload?.message ?? '')) {
+    if (event.name === 'agent:request-status') requestStates.push(event.payload.phase);
+    if ((event.name === 'ui:info' && /retrying/.test(event.payload?.message ?? ''))
+        || (event.name === 'agent:request-status' && event.payload?.phase === 'retrying')) {
       retryAnnouncements++;
       if (mode === 'cancel-retry') bridge.cancel();
       if (mode === 'cancel-subagent') subagentCancel.abort();
     }
   });
-  const begin = value => { mode = value; modeAttempts = 0; text = ''; tools = 0; retryAnnouncements = 0; };
+  const begin = value => { mode = value; modeAttempts = 0; text = ''; tools = 0; retryAnnouncements = 0; requestStates = []; };
   for (const value of ['headers-once', 'body-once']) {
     begin(value);
     await bridge.submit('Reply briefly');
     assert.equal(modeAttempts, 2);
     assert.equal(retryAnnouncements, 1);
+    assert.equal(requestStates[0], 'sending');
+    assert(requestStates.includes('waiting'));
+    assert.equal(requestStates.at(-1), 'clear');
     assert.equal(text.trimEnd(), 'HTTP2_OK');
     assert.equal(tools, 0);
     assert.match(capturedNetworkError, /ERR_HTTP2_PROTOCOL_ERROR/);
@@ -169,6 +174,13 @@ app.whenReady().then(async () => {
   assert.equal(modeAttempts, 1);
   assert.equal(retryAnnouncements, 1);
   console.log('PASS cancelling a subagent retry prevents another upload');
+  const diagnostics = fs.readFileSync(path.join(dir, 'logs', 'requests.jsonl'), 'utf8');
+  assert(!diagnostics.includes('fake-access') && !diagnostics.includes('fake-account') && !diagnostics.includes('Reply briefly'));
+  const entries = diagnostics.trim().split('\n').map(JSON.parse);
+  assert(entries.some(e => e.phase === 'error' && e.code === 'ERR_HTTP2_PROTOCOL_ERROR'));
+  assert(entries.some(e => e.phase === 'request' && e.attempt === 4));
+  assert(entries.some(e => e.phase === 'cancelled'));
+  console.log('PASS real transport diagnostics distinguish retries, failures and cancellation without content or credentials');
 }).then(() => finish(0), error => { console.error(error); finish(1); });
 
 async function finish(code) {

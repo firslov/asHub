@@ -25,9 +25,9 @@
 .title-bar .session-tab.active:hover { background: var(--bg-elevated); }
 .sidebar { background: var(--bg2); border-right: 0; }
 .sidebar::after { display: none; }
-.sidebar-new-btn { height: 40px; border-color: var(--accent-border); color: var(--accent-dim); background: var(--bg-elevated); border-radius: var(--radius-md); }
+.sidebar-new-btn { height: 36px; border: 0; color: var(--text-dim); background: transparent; border-radius: var(--radius-sm); justify-content: flex-start; }
 .sidebar-new-btn:hover { background: var(--accent-glow); }
-.sidebar-filter { background: transparent; border-color: var(--border); border-radius: var(--radius-sm); }
+
 .toolbar { background: var(--bg2); border-left: 0; }
 .toolbar .toolbar-btn { border-radius: var(--radius-md); color: var(--text-mid); }
 .toolbar .toolbar-btn:hover { background: var(--bg3); color: var(--text); }

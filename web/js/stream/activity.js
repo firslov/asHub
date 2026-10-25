@@ -8,7 +8,7 @@ const technical = (node) => ["tool-group", "thinking-block", "subagent-block", "
   .some((name) => node.classList?.contains(name));
 
 export function resetActivity(session) {
-  sessions.set(session, { current: null, turn: new Set(), waiting: false });
+  sessions.set(session, { current: null, turn: new Set(), waiting: false, requestLabel: null });
 }
 export function disposeActivity(session) { sessions.delete(session); }
 
@@ -39,7 +39,7 @@ function refresh(record) {
   // Only a terminal error from the main agent warrants an outer warning.
   box.dataset.attention = record.finished === "error" ? "true" : "false";
   const key = record.waiting ? "activity.waiting" : running
-    ? delegated ? "activity.delegating" : pending.length ? toolLabel(pending.at(-1)) : "activity.thinking"
+    ? delegated ? "activity.delegating" : pending.length ? toolLabel(pending.at(-1)) : record.requestLabel || "activity.thinking"
     : record.finished === "stopped" ? "activity.stopped"
     : record.finished === "error" ? "activity.interrupted"
     : record.finished === "done" ? "activity.done"
@@ -58,6 +58,17 @@ export function refreshActivity(node) {
   const box = node?.closest?.(".execution-activity");
   const record = box && records.get(box);
   if (record) refresh(record);
+}
+
+export function setRequestActivity(session, key) {
+  const state = sessions.get(session);
+  if (!state) return false;
+  state.requestLabel = key;
+  const record = state.current;
+  if (!record || record.finished || record.sealed) return false;
+  record.requestLabel = key;
+  refresh(record);
+  return true;
 }
 
 // Called before normal stream insertion. Null means the node joined an
@@ -109,7 +120,7 @@ export function prepareActivityNode(session, node, target) {
     body.className = "execution-activity-body";
     body.hidden = true;
     box.append(head, body);
-    record = { box, head, body, label, changes, hint, arrow, sealed: false, finished: "", waiting: state.waiting };
+    record = { box, head, body, label, changes, hint, arrow, sealed: false, finished: "", waiting: state.waiting, requestLabel: state.requestLabel };
     records.set(box, record);
     state.current = record;
     state.turn.add(record);
@@ -132,6 +143,7 @@ export function activityEvent(session, name) {
     state.current = null;
     state.turn.clear();
     state.waiting = false;
+    state.requestLabel = null;
     return;
   }
   if (name === "permission:request" || name === "permission:resolved" || name === "permission:request-cleanup") {
@@ -150,10 +162,12 @@ export function activityEvent(session, name) {
       record.finished = finished;
     }
     record.waiting = false;
+    record.requestLabel = null;
     refresh(record);
   }
   state.current = null;
   state.waiting = false;
+  state.requestLabel = null;
 }
 
 document.addEventListener("langchange", () => {

@@ -1,4 +1,4 @@
-import { refreshActivity } from "./activity.js";
+import { refreshActivity, setRequestActivity } from "./activity.js";
 import { hideEmptyState, maybeScroll } from "./scroll.js";
 import { append, insertStreamNode } from "./tool-group.js";
 import { t } from "../i18n.js";
@@ -35,6 +35,20 @@ export const hideThinking = (session) => {
   if (!el) return;
   el.remove();
   session.thinking.el = null;
+};
+
+// Use the existing progress line/disclosure; never add a second activity card.
+export const updateRequestStatus = (session, payload) => {
+  const keys = { sending: "request.sending", waiting: "request.waiting", retrying: "request.retrying", clear: null };
+  if (!Object.hasOwn(keys, payload?.phase) || !session?.state?.isProcessing) return;
+  const key = keys[payload.phase];
+  if (setRequestActivity(session, key)) { hideThinking(session); return; }
+  if (key && !session.thinking?.el) showThinking(session);
+  const label = session.thinking?.el?.querySelector(".thinking-status-label");
+  if (label) {
+    label.dataset.labelKey = key || "activity.thinking";
+    label.textContent = t(label.dataset.labelKey);
+  }
 };
 
 // Remove `.thinking` dots that aren't the live thinkingEl — orphans can be
@@ -168,7 +182,7 @@ export const finalizeThinking = (session) => {
 
 // Refresh translated labels on language change
 document.addEventListener("langchange", () => {
-  document.querySelectorAll(".thinking-status-label").forEach((el) => { el.textContent = t("activity.thinking"); });
+  document.querySelectorAll(".thinking-status-label").forEach((el) => { el.textContent = t(el.dataset.labelKey || "activity.thinking"); });
   document.querySelectorAll(".thinking-block-head").forEach((head) => {
     const block = head.closest(".thinking-block");
     const isCollapsed = block?.classList?.contains("collapsed") ?? false;

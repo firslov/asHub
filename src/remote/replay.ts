@@ -23,6 +23,7 @@ export function mobileReplayFrame(frame: string): string {
   const p = data.payload || {};
   data.payload = {
     name: p.name, title: p.title, toolName: p.toolName, toolCallId: p.toolCallId,
+    subagentId: p.subagentId, // Lifecycle identity must survive diagnostic previews.
     success: p.success, detailsOmitted: true,
     text: unicodeSlice(JSON.stringify(p), 0, 1200) + '\n…（完整记录可在完整历史中查看）',
   };

@@ -257,7 +257,9 @@ const translations = {
     "bucket.thismonth": "Earlier this month",
     "bucket.older": "Older",
     "untitled": "Untitled",
-    "filter.sessions": "Filter sessions…",
+    "filter.sessions": "Search title or folder…",
+    "sidebar.search": "Search conversations",
+    "sidebar.search.close": "Clear and close search",
     "export.md": "Export conversation as Markdown",
     "export.no.session": "No active session to export",
     "export.failed": "Export failed",
@@ -373,6 +375,9 @@ const translations = {
 
     // ── Thinking ───────────────────────────────────────────────────
     "activity.thinking": "Considering your request",
+    "request.sending": "Sending context · awaiting response",
+    "request.waiting": "Connected · awaiting reply",
+    "request.retrying": "Retrying connection",
     "activity.reading": "Reading relevant information",
     "activity.searching": "Finding relevant information",
     "activity.writing": "Updating files",
@@ -710,7 +715,9 @@ const translations = {
     "bucket.thismonth": "本月",
     "bucket.older": "更早",
     "untitled": "未命名",
-    "filter.sessions": "过滤会话…",
+    "filter.sessions": "搜索名称或目录…",
+    "sidebar.search": "搜索会话",
+    "sidebar.search.close": "清除并收起搜索",
     "export.md": "导出对话为 Markdown",
     "export.no.session": "没有可导出的活跃会话",
     "export.failed": "导出失败",
@@ -826,6 +833,9 @@ const translations = {
 
     // ── Thinking ───────────────────────────────────────────────────
     "activity.thinking": "正在梳理思路",
+    "request.sending": "正在发送上下文并等待响应",
+    "request.waiting": "已连接，正在等待回复",
+    "request.retrying": "正在重试连接",
     "activity.reading": "正在查阅资料",
     "activity.searching": "正在查找资料",
     "activity.writing": "正在更新文件",

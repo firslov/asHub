@@ -707,29 +707,30 @@
 
 /* Navigation has its own quiet surface; labels make every destination explicit. */
 .sidebar { background: var(--bg2); }
-.sidebar-head { height: auto; padding: 14px 12px 0; border: 0; }
-.sidebar-action { padding: 18px 14px 0; }
+.sidebar-head { height: auto; min-height: 56px; gap: 4px; padding: 10px 12px 6px; border: 0; }
+.sidebar-action { padding: 2px 12px 8px; }
+.sidebar .projects-head { padding-bottom: 8px; }
 .sidebar-new-btn { height: 38px; border: 1px solid var(--border-mid); background: var(--bg-elevated); border-radius: 9px; font-size: var(--fs-sm); font-weight: 400; color: var(--text); }
-.sidebar-filter { height: 36px; margin: 10px 14px 16px; padding: 0 10px; background: transparent; border-color: var(--border); border-radius: 8px; font-size: var(--fs-sm); }
+
 .session-list, .workspace-list, .terminal-list, .archive-list { padding: 0 12px 16px; }
 .session-list li, .terminal-list li, .workspace-children li, .archive-list li { border-radius: 7px; margin-bottom: 0; }
 .session-list li.current, .terminal-list li.current, .workspace-children li.current,
 .session-list li.current:hover, .terminal-list li.current:hover, .workspace-children li.current:hover { background: var(--accent-soft); }
 .session-list li a { padding: 9px 10px 9px 24px; }
 .terminal-list li a, .workspace-children li a, .archive-list li a { padding-top: 9px; padding-bottom: 9px; }
-.terminal-list { margin-top: 16px; }
+.terminal-list { margin-top: 0; }
 .session-list li.current a { color: var(--text); }
 .sidebar-new-btn span { display: inline; }
 .session-list li:focus-within .session-actions { opacity: 1; pointer-events: auto; }
 
 /* View switcher uses the same warm surfaces and restrained accent as panels.
    The popover enters the top layer, outside sidebar containment and clipping. */
-.sidebar-view-picker { width: 100%; min-width: 0; }
+.sidebar-view-picker { flex: 1; min-width: 0; }
 .sidebar-view-select {
   display: flex; align-items: center; gap: 10px;
   width: 100%; height: 40px; padding: 0 12px;
-  border: 1px solid var(--border-light); border-radius: var(--radius-md);
-  background: var(--bg-elevated); color: var(--text);
+  border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text);
   font: inherit; font-size: var(--fs-md); font-weight: 500; text-align: left;
   cursor: pointer; transition: background var(--dur-fast), border-color var(--dur-fast);
 }
@@ -769,3 +770,30 @@
 
 .session-actions > .session-proxy[data-enabled="true"] { color: var(--accent-dim); }
 .session-actions > .session-proxy:disabled { opacity: .4; cursor: wait; }
+
+/* Reveal search only when needed; keep active queries visible in every supported view. */
+.sidebar-icon-btn {
+  display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px;
+  padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent;
+  color: var(--text-dim); cursor: pointer;
+}
+.sidebar-icon-btn:hover { background: var(--bg3); color: var(--text); }
+.sidebar-icon-btn:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 2px; }
+.sidebar-icon-btn[data-active="true"] { color: var(--accent-dim); background: var(--accent-soft); }
+.sidebar-search {
+  display: flex; align-items: center; gap: 8px; flex: none; min-width: 0;
+  margin: 0 12px 8px; padding: 2px 4px 2px 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--text-faint);
+}
+.sidebar-search[hidden], .sidebar-icon-btn[hidden] { display: none; }
+.sidebar-search:focus-within { border-color: var(--accent-border); }
+.sidebar-search > svg { flex: none; width: 14px; height: 14px; }
+.sidebar-search .sidebar-filter {
+  flex: 1; min-width: 0; width: 0; height: 32px; margin: 0; padding: 0;
+  border: 0; border-radius: 0; outline: none; box-shadow: none;
+  background: transparent; font-size: var(--fs-sm);
+}
+@media (pointer: coarse) {
+  .sidebar-head .sidebar-icon-btn, .sidebar-search .sidebar-icon-btn { width: 40px; height: 40px; }
+  .sidebar-search .sidebar-filter { height: 40px; }
+}

@@ -87,6 +87,7 @@ interface Session {
   /** Whether the session has new output since the user last viewed it. */
   hasUnread: boolean;
   lastAgentInfo: Record<string, unknown> | null;
+  lastRequestStatus?: { phase: string };
   backendState?: Record<string, unknown>;
   backendId?: string;
   collaboration?: CollaborationTasks;
@@ -2101,6 +2102,11 @@ function routeEvent(session: Session, e: BusEvent): void {
   // Drop late bridge events for closed/archived sessions entirely — no
   // SSE writes, no replay persistence, no watchdog re-arming.
   if (session._closed) return;
+  if (e.name === "agent:request-status") {
+    const phase = (e.payload as { phase?: string })?.phase;
+    if (!session.isProcessing || !phase || !["sending", "waiting", "retrying", "clear"].includes(phase)) return;
+    session.lastRequestStatus = phase === "clear" ? undefined : { phase };
+  }
   session.collaboration?.event(session.id, e.name, e.payload);
   if (e.name === "agent:queued-submit" || (e.name === "agent:queued-done" && (e.payload as any)?.dropped)) {
     const i = session.queuedQueries?.indexOf((e.payload as any)?.query);
@@ -2296,7 +2302,7 @@ function routeEvent(session: Session, e: BusEvent): void {
     return;
   }
 
-  if (e.name === "ui:error" || e.name === "ui:info" || e.name === "agent:providers:changed") {
+  if (e.name === "ui:error" || e.name === "ui:info" || e.name === "agent:providers:changed" || e.name === "agent:request-status") {
     pushFrame(session, e.name, sseFrame(meta, e.payload), { transient: true });
     return;
   }
@@ -2416,6 +2422,7 @@ function pushFrame(session: Session, name: string, frame: string, opts?: { trans
   // frames were never seen by a client, and persisting them would
   // recreate the deleted replay file as an orphan.
   if (session._closed) return;
+  if (["agent:processing-start", "agent:processing-done", "agent:error", "agent:cancelled"].includes(name)) session.lastRequestStatus = undefined;
   if (name === "agent:processing-start") session.lastTurnError = false;
   if (name === "agent:error") {
     session.lastTurnError = true;
@@ -3014,6 +3021,7 @@ async function openSseMulti(
       for (const [name, payload] of [["session:title", { title: session.title }], ["shell:cwd-change", { cwd: session.cwd }], ["hub:capabilities", { readOnlyContext: !session.bridge || !!session.bridge.readOnlyContext, supportsCwdChange: !!session.bridge?.supportsCwdChange }]] as const) {
         try { res.write(sseFrame({ source: id, ts: Date.now(), name }, payload)); } catch { return; }
       }
+      try { res.write(sseFrame({ source: id, ts: Date.now(), name: "agent:request-status" }, session.lastRequestStatus ?? { phase: "clear" })); } catch { return; }
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
       try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
     } else if (since > 0) {
@@ -3055,6 +3063,7 @@ async function openSseMulti(
         }
       }
       if (sentAny) session.hasUnread = false;
+      try { res.write(sseFrame({ source: id, ts: Date.now(), name: "agent:request-status" }, session.lastRequestStatus ?? { phase: "clear" })); } catch { return; }
     }
     if (disconnected || res.writableEnded || session._closed || session._closing) return;
     session.sseClients.add(res);

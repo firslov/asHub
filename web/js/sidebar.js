@@ -1,4 +1,5 @@
 import { networkPolicy, saveNetworkPolicy } from "./network-settings.js";
+import { initSidebarSearch } from "./sidebar-search.js";
 import { initSidebarViewPicker } from "./sidebar-view-picker.js";
 import { showProjects } from "./projects.js";
 import { escape } from "./utils.js";
@@ -1068,6 +1069,14 @@ const renderArchive = async () => {
   } catch {}
 };
 
+const sidebarSearch = initSidebarSearch({
+  toggle: document.getElementById("sidebar-search-toggle"),
+  panel: document.getElementById("sidebar-search"),
+  input: sessionFilter,
+  close: document.getElementById("sidebar-search-close"),
+  onChange: updateFilter,
+});
+
 effect(() => {
   const view = sidebarView.value;
   showProjects(view === "projects");
@@ -1075,7 +1084,7 @@ effect(() => {
   if (workspaceList) workspaceList.hidden = view !== "workspaces";
   if (terminalList) terminalList.hidden = view !== "terminals";
   if (archiveList) archiveList.hidden = view !== "archive";
-  if (sessionFilter) sessionFilter.hidden = view !== "sessions" && view !== "archive" && view !== "workspaces";
+  sidebarSearch.setAvailable(["sessions", "archive", "workspaces"].includes(view));
   if (newSessionAction) newSessionAction.hidden = view !== "sessions";
   if (newTerminalAction) newTerminalAction.hidden = view !== "terminals";
   updateViewPicker(view);
@@ -1084,17 +1093,17 @@ effect(() => {
 // Sidebar filter: substring match on title + cwd for sessions, workspaces
 // and archive. Debounced; the sessions view re-filters the last fetched
 // list client-side instead of re-fetching on every keystroke.
-sessionFilter?.addEventListener("input", () => {
-  filterText = sessionFilter.value;
+function updateFilter(value) {
+  filterText = value;
   if (filterDebounce) clearTimeout(filterDebounce);
   filterDebounce = setTimeout(() => {
     filterDebounce = null;
     const v = sidebarView.peek();
     if (v === "archive") renderArchive();
     else if (v === "workspaces") renderWorkspaces();
-    else renderSessions(false, { fromCache: true });
+    else if (v === "sessions") renderSessions(false, { fromCache: true });
   }, 150);
-});
+}
 
 effect(() => {
   const v = sidebarView.value;

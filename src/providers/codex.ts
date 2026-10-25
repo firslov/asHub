@@ -5,6 +5,7 @@ import { CONFIG_DIR, getSettings } from "agent-sh/settings";
 import { BUILTIN_EXTENSIONS } from "agent-sh/extensions";
 import type { AgentShellCore } from "agent-sh";
 import { observeCodexUsage, type CodexUsage } from "./codex-usage.js";
+import type { RequestDiagnostic } from "../request-diagnostics.js";
 
 type Context = ReturnType<AgentShellCore["extensionContext"]>;
 
@@ -36,7 +37,7 @@ export class CodexProviderHost {
   private dispose: (() => void) | null = null;
   private commands = new Map<string, (args: string) => void | Promise<void>>();
 
-  constructor(private ctx: Context, private onUsage?: (usage: CodexUsage) => void) {}
+  constructor(private ctx: Context, private onUsage?: (usage: CodexUsage) => void, private onRequest?: (event: RequestDiagnostic) => void) {}
 
   sync(): Promise<void> {
     if (this.closed) return Promise.resolve();
@@ -81,7 +82,7 @@ export class CodexProviderHost {
         upstreamURL: "https://chatgpt.com/backend-api/codex/responses",
       });
       cleanups.push(registerNetworkEndpoint(config.upstreamURL, sessionId));
-      if (this.onUsage) cleanups.push(observeCodexUsage(config.upstreamURL, sessionId, this.onUsage));
+      if (this.onUsage || this.onRequest) cleanups.push(observeCodexUsage(config.upstreamURL, sessionId, this.onUsage ?? (() => {}), this.onRequest));
     }
     const context = {
       ...this.ctx,

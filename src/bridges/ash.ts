@@ -12,6 +12,8 @@ import { conversationTools } from "../conversation-tools.js";
  * approval settings; product prompt guidance does not bypass that gate.
  */
 import { clipHeadTail, unicodeSlice, guardLlmUnicode } from "../unicode.js";
+import { guardImageContext } from "../image-context.js";
+import { RequestMonitor } from "../request-diagnostics.js";
 import { SessionThinking, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
 import { configureDeepSeek } from "../providers/deepseek.js";
 import { EventEmitter } from "node:events";
@@ -308,6 +310,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   readonly supportsQueue = true;
   readonly supportsCwdChange = true;
   private core: AgentShellCore | null = null;
+  private requests?: RequestMonitor;
   private initPromise: Promise<void>;
   private opts: BridgeOpts;
   private extCtx: ReturnType<AgentShellCore["extensionContext"]> | null = null;
@@ -385,6 +388,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     const sessionId = this.opts.sessionId || randomUUID();
     core.handlers.define("session:current-id", () => sessionId);
 
+    this.requests = new RequestMonitor(path.join(CONFIG_DIR, "logs"), sessionId,
+      payload => this.emit("event", { name: "agent:request-status", payload }));
+
     this.wire(core);
 
     // Signal to extensions (e.g. ember) that this session uses ephemeral
@@ -417,6 +423,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       for (const tool of conversationTools(this.opts.conversationAccess)) agent.registerTool(tool);
     }
     guardLlmUnicode(core.handlers.call("llm:get-client"));
+    guardImageContext(core.handlers.call("llm:get-client"), path.join(CONFIG_DIR, "hub-sessions", "uploads"), sessionId);
     this.registerUserProviders(extCtx);
     configureDeepSeek(extCtx);
 
@@ -435,7 +442,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     ];
     const builtinNames = await loadBuiltinExtensions(extCtx, headlessDisabled);
     this.assertOpen();
-    this.codexHost = new CodexProviderHost(extCtx, usage => { this.codexUsage = usage; });
+    this.codexHost = new CodexProviderHost(extCtx, usage => { this.codexUsage = usage; }, event => this.requests?.observe(event));
     await this.syncCodexProvider();
     this.assertOpen();
 
@@ -1749,6 +1756,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       }
     });
     onAny("agent:submit", () => {
+      this.requests?.begin();
       lastCacheHit = 0;
       lastCacheMiss = 0;
     });
@@ -1780,6 +1788,9 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     for (const name of FORWARDED) {
       onAny(name, (payload) => {
+        if (name === "ui:info" && this.requests?.retry((payload as { message?: unknown })?.message)) return;
+        if ((name === "agent:response-chunk" && (payload as { blocks?: Array<{ text?: string }> })?.blocks?.some(b => b.text))
+            || (name === "agent:thinking-chunk" && (payload as { text?: string })?.text)) this.requests?.output();
         if (name === "agent:info") {
           const think = readThinking();
           // Query multimodal capabilities from agent-sh's mode system.
@@ -1863,11 +1874,13 @@ export class AshBridge extends EventEmitter implements Bridge {
     // also forwarded the kernel's, the kernel's done would arrive before
     // the segment flush and re-open a fresh reply, doubling the text.
     onAny("agent:processing-done", () => {
+      this.requests?.end();
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "end_turn" }); }
       setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
     onAny("agent:error", (payload) => {
+      this.requests?.end();
       const message = (payload as { message?: string })?.message ?? "agent error";
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.reject(new Error(message)); }
@@ -1876,6 +1889,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
     onAny("agent:cancelled", () => {
+      this.requests?.end();
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "cancelled" }); }
       // Abort all running async subagents — their tool calls are still
@@ -2477,6 +2491,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   private releaseResources(): void {
+    this.requests?.end();
     const preparing = this.preparingTurn;
     if (preparing && this.pendingTurn === preparing) {
       this.pendingTurn = this.preparingTurn = null;

@@ -340,5 +340,35 @@ async function runSwarmTool(x,items,entries){
  await check('Activity explicit terminal commands and error cards are never folded',()=>{
   const x=fixture();x.tool();for(const cls of ['shell-block','err-card']){const n=x.node(cls);x.groups.append(x.session,n);assert(n.parentNode===x.session.streamEl);}
  });
+ await check('Request status uses one progress line and survives language changes',()=>{
+  const x=fixture();x.session.thinking={};x.session.state.isProcessing=true;
+  const thinking=x.e.load('web/js/stream/thinking.js');
+  thinking.updateRequestStatus(x.session,{phase:'sending'});
+  thinking.updateRequestStatus(x.session,{phase:'waiting'});
+  assert(x.session.streamEl.querySelectorAll('.thinking').length===1);
+  assert(x.session.thinking.el.querySelector('.thinking-status-label').textContent==='en:request.waiting');
+  x.lang();assert(x.session.thinking.el.querySelector('.thinking-status-label').textContent==='zh:request.waiting');
+  const row=x.tool();row.classList.add('ok');
+  thinking.updateRequestStatus(x.session,{phase:'retrying'});
+  assert(x.session.streamEl.querySelectorAll('.thinking').length===0);
+  assert(x.box().querySelector('.execution-activity-label').textContent==='zh:request.retrying');
+  thinking.updateRequestStatus(x.session,{phase:'clear'});
+  assert(x.box().querySelector('.execution-activity-label').textContent==='zh:activity.thinking');
+ });
+ await check('Request replay and next-turn progress never reopen a finished disclosure',()=>{
+  const x=fixture();x.session.thinking={};x.session.state.isProcessing=true;x.session._replayFrag=new Node();
+  const thinking=x.e.load('web/js/stream/thinking.js'),row=x.tool();row.classList.add('ok');
+  thinking.updateRequestStatus(x.session,{phase:'waiting'});
+  const box=x.session._replayFrag.querySelector('.execution-activity');assert(box.querySelector('.execution-activity-label').textContent==='en:request.waiting');
+  x.finish();x.session.state.isProcessing=false;
+  thinking.updateRequestStatus(x.session,{phase:'retrying'});
+  assert(box.querySelector('.execution-activity-label').textContent==='en:activity.done');
+  x.activity.activityEvent(x.session,'agent:processing-start');x.session.state.isProcessing=true;
+  thinking.updateRequestStatus(x.session,{phase:'sending'});
+  assert(x.session._replayFrag.querySelectorAll('.thinking').length===1);
+  assert(box.querySelector('.execution-activity-label').textContent==='en:activity.done');
+  thinking.hideThinking(x.session);x.activity.resetActivity(x.session);
+  thinking.updateRequestStatus(x.session,{phase:'clear'});assert(!x.session.thinking.el);
+ });
  console.log(JSON.stringify({checks:results.length,passed:results.filter(x=>x.passed).length,failed:results.filter(x=>!x.passed).length}));
 })();

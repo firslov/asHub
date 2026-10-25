@@ -7,7 +7,7 @@ export function settingsValidationError(value: unknown): string | null {
   for (const key of ["defaultProvider", "defaultBackend", "thinkingLevel", "toolMode"]) {
     if (value[key] != null && typeof value[key] !== "string") return `${key} must be a string`;
   }
-  for (const key of ["skillPaths", "extensions", "coreTools", "disabledBuiltins", "disabledExtensions"]) {
+  for (const key of ["skillPaths", "extensions", "coreTools", "disabledBuiltins", "disabledExtensions", "ashub.plugins.disabled"]) {
     if (value[key] != null && !strings(value[key])) return `${key} must be an array of strings`;
   }
   if (value.providers === undefined) return null;

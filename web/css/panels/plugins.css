@@ -1,0 +1,40 @@
+#plugins-overlay .plugins-intro { color: var(--text-dim); font-size: var(--fs-sm); line-height: 1.7; margin: 0; }
+#plugins-overlay .plugins-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+#plugins-overlay .plugins-message { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.6; overflow-wrap: anywhere; }
+#plugins-overlay .plugins-message:empty { display: none; }
+#plugins-overlay .plugin-item { padding: var(--space-4) 0; border-top: 1px solid var(--border); min-width: 0; }
+#plugins-overlay .plugin-heading { display: flex; align-items: center; gap: var(--space-3); }
+#plugins-overlay .plugin-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); font-weight: 500; }
+#plugins-overlay .plugin-toggle { flex: none; font-size: var(--fs-xs); }
+#plugins-overlay .plugin-toggle[aria-checked="true"] { color: var(--accent); }
+#plugins-overlay .plugin-source { margin: 6px 0; color: var(--text-faint); font-family: var(--font-mono); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+#plugins-overlay .plugin-status, #plugins-overlay .plugin-details { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.7; }
+#plugins-overlay .plugin-details { margin-top: var(--space-2); }
+#plugins-overlay summary { cursor: pointer; }
+#plugins-overlay .plugin-session { display: flex; flex-wrap: wrap; gap: 4px 12px; padding-top: 8px; overflow-wrap: anywhere; }
+#plugins-overlay .plugin-session > span:first-child { flex: 1; min-width: 0; }
+#plugins-overlay .plugin-error { flex-basis: 100%; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; color: var(--text-dim); max-height: 160px; overflow: auto; }
+#plugins-overlay .plugins-note { color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.7; overflow-wrap: anywhere; }
+
+#plugins-overlay .plugin-config { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+#plugins-overlay .plugin-config-label { display: block; font-size: var(--fs-xs); color: var(--text-dim); margin: 12px 0 6px; }
+#plugins-overlay .plugin-config-namespace { display: flex; align-items: center; gap: 8px; }
+#plugins-overlay .plugin-namespace { flex: 1; min-width: 0; width: 0; font-family: var(--font-mono); }
+#plugins-overlay .plugin-config-editor { display: block; width: 100%; min-height: 180px; resize: vertical; font: var(--fs-xs)/1.75 var(--font-mono); tab-size: 2; }
+#plugins-overlay .plugin-config-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+#plugins-overlay .plugin-config-actions .plugin-status { flex: 1; }
+#plugins-overlay .plugin-config-confirm { margin-top: 10px; }
+#plugins-overlay .plugin-config-confirm button { margin-right: 8px; }
+#plugins-overlay .plugin-configure { flex: none; font-size: var(--fs-xs); }
+@media (max-width: 480px) {
+  #plugins-overlay .plugin-heading { flex-wrap: wrap; gap: 8px; }
+  #plugins-overlay .plugin-name { flex-basis: 100%; }
+  #plugins-overlay .plugin-config-editor { font-size: 16px; }
+}
+
+#plugins-overlay .plugin-group-title { margin: 24px 0 8px; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 500; letter-spacing: .04em; }
+#plugins-overlay .plugin-badge { flex: none; color: var(--text-faint); font-size: var(--fs-xs); }
+#plugins-overlay .plugin-description { margin: 6px 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.7; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  #plugins-overlay [data-builtin] .plugin-name { flex-basis: auto; }
+}

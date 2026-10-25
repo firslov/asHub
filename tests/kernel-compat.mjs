@@ -107,6 +107,20 @@ try {
     assert.equal(JSON.parse(await fs.readFile(path.join(dir, 'extensions/package.json'))).type, 'module');
     assert.equal(bridge.core.handlers.call('agent:get-model').model, 'compat-model');
   });
+  await check('built-in plugin status reflects live registrations without exposing credentials', async () => {
+    const plugins = bridge.getPluginStatus();
+    assert.equal(plugins.find(p => p.id === 'builtin:agent').state, 'loaded');
+    assert.equal(plugins.find(p => p.id === 'builtin:slash-commands').state, 'loaded');
+    assert.equal(plugins.find(p => p.id === 'builtin:file-autocomplete').state, 'frontend');
+    const registry = bridge.core.bus.emitPipe('agent:providers', { providers: [] }).providers;
+    for (const p of plugins.filter(p => p.id.startsWith('builtin:provider:'))) {
+      const id = p.id.slice('builtin:provider:'.length);
+      assert.equal(p.state, registry.some(r => r.id === id) ? 'registered' : 'inactive');
+      assert.deepEqual(p.configNamespaces, ['providers.' + id]);
+    }
+    assert.equal(plugins.find(p => p.id === 'builtin:codex-provider').state, 'inactive');
+    assert(!JSON.stringify(plugins).includes('apiKey'));
+  });
   await check('asHub prompt replaces identity while preserving kernel context', async () => {
     const prompt = bridge.core.handlers.call('system-prompt:build');
     assert.match(prompt, /^你是 asHub 中的 AI 助手/);

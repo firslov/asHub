@@ -43,7 +43,7 @@ function routerBridge() {
 const routerResponse=id=>response({data:[{id:'common'},{id,architecture:{input_modalities:['text','image']}}]});
 function shellEnv({fail=false,windows=false}={}) {
  let killed=0,shells=0,shellKilled=0;const noop=()=>{};
- const core={handlers:{define:noop,advise:noop,call:noop},bus:{on:noop,emit:noop,emitPipe:(_,p)=>p},extensionContext:()=>({agent:{registerInstruction:noop,registerTool:noop,registerContextProducer:()=>noop}}),activateBackend:async()=>{},kill:()=>killed++};
+ const core={handlers:{define:noop,advise:noop,call:noop},bus:{on:noop,emit:noop,emitPipe:(_,p)=>p},extensionContext:()=>({bus:core.bus,registerCommand:noop,define:noop,agent:{registerInstruction:noop,removeInstruction:noop,registerTool:noop,unregisterTool:noop,registerSkill:noop,removeSkill:noop,providers:{register:noop,unregister:noop,configure:noop},registerContextProducer:()=>noop}}),activateBackend:async()=>{},kill:()=>killed++};
  const e=env({modules:{'agent-sh':{createCore:()=>core},'agent-sh/agent':{activateAgent:noop},'agent-sh/extensions':{loadBuiltinExtensions:async()=>[]},'agent-sh/extension-loader':{loadExtensions:async()=>[]},'agent-sh/shell/host':{registerShellHandlers:noop},'agent-sh/shell':{Shell:class{constructor(){shells++;if(fail)throw Error('spawn ENOENT')}onExit(){}kill(){shellKilled++}}},'agent-sh/shell/terminal':{headlessTerminal:()=>({}),BridgedTerminal:class{},surfaceFromTerminal:()=>({})}}});
  e.context.process={...e.context.process,platform:windows?'win32':'darwin',stderr:{write(){}}};
  const A=e.load('src/bridges/ash.ts').AshBridge;A.prototype.wire=noop;A.prototype.registerUserProviders=noop;A.prototype.gateImageToolResults=noop;

@@ -1,13 +1,13 @@
 import { projectSessionStatus, sharesActiveWorkspace } from "./project-status.js";
 import { allSessions, setSessions } from "./store.js";
-import { activeSessionId, spaEnabled, switchTo } from "./session-manager.js";
+import { activeSessionId, spaEnabled, switchTo, closeTab, openTabs, sessions } from "./session-manager.js";
 import { effect } from "../vendor/signals-core.js";
 import { t } from "./i18n.js";
 
 const root = document.getElementById("projects");
 let groups = [], visible = false, loading = false, error = "", generation = 0;
 let dialog = null;
-let workspaces = {}, pollTimer = null, polling = false, workspacePolling = false, rendered = "";
+let workspaces = {}, pollTimer = null, polling = false, workspacePolling = false, rendered = "", statusGeneration = 0;
 const collapsed = new Set();
 try { for (const id of JSON.parse(localStorage.getItem("ash.project-folded") || "[]")) collapsed.add(id); } catch {}
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
@@ -72,10 +72,10 @@ function render() {
     const summary = attention ? t("projects.attentionCount", { n: attention }) : unread ? t("projects.unreadCount", { n: unread }) : running ? t("projects.runningCount", { n: running }) : "";
     if (summary) { const badge = el("span", "project-summary" + (attention ? " attention" : ""), summary); toggle.append(badge); }
     const history = button(t("projects.tasks"), () => taskHistory(p), "project-history");
-    const isolate = button(t("projects.isolate"), () => isolatedChat(p), "project-history"); isolate.title = t("projects.isolate"); isolate.setAttribute("aria-label", t("projects.isolate"));
+    const createChat = button(t("projects.newChat"), () => newProjectChat(p), "project-history"); createChat.title = t("projects.newChat"); createChat.setAttribute("aria-label", t("projects.newChat"));
     const manage = button("···", () => edit(p), "project-manage"); manage.title = t("projects.manage"); manage.setAttribute("aria-label", t("projects.manage") + ": " + p.name);
     row.append(toggle, manage); block.append(row);
-    const actions = el("div", "project-group-actions"); actions.append(history, isolate); block.append(actions);
+    const actions = el("div", "project-group-actions"); actions.append(createChat, history); block.append(actions);
     if (!collapsed.has(p.id)) {
       if (!members.length) block.append(button(t("projects.add"), () => edit(p), "project-empty"));
       for (const s of members) {
@@ -95,7 +95,10 @@ function render() {
         if (labels.length) body.append(el("small", "project-chat-status " + status, labels.join(" · ")));
         if (shared) link.title += "\n" + t("projects.sharedWorkspaceHint");
         link.append(el("span", "project-chat-dot " + status), body);
-        block.append(link);
+        const chatRow = el('div', 'project-chat-row');
+        const remove = button('×', () => deleteProjectChat(s), 'project-chat-delete');
+        remove.title = t('projects.deleteChat'); remove.setAttribute('aria-label', t('projects.deleteChat') + ': ' + (s.title || t('untitled')));
+        chatRow.append(link, remove); block.append(chatRow);
       }
     }
     root.append(block);
@@ -104,9 +107,13 @@ function render() {
 async function projectApi(route, body) {
   const res = await fetch(route, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   if (!res.ok) {
-    let message = t("projects.loadFailed");
-    try { const data = await res.json(); message = data.error || message; if (data.workspace) message += "\n" + data.workspace.root; } catch {}
-    throw new Error(message);
+    let message = t("projects.loadFailed"), instanceId;
+    try {
+      const data = await res.json(); message = data.error || message;
+      if (data.workspace) message += "\n" + data.workspace.root;
+      if (typeof data.instanceId === 'string' && /^[0-9a-f]{4,32}$/i.test(data.instanceId)) instanceId = data.instanceId;
+    } catch {}
+    throw Object.assign(new Error(message), { instanceId });
   }
   return res.json();
 }
@@ -121,7 +128,8 @@ async function pollStatus() {
   }
   if (polling) return;
   polling = true;
-  try { const sessions = await projectApi('/sessions'); if (visible) setSessions(sessions); }
+  const seq = statusGeneration;
+  try { const sessions = await projectApi('/sessions'); if (visible && seq === statusGeneration) setSessions(sessions); }
   catch { /* Keep the last successful view during a brief disconnect. */ }
   finally { polling = false; }
 }
@@ -139,6 +147,33 @@ function projectDialog(title) {
   node.addEventListener('close', () => { node.remove(); if (dialog === node) dialog = null; if (opener?.isConnected) opener.focus(); else document.getElementById('sidebar-view-select')?.focus(); });
   document.body.append(node); node.showModal(); close.focus();
   return { node, content, close };
+}
+function deleteProjectChat(session) {
+  const view = projectDialog(t('projects.deleteChat')); if (!view) return;
+  view.content.append(el('p', 'project-note', t('projects.deleteChatConfirm', { title: session.title || t('untitled') })),
+    el('p', 'project-note', t('projects.deleteChatHint')));
+  const error = el('p', 'project-error'); error.setAttribute('role', 'alert');
+  let busy = false;
+  const remove = button(t('projects.deleteChat'), async () => {
+    if (busy) return;
+    busy = true; remove.disabled = view.close.disabled = true; error.textContent = '';
+    try {
+      const response = await fetch(`/${session.instanceId}/`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+      ++statusGeneration; // Ignore any pre-deletion status snapshot still in flight.
+      setSessions(allSessions.value.filter(s => s.instanceId !== session.instanceId));
+      view.node.close();
+      if (!spaEnabled() && activeSessionId.value === session.instanceId) { window.location.href = '/'; return; }
+      if (openTabs.peek().includes(session.instanceId)) await closeTab(session.instanceId, { backendClosed: true });
+      else if (activeSessionId.value === session.instanceId) { window.location.href = '/'; return; }
+      else sessions.get(session.instanceId)?.remove();
+      document.dispatchEvent(new CustomEvent('ash:sessions-changed'));
+      await refresh();
+    } catch (e) { error.textContent = e.message; }
+    finally { busy = false; remove.disabled = view.close.disabled = false; }
+  }, 'project-button project-delete');
+  view.node.addEventListener('cancel', ev => { if (busy) ev.preventDefault(); });
+  view.content.append(error, remove);
 }
 function taskHistory(project) {
   const view = projectDialog(t('projects.tasks')); if (!view) return;
@@ -180,33 +215,60 @@ function taskHistory(project) {
   };
   view.content.append(button(t('projects.refresh'), load), list); void load();
 }
-function isolatedChat(project) {
-  const view = projectDialog(t('projects.isolate')); if (!view) return;
-  view.content.append(el('p', 'project-note', t('projects.isolateHint')));
-  const list = el('div', 'project-picker');
-  const members = chats().filter(s => project.sessionIds.includes(s.instanceId));
-  let sourceId = members[0]?.instanceId, busy = false;
-  for (const session of members) {
-    const row = el('label', 'project-option'), input = el('input'); input.type = 'radio'; input.name = 'workspace-source'; input.checked = session.instanceId === sourceId;
-    input.addEventListener('change', () => { sourceId = session.instanceId; });
-    const body = el('span', 'project-option-body'); body.append(el('span', '', session.title || t('untitled')), el('small', '', session.cwd)); row.append(input, body); list.append(row);
-  }
-  if (!members.length) list.append(el('p', 'project-note', t('projects.isolateEmpty')));
-  const error = el('p', 'project-error'); error.setAttribute('role', 'alert');
-  const create = button(t('projects.createIsolated'), async () => {
-    if (busy || !sourceId) return; busy = true; error.textContent = '';
-    create.disabled = true; view.close.disabled = true;
-    for (const input of list.querySelectorAll('input')) input.disabled = true;
+function newProjectChat(project) {
+  const view = projectDialog(t('projects.newChat')); if (!view) return;
+  view.content.append(el('p', 'project-note', t('projects.newChatHint')));
+  const field = el('label', 'project-field', t('projects.directory'));
+  const cwd = el('input', 'p-input'); cwd.type = 'text'; cwd.autocomplete = 'off';
+  cwd.value = chats().find(s => project.sessionIds.includes(s.instanceId))?.cwd || '';
+  cwd.placeholder = t('projects.directoryPlaceholder');
+  field.append(cwd);
+  const browse = button(t('projects.chooseDirectory'), async () => {
+    picking = true; browse.disabled = true; update();
     try {
-      const result = await projectApi('/api/projects/worktree', { projectId: project.id, sourceId });
-      await refresh(); await pollStatus(); view.node.close();
-      if (spaEnabled()) await switchTo(result.instanceId); else window.location.href = '/' + result.instanceId + '/';
-    } catch (e) { error.textContent = e.message; }
-    finally { busy = false; create.disabled = false; view.close.disabled = false; for (const input of list.querySelectorAll('input')) input.disabled = false; }
+      const picked = window.electronAPI?.pickDirectory ? await window.electronAPI.pickDirectory() : await projectApi('/pick-dir');
+      if (view.node.open && !picked.cancelled && picked.cwd) { cwd.value = picked.cwd; update(); }
+    } catch (e) { if (view.node.open) error.textContent = e.message; }
+    finally { picking = false; browse.disabled = busy; update(); }
+  });
+  const option = el('label', 'project-option'), isolated = el('input'); isolated.type = 'checkbox'; isolated.checked = false;
+  option.append(isolated, el('span', 'project-option-body', t('projects.independentDirectory')));
+  const hint = el('p', 'project-note', t('projects.isolateHint')); hint.hidden = true;
+  isolated.addEventListener('change', () => { hint.hidden = !isolated.checked; });
+  const error = el('p', 'project-error'); error.setAttribute('role', 'alert');
+  let busy = false, picking = false, createdId = '';
+  const update = () => { create.disabled = busy || picking || (!createdId && !cwd.value.trim()); };
+  const openCreated = () => {
+    if (spaEnabled()) switchTo(createdId); else window.location.href = '/' + createdId + '/';
+    view.node.close();
+  };
+  const create = button(t('projects.createIsolated'), async () => {
+    if (busy || picking) return;
+    if (createdId) { openCreated(); return; }
+    if (!cwd.value.trim()) return;
+    const body = { projectId: project.id, cwd: cwd.value.trim(), isolated: isolated.checked };
+    busy = true; error.textContent = ''; update();
+    view.close.disabled = cwd.disabled = isolated.disabled = browse.disabled = true;
+    try {
+      const result = await projectApi('/api/projects/session', body);
+      createdId = result.instanceId;
+      await refresh(); await pollStatus(); openCreated();
+    } catch (e) {
+      createdId ||= e.instanceId || '';
+      error.textContent = e.message;
+      if (createdId) {
+        error.textContent += '\n' + t('projects.createdWithError');
+        create.textContent = t('projects.openCreatedChat');
+      }
+    }
+    finally {
+      busy = false; view.close.disabled = false;
+      cwd.disabled = isolated.disabled = browse.disabled = !!createdId; update();
+    }
   }, 'project-button primary');
-  create.disabled = !sourceId;
+  cwd.addEventListener('input', update); update();
   view.node.addEventListener('cancel', ev => { if (busy) ev.preventDefault(); });
-  view.content.append(list, error, create);
+  view.content.append(field, browse, option, hint, error, create); cwd.focus();
 }
 function edit(project) {
   if (dialog) return;

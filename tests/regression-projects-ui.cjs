@@ -19,17 +19,17 @@ function setup(options = {}) {
   let fail=false;
   const document={body,activeElement:null,createElement:tag=>new Node(tag),getElementById:id=>id==='projects'?root:null,addEventListener(){}};
   const e=env({modules:{
-    './store.js':{allSessions:{value:[{instanceId:'a',title:'Alpha',kind:'agent'},{instanceId:'b',title:'Beta',kind:'agent'}]}},
+    './store.js':{setSessions(){},allSessions:{value:[{instanceId:'a',title:'Alpha',kind:'agent',cwd:'/workspace'},{instanceId:'b',title:'Beta',kind:'agent'}]}},
     './session-manager.js':{activeSessionId:{value:''},spaEnabled:()=>false},
     '../vendor/signals-core.js':{effect:fn=>fn()}, './i18n.js':{t:key=>key},
-  }, globals:{document,window:new Node(),localStorage:{getItem:()=>null,setItem(){}},fetch:async(url,opts)=>{
+  }, globals:{document,window:Object.assign(new Node(),{location:{}}),localStorage:{getItem:()=>null,setItem(){}},fetch:async(url,opts)=>{
     if (url === '/sessions') return {ok:true,json:async()=>[]};
     if (url === '/api/projects/workspaces') return {ok:true,json:async()=>({})};
     calls.push({url,body:opts?.body?JSON.parse(opts.body):null});
     if (options.fetch) return options.fetch(url, opts);
     return {ok:!fail,json:async()=>[project]};
   }}});
-  const mod=e.load('web/js/projects.js','export const audit={edit,taskHistory};');
+  const mod=e.load('web/js/projects.js','export const audit={edit,taskHistory,newProjectChat};');
   return {mod,root,body,calls,project,fail:()=>fail=true};
 }
 test('project picker preserves hidden and archived selections and sends only membership deltas',async()=>{
@@ -119,4 +119,45 @@ test('failed collaboration without output keeps the diagnostic separate from the
  card.querySelectorAll('button')[0].dispatchEvent({type:'click'});await tick();
  assert.equal(card.querySelectorAll('pre')[0].textContent,'projects.noResult');
  assert.equal(card.querySelectorAll('p').find(n=>n.className==='project-error').textContent,'Provider unavailable');
+});
+
+
+test('project new conversation defaults to shared directory and joins its project in one request', async()=>{
+ const s=setup({fetch:async(url)=>({ok:true,json:async()=>url==='/api/projects/session'?{instanceId:'new-chat'}:[]})});
+ s.mod.audit.newProjectChat(s.project);
+ const dialog=s.body.children.at(-1), content=dialog.children[0], inputs=content.querySelectorAll('input');
+ assert.equal(inputs[0].value,'/workspace'); assert.equal(inputs[1].checked,false);
+ content.lastChild.dispatchEvent({type:'click'}); await tick(); await tick();
+ assert.deepEqual(s.calls.find(c=>c.url==='/api/projects/session').body,{projectId:'project',cwd:'/workspace',isolated:false});
+ assert.equal(dialog.open,false);
+});
+test('empty project can create a first conversation and optionally request an isolated directory', async()=>{
+ const s=setup();s.mod.audit.newProjectChat({id:'empty',sessionIds:[]});
+ const dialog=s.body.children.at(-1),content=dialog.children[0],inputs=content.querySelectorAll('input');
+ assert.equal(content.lastChild.disabled,true); inputs[0].value='/repo';inputs[0].dispatchEvent({type:'input'});
+ inputs[1].checked=true;inputs[1].dispatchEvent({type:'change'});assert.equal(content.lastChild.disabled,false);
+ s.fail(); content.lastChild.dispatchEvent({type:'click'});await tick();
+ assert.deepEqual(s.calls.at(-1).body,{projectId:'empty',cwd:'/repo',isolated:true});
+ assert.equal(dialog.open,true);assert.equal(inputs[0].disabled,false);assert.equal(inputs[1].checked,true);
+});
+test('project creation blocks duplicate submits and Escape while request is pending',async()=>{
+ let finish;
+ const s=setup({fetch:(url)=>url==='/api/projects/session'?new Promise(resolve=>finish=resolve):Promise.resolve({ok:true,json:async()=>[]})});
+ s.mod.audit.newProjectChat(s.project);const dialog=s.body.children.at(-1),content=dialog.children[0];
+ content.lastChild.dispatchEvent({type:'click'});content.lastChild.dispatchEvent({type:'click'});
+ assert.equal(s.calls.filter(c=>c.url==='/api/projects/session').length,1);
+ let blocked=false;dialog.dispatchEvent({type:'cancel',preventDefault(){blocked=true;}});assert(blocked);
+ finish({ok:false,json:async()=>({error:'fixture failure'})});await tick();assert.equal(content.lastChild.disabled,false);
+});
+
+test('partial project creation opens the retained conversation instead of creating a duplicate',async()=>{
+ const s=setup({fetch:async()=>({ok:false,json:async()=>({error:'Project no longer exists',instanceId:'abc123',cwd:'/workspace'})})});
+ s.mod.audit.newProjectChat(s.project);
+ const dialog=s.body.children.at(-1),content=dialog.children[0],create=content.lastChild;
+ create.dispatchEvent({type:'click'});await tick();
+ assert.equal(create.textContent,'projects.openCreatedChat');
+ assert.equal(content.querySelectorAll('input')[0].disabled,true);
+ create.dispatchEvent({type:'click'});await tick();
+ assert.equal(s.calls.filter(c=>c.url==='/api/projects/session').length,1);
+ assert.equal(dialog.open,false);
 });

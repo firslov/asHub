@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor, safeStorage, net } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor, safeStorage, net, Tray, nativeImage, powerSaveBlocker } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -61,6 +61,25 @@ Module._resolveFilename = function (request, parent, isMain, options) {
 
 const isDev = !app.isPackaged;
 const HUB_PORT = 7878;
+const { createBackgroundController, isTrustedDesktopEvent } = require('./background.cjs');
+let background = null;
+let remoteStatusRef = () => ({});
+const desktopReady = new WeakSet();
+const pendingMobile = new WeakSet();
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  else {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+function openMobileAccess() {
+  showMainWindow();
+  const contents = mainWindow.webContents;
+  if (desktopReady.has(contents)) contents.send('desktop:open-mobile');
+  else pendingMobile.add(contents);
+}
 
 // ── Update install capability ─────────────────────────────────────────
 // Squirrel.Mac (and the NSIS/AppImage installers) verify that the new
@@ -179,6 +198,11 @@ let updaterReady = false;
 // MRU order so cross-window drag hit-tests pick the topmost window.
 const windowZOrder = [];
 function trackWindow(win) {
+  background?.trackWindow(win);
+  win.webContents.on('did-start-navigation', (_event, _url, inPlace, isMainFrame) => {
+    // Session switches use history.pushState and keep the existing IPC listeners.
+    if (isMainFrame && !inPlace) desktopReady.delete(win.webContents);
+  });
   windowZOrder.unshift(win);
   win.on("focus", () => {
     const i = windowZOrder.indexOf(win);
@@ -387,6 +411,20 @@ function setupAutoUpdater() {
 }
 
 function setupIPC() {
+  const trustedDesktop = event => isTrustedDesktopEvent(event, BrowserWindow, `http://127.0.0.1:${HUB_PORT}`);
+  ipcMain.handle('desktop:background:get', event => {
+    if (!trustedDesktop(event)) throw new Error('Untrusted desktop sender');
+    return background.snapshot();
+  });
+  ipcMain.handle('desktop:background:set', (event, patch) => {
+    if (!trustedDesktop(event)) throw new Error('Untrusted desktop sender');
+    return background.update(patch);
+  });
+  ipcMain.on('desktop:ready', event => {
+    if (!trustedDesktop(event)) return;
+    desktopReady.add(event.sender);
+    if (pendingMobile.delete(event.sender)) event.sender.send('desktop:open-mobile');
+  });
   ipcMain.handle("pick-directory", async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     if (!owner || owner.isDestroyed()) return { cancelled: true };
@@ -708,6 +746,7 @@ async function startServer() {
       const recovered = startHub(hubOptions);
       server = recovered.server;
       shutdownHubRef = recovered.shutdown;
+      remoteStatusRef = recovered.remoteStatus;
       shutdownPromise = null;
       _shuttingDown = false;
       server.on("error", err => dialog.showErrorBox("Server Error", String(err)));
@@ -717,6 +756,7 @@ async function startServer() {
     };
     server = hub.server;
     shutdownHubRef = hub.shutdown;
+    remoteStatusRef = hub.remoteStatus;
   } catch (err) {
     console.error("[electron] failed to start hub:", err);
     dialog.showErrorBox(
@@ -738,6 +778,8 @@ async function startServer() {
 
   server.on("listening", () => {
     // The 10s fallback below may have already created the window.
+    // Tray actions may open the UI, so expose them only once the Hub is reachable.
+    background.start();
     if (mainWindow) return;
     createWindow();
   });
@@ -762,14 +804,7 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    } else {
-      // Main window was closed but tear-out windows kept the app alive;
-      // relaunching should bring the main window back.
-      createWindow();
-    }
+    if (app.isReady()) showMainWindow();
   });
 
   app.whenReady().then(() => {
@@ -814,6 +849,18 @@ if (!gotTheLock) {
       },
     ];
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+    background = createBackgroundController({
+      app, Tray, Menu, nativeImage, dialog, powerSaveBlocker,
+      getWindows: () => BrowserWindow.getAllWindows(), showWindow: showMainWindow,
+      openMobile: openMobileAccess, getRemoteStatus: () => remoteStatusRef(),
+      isQuitting: () => _shuttingDown || _installOnQuit,
+      onChange: settings => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send('desktop:background:changed', settings);
+        }
+      },
+    });
+    app.once('will-quit', () => background.dispose());
     setupIPC();
     startServer();
 
@@ -853,20 +900,20 @@ if (!gotTheLock) {
   });
 
   app.on("window-all-closed", () => {
-    app.quit();
+    if (!background?.shouldHide()) app.quit();
   });
 
   // macOS: clicking the Dock icon while the main window is closed (but
   // tear-out windows keep the app alive) recreates the main window.
   app.on("activate", () => {
-    if (!mainWindow) createWindow();
+    if (app.isReady()) showMainWindow();
   });
 
   app.on("before-quit", (event) => {
     if (mainWindow) mainWindow.removeAllListeners("closed");
-    if (_shuttingDown || !shutdownHubRef) return;
-
+    if (_shuttingDown) return;
     _shuttingDown = true;
+    if (!shutdownHubRef) return;
     event.preventDefault();
     prepareShutdown()
       .catch((err) => console.error("[electron] shutdown failed:", err))

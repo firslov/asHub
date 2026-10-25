@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
    *  source of truth.  navigator.platform is deprecated in Chromium and the
    *  Windows custom title bar depends on this value being right. */
   platform: process.platform,
+  getBackgroundSettings: () => ipcRenderer.invoke('desktop:background:get'),
+  setBackgroundSettings: (patch) => ipcRenderer.invoke('desktop:background:set', patch),
+  onBackgroundSettings: (cb) => onChannel('desktop:background:changed', cb),
+  onOpenMobileAccess: (cb) => onChannel('desktop:open-mobile', cb),
+  notifyDesktopReady: () => ipcRenderer.send('desktop:ready'),
   pickDirectory: () => ipcRenderer.invoke("pick-directory"),
   checkForUpdate: () => ipcRenderer.invoke("check-for-update"),
   startUpdateDownload: () => ipcRenderer.invoke("start-update-download"),

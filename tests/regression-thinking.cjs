@@ -170,7 +170,7 @@ test('model profiles expose native levels, forced thinking, and no invented ladd
   for (const m of [model('unknown'), model('gpt-5','private-provider'), {...model('gpt-5'),reasoning:false}]) assert.equal(p(m),null);
 });
 
-test('Codex cache supplies model-specific native max/ultra choices, including custom provider IDs', () => {
+test('Codex cache filters client-only ultra while preserving model-specific backend choices', () => {
   const e=env(); e.settings.getSettings=()=>({'codex-provider':{providerId:'subscription'}});
   const cache=path.join(e.os.homedir(),'.codex','models_cache.json'); fs.mkdirSync(path.dirname(cache),{recursive:true});
   fs.writeFileSync(cache,JSON.stringify({models:[
@@ -178,7 +178,7 @@ test('Codex cache supplies model-specific native max/ultra choices, including cu
     {slug:'gpt-6-luna',supported_reasoning_levels:[{effort:'low'},{effort:'high'},{effort:'max'}]},
   ]}));
   const {reasoningProfile:p}=e.load('src/providers/reasoning.ts');
-  assert.deepEqual(plain(p(model('gpt-6.1-sol','subscription')).levels),['low','medium','high','xhigh','max','ultra']);
+  assert.deepEqual(plain(p(model('gpt-6.1-sol','subscription')).levels),['low','medium','high','xhigh','max']);
   assert.deepEqual(plain(p(model('gpt-6-luna','subscription')).levels),['low','high','max']);
   assert.equal(p(model('unlisted-codex-model','subscription')),null);
 });
@@ -246,4 +246,19 @@ test('picker selection stops the outside-click listener before replacing its tar
   const effort=new El();effort.dataset.level='high';
   await u.e.context.testDropdown.events.click[0]({stopPropagation(){stopped=true;},target:{closest:selector=>selector==='.model-thinking-option'?effort:null}});
   assert(saved);
+});
+
+
+test('persisted Codex ultra selections migrate to max and never reach the request', () => {
+  const e=env(); e.settings.getSettings=()=>({'codex-provider':{providerId:'subscription'}});
+  const {SessionThinking,reasoningProfile}=e.load('src/providers/reasoning.ts');
+  const m=model('gpt-6-astra','subscription'), key=JSON.stringify([m.provider,m.id]);
+  const state=new SessionThinking([[key,'ultra']]);
+  assert.deepEqual(plain(reasoningProfile(m).levels),['low','medium','high','xhigh','max']);
+  assert.equal(state.state(m).level,'max');
+  const request={reasoning_effort:'ultra'}; state.apply(request,m,'high');
+  assert.deepEqual(plain(request),{reasoning_effort:'max'});
+  assert.deepEqual(plain(state.restoreState()),[[key,'max']]);
+  assert.throws(()=>state.set(m,'ultra'),/Unsupported thinking level/);
+  assert.equal(reasoningProfile(model('gpt-6.9-unknown','subscription')),null);
 });

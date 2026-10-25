@@ -6,9 +6,10 @@ import { getSettings, resolveProvider } from "agent-sh/settings";
 export interface ReasoningModel { id: string; provider: string; reasoning?: boolean; supportsReasoningEffort?: boolean }
 export interface ReasoningProfile { levels: string[]; format: "effort" | "thinking" | "router"; defaultLevel?: string }
 export interface ThinkingState { model: string; provider: string; level: string; levels: string[]; supported: boolean; defaultLevel?: string }
-const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-// Codex's own discovered catalog is authoritative, including newer model levels.
+// Codex app metadata may include client modes (ultra delegates tasks). Only
+// backend reasoning.effort values are valid for asHub's single model request.
 // Read metadata only; do not expose or read authentication files here.
 let cacheStamp = "", cachedModels: Record<string, unknown>[] = [];
 function codexModels(): Record<string, unknown>[] {
@@ -40,8 +41,9 @@ export function reasoningProfile(model: ReasoningModel): ReasoningProfile | null
     if (Array.isArray(entry?.supported_reasoning_levels)) {
       const levels = [...new Set(entry.supported_reasoning_levels.map((v: { effort?: unknown }) => v?.effort)
         .filter((v): v is string => typeof v === "string" && EFFORTS.has(v)))];
-      return levels.length ? make(levels, "effort", typeof entry.default_reasoning_level === "string" ? entry.default_reasoning_level : undefined) : null;
+      return levels.length ? make(levels, "effort", typeof entry.default_reasoning_level === "string" && levels.includes(entry.default_reasoning_level) ? entry.default_reasoning_level : undefined) : null;
     }
+    if (/^(?:gpt-6-(?:astra|sol|luna)|gpt-6\.1-sol)$/.test(id)) return make(["low", "medium", "high", "xhigh", "max"], "effort", "medium");
     if (/^gpt-5(?:\.1)?-codex(?:-mini)?$/.test(id)) return make(["low", "medium", "high"]);
     if (/^gpt-5\.(?:2|3)-codex$|^gpt-5\.1-codex-max$|^gpt-5\.(?:4|5)(?:-mini)?$/.test(id)) return make(["low", "medium", "high", "xhigh"]);
     return null;
@@ -93,7 +95,12 @@ export class SessionThinking {
   private key(model: ReasoningModel) { return JSON.stringify([model.provider, model.id]); }
   state(model: ReasoningModel, legacy = "off"): ThinkingState {
     const profile = reasoningProfile(model), levels = profile?.levels ?? [];
-    const saved = this.selections.get(this.key(model));
+    let saved = this.selections.get(this.key(model));
+    const codex = (getSettings() as unknown as Record<string, any>)["codex-provider"];
+    if (saved === "ultra" && model.provider === (codex?.providerId || "codex") && levels.includes("max")) {
+      // Repair persisted selections from the old client-mode/backend mismatch.
+      saved = "max"; this.selections.set(this.key(model), saved);
+    }
     let level = saved ?? legacy;
     if (!saved) {
       // Preserve existing off settings when the model has an actual disabled

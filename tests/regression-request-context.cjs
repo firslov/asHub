@@ -159,3 +159,21 @@ test('reconnecting receives current request status even outside the replay tail;
   await h.deleteSessionFiles(s.id);
   assert.equal(fs.readdirSync(uploads).length, 0, 'deleting a session also removes image references');
 });
+
+
+test('fresh image batches consume the history allowance without changing new input or stored messages', () => {
+  const x=fixture(), old=image(300,1), fresh=image(600,2);
+  const input={tools,messages:[{role:'tool',content:[old]},{role:'assistant',content:'read new image'},{role:'tool',content:[fresh]}]};
+  const before=JSON.stringify(input), out=x.imageContext(input,x.uploads,'a',450);
+  assert.equal(out.messages[2].content[0],fresh);
+  assert.equal(out.messages[0].content[0].type,'text');
+  assert.deepEqual(fs.readFileSync(reference(out.messages[0].content[0])),Buffer.alloc(300,1));
+  assert.equal(JSON.stringify(input),before);
+});
+test('current user images reserve space and unused allowance retains recent history', () => {
+  const x=fixture(), old=image(150,1), fresh=image(150,2);
+  const input={tools,messages:[{role:'tool',content:[old]},{role:'assistant',content:'done'},{role:'user',content:[fresh]}]};
+  assert.equal(x.imageContext(input,x.uploads,'a',500),input);
+  const out=x.imageContext(input,x.uploads,'a',300);
+  assert.equal(out.messages[2].content[0],fresh); assert.equal(out.messages[0].content[0].type,'text');
+});

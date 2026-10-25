@@ -27,7 +27,8 @@ import path from "node:path";
 import * as os from "node:os";
 import { createCore, type AgentShellCore, runSubagent, type ToolDefinition } from "agent-sh";
 import { activateAgent } from "agent-sh/agent";
-import { loadExtensions } from "agent-sh/extension-loader";
+import { builtinPluginCatalog, type PluginStatus } from "../plugins.js";
+import { PluginRuntime, preparePluginRegistrations } from "../plugin-runtime.js";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
 import { CodexProviderHost, codexStatus } from "../providers/codex.js";
 import { getSettings, reloadSettings, resolveProvider, getProviderNames, CONFIG_DIR } from "agent-sh/settings";
@@ -330,6 +331,26 @@ export class AshBridge extends EventEmitter implements Bridge {
   private codexFailure: string | null = null;
   private codexBackendActivation: Promise<void> | null = null;
   private loadedExtensionNames: string[] = [];
+  private plugins?: PluginRuntime;
+  private builtinExtensionNames: string[] = [];
+  getPluginStatus(): PluginStatus[] {
+    const local = this.plugins?.status.map(s => ({ ...s, configNamespaces: s.configNamespaces?.slice() })) ?? [];
+    if (!this.core || !this.extCtx || this.closed) return local;
+    const registered = new Set(this.core.bus.emitPipe("agent:providers", { providers: [] }).providers.map(p => p.id));
+    const builtins = builtinPluginCatalog(path.join(CONFIG_DIR, "settings.json")).map((p): PluginStatus => {
+      let state: PluginStatus['state'] = 'inactive';
+      let error: string | undefined;
+      if (p.id === 'builtin:agent') state = 'loaded';
+      else if (p.providerId) state = registered.has(p.providerId) ? 'registered' : 'inactive';
+      else if (p.extensionName === 'file-autocomplete') state = 'frontend';
+      else if (p.extensionName === 'codex-provider') {
+        state = this.codexFailure ? 'error' : registered.has(codexStatus().providerId) ? 'registered' : 'inactive';
+        error = this.codexFailure ?? undefined;
+      } else if (p.extensionName && this.builtinExtensionNames.includes(p.extensionName)) state = 'loaded';
+      return { id: p.id, name: p.name, state, error, configNamespaces: p.configNamespace ? [p.configNamespace] : [] };
+    });
+    return [...local, ...builtins];
+  }
   private _subagents: Map<string, SubagentEntry> = new Map();
   private _todos: TodoItem[] = [];
   private shell: Shell | null = null;
@@ -417,7 +438,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     // registerShellHandlers must precede activateAgent + loadBuiltinExtensions
     // so ctx.shell.compositor + tui-renderer are wired before the input mode prompt fires.
     if (exposeTerminal) registerShellHandlers(extCtx);
+    preparePluginRegistrations(extCtx);
     activateAgent(extCtx);
+    preparePluginRegistrations(extCtx);
     if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
       const agent = (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent;
       for (const tool of conversationTools(this.opts.conversationAccess)) agent.registerTool(tool);
@@ -441,6 +464,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       ...(settings.disabledBuiltins ?? []),
     ];
     const builtinNames = await loadBuiltinExtensions(extCtx, headlessDisabled);
+    this.builtinExtensionNames = builtinNames;
     this.assertOpen();
     this.codexHost = new CodexProviderHost(extCtx, usage => { this.codexUsage = usage; }, event => this.requests?.observe(event));
     await this.syncCodexProvider();
@@ -456,19 +480,17 @@ export class AshBridge extends EventEmitter implements Bridge {
       this.assertOpen();
     }
 
-    // User extensions (~/.agent-sh/extensions/) load too. Extensions that
-    // would conflict with the hub (e.g. web-renderer binding 7878) should
-    // check `process.env.ASHUB_UNDER` and bail early.
-    const TIMEOUT_MS = 10_000;
-    const userNames = await Promise.race([
-      loadExtensions(extCtx),
-      new Promise<string[]>((_, reject) =>
-        setTimeout(() => reject(new Error(`extension load timeout (${TIMEOUT_MS}ms)`)), TIMEOUT_MS),
-      ),
-    ]).catch((err) => {
-      process.stderr.write(`[ash-bridge] ${err instanceof Error ? err.message : err}\n`);
-      return [] as string[];
-    });
+    this.plugins = new PluginRuntime(path.join(CONFIG_DIR, "settings.json"));
+    const userNames = await this.plugins.load(extCtx);
+    // Hot reload cannot safely replace tools in an in-flight turn. New kernels
+    // load current settings; existing conversations apply changes after restart.
+    const reloadNotice = () => {
+      core.bus.emit("ui:info", { message: "Plugin changes apply to new sessions. Restart asHub to apply them to existing conversations." });
+      return [];
+    };
+    core.bus.emit("command:unregister", { name: "/reload" });
+    extCtx.registerCommand("/reload", "Apply plugin changes after restarting asHub", () => { reloadNotice(); });
+    extCtx.define("extensions:reload", reloadNotice);
 
     this.assertOpen();
 
@@ -2498,6 +2520,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       this.queryQueue.length = 0;
       preparing.reject(new Error("bridge closed during initialization"));
     }
+    this.plugins?.close();
     this.codexHost?.close();
     // Abort and clean up any async subagents still running.
     for (const [, entry] of (this as any)._subagents as Map<any, any>) {

@@ -19,6 +19,32 @@ const {once}=require('node:events');
   assert.equal(bridges[0].opts.sessionId,a.instanceId);
   assert.equal(bridges[1].opts.sessionId,b.instanceId);
   const p=(await api('/api/projects',{action:'create',name:'Shared',add:[a.instanceId,b.instanceId]}))[0];
+  assert.equal((await fetch(base+'/api/projects/session',{method:'POST',headers:{...headers,Origin:'https://foreign.invalid'},body:'{}'})).status,403);
+  const direct=await api('/api/projects/session',{projectId:p.id,cwd:e.dir,isolated:false});
+  assert.equal(direct.cwd,e.dir);assert((await api('/api/projects'))[0].sessionIds.includes(direct.instanceId));
+  await api('/'+direct.instanceId+'/',null,'DELETE');
+  const empty=(await api('/api/projects',{action:'create',name:'Empty'})).find(p=>p.name==='Empty');
+  const first=await api('/api/projects/session',{projectId:empty.id,cwd:e.dir});
+  assert((await api('/api/projects')).find(p=>p.id===empty.id).sessionIds.includes(first.instanceId));
+  await api('/'+first.instanceId+'/',null,'DELETE');await api('/api/projects',{action:'delete',id:empty.id});
+  const count=(await api('/sessions')).length;
+  for(const body of [null,{projectId:p.id,cwd:e.dir,isolated:'yes'},{projectId:'missing',cwd:e.dir},{projectId:p.id,cwd:'relative'},{projectId:p.id,cwd:path.join(e.dir,'missing')},{projectId:p.id,cwd:e.dir,isolated:true}]) {
+    const bad=await fetch(base+'/api/projects/session',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(bad.status,400);
+  }
+  assert.equal((await api('/sessions')).length,count,'validation must not create orphan sessions');
+  // A membership write can fail after session creation. The UI needs its ID
+  // to open that retained session instead of submitting a duplicate create.
+  const projectProto=e.load('src/projects.ts').ProjectStore.prototype, originalUpdate=projectProto.update;
+  let partial;
+  try {
+    projectProto.update=function(input,...args){if(input.action==='members'&&input.id===p.id)throw Error('fixture membership write failed');return originalUpdate.call(this,input,...args);};
+    const response=await fetch(base+'/api/projects/session',{method:'POST',headers,body:JSON.stringify({projectId:p.id,cwd:e.dir})});
+    assert.equal(response.status,400);partial=await response.json();
+  } finally {projectProto.update=originalUpdate;}
+  assert.match(partial.instanceId,/^[0-9a-f]{4,32}$/i);
+  assert((await api('/sessions')).some(s=>s.instanceId===partial.instanceId));
+  assert(!(await api('/api/projects'))[0].sessionIds.includes(partial.instanceId));
+  await api('/'+partial.instanceId+'/',null,'DELETE');
   const access=bridges[0].opts.conversationAccess;
   assert.equal(access.list().conversations.length,2);
   await api('/api/sessions/archive',{id:b.instanceId});
@@ -59,7 +85,9 @@ const {once}=require('node:events');
   const gitChat=await api('/sessions',{cwd:repo});
   await api('/api/projects',{action:'members',id:p.id,add:[gitChat.instanceId]});
   assert.equal((await fetch(base+'/api/projects/worktree',{method:'POST',headers:{...headers,Origin:'https://foreign.invalid'},body:'{}'})).status,403);
-  const isolated=await api('/api/projects/worktree',{projectId:p.id,sourceId:gitChat.instanceId});
+  const legacy=await api('/api/projects/worktree',{projectId:p.id,sourceId:gitChat.instanceId});
+  await api('/'+legacy.instanceId+'/',null,'DELETE');
+  const isolated=await api('/api/projects/session',{projectId:p.id,cwd:repo,isolated:true});
   assert((await api('/api/projects'))[0].sessionIds.includes(isolated.instanceId));
   assert.equal(fs.readFileSync(path.join(isolated.cwd,'file.txt'),'utf8'),'base');
   assert.equal(fs.readFileSync(path.join(repo,'file.txt'),'utf8'),'local edits');

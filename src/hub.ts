@@ -21,6 +21,7 @@ import { DEEPSEEK_MODELS } from "./providers/deepseek.js";
 import { codexStatus } from "./providers/codex.js";
 import * as http from "node:http";
 import { settingsValidationError } from "./config-validation.js";
+import { pluginCatalog, builtinPluginCatalog, setPluginEnabled, getPluginConfig, savePluginConfig, PluginConfigConflict, PLUGIN_DISABLED } from "./plugins.js";
 import { updateSettingsFile } from "./settings-store.js";
 import { createAccessGuard } from "./http-auth.js";
 import * as fs from "node:fs";
@@ -820,7 +821,7 @@ function unmaskApiKeys(parsed: Record<string, unknown>, old: Record<string, unkn
   }
 }
 
-export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => Promise<void> } {
+export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => Promise<void>; remoteStatus: () => ReturnType<RemoteConnector["status"]> } {
   const lifecycle = new AbortController();
   opts = { ...opts, signal: lifecycle.signal };
   const sessions = new Map<string, Session>();
@@ -846,31 +847,37 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (!await access.allow(req, res)) return;
     if (url === "/api/mobile" || url.startsWith("/api/mobile/")) return mobile.handle(req, res);
 
-    if (req.method === "POST" && url === "/api/projects/worktree") {
+    if (req.method === "POST" && (url === "/api/projects/worktree" || url === "/api/projects/session")) {
       let workspace: Awaited<ReturnType<typeof createIsolatedWorkspace>> | undefined;
       let created: Session | undefined;
       try {
-        const input = JSON.parse(await readBody(req)) as { projectId: string; sourceId: string };
+        const input = JSON.parse(await readBody(req));
+        if (!input || typeof input.projectId !== 'string' || (input.isolated !== undefined && typeof input.isolated !== 'boolean')) throw new Error("Invalid project conversation request");
+        const legacy = url === "/api/projects/worktree";
         const check = () => {
           const project = projects.list().find(p => p.id === input.projectId);
-          const source = sessions.get(input.sourceId);
-          if (!project?.sessionIds.includes(input.sourceId) || !source || source.kind !== "agent" || source._closed || source._closing) throw new Error("Source conversation unavailable");
+          if (!project) throw new Error("Project no longer exists");
+          const source = legacy ? sessions.get(input.sourceId) : undefined;
+          if (legacy && (!project.sessionIds.includes(input.sourceId) || !source || source.kind !== "agent" || source._closed || source._closing)) throw new Error("Source conversation unavailable");
           return source;
         };
         const source = check();
-        workspace = await createIsolatedWorkspace(source.cwd, path.join(SESSIONS_DIR, "worktrees"));
+        const directory = source?.cwd ?? (typeof input.cwd === 'string' ? expandHome(input.cwd.trim()) : '');
+        if (!directory || !path.isAbsolute(directory) || !(await fs.promises.stat(directory)).isDirectory()) throw new Error("Choose an existing absolute working directory");
         check();
-        created = await createSession(sessions, opts, workspace.cwd);
+        if (legacy || input.isolated) workspace = await createIsolatedWorkspace(directory, path.join(SESSIONS_DIR, "worktrees"));
+        check();
+        created = await createSession(sessions, opts, workspace?.cwd ?? directory);
         check();
         projects.update({ action: "members", id: input.projectId, add: [created.id] }, id => sessions.has(id));
-        await setSessionTitle(created, `${source.title || path.basename(source.cwd)} · ${workspace.branch}`, true);
+        if (workspace) await setSessionTitle(created, `${source?.title || path.basename(directory)} · ${workspace.branch}`, true);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ instanceId: created.id, ...workspace }));
+        res.end(JSON.stringify({ instanceId: created.id, cwd: created.cwd, kind: created.kind, ...workspace }));
       } catch (e) {
         // Preserve any checkout/session created before a later failure; never
         // delete files that extensions or the user may already have touched.
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: String(e), ...(workspace ? { workspace, instanceId: created?.id } : {}) }));
+        res.end(JSON.stringify({ error: String(e), ...(workspace ? { workspace } : {}), ...(created ? { instanceId: created.id, cwd: created.cwd } : {}) }));
       }
       return;
     }
@@ -915,6 +922,46 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         });
         res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(result));
       } catch (e) { res.writeHead(req.method === "GET" ? 500 : 400); res.end(String(e)); }
+      return;
+    }
+    if (url.split('?')[0] === "/api/plugins/config") {
+      try {
+        let result;
+        if (req.method === 'GET') {
+          const params = new URLSearchParams(url.split('?')[1]);
+          result = getPluginConfig(settingsPath(), params.get('id') ?? '', params.get('namespace'));
+        } else if (req.method === 'PUT') {
+          const input = JSON.parse(await readBody(req));
+          if (!input || typeof input.id !== 'string') throw new Error('Invalid plugin configuration');
+          result = savePluginConfig(settingsPath(), input.id, input.namespace, input.config, input.revision);
+        } else { res.writeHead(405); res.end(); return; }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(err instanceof PluginConfigConflict ? 409 : 400, { 'Cache-Control': 'no-store' });
+        res.end(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+    if (url === "/api/plugins") {
+      try {
+        if (req.method === "PUT") {
+          const input = JSON.parse(await readBody(req));
+          if (!input || typeof input.id !== "string" || typeof input.enabled !== "boolean") throw new Error("Invalid plugin update");
+          setPluginEnabled(settingsPath(), input.id, input.enabled);
+        } else if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
+        const catalog = [...pluginCatalog(settingsPath()).map(({ specifier, directoryNames, ...plugin }) => plugin), ...builtinPluginCatalog(settingsPath())];
+        const livePluginStatus = [...sessions.values()].filter(s => !s._closed && !s._closing).flatMap(s =>
+          (s.bridge?.getPluginStatus?.() ?? []).map(p => ({ ...p, sessionId: s.id, title: s.title || s.id })));
+        const plugins = catalog.map(plugin => ({
+          ...plugin,
+          sessions: livePluginStatus.filter(p => p.id === plugin.id).map(p => ({
+            sessionId: p.sessionId, title: p.title, state: p.state, error: p.error, configNamespaces: p.configNamespaces,
+          })),
+        }));
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ plugins }));
+      } catch (err) { res.writeHead(req.method === "GET" ? 500 : 400); res.end(err instanceof Error ? err.message : String(err)); }
       return;
     }
     if (req.method === "GET" && url === "/api/config") return getConfig(res);
@@ -1102,6 +1149,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
 
   return {
     server,
+    remoteStatus: () => mobile.status(),
     shutdown: () => {
       stopping = true;
       mobile.close();
@@ -1470,7 +1518,7 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
   try {
     delete parsed.anyProviderConfigured;
     updateSettingsFile(fp, (old) => {
-      for (const key of [AUTO_APPROVE_KEY, "ashub.network", "subagentModels", "subagentBudgets"]) {
+      for (const key of [AUTO_APPROVE_KEY, "ashub.network", PLUGIN_DISABLED, "subagentModels", "subagentBudgets"]) {
         if (old[key] !== undefined) parsed[key] = old[key];
         else delete parsed[key];
       }

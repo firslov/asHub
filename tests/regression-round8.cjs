@@ -15,7 +15,7 @@ function acp(){const calls=[],child=new EventEmitter();child.stdout=new EventEmi
 
 function ashEnv(extra={}){
  let created=0,killed=0,shells=0,shellKilled=0;
- const noop=()=>{},core={handlers:{define:noop,advise:noop,call:noop},bus:{on:noop,emit:noop,emitPipe:(_,p)=>p},extensionContext:()=>({agent:{registerInstruction:noop,registerTool:noop,registerContextProducer:()=>noop}}),activateBackend:async()=>{},kill:()=>killed++};
+ const noop=()=>{},core={handlers:{define:noop,advise:noop,call:noop},bus:{on:noop,emit:noop,emitPipe:(_,p)=>p},extensionContext:()=>({bus:core.bus,registerCommand:noop,define:noop,agent:{registerInstruction:noop,removeInstruction:noop,registerTool:noop,unregisterTool:noop,registerSkill:noop,removeSkill:noop,providers:{register:noop,unregister:noop,configure:noop},registerContextProducer:()=>noop}}),activateBackend:async()=>{},kill:()=>killed++};
  const e=env({...extra,modules:{'agent-sh':{createCore:()=>{created++;return core}},'agent-sh/agent':{activateAgent:noop},'agent-sh/extensions':{loadBuiltinExtensions:async()=>[]},'agent-sh/extension-loader':{loadExtensions:async()=>[]},'agent-sh/shell':{Shell:class{constructor(){shells++}onExit(){}kill(){shellKilled++}}},'agent-sh/shell/terminal':{headlessTerminal:()=>({})},...extra.modules}});const A=e.load('src/bridges/ash.ts').AshBridge;A.prototype.wire=noop;A.prototype.registerUserProviders=noop;A.prototype.gateImageToolResults=noop;return{e,A,core,stats:()=>({created,killed,shells,shellKilled})};
 }
 const watchdog=setTimeout(()=>{console.error('TIMEOUT');process.exit(1)},30000);

@@ -75,6 +75,7 @@
   <link rel="stylesheet" href="/css/panels/skills.css" />
   <link rel="stylesheet" href="/css/panels/subagent.css" />
   <link rel="stylesheet" href="/css/panels/config.css" />
+  <link rel="stylesheet" href="/css/panels/plugins.css" />
   <link rel="stylesheet" href="/css/mobile-access.css" />
   <link rel="stylesheet" href="/css/panels/sidebar.css" />
   <link rel="stylesheet" href="/css/stream.css" />
@@ -459,6 +460,11 @@
           <rect x="8.5" y="8.5" width="4" height="4" rx="0.8"/>
         </svg>
       </button>
+      <button class="toolbar-btn" id="plugins-toggle" type="button" data-i18n-title="plugins.title" data-i18n-aria="plugins.title" title="Plugins" aria-label="Plugins">
+        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4.5 1.5v3m5-3v3M2.5 4.5h9M3.5 4.5v2.5a3.5 3.5 0 0 0 7 0V4.5M7 10.5v2"/>
+        </svg>
+      </button>
       <button class="toolbar-btn" id="sa-toggle" data-i18n-title="subagents" title="Subagents">
         <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="7" cy="7" r="2"/>
@@ -569,6 +575,24 @@
           </svg>
         </button>
       </div>
+      <details id="desktop-background-settings" class="desktop-background" hidden>
+        <summary data-i18n="background.title">Background activity</summary>
+        <div class="desktop-background-body">
+          <label class="config-toggle">
+            <input id="desktop-background-enabled" type="checkbox" role="switch" disabled aria-describedby="desktop-background-hint" />
+            <span class="config-toggle-slider" aria-hidden="true"></span>
+            <span class="config-toggle-label" data-i18n="background.enabled">Keep running when the window closes</span>
+          </label>
+          <p class="config-hint" id="desktop-background-hint" data-i18n="background.hint">Keep conversations and remote access available from the tray</p>
+          <label class="config-toggle">
+            <input id="desktop-background-awake" type="checkbox" role="switch" disabled aria-describedby="desktop-background-sleep-hint" />
+            <span class="config-toggle-slider" aria-hidden="true"></span>
+            <span class="config-toggle-label" data-i18n="background.awake">Keep awake while remote access is enabled</span>
+          </label>
+          <p class="config-hint" id="desktop-background-sleep-hint" data-i18n="background.sleepHint">The display can turn off · Closing a laptop lid or manual sleep can still disconnect remote access</p>
+          <p id="desktop-background-status" class="config-hint" role="status" hidden></p>
+        </div>
+      </details>
       <div class="p-controls">
         <div class="p-seg" id="config-mode-tabs">
           <button class="p-seg-item active" data-mode="simple" data-i18n="simple">Simple</button>
@@ -683,6 +707,22 @@
           <button class="p-btn" id="config-format" data-i18n="format">format</button>
           <button class="p-btn-primary" id="config-save" data-i18n="save.reload">save & reload</button>
         </div>
+      </div>
+    </div>
+
+    <div class="p-drawer" id="plugins-overlay" hidden>
+      <div class="p-head">
+        <div class="p-heading"><span class="p-title" data-i18n="plugins.title">Plugins</span><span class="p-meta" data-i18n="plugins.catalog">Extensions & providers</span></div>
+        <button class="p-icon-btn" id="plugins-close" type="button" data-i18n-title="close" title="Close"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m2 2 8 8M10 2l-8 8"/></svg></button>
+      </div>
+      <div class="p-body">
+        <p class="plugins-intro" data-i18n="plugins.hint">Changes apply when a conversation's kernel starts. Restart asHub to apply them to existing conversations without losing history.</p>
+        <div class="plugins-actions">
+          <button class="p-btn" id="plugins-refresh" type="button" data-i18n="plugins.refresh">Refresh status</button>
+        </div>
+        <p id="plugins-message" class="plugins-message" role="status" aria-live="polite"></p>
+        <div id="plugins-list"></div>
+        <p class="plugins-note" data-i18n="plugins.installHint">Install trusted extensions in ~/.agent-sh/extensions/ or add their paths to settings.extensions. Terminal-only interfaces need separate web support.</p>
       </div>
     </div>
 

@@ -1,4 +1,5 @@
 import "./i18n.js";
+import "./background-settings.js";
 
 // Platform detection (data-platform is set by the inline script in index.html,
 // which prefers the main process's process.platform over navigator.platform)
@@ -48,6 +49,7 @@ import("./no-session.js");
 
 // Lazy-loaded panels — loaded on first click
 registerPanel("config",    { toggleBtnId: "config-toggle",     panelId: "config-overlay",    load: () => import("./config-panel.js") });
+registerPanel("plugins", { toggleBtnId: "plugins-toggle", panelId: "plugins-overlay", load: () => import("./plugins-panel.js") });
 registerPanel("skills",    { toggleBtnId: "skills-toggle",    panelId: "skills-overlay",    load: () => import("./skills-panel.js") });
 registerPanel("ctx",       { toggleBtnId: "ctx-toggle",       panelId: "ctx-panel",        load: () => import("./context-panel.js") });
 registerPanel("files",     { toggleBtnId: "files-toggle",     panelId: "files-panel",      load: () => import("./files-panel.js") });

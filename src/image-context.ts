@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-// This bounds repeated image data, not new input or the stored conversation.
+// Fresh images have priority in this budget; they are never removed, even
+// when they exceed it. Only repeated history images may become references.
 export const HISTORY_IMAGE_BYTES = 2 * 1024 * 1024;
 const extensions: Record<string, string> = { png: "png", jpeg: "jpg", webp: "webp", gif: "gif" };
 type Message = { role?: string; content?: unknown; [key: string]: unknown };
@@ -20,6 +21,15 @@ export function imageContext(options: Options, uploads: string, sessionId: strin
   messages.forEach((m, i) => { if (m.role === "assistant") lastAssistant = i; if (m.role === "user") lastUser = i; });
   const replacements = new Map<number, unknown[]>();
   let remaining = Math.max(0, budget);
+  // Do not add a full history allowance on top of a large fresh image batch.
+  // Keep all new images lossless and let older images be read back as needed.
+  messages.forEach((message, i) => {
+    if (!Array.isArray(message.content) || (i <= lastAssistant && i !== lastUser && ['user', 'tool'].includes(message.role ?? ''))) return;
+    for (const part of message.content) {
+      const url = typeof part?.image_url === 'string' ? part.image_url : part?.image_url?.url;
+      if (part?.type === 'image_url' && typeof url === 'string' && url.startsWith('data:image/')) remaining = Math.max(0, remaining - url.length);
+    }
+  });
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
     // Never discard unseen tool results, the current user's attachments, or

@@ -240,3 +240,16 @@
 .config-load-state span { flex: 1; }
 .config-load-state .p-btn { flex-shrink: 0; }
 #config-body-simple[inert], #config-body-advanced[inert] { opacity: .45; }
+
+/* Desktop lifecycle settings stay separate from the provider configuration. */
+#config-overlay .desktop-background { flex-shrink: 0; margin: 0 20px; border-bottom: 1px solid var(--border-light); }
+#config-overlay .desktop-background[hidden] { display: none; }
+#config-overlay .desktop-background summary { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; cursor: pointer; color: var(--text-dim); font-size: var(--fs-sm); list-style: none; }
+#config-overlay .desktop-background summary::-webkit-details-marker { display: none; }
+#config-overlay .desktop-background summary::after { content: ''; width: 5px; height: 5px; margin-right: 3px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: rotate(-45deg); }
+#config-overlay .desktop-background[open] summary::after { transform: rotate(45deg); }
+#config-overlay .desktop-background summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#config-overlay .desktop-background-body { display: grid; gap: 10px; padding: 2px 0 16px; max-height: 35vh; overflow-y: auto; }
+#config-overlay .desktop-background .config-hint { margin: 0; line-height: 1.6; }
+#config-overlay .desktop-background input:disabled ~ span { opacity: .5; }
+#desktop-background-status { color: var(--error); }

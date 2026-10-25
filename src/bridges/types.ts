@@ -79,6 +79,8 @@ export interface Bridge {
   /** Resolves once the underlying agent is initialized and ready for prompts. */
   ready(): Promise<void>;
 
+  getPluginStatus?(): import("../plugins.js").PluginStatus[];
+
   getRestoreState?(): Record<string, unknown> | undefined;
 
   /** Submit a prompt; resolves at end of turn. */

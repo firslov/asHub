@@ -321,7 +321,7 @@ const renderSessionItem = (s, isPinned = false) => {
   editBtn.addEventListener("click", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
-    startTitleEdit(li, s.instanceId, s.title || "");
+    startTitleEdit(li, s.instanceId, (getSession(s.instanceId)?.title ?? s.title) || "");
   });
 
   const close = document.createElement("button");
@@ -336,7 +336,7 @@ const renderSessionItem = (s, isPinned = false) => {
     if (!close.classList.contains("confirming")) {
       close.classList.add("confirming");
       close.textContent = "?";
-      close.title = t("close.session.confirm", { title: s.title || t("untitled") });
+      close.title = t("close.session.confirm", { title: (getSession(s.instanceId)?.title ?? s.title) || t("untitled") });
       setTimeout(() => {
         close.classList.remove("confirming");
         close.textContent = "×";
@@ -395,7 +395,7 @@ const renderSessionItem = (s, isPinned = false) => {
     if (!archiveBtn.classList.contains("confirming")) {
       archiveBtn.classList.add("confirming");
       archiveBtn.innerHTML = "?";
-      archiveBtn.title = t("archive.confirm", { title: s.title || t("untitled") });
+      archiveBtn.title = t("archive.confirm", { title: (getSession(s.instanceId)?.title ?? s.title) || t("untitled") });
       setTimeout(() => {
         archiveBtn.classList.remove("confirming");
         archiveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>`;
@@ -615,8 +615,18 @@ const renderSessions = async (force = false, opts = null) => {
       if (v === "workspaces" || v === "terminals") bump();
     }
 
+    // Moving a focused rename input can blur/commit it. Reconcile after editing.
+    if (editingId) {
+      const editing = list.find(s => s.instanceId === editingId);
+      if (editing && matchesFilter(editing.title || t("untitled"), editing.cwd)) {
+        fullHashCache = ""; // Replay deferred pin/language refreshes after the edit.
+        return;
+      }
+      editingId = null; // A removed/filtered row must not strand reconciliation.
+    }
     fullHashCache = fullHash;
-    const agentList = list.filter((s) => (s.kind ?? "agent") === "agent");
+    const agentList = list.filter((s) => (s.kind ?? "agent") === "agent")
+      .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
     const pinIds = pinnedIds.peek();
 
     // Filter by title + cwd substring; the query is part of the hash so
@@ -628,7 +638,7 @@ const renderSessions = async (force = false, opts = null) => {
 
     const hash = JSON.stringify([query, visibleList.map((s) => [
       s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread,
-      pinIds.has(s.instanceId),
+      pinIds.has(s.instanceId), s.lastModified ?? s.startedAt,
     ])]);
     if (hash === sessionsHash) return;
     const isFirstRender = sessionsHash === "";
@@ -683,9 +693,7 @@ const renderSessions = async (force = false, opts = null) => {
       newChildren.push(sideEmpty("◌", query ? t("filter.no.match") : t("no.session")));
     }
     // Walk in order, updating or creating DOM nodes.
-    // Only update display content — do NOT reorder DOM nodes
-    // when only metadata (isProcessing, title) changed.
-    // This prevents the visual flash of items jumping position.
+    // Reuse rows, then move only those whose sorted position changed.
     for (const entry of buildOrder) {
       if (entry.kind === "head") {
         // Group headers are always recreated (cheap, few of them)
@@ -783,13 +791,8 @@ const renderSessions = async (force = false, opts = null) => {
           prevChild = child;
         }
       } else {
-        if (!sessionList.contains(child)) {
-          if (prevChild) {
-            insertAfter(child, prevChild);
-          } else {
-            insertFirst(child);
-          }
-        }
+        if (prevChild) insertAfter(child, prevChild);
+        else insertFirst(child);
         prevChild = child;
       }
     }
@@ -1137,6 +1140,7 @@ const queueRefresh = () => {
   });
 };
 // Trigger on title changes, processing start/end via SSE events.
+document.addEventListener("ash:sessions-changed", queueRefresh);
 document.addEventListener("sse:title", queueRefresh);
 document.addEventListener("sse:processing-change", queueRefresh);
 // Fallback: poll every 5 minutes in case SSE events were missed. Also
@@ -1181,6 +1185,8 @@ document.addEventListener("langchange", () => {
 // Inline update — a full re-render would clobber an in-progress title edit.
 export const updateSessionTitle = (sid, title) => {
   if (!title) return;
+  // Actions must see a live title even before the follow-up list fetch returns.
+  updateSession(sid, { title });
   if (sid === activeSessionId.peek()) setSessionTopic(title);
   const items = sessionList.querySelectorAll("li");
   for (const li of items) {

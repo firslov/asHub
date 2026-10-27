@@ -6,6 +6,7 @@ import { BUILTIN_EXTENSIONS } from "agent-sh/extensions";
 import type { AgentShellCore } from "agent-sh";
 import { observeCodexUsage, type CodexUsage } from "./codex-usage.js";
 import type { RequestDiagnostic } from "../request-diagnostics.js";
+import { CODEX_HEADERS_TIMEOUT_MS, registerCodexEndpoint } from "./codex-retry.js";
 
 type Context = ReturnType<AgentShellCore["extensionContext"]>;
 
@@ -86,6 +87,9 @@ export class CodexProviderHost {
     }
     const context = {
       ...this.ctx,
+      getExtensionSettings: <T extends Record<string, unknown>>(namespace: string, defaults: T): T =>
+        this.ctx.getExtensionSettings(namespace, namespace === "codex-provider"
+          ? { ...defaults, headersTimeoutMs: CODEX_HEADERS_TIMEOUT_MS } : defaults),
       agent: {
         ...agent,
         providers: {
@@ -93,12 +97,14 @@ export class CodexProviderHost {
           register: (reg: Parameters<typeof agent.providers.register>[0]) => {
             if (disposed || this.closed) { dispose(); return () => {}; }
             const unregister = agent.providers.register(reg);
+            const untrackEndpoint = registerCodexEndpoint(reg.baseURL);
             let registered = true;
             return () => {
               // Upstream unregisters by provider id. A repeated old cleanup
               // would otherwise remove a newer activation with the same id.
               if (!registered) return;
               registered = false;
+              untrackEndpoint();
               unregister();
             };
           },

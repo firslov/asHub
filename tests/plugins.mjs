@@ -532,11 +532,12 @@ test('Codex configuration rejects known field type errors before writing, includ
     { models: 'example-model' }, { models: null }, { models: [7] }, { models: [''] }, { models: [{}] },
     { providerId: 3 }, { upstreamURL: null }, { originator: [] },
     { credentialsTimeoutMs: '120000' }, { headersTimeoutMs: -1 }, { idleTimeoutMs: null },
+    { maxRetries: 7 }, { maxRetries: 1.5 }, { maxRetries: '4' }, { headersTimeoutRetries: 2 }, { headersTimeoutRetries: -1 },
   ]) {
     for (const pluginId of [id, localId]) assert.throws(() => savePluginConfig(f.file, pluginId, namespace, config, initial.revision), /codex-provider\./);
     assert.equal(fs.readFileSync(f.file, 'utf8'), before);
   }
-  const valid = { providerId: 'custom-codex', models: ['custom-model'], headersTimeoutMs: 900000, extensionOption: { retained: true } };
+  const valid = { providerId: 'custom-codex', models: ['custom-model'], headersTimeoutMs: 900000, maxRetries: 4, headersTimeoutRetries: 1, extensionOption: { retained: true } };
   savePluginConfig(f.file, id, namespace, valid, initial.revision);
   assert.deepEqual(getPluginConfig(f.file, id, namespace).config, valid);
   const { resolveModels } = await import('../node_modules/agent-sh/dist/agent/extensions/codex-provider/models.js');

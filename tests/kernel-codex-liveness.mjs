@@ -17,16 +17,48 @@ const watchdog = setTimeout(() => { console.error('Codex liveness integration ti
 const originalFetch = globalThis.fetch;
 let outputSent = false, mode = 'delayed', requests = 0, headersBeforeOutput = false, upstreamClosed, onHeaders, transientSent = false;
 let diagnosticFailureSent = false, largeToolRequests = 0;
+let policyRequests = 0;
 globalThis.fetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   assert(['127.0.0.1', 'localhost'].includes(url.hostname), 'external requests disabled');
   const response = await originalFetch(input, init);
   if (url.pathname.endsWith('/chat/completions')) { headersBeforeOutput = !outputSent; }
+  if (mode === 'loopback-cut' && url.pathname.endsWith('/chat/completions')) {
+    const reader = response.body.getReader();
+    let delivered = false;
+    return new Response(new ReadableStream({
+      async pull(controller) {
+        if (delivered) {
+          await reader.cancel();
+          controller.error(new Error('fetch failed: loopback transport interrupted'));
+          return;
+        }
+        const {value, done} = await reader.read();
+        if (done) { controller.close(); return; }
+        const text = new TextDecoder().decode(value);
+        const end = text.indexOf('\n\n', text.indexOf('LIVENESS_OK'));
+        if (text.includes('LIVENESS_OK') && end >= 0) {
+          controller.enqueue(new TextEncoder().encode(text.slice(0, end + 2)));
+          delivered = true;
+        } else controller.enqueue(value);
+      },
+      cancel: () => reader.cancel(),
+    }), {status:response.status, headers:response.headers});
+  }
   return response;
 };
 const upstream = http.createServer(async (req, res) => {
   for await (const _ of req) { /* consume */ }
   requests++;
+  if (['four-failures', 'exhaust-retries', 'exhaust-deadlines', 'switch-backoff'].includes(mode)) {
+    policyRequests++;
+    if (mode === 'exhaust-deadlines') return;
+    if (mode === 'exhaust-retries' || policyRequests <= 4) {
+      res.writeHead(503, {'content-type': 'application/json', 'retry-after': mode === 'switch-backoff' ? '0.05' : '0'});
+      res.end(JSON.stringify({error:{message:'temporary policy fixture failure'}}));
+      return;
+    }
+  }
   if (mode === 'retry-large-tool') {
     largeToolRequests++;
     if (largeToolRequests === 1) {
@@ -73,7 +105,7 @@ const upstream = http.createServer(async (req, res) => {
 upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
 await fs.writeFile(path.join(dir, 'settings.json'), JSON.stringify({
   defaultProvider: 'codex', startupBanner: false,
-  'codex-provider': {models: ['audit-model'], upstreamURL: `http://127.0.0.1:${upstream.address().port}/responses`, headersTimeoutMs: 1500, idleTimeoutMs: 1500},
+  'codex-provider': {models: ['audit-model','alternate-audit-model'], upstreamURL: `http://127.0.0.1:${upstream.address().port}/responses`, headersTimeoutMs: 1500, idleTimeoutMs: 1500},
 }));
 await fs.mkdir(path.join(dir, 'codex-provider'));
 await fs.writeFile(path.join(dir, 'codex-provider/auth.json'), JSON.stringify({access: 'fake-access', refresh: 'fake-refresh', accountId: 'fake-account', expires: Date.now() + 3600000}));
@@ -89,6 +121,12 @@ try {
   assert.equal(requests, 1, 'reasoning must not trigger duplicate upstream requests');
   assert(JSON.stringify((await bridge.snapshot()).messages).includes('LIVENESS_OK'));
   console.log('PASS AshBridge receives early Codex headers and one complete answer');
+
+  mode = 'loopback-cut';
+  const beforeCut = requests;
+  await assert.rejects(bridge.submit('Do not replay a partial loopback response'), /loopback transport interrupted/);
+  assert.equal(requests - beforeCut, 1, 'a raw loopback error after output must not replay the response');
+  console.log('PASS raw loopback failures after partial output do not escape into outer retries');
 
   mode = 'retryable';
   const beforeRetry = requests;
@@ -134,9 +172,9 @@ try {
   for (const [scenario, expectedCode] of [['done-only', 'STREAM_ENDED'], ['bad-200', 'STREAM_ENDED'], ['headers-timeout', 'UPSTREAM_HEADERS_TIMEOUT'], ['idle-timeout', 'UPSTREAM_IDLE_TIMEOUT']]) {
     mode = scenario; diagnosticFailureSent = false;
     const before = requests, logStart = (await readDiagnostics()).length;
-    if (scenario.endsWith('timeout')) {
-      // Local deadlines deliberately exhaust the request: the installed
-      // kernel must not start another long upload automatically.
+    if (scenario === 'idle-timeout') {
+      // Stream inactivity still stops immediately; only a pre-output header
+      // deadline gets the new one-retry allowance.
       await assert.rejects(bridge.submit('Wait for the deadline'), /timed out/);
       assert.equal(requests - before, 1, 'spent deadlines must not be automatically retried');
       mode = 'delayed';
@@ -149,8 +187,38 @@ try {
     assert.equal(firstOutcome.phase, 'error'); assert.equal(firstOutcome.code, expectedCode);
     assert.equal(entries.at(-1).phase, 'complete');
     assert(!entries.some(e => e.phase === 'cancelled'), 'a deadline is not user cancellation');
-    console.log(`PASS ${scenario}: diagnostic agrees with the kernel; retry/continuation policy is unchanged`);
+    console.log(`PASS ${scenario}: diagnostics agree with bounded retry/continuation policy`);
   }
+
+  mode = 'four-failures'; policyRequests = 0;
+  await bridge.submit('Recover after four transient failures');
+  assert.equal(policyRequests, 5, 'four retries recover on the fifth attempt');
+  for (const [scenario, expected] of [['exhaust-retries',5], ['exhaust-deadlines',2]]) {
+    mode = scenario; policyRequests = 0;
+    await assert.rejects(bridge.submit('Exhaust the request budget'), /failure|timed out/);
+    assert.equal(policyRequests, expected, 'kernel retries must not multiply the asHub budget');
+  }
+  console.log('PASS transient retries and local header deadlines have independent bounded budgets');
+
+  mode = 'switch-backoff'; policyRequests = 0;
+  let switched;
+  const switchDuringRetry = event => {
+    if (!switched && event.name === 'agent:request-status' && event.payload.phase === 'retrying') {
+      switched = Promise.resolve(bridge.execCommand('/model','alternate-audit-model@codex'));
+      switched.catch(() => {});
+    }
+  };
+  bridge.on('event', switchDuringRetry);
+  try {
+    await assert.rejects(bridge.submit('Do not resend old parameters after model switch'), /settings changed/);
+    assert(switched, 'the real model command must run during backoff');
+    await switched;
+    assert.equal(policyRequests, 1);
+    assert.equal(bridge.getThinking().model, 'alternate-audit-model');
+  } finally { bridge.off('event', switchDuringRetry); }
+  mode = 'delayed';
+  await bridge.submit('Continue on the newly selected model');
+  console.log('PASS changing models during retry stops the old request and the next turn still works');
 
   mode = 'cancel';
   const closed = new Promise(resolve => { upstreamClosed = resolve; });

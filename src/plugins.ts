@@ -140,6 +140,12 @@ function configTarget(data: Record<string, any>, id: string, namespace: string) 
 }
 const configObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 function validateCodexConfig(config: Record<string, unknown>): void {
+  for (const [key, max] of [["maxRetries", 6], ["headersTimeoutRetries", 1]] as const) {
+    if (Object.hasOwn(config, key) && !(typeof config[key] === 'number' && Number.isInteger(config[key])
+        && (config[key] as number) >= 0 && (config[key] as number) <= max)) {
+      throw new Error(`codex-provider.${key} must be an integer from 0 to ${max}`);
+    }
+  }
   for (const key of ['providerId', 'upstreamURL', 'originator']) {
     if (Object.hasOwn(config, key) && (typeof config[key] !== 'string' || !(config[key] as string).trim())) {
       throw new Error(`codex-provider.${key} must be a nonempty string`);

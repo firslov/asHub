@@ -16,6 +16,7 @@ import { guardImageContext } from "../image-context.js";
 import { RequestMonitor } from "../request-diagnostics.js";
 import { SessionThinking, reasoningProfile, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
 import { configureDeepSeek } from "../providers/deepseek.js";
+import { guardCodexRetries } from "../providers/codex-retry.js";
 import { EventEmitter } from "node:events";
 import { setTimeout as waitForRetry } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
@@ -448,6 +449,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
     guardLlmUnicode(core.handlers.call("llm:get-client"));
     guardImageContext(core.handlers.call("llm:get-client"), path.join(CONFIG_DIR, "hub-sessions", "uploads"), sessionId);
+    guardCodexRetries(core.handlers.call("llm:get-client"), message => core.bus.emit("ui:info", { message }));
     this.registerUserProviders(extCtx);
     configureDeepSeek(extCtx);
 

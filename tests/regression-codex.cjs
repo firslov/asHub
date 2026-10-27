@@ -3,6 +3,21 @@ const assert = require('node:assert/strict');
 const { env, fs, path, Res } = require('./harness.cjs');
 
 const credentials = { access: 'fixture-access', refresh: 'fixture-refresh', accountId: 'fixture-account', expires: 1 };
+test('asHub supplies a 15 minute Codex header default while preserving explicit overrides', async () => {
+  for (const override of [{}, {headersTimeoutMs:1234}]) {
+    let config, other;
+    const x=setup({'agent-sh/extensions':{BUILTIN_EXTENSIONS:[{name:'codex-provider',load:async()=>async ctx=>{
+      config=ctx.getExtensionSettings('codex-provider',{headersTimeoutMs:600000,idleTimeoutMs:1800000});
+      other=ctx.getExtensionSettings('other',{headersTimeoutMs:22});
+    }}]}});
+    const host=new x.module.CodexProviderHost({call:()=>null,list:()=>[],agent:{providers:{}},
+      getExtensionSettings:(name, defaults)=>({...defaults,...(name==='codex-provider'?override:{})}),
+    });
+    try {await host.sync();assert.equal(config.headersTimeoutMs,override.headersTimeoutMs??900000);
+      assert.equal(config.idleTimeoutMs,1800000);assert.equal(other.headersTimeoutMs,22);
+    } finally {host.close();}
+  }
+});
 function setup(modules = {}) {
   const e = env({ modules });
   let settings = {};

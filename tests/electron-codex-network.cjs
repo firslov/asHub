@@ -142,8 +142,8 @@ app.whenReady().then(async () => {
 
   begin('persistent');
   await assert.rejects(bridge.submit('Reply briefly'), /ERR_HTTP2_PROTOCOL_ERROR/);
-  assert.equal(modeAttempts, 4, 'the default retry budget is three retries; the SDK must not multiply it');
-  assert.equal(retryAnnouncements, 3);
+  assert.equal(modeAttempts, 5, 'the default retry budget is four retries; the SDK must not multiply it');
+  assert.equal(retryAnnouncements, 4);
   assert.equal(text, '');
   console.log('PASS persistent HTTP/2 errors stop after the configured retry budget');
 
@@ -178,7 +178,7 @@ app.whenReady().then(async () => {
   assert(!diagnostics.includes('fake-access') && !diagnostics.includes('fake-account') && !diagnostics.includes('Reply briefly'));
   const entries = diagnostics.trim().split('\n').map(JSON.parse);
   assert(entries.some(e => e.phase === 'error' && e.code === 'ERR_HTTP2_PROTOCOL_ERROR'));
-  assert(entries.some(e => e.phase === 'request' && e.attempt === 4));
+  assert(entries.some(e => e.phase === 'request' && e.attempt === 5));
   assert(entries.some(e => e.phase === 'cancelled'));
   console.log('PASS real transport diagnostics distinguish retries, failures and cancellation without content or credentials');
 }).then(() => finish(0), error => { console.error(error); finish(1); });

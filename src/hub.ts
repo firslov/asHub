@@ -866,16 +866,20 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         if (input.thinking !== undefined && (typeof input.thinking !== "string" || (!input.model && input.thinking !== "default")
           || (input.thinking !== "default" && !reasoningProfile({ id: input.model, provider: input.provider })?.levels.includes(input.thinking)))) throw new Error("Unsupported thinking level for this model");
         const legacy = url === "/api/projects/worktree";
+        const projectRoot = projects.list().find(p => p.id === input.projectId)?.cwd;
         const check = () => {
           if (deletingProject) throw new Error("Project deletion in progress; retry shortly");
           const project = projects.list().find(p => p.id === input.projectId);
           if (!project) throw new Error("Project no longer exists");
+          if (!legacy && project.cwd !== projectRoot) throw new Error("Project directory changed; retry with the updated project");
           const source = legacy ? sessions.get(input.sourceId) : undefined;
           if (legacy && (!project.sessionIds.includes(input.sourceId) || !source || source.kind !== "agent" || source._closed || source._closing)) throw new Error("Source conversation unavailable");
           return source;
         };
         const source = check();
-        const directory = source?.cwd ?? (typeof input.cwd === 'string' ? expandHome(input.cwd.trim()) : '');
+        const directory = source?.cwd ?? projectRoot ?? '';
+        if (!legacy && !projectRoot) throw new Error("Set the project root directory in Manage project before creating a conversation");
+        if (!legacy && input.cwd !== undefined && (typeof input.cwd !== 'string' || !path.isAbsolute(expandHome(input.cwd.trim())) || path.relative(directory, expandHome(input.cwd.trim())) !== '')) throw new Error("New project conversations must use the project root directory");
         if (!directory || !path.isAbsolute(directory) || !(await fs.promises.stat(directory)).isDirectory()) throw new Error("Choose an existing absolute working directory");
         check();
         if (legacy || input.isolated) workspace = await createIsolatedWorkspace(directory, path.join(SESSIONS_DIR, "worktrees"));
@@ -948,6 +952,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         else {
           const input = JSON.parse(await readBody(req));
           if (deletingProject) throw new Error("Project deletion in progress; retry shortly");
+          if ((input?.action === 'create' || input?.action === 'edit') && typeof input.cwd === 'string') input.cwd = expandHome(input.cwd.trim());
           if (input?.action === 'delete' && input.deleteConversations !== undefined && typeof input.deleteConversations !== 'boolean') throw new Error("Invalid deleteConversations option");
           if (input?.action === 'delete' && input.deleteConversations === true) {
             const project = projects.list().find(p => p.id === input.id);
@@ -2622,9 +2627,9 @@ async function generateTitleAsync(session: Session): Promise<void> {
 function listSessions(res: http.ServerResponse, sessions: Map<string, Session>, projects: ProjectStore): void {
   const groups = projects.list();
   const membership = new Map(groups.flatMap(p => p.sessionIds.map(id => [id, p.id] as const)));
-  // Use membership order, not activity sorting, to keep the reference directory
-  // stable. Only expose the comparison result to shared/mobile conversations.
-  const directories = new Map(groups.map(p => [p.id, p.sessionIds.map(id => sessions.get(id)).find(s => s?.kind === 'agent' && s.cwd)?.cwd] as const));
+  // Project roots are independent of membership, activity and conversation cwd changes.
+  // Only expose the comparison result to shared/mobile conversations.
+  const directories = new Map(groups.map(p => [p.id, p.cwd] as const));
   const list = Array.from(sessions.values())
     .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0))
     .map((s) => ({

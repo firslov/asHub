@@ -17,8 +17,8 @@ const assert=require('node:assert/strict');const {once}=require('node:events');
  const call=(url,body)=>fetch(base+url,{headers,method:body?'POST':'GET',body:body?JSON.stringify(body):undefined});
  const api=async(...args)=>{const r=await call(...args);assert(r.ok,await r.clone().text());return r.json();};
  try{
-  const project=(await api('/api/projects',{action:'create',name:'Test'}))[0];
-  const body={projectId:project.id,cwd:e.dir,title:'Review literature',model:'deepseek-v4-flash',provider:'deepseek',thinking:'max',proxyEnabled:false};
+  const project=(await api('/api/projects',{action:'create',cwd:e.dir,name:'Test'}))[0];
+  const body={projectId:project.id,title:'Review literature',model:'deepseek-v4-flash',provider:'deepseek',thinking:'max',proxyEnabled:false};
   const created=await api('/api/projects/session',body);
   const session=(await api('/sessions')).find(s=>s.instanceId===created.instanceId);
   assert.equal(session.title,body.title);assert.equal(session.model,body.model);assert.equal(session.provider,body.provider);assert.equal(session.thinkingLevel,'max');assert.equal(session.projectId,project.id);

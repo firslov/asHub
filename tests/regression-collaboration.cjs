@@ -12,7 +12,7 @@ async function setup(t) {
   const sessions = new Map();
   const opts = {collaboration:tasks, makeBridge:o=>new Bridge(o), conversationAccess:id=>conversationAccess(id,sessions,projects,tasks)};
   const a = await createSession(sessions,opts,e.dir), b = await createSession(sessions,opts,e.dir);
-  const project = projects.update({action:'create',name:'Team',add:[a.id,b.id]},()=>true)[0];
+  const project = projects.update({action:'create',cwd:e.dir,name:'Team',add:[a.id,b.id]},()=>true)[0];
   return {e,tasks,projects,project,sessions,a,b,access:a.bridge.opts.conversationAccess,routeEvent,listSessions,closeSession,CollaborationTasks};
 }
 test('receipts track exact turn, preserve long Unicode output, wait without polling, and survive restart',async t=>{

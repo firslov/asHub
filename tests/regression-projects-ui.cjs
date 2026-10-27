@@ -17,7 +17,7 @@ function setup(options = {}) {
   const root=new Node(),body=new Node(); const calls=[], events=[], closed=[], snapshots=[];
   const activeSessionId={value:options.active || ''};
   const window=Object.assign(new Node(),{location:{}});
-  const project={id:'project',name:'Existing',sessionIds:['a','archived']};
+  const project={id:'project',name:'Existing',cwd:'/workspace',sessionIds:['a','archived']};
   let fail=false;
   const document={body,activeElement:null,createElement:tag=>new Node(tag),getElementById:id=>id==='projects'?root:null,addEventListener(){},dispatchEvent(e){events.push(e.type);}};
   const e=env({modules:{
@@ -39,7 +39,7 @@ function setup(options = {}) {
 test('project picker preserves hidden and archived selections and sends only membership deltas',async()=>{
  const s=setup();s.mod.showProjects(true);await tick();s.mod.audit.edit(s.project);
  const dialog=s.body.children.at(-1),form=dialog.children[0],inputs=form.querySelectorAll('input');
- const [name,search,a,b]=inputs;assert.equal(a.checked,true);assert.equal(b.checked,false);
+ const [name,cwd,search,a,b]=inputs;assert.equal(a.checked,true);assert.equal(b.checked,false);
  search.value='Beta';search.dispatchEvent({type:'input'});assert.equal(a.parentNode.hidden,true);
  b.checked=true;b.dispatchEvent({type:'change'});name.value='Renamed';
  form.dispatchEvent({type:'submit',preventDefault(){}});await tick();
@@ -68,7 +68,7 @@ test('failed create during initial loading does not leave the project list perma
  // The new-project action is available while the list request is pending.
  s.mod.audit.edit(null);
  const dialog=s.body.children.at(-1),form=dialog.children[0];
- form.querySelectorAll('input')[0].value='Draft';
+ form.querySelectorAll('input')[0].value='Draft';form.querySelectorAll('input')[1].value='/workspace';
  form.dispatchEvent({type:'submit',preventDefault(){}});await tick();
  assert.equal(dialog.open,true);
  dialog.close();
@@ -84,7 +84,7 @@ test('successful create cannot be overwritten by an older pending list response'
    : new Promise(resolve=>finishRead=resolve)});
  s.mod.showProjects(true);s.mod.audit.edit(null);
  const form=s.body.children.at(-1).children[0];
- form.querySelectorAll('input')[0].value='New';
+ form.querySelectorAll('input')[0].value='New';form.querySelectorAll('input')[1].value='/workspace';
  form.dispatchEvent({type:'submit',preventDefault(){}});await tick();
  const before=s.root.children;
  finishRead({ok:true,json:async()=>[]});await tick();
@@ -130,19 +130,19 @@ test('project new conversation defaults to shared directory and joins its projec
  const s=setup({fetch:async(url)=>({ok:true,json:async()=>url==='/api/projects/session'?{instanceId:'new-chat'}:[]})});
  s.mod.audit.newProjectChat(s.project);
  const dialog=s.body.children.at(-1), content=dialog.children[0], inputs=content.querySelectorAll('input');
- assert.equal(inputs[2].value,'/workspace'); assert.equal(inputs[3].checked,false);
+ assert(!inputs.some(n=>n.name==='cwd')); assert.equal(inputs[2].checked,false);
  content.lastChild.dispatchEvent({type:'click'}); await tick(); await tick();
  assert.deepEqual(s.calls.find(c=>c.url==='/api/projects/session').body,{projectId:'project',cwd:'/workspace',isolated:false});
  assert.equal(dialog.open,false);
 });
 test('empty project can create a first conversation and optionally request an isolated directory', async()=>{
- const s=setup();s.mod.audit.newProjectChat({id:'empty',sessionIds:[]});
+ const s=setup();s.mod.audit.newProjectChat({id:'empty',cwd:'/repo',sessionIds:[]});
  const dialog=s.body.children.at(-1),content=dialog.children[0],inputs=content.querySelectorAll('input');
- assert.equal(content.lastChild.disabled,true); inputs[2].value='/repo';inputs[2].dispatchEvent({type:'input'});
- inputs[3].checked=true;inputs[3].dispatchEvent({type:'change'});assert.equal(content.lastChild.disabled,false);
+ assert.equal(content.lastChild.disabled,false);
+ inputs[2].checked=true;inputs[2].dispatchEvent({type:'change'});assert.equal(content.lastChild.disabled,false);
  s.fail(); content.lastChild.dispatchEvent({type:'click'});await tick();
  assert.deepEqual(s.calls.at(-1).body,{projectId:'empty',cwd:'/repo',isolated:true});
- assert.equal(dialog.open,true);assert.equal(inputs[2].disabled,false);assert.equal(inputs[3].checked,true);
+ assert.equal(dialog.open,true);assert.equal(inputs[2].disabled,false);assert.equal(inputs[2].checked,true);
 });
 test('project creation blocks duplicate submits and Escape while request is pending',async()=>{
  let finish;
@@ -249,7 +249,70 @@ test('failed archive leaves membership intact and allows retry',async()=>{
 
 test('project creation keeps the reference directory when an external chat was modified more recently',()=>{
  const s=setup({sessions:[{instanceId:'b',title:'External',cwd:'/external',kind:'agent'},{instanceId:'a',title:'Main',cwd:'/main',kind:'agent'}]});
- s.mod.audit.newProjectChat({id:'project',sessionIds:['a','b']});
+ s.mod.audit.newProjectChat({id:'project',cwd:'/root',sessionIds:['a','b']});
  const fields=s.body.children.at(-1).querySelectorAll('input');
- assert.equal(fields.find(n=>n.type==='text'&&n.name!=='title').value,'/main');
+ assert(!fields.some(n=>n.name==='cwd'));
+ assert(s.body.children.at(-1).querySelectorAll('p').some(n=>n.textContent==='/root'));
+});
+
+test('new project requires a root and sends it once with creation',async()=>{
+ const s=setup();s.mod.audit.edit(null);const form=s.body.children.at(-1).children[0],inputs=form.querySelectorAll('input');
+ inputs[0].value='New';form.dispatchEvent({type:'submit',preventDefault(){}});await tick();assert.equal(s.calls.length,0);
+ inputs.find(n=>n.name==='cwd').value='/chosen';form.dispatchEvent({type:'submit',preventDefault(){}});await tick();
+ assert.equal(s.calls[0].body.cwd,'/chosen');assert.equal(s.calls[0].body.action,'create');
+});
+test('legacy project opens root configuration instead of guessing from a member conversation',()=>{
+ const s=setup();s.mod.audit.newProjectChat({id:'legacy',name:'Legacy',sessionIds:['a']});
+ const form=s.body.children.at(-1).children[0];assert.equal(form.querySelectorAll('input').find(n=>n.name==='cwd').value,'');
+ assert(form.querySelectorAll('p').some(n=>n.textContent==='projects.rootRequired'));assert.equal(s.calls.length,0);
+});
+test('root directory picker blocks save and ignores results after closing the project editor',async()=>{
+ const s=setup();let resolve;s.window.electronAPI={pickDirectory:()=>new Promise(r=>resolve=r)};s.mod.audit.edit(null);
+ const dialog=s.body.children.at(-1),form=dialog.children[0],inputs=form.querySelectorAll('input');inputs[0].value='Project';inputs[1].value='/before';
+ form.querySelectorAll('button').find(b=>b.textContent==='projects.chooseDirectory').dispatchEvent({type:'click'});
+ form.dispatchEvent({type:'submit',preventDefault(){}});await tick();assert.equal(s.calls.length,0);
+ dialog.close();resolve({cwd:'/late'});await tick();assert.equal(inputs[1].value,'/before');
+});
+
+
+test('stale conversation dialog rejects a changed project root before creating a session',async()=>{
+ let currentRoot='/workspace',created=0;
+ const s=setup({fetch:async(url,opts)=>{
+   if(url==='/api/projects/session') {
+     const input=JSON.parse(opts.body);
+     if(input.cwd!==undefined && input.cwd!==currentRoot)return {ok:false,json:async()=>({error:'Project directory changed'})};
+     created++;return {ok:true,json:async()=>({instanceId:'new-chat'})};
+   }
+   return {ok:true,json:async()=>[]};
+ }});
+ s.mod.audit.newProjectChat(s.project);
+ const dialog=s.body.children.at(-1),content=dialog.children[0];
+ currentRoot='/changed-elsewhere';
+ content.lastChild.dispatchEvent({type:'click'});await tick();await tick();
+ assert.equal(created,0,'must not silently create in a different directory from the displayed root');
+ assert.equal(dialog.open,true);
+ assert(content.querySelectorAll('p').some(n=>n.textContent==='Project directory changed'));
+});
+
+test('stale project editor does not overwrite a concurrent root change when renaming',async()=>{
+ let currentRoot='/workspace';
+ const s=setup({fetch:async(_url,opts)=>{
+   const input=JSON.parse(opts.body);
+   if(input.cwd!==undefined)currentRoot=input.cwd;
+   return {ok:true,json:async()=>[{...s.project,name:input.name,cwd:currentRoot}]};
+ }});
+ s.mod.audit.edit(s.project);
+ const dialog=s.body.children.at(-1),form=dialog.children[0];
+ currentRoot='/changed-elsewhere';form.querySelectorAll('input')[0].value='Renamed';
+ form.dispatchEvent({type:'submit',preventDefault(){}});await tick();
+ assert.equal(currentRoot,'/changed-elsewhere','renaming must preserve the latest project root');
+ assert.equal(dialog.open,false);
+});
+
+test('project editor still sends an intentionally changed root',async()=>{
+ const s=setup();s.mod.audit.edit(s.project);
+ const form=s.body.children.at(-1).children[0];
+ form.querySelectorAll('input')[1].value='/new-root';
+ form.dispatchEvent({type:'submit',preventDefault(){}});await tick();
+ assert.equal(s.calls.at(-1).body.cwd,'/new-root');
 });

@@ -21,7 +21,7 @@ test('DeepSeek explicit model list and modality overrides stay authoritative', a
   e.settings.resolveProvider = () => ({ modelsExplicit: true, models: ['deepseek-flash', 'private-model'], modelCapabilities: new Map([['deepseek-flash', { modalities: ['text'] }]]) });
   const { getModels } = e.load('src/hub.ts', 'export { getModels };');
   const res = new Res(); await getModels(req({}, '/api/models/deepseek'), res, new Map());
-  assert.deepEqual(res.json().models, [{ id: 'deepseek-flash', modalities: ['text'] }, { id: 'private-model' }]);
+  assert.deepEqual(res.json().models, [{ id: 'deepseek-flash', modalities: ['text'], thinkingLevels: ['off', 'low', 'high', 'max'] }, { id: 'private-model', thinkingLevels: [] }]);
 });
 
 test('DeepSeek reasoning maps legacy settings without sending unsupported effort values', () => {

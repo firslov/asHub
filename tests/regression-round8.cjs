@@ -84,6 +84,7 @@ await check('Y07 failed tab title save restores confirmed state and reports erro
 await check('Y01 live and optimistic user boxes keep exact query correlation',async()=>{
  const u=ui(),boxes=[],rootEl={querySelector:()=>null,querySelectorAll:()=>boxes.filter(b=>b.classList.contains('pending'))};
  const session={state:{currentTurn:0,replaying:false},streamEl:rootEl};Object.assign(u.e.context,{CSS:{escape:String},closeReply(){},finalizeThinking(){},finalizeLiveOutput(){},resetCompletedTools(){},startNewSegment(){},renderTurnSep(){},createUserBox:q=>{const b=new El();b._queryText=q;return b},append:(s,b)=>boxes.push(b)});
+ u.e.context.findQueued=u.e.load('web/js/queued-messages.js').findQueued;
  const query=method('web/js/sse.js','agent:query',u.e.context),tag=method('web/js/sse.js','agent:query-tagged',u.e.context);query.call(session,{query:'same',queryId:'first'});const optimistic=new El();optimistic._queryText='same';optimistic.classList.add('pending');boxes.push(optimistic);query.call(session,{query:'same',queryId:'second'});
  rootEl.querySelectorAll=()=>boxes.filter(b=>!b.dataset.entryId);tag.call(session,{query:'same',queryId:'second',entryId:'good'});assert(!boxes[0].dataset.entryId&&optimistic.dataset.entryId==='good'&&optimistic.dataset.queryId==='second','tag matched by text');tag.call(session,{query:'same',entryId:'legacy'});assert(!boxes[0].dataset.entryId,'legacy tag stole failed box');
 });

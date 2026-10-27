@@ -1,3 +1,4 @@
+import { findQueued, attachQueueEdit } from "./queued-messages.js";
 import { loadThinking, saveThinking, thinkingChoices, thinkingLabel } from "./thinking-control.js";
 import { refreshActivity } from "./stream/activity.js";
 import { readSwarmOutcome } from "./stream/swarm-result.js";
@@ -472,11 +473,8 @@ export const handlers = {
     // already done so for live viewers.  During replay the boxes live in
     // the replay fragment, so search the container they were appended to.
     const pendRoot = (this.state.replaying && this._replayFrag) || this.streamEl;
-    const existing = pendRoot?.querySelector(
-      `.agent-box.pending[data-queued="${CSS.escape(queryText)}"]`
-    ) ?? Array.from(pendRoot?.querySelectorAll(".agent-box.pending") ?? [])
-      .find((pb) => pb._queryText === queryText);
-    if (existing) return;
+    const existing = findQueued(pendRoot, p);
+    if (existing) { attachQueueEdit(existing, this.id, p?.queueId); return; }
     // Build turn-separator manually (same as renderTurnSep) but append
     // after any pending boxes to preserve submission order.
     const cwd = this.state.cwd ?? "";
@@ -493,6 +491,7 @@ export const handlers = {
     box.classList.add("pending");
     box.dataset.queued = queryText;
     box._queryText = queryText;
+    attachQueueEdit(box, this.id, p?.queueId);
     appendAfterPending(this, box);
   },
 
@@ -511,12 +510,7 @@ export const handlers = {
     // _queryText (composer.js live path).  During replay the boxes live
     // in the replay fragment rather than streamEl.
     const pendRoot = (this.state.replaying && this._replayFrag) || this.streamEl;
-    let matched = pendRoot?.querySelector(`.agent-box.pending[data-queued="${CSS.escape(queryText)}"]`) ?? null;
-    if (!matched) {
-      for (const pb of pendRoot?.querySelectorAll(".agent-box.pending") ?? []) {
-        if (pb._queryText === queryText) { matched = pb; break; }
-      }
-    }
+    const matched = findQueued(pendRoot, p);
     // Slash commands (payload.command === true) are not conversation
     // turns: don't bump the turn counter, and pass turn=null so
     // createUserBox renders no rewind/fork actions for them (contract G).
@@ -530,6 +524,9 @@ export const handlers = {
       }
       matched.classList.remove("pending");
       delete matched.dataset.queued;
+      delete matched.dataset.queueId;
+      delete matched.dataset.withdrawing;
+      matched.querySelector(".queue-edit")?.remove();
       return;
     }
     if (!isCommand) this.state.currentTurn++;
@@ -557,7 +554,7 @@ export const handlers = {
   },
 
   // A queued message was cancelled and dropped before it ran — remove its
-  // optimistic pending box (same two-level match as agent:query above).
+  // pending box by ID; only legacy frames without an ID may match by text.
   // Each queued message was rendered as a pair (.turn-sep + pending box) by
   // composer.js or agent:queued, so the separator immediately preceding the
   // box belongs to it and must go too — otherwise an orphaned separator
@@ -566,15 +563,10 @@ export const handlers = {
   // follow another element when no separator was paired with it.
   "agent:queued-done"(p) {
     if (!p?.dropped) return;
-    const queryText = p?.query ?? "";
     const pendRoot = (this.state.replaying && this._replayFrag) || this.streamEl;
-    let matched = pendRoot?.querySelector(`.agent-box.pending[data-queued="${CSS.escape(queryText)}"]`) ?? null;
-    if (!matched) {
-      for (const pb of pendRoot?.querySelectorAll(".agent-box.pending") ?? []) {
-        if (pb._queryText === queryText) { matched = pb; break; }
-      }
-    }
+    const matched = findQueued(pendRoot, p, false);
     if (!matched) return;
+    if (matched.dataset.withdrawing) return;
     const prev = matched.previousElementSibling;
     matched.remove();
     if (prev?.classList?.contains("turn-sep")) prev.remove();

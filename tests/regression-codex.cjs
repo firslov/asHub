@@ -214,7 +214,7 @@ function delayedCodexBridge() {
   let release,started;const syncing=new Promise(r=>started=r),pending=new Promise(r=>release=r);
   const emitted=[];
   Object.assign(b,{
-    closed:false,initPromise:Promise.resolve(),backendRegistered:true,queryQueue:[],
+    closed:false,initPromise:Promise.resolve(),backendRegistered:true,queryQueue:[],queuedIds:[],
     codexHost:{sync(){started();return pending;},close(){}},
     _subagents:new Map(),pendingPermissions:new Map(),permissionSessionApproved:new Set(),shellExchanges:[],
     core:{kill(){},handlers:{call(){return []; }},bus:{emit(name){

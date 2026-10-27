@@ -84,7 +84,10 @@ export interface Bridge {
   getRestoreState?(): Record<string, unknown> | undefined;
 
   /** Submit a prompt; resolves at end of turn. */
-  submit(text: string): Promise<{ stopReason: string }>;
+  submit(text: string, queueId?: string): Promise<{ stopReason: string }>;
+
+  /** Atomically remove a still-pending message; never cancels the running turn. */
+  withdrawQueued?(queueId: string): boolean;
 
   /** Best-effort cancel of the current turn. */
   cancel(): void;
@@ -131,7 +134,7 @@ export interface Bridge {
   compact(strategy: ContextStrategy): Promise<{ before: number; after: number; evictedCount: number } | null>;
 
   getModels?(): Promise<{
-    models: Array<{ model: string; provider: string; modalities?: string[] }>;
+    models: Array<{ model: string; provider: string; modalities?: string[]; thinkingLevels?: string[] }>;
     active: { model: string; provider: string } | null;
   }>;
 

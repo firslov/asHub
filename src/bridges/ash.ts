@@ -14,7 +14,7 @@ import { conversationTools } from "../conversation-tools.js";
 import { clipHeadTail, unicodeSlice, guardLlmUnicode } from "../unicode.js";
 import { guardImageContext } from "../image-context.js";
 import { RequestMonitor } from "../request-diagnostics.js";
-import { SessionThinking, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
+import { SessionThinking, reasoningProfile, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
 import { configureDeepSeek } from "../providers/deepseek.js";
 import { EventEmitter } from "node:events";
 import { setTimeout as waitForRetry } from "node:timers/promises";
@@ -318,6 +318,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private pendingTurn: { resolve: (v: { stopReason: string }) => void; reject: (e: Error) => void } | null = null;
   private preparingTurn: typeof this.pendingTurn = null;
   private queryQueue: string[] = [];
+  private queuedIds: Array<string | undefined> = [];
   private shellQueue: string[] = [];
   private closed = false;
   private providerGeneration = 0;
@@ -1481,7 +1482,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     core.handlers.advise("conversation:prepare", (next, messages) => {
       try {
         const modeInfo = core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
-        const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; modalities?: string[] }>;
+        const modes = (core.handlers.call("agent:get-models") ?? []) as Array<ReasoningModel & { modalities?: string[] }>;
         const activeMode = modes.find((m) => m.id === modeInfo?.model && (!modeInfo?.provider || m.provider === modeInfo.provider));
         if (activeMode?.modalities?.includes("image")) return next(messages);
       } catch { /* fall through — strip to be safe */ }
@@ -1736,7 +1737,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     const active = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
     const model = active?.model ?? (this.core.handlers.call("llm:get-client") as { model?: string } | undefined)?.model;
     if (!model) return false;
-    const modes = (this.core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; modalities?: string[] }>;
+    const modes = (this.core.handlers.call("agent:get-models") ?? []) as Array<ReasoningModel & { modalities?: string[] }>;
     return modes.some((m) => m.id === model && (!active?.provider || m.provider === active.provider) && m.modalities?.includes("image"));
   }
 
@@ -1818,7 +1819,7 @@ export class AshBridge extends EventEmitter implements Bridge {
           // Query multimodal capabilities from agent-sh's mode system.
           let modalities: string[] | undefined;
           try {
-            const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; modalities?: string[] }>;
+            const modes = (core.handlers.call("agent:get-models") ?? []) as Array<ReasoningModel & { modalities?: string[] }>;
             const info = payload as Record<string, unknown>;
             const currentMode = modes.find((m) => m.id === info.model && (!info.provider || m.provider === info.provider));
             modalities = currentMode?.modalities;
@@ -2012,10 +2013,11 @@ export class AshBridge extends EventEmitter implements Bridge {
     return !!this.pendingTurn || this.queryQueue.length > 0;
   }
 
-  async submit(text: string): Promise<{ stopReason: string }> {
+  async submit(text: string, queueId?: string): Promise<{ stopReason: string }> {
     this.assertOpen();
     if (this.pendingTurn || this.queryQueue.length > 0) {
       this.queryQueue.push(text);
+      this.queuedIds.push(queueId);
       return { stopReason: "queued" };
     }
     return new Promise<{ stopReason: string }>((resolve, reject) => {
@@ -2067,9 +2069,19 @@ export class AshBridge extends EventEmitter implements Bridge {
     return { query, images };
   }
 
+  withdrawQueued(queueId: string): boolean {
+    const index = this.queuedIds.indexOf(queueId);
+    if (this.closed || index < 0) return false;
+    const [text] = this.queryQueue.splice(index, 1);
+    this.queuedIds.splice(index, 1);
+    this.emit("event", { name: "agent:queued-done", payload: { query: this.parseSubmission(text!).query, queueId, dropped: true } } satisfies BusEvent);
+    return true;
+  }
+
   private drainQueue(): void {
     if (this.pendingTurn) return;
     const next = this.queryQueue.shift();
+    const queueId = this.queuedIds.shift();
     if (!next || this.closed || !this.core) return;
     this.pendingTurn = {
       resolve: () => {
@@ -2085,7 +2097,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       },
     };
     const payload = this.parseSubmission(next);
-    this.emit("event", { name: "agent:queued-submit", payload } satisfies BusEvent);
+    this.emit("event", { name: "agent:queued-submit", payload: { ...payload, queueId } } satisfies BusEvent);
     this.core.bus.emit("agent:submit", payload);
   }
 
@@ -2097,7 +2109,8 @@ export class AshBridge extends EventEmitter implements Bridge {
   private dropQueued(): void {
     while (this.queryQueue.length > 0) {
       const dropped = this.queryQueue.shift()!;
-      this.emit("event", { name: "agent:queued-done", payload: { query: this.parseSubmission(dropped).query, dropped: true } } satisfies BusEvent);
+      const queueId = this.queuedIds.shift();
+      this.emit("event", { name: "agent:queued-done", payload: { query: this.parseSubmission(dropped).query, queueId, dropped: true } } satisfies BusEvent);
     }
   }
 
@@ -2339,8 +2352,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     await this.initPromise;
     await this.syncCodex();
     if (!this.core) throw new Error("core not initialized");
-    const modes = (this.core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; modalities?: string[] }>;
-    const models = modes.map((m) => ({ model: m.id, provider: m.provider ?? "", modalities: m.modalities }));
+    const modes = (this.core.handlers.call("agent:get-models") ?? []) as Array<ReasoningModel & { modalities?: string[] }>;
+    const models = modes.map((m) => ({ model: m.id, provider: m.provider ?? "", modalities: m.modalities, thinkingLevels: reasoningProfile(m)?.levels ?? [] }));
     return { models, active: null };
   }
 
@@ -2518,6 +2531,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (preparing && this.pendingTurn === preparing) {
       this.pendingTurn = this.preparingTurn = null;
       this.queryQueue.length = 0;
+      this.queuedIds.length = 0;
       preparing.reject(new Error("bridge closed during initialization"));
     }
     this.plugins?.close();

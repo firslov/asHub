@@ -148,7 +148,7 @@ const renderImagePreviews = () => {
     const img = attachedImages[i];
     const wrap = document.createElement("div");
     wrap.className = "image-preview-item";
-    const url = toBlobUrl(img.data, img.mimeType);
+    const url = img.id ? "/api/uploads/" + encodeURIComponent(img.id) : toBlobUrl(img.data, img.mimeType);
     wrap.innerHTML =
       `<img src="${url}" alt="preview">` +
       `<button type="button" class="image-preview-remove" data-i18n-title="remove" title="Remove">&times;</button>`;
@@ -226,10 +226,10 @@ effect(() => {
   updateSendBtn();
 });
 
-const restoreDraft = (sid, text, shell = false) => {
+const restoreDraft = (sid, text, shell = null) => {
   const active = sid === currentSessionId();
   const draft = active ? { text: input?.value ?? "", shell: shellMode } : (textDrafts.get(sid) ?? { text: "", shell: false });
-  const restored = { text: draft.text ? text + "\n" + draft.text : text, shell: shell || draft.shell };
+  const restored = { text: draft.text ? text + "\n" + draft.text : text, shell: shell ?? draft.shell };
   textDrafts.set(sid, restored);
   if (active && input) {
     input.value = restored.text;
@@ -238,6 +238,32 @@ const restoreDraft = (sid, text, shell = false) => {
     input.setSelectionRange(input.value.length, input.value.length);
   }
 };
+
+const withdrawing = new Set();
+const withdrawalRequests = new Map();
+document.addEventListener('ash:queue-edit', async event => {
+  const { sessionId: sid, queueId, button } = event.detail || {};
+  if (!sid || !queueId || withdrawing.has(queueId)) return;
+  const requestId = withdrawalRequests.get(queueId) || crypto.randomUUID(); withdrawalRequests.set(queueId, requestId);
+  const box = button?.closest('.agent-box'); if (box) box.dataset.withdrawing = 'true';
+  withdrawing.add(queueId); if (button) button.disabled = true;
+  try {
+    const response = await fetch('/' + sid + '/queue/withdraw', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: queueId, requestId }) });
+    if (!response.ok) {
+      if (response.status === 409) { withdrawalRequests.delete(queueId); if (box?.classList.contains('pending')) { const prev = box.previousElementSibling; box.remove(); if (prev?.classList.contains('turn-sep')) prev.remove(); } }
+      throw Error(t('queue.failed'));
+    }
+    const message = await response.json();
+    withdrawalRequests.delete(queueId);
+    if (box) { const prev = box.previousElementSibling; box.remove(); if (prev?.classList.contains('turn-sep')) prev.remove(); }
+    // A queued chat remains a chat even if the current draft is a shell command.
+    restoreDraft(sid, message.query || '', false);
+    const draft = imageDrafts.get(sid) ?? [];
+    draft.push(...(message.images || [])); imageDrafts.set(sid, draft);
+    if (sid === currentSessionId()) { attachedImages = draft; renderImagePreviews(); updateSendBtn(); input?.focus(); }
+  } catch (e) { toast(e.message || t('queue.failed'), { type: 'error' }); }
+  finally { withdrawing.delete(queueId); if (button) button.disabled = false; }
+});
 
 input?.addEventListener("keydown", (ev) => {
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
@@ -476,6 +502,7 @@ const doSubmit = async (query) => {
       try {
         const uploaded = await Promise.all(
           sentImages.map(async (img) => {
+            if (img.id) return { id: img.id, mimeType: img.mimeType };
             const r = await fetch("/api/upload", {
               method: "POST",
               headers: { "Content-Type": "application/json" },

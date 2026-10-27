@@ -1,3 +1,4 @@
+import { reasoningProfile, SessionThinking } from "./providers/reasoning.js";
 import { mobileReplayStart, mobileReplayFrame } from "./remote/replay.js";
 import { readNetworkPolicy, writeNetworkPolicy } from "./network-policy.js";
 import { workspaceInfo, createIsolatedWorkspace } from "./worktrees.js";
@@ -53,6 +54,8 @@ export interface HubOpts {
   signal?: AbortSignal;
 }
 
+interface QueuedMessage { id: string; query: string; images?: Array<{ id?: string; data?: string; mimeType: string }> }
+
 interface Session {
   id: string;
   title: string;
@@ -93,6 +96,8 @@ interface Session {
   backendId?: string;
   collaboration?: CollaborationTasks;
   queuedQueries?: string[];
+  withdrawnItems?: Map<string, { requestId: string; item: QueuedMessage }>;
+  queuedItems?: Map<string, QueuedMessage>;
   lastTurnError?: boolean;
   pendingPermissions?: Map<string, { expiresAt: number }>;
   store?: SessionStore;
@@ -854,6 +859,12 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       try {
         const input = JSON.parse(await readBody(req));
         if (!input || typeof input.projectId !== 'string' || (input.isolated !== undefined && typeof input.isolated !== 'boolean')) throw new Error("Invalid project conversation request");
+        if (input.title !== undefined && (typeof input.title !== "string" || input.title.trim().length > 100)) throw new Error("Invalid conversation title");
+        if (input.proxyEnabled !== undefined && input.proxyEnabled !== null && typeof input.proxyEnabled !== "boolean") throw new Error("Invalid VPN setting");
+        if (input.model !== undefined && (typeof input.model !== "string" || !input.model.trim() || /[\s@]/.test(input.model)
+          || typeof input.provider !== "string" || !input.provider || /[\s@]/.test(input.provider))) throw new Error("Invalid model");
+        if (input.thinking !== undefined && (typeof input.thinking !== "string" || (!input.model && input.thinking !== "default")
+          || (input.thinking !== "default" && !reasoningProfile({ id: input.model, provider: input.provider })?.levels.includes(input.thinking)))) throw new Error("Unsupported thinking level for this model");
         const legacy = url === "/api/projects/worktree";
         const check = () => {
           if (deletingProject) throw new Error("Project deletion in progress; retry shortly");
@@ -870,9 +881,22 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         if (legacy || input.isolated) workspace = await createIsolatedWorkspace(directory, path.join(SESSIONS_DIR, "worktrees"));
         check();
         created = await createSession(sessions, opts, workspace?.cwd ?? directory);
+        if (typeof input.proxyEnabled === "boolean") writeNetworkPolicy(input.proxyEnabled, created.id);
+        if (input.model) {
+          if (!created.bridge.execCommand) throw new Error("Backend does not support model selection");
+          await created.bridge.execCommand("/model", `${input.model}@${input.provider}`);
+          if (created.model !== input.model || created.provider !== input.provider) throw new Error("Model selection was not applied");
+        }
+        if (input.thinking) {
+          const current = created.bridge.getThinking?.();
+          if (current?.supported && created.bridge.setThinking && (input.thinking === "default" || current.levels.includes(input.thinking))) created.bridge.setThinking(input.thinking);
+          else if (input.thinking !== "default") throw new Error("Unsupported thinking level for this model");
+        }
+        saveSessionMetaDebounced(created);
         check();
         projects.update({ action: "members", id: input.projectId, add: [created.id] }, id => sessions.has(id));
-        if (workspace) await setSessionTitle(created, `${source?.title || path.basename(directory)} · ${workspace.branch}`, true);
+        if (input.title?.trim()) await setSessionTitle(created, input.title.trim(), true);
+        else if (workspace) await setSessionTitle(created, `${source?.title || path.basename(directory)} · ${workspace.branch}`, true);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ instanceId: created.id, cwd: created.cwd, kind: created.kind, ...workspace }));
       } catch (e) {
@@ -1085,6 +1109,29 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
 
       if (req.method === "POST" && rest === "/pty-input") return ptyInput(req, res, session);
       if (req.method === "POST" && rest === "/pty-resize") return ptyResize(req, res, session);
+      if (req.method === "GET" && rest === "/queue") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(session.bridge.withdrawQueued ? [...(session.queuedItems?.values() ?? [])] : [])); return;
+      }
+      if (req.method === "POST" && rest === "/queue/withdraw") {
+        let input;
+        try { input = JSON.parse(await readBody(req)); } catch { res.writeHead(400); res.end("Invalid request"); return; }
+        if (typeof input?.requestId !== "string" || !/^[a-zA-Z0-9-]{16,80}$/.test(input.requestId)) { res.writeHead(400); res.end("Invalid request ID"); return; }
+        const previous = typeof input.id === "string" ? session.withdrawnItems?.get(input.id) : undefined;
+        if (previous && previous.requestId === input.requestId) {
+          res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(previous.item)); return;
+        }
+        const item = typeof input?.id === "string" ? session.queuedItems?.get(input.id) : undefined;
+        // No await between lookup and removal: dequeue and withdrawal cannot both win.
+        if (!item || session._closed || session._closing || !session.bridge.withdrawQueued?.(item.id)) {
+          res.writeHead(409); res.end("Message is no longer queued"); return;
+        }
+        session.queuedItems?.delete(item.id);
+        const receipts = session.withdrawnItems ??= new Map();
+        receipts.set(item.id, { requestId: input.requestId, item });
+        if (receipts.size > 128) receipts.delete(receipts.keys().next().value!);
+        res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(item)); return;
+      }
       if (req.method === "POST" && rest === "/submit") return submit(req, res, session);
       if (req.method === "POST" && rest === "/command") return execCommand(req, res, session);
       if (req.method === "GET" && rest === "/thinking") {
@@ -1330,12 +1377,13 @@ async function getModels(
     // didn't cover.
     const bridgeModels = new Map<string, { defaultModel?: string; models: Set<string> }>();
     const modelModalities = new Map<string, string[] | undefined>();
+    const modelThinking = new Map<string, string[]>();
 
     for (const s of sessions.values()) {
       if (s.kind !== "agent" || !s.bridge || !s.bridge.getModels) continue;
       try {
         const { models } = await s.bridge.getModels();
-        for (const { model, provider, modalities } of models) {
+        for (const { model, provider, modalities, thinkingLevels } of models) {
           if (!provider || !model) continue;
           let entry = bridgeModels.get(provider);
           if (!entry) {
@@ -1344,6 +1392,7 @@ async function getModels(
           }
           entry.models.add(model);
           if (modalities) modelModalities.set(`${provider}:${model}`, modalities);
+          if (thinkingLevels) modelThinking.set(`${provider}:${model}`, thinkingLevels);
         }
       } catch {
         continue;
@@ -1395,7 +1444,8 @@ async function getModels(
         defaultModel: entry.defaultModel,
         models: [...entry.models].map((id) => ({
 	        id,
-	        modalities: modelModalities.get(`${single}:${id}`)
+	        modalities: modelModalities.get(`${single}:${id}`),
+            thinkingLevels: modelThinking.get(`${single}:${id}`) ?? reasoningProfile({ id, provider: single })?.levels ?? []
 	      })),
       }));
       return;
@@ -1406,7 +1456,8 @@ async function getModels(
       defaultModel: entry.defaultModel,
       models: [...entry.models].map((id) => ({
 	        id,
-	        modalities: modelModalities.get(`${name}:${id}`)
+	        modalities: modelModalities.get(`${name}:${id}`),
+            thinkingLevels: modelThinking.get(`${name}:${id}`) ?? reasoningProfile({ id, provider: name })?.levels ?? []
 	      })),
     }));
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -2176,6 +2227,7 @@ function routeEvent(session: Session, e: BusEvent): void {
   }
   session.collaboration?.event(session.id, e.name, e.payload);
   if (e.name === "agent:queued-submit" || (e.name === "agent:queued-done" && (e.payload as any)?.dropped)) {
+    session.queuedItems?.delete((e.payload as any)?.queueId);
     const i = session.queuedQueries?.indexOf((e.payload as any)?.query);
     if (i !== undefined && i >= 0) session.queuedQueries!.splice(i, 1);
   }
@@ -2280,16 +2332,16 @@ function routeEvent(session: Session, e: BusEvent): void {
       id: `hub:${session.id}:${name}`,
       name,
     });
-    pushFrame(session, "agent:query", sseFrame(makeMeta("agent:query"), { query, images: (e.payload as { images?: unknown[] })?.images }));
+    pushFrame(session, "agent:query", sseFrame(makeMeta("agent:query"), { query, queueId: (e.payload as any)?.queueId, images: (e.payload as { images?: unknown[] })?.images }));
     pushFrame(session, "agent:processing-start", sseFrame(makeMeta("agent:processing-start"), {}));
     return;
   }
 
   if (e.name === "agent:queued-done") {
-    const dropped = e.payload as { query?: string; dropped?: boolean } | undefined;
+    const dropped = e.payload as { query?: string; queueId?: string; dropped?: boolean } | undefined;
     if (dropped?.dropped) {
       // A queued item that never ran cannot finish or stop another turn.
-      pushFrame(session, "agent:queued-done", sseFrame(meta, { query: dropped.query ?? "", dropped: true }));
+      pushFrame(session, "agent:queued-done", sseFrame(meta, { query: dropped.query ?? "", queueId: dropped.queueId, dropped: true }));
       _flushBuf(session.id);
       return;
     }
@@ -2568,16 +2620,22 @@ async function generateTitleAsync(session: Session): Promise<void> {
 // ── HTTP handlers ───────────────────────────────────────────────────
 
 function listSessions(res: http.ServerResponse, sessions: Map<string, Session>, projects: ProjectStore): void {
-  const membership = new Map(projects.list().flatMap(p => p.sessionIds.map(id => [id, p.id] as const)));
+  const groups = projects.list();
+  const membership = new Map(groups.flatMap(p => p.sessionIds.map(id => [id, p.id] as const)));
+  // Use membership order, not activity sorting, to keep the reference directory
+  // stable. Only expose the comparison result to shared/mobile conversations.
+  const directories = new Map(groups.map(p => [p.id, p.sessionIds.map(id => sessions.get(id)).find(s => s?.kind === 'agent' && s.cwd)?.cwd] as const));
   const list = Array.from(sessions.values())
     .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0))
     .map((s) => ({
       instanceId: s.id,
       projectId: membership.get(s.id) ?? null,
+      projectExternal: !!directories.get(membership.get(s.id) ?? '') && path.relative(directories.get(membership.get(s.id) ?? '')!, s.cwd) !== '',
       title: s.title,
       kind: s.kind,
       model: s.model,
       provider: s.provider,
+      thinkingLevel: s.bridge?.getThinking?.()?.level ?? s.lastAgentInfo?.thinkingLevel ?? (s.model && s.provider ? new SessionThinking(s.backendState?.thinkingSelections).state({ id: s.model, provider: s.provider }).level : "default"),
       cwd: s.cwd,
       readOnlyContext: s.bridge?.readOnlyContext ?? (s.backendId === "ash" ? false : !!s.backendState),
       supportsCwdChange: !!s.bridge?.supportsCwdChange,
@@ -3270,7 +3328,11 @@ async function submitQuery(session: Session, query: string,
     session.lastModified = Date.now();
 
     const queued = !!session.bridge.isProcessing?.();
-    if (queued) (session.queuedQueries ??= []).push(query);
+    const queueId = queued ? randomUUID() : undefined;
+    if (queued) {
+      (session.queuedQueries ??= []).push(query);
+      (session.queuedItems ??= new Map()).set(queueId!, { id: queueId!, query, ...(imageRefs?.length ? { images: imageRefs } : {}) });
+    }
     else if (taskId) session.collaboration?.start(taskId);
     if (!queued) {
       session.isProcessing = true;
@@ -3318,12 +3380,12 @@ async function submitQuery(session: Session, query: string,
       ? JSON.stringify({ query, images })
       : query;
 
-    Promise.race([session.bridge.submit(submitPayload), timeout])
+    Promise.race([session.bridge.submit(submitPayload, queueId), timeout])
       .then((result) => {
         cleanup();
         if (session._closed || session._closing) return;
         if (result.stopReason === "queued") {
-          pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
+          pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query, queueId, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
           return;
         }
         if (taskId) session.collaboration?.finish(taskId, session._cancelled ? "cancelled" : "completed");
@@ -3357,6 +3419,13 @@ async function submitQuery(session: Session, query: string,
         if (taskId) session.collaboration?.finish(taskId, "failed", String(err));
         cleanup();
         if (session._closed || session._closing) return;
+        if (queueId) {
+          session.queuedItems?.delete(queueId);
+          const index = session.queuedQueries?.indexOf(query) ?? -1;
+          if (index >= 0) session.queuedQueries!.splice(index, 1);
+          pushFrame(session, "agent:queued-done", sseFrame(meta("agent:queued-done"), { query, queueId, dropped: true }));
+          return;
+        }
         // Persist any text the agent emitted before the error so it survives
         // reload/replay — and MUST run before the error frame so the segment
         // renders before the error card. Without it, the leftover text would
@@ -3370,7 +3439,7 @@ async function submitQuery(session: Session, query: string,
         saveSessionMetaDebounced(session);
       });
 
-    return { ok: true, queued };
+    return { ok: true, queued, ...(queueId ? { queueId } : {}) };
   });
 }
 

@@ -147,7 +147,7 @@ for (const change of ['disable', 'rebind']) {
     t.after(() => { connector.close(); fs.rmSync(dir, { recursive: true, force: true }); });
     const effects = [];
     t.mock.method(globalThis, 'fetch', async (url) => { effects.push(String(url)); return new Response('{}', { headers: { 'content-type': 'image/png' } }); });
-    for (const op of ['cancel', 'permission', 'model', 'thinking', 'set-thinking', 'image']) {
+    for (const op of ['cancel', 'permission', 'model', 'thinking', 'set-thinking', 'image', 'queue', 'queue-withdraw']) {
       connector.config = { ...config }; connector.stopped = false;
       let release;
       connector.local = async route => {
@@ -253,4 +253,22 @@ test('remote thinking reads stay available while running but writes require idle
   assert.equal(writes.length,0);
   assert.equal((await connector.execute('set-thinking',args)).level,'max');
   assert.deepEqual(writes,[{route:'/abcdef/thinking',body:{model:args.model,provider:args.provider,level:'max'}}]);
+});
+
+test('queue editing is scoped to authorized sessions and uploaded image references', async t => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-remote-queue-'));
+ const connector=new RemoteConnector({dataDir:dir});
+ t.after(()=>{connector.close();fs.rmSync(dir,{recursive:true,force:true});});
+ connector.config={deviceId:'desktop',deviceToken:'secret',username:'alice',roots:[fs.realpathSync(dir)],deviceName:'Desktop'};connector.stopped=false;
+ const effects=[];
+ connector.local=async(route,body)=>{if(route==='/sessions')return[{instanceId:'abcdef',kind:'agent',cwd:dir}];effects.push({route,body});return {id:'queue-id'};};
+ assert.equal((await connector.execute('capabilities',{})).queue,true);
+ await connector.execute('queue',{session:'abcdef'});
+ await connector.execute('queue-withdraw',{session:'abcdef',id:'queued-item-0000001',requestId:'withdraw-request-01'});
+ assert.equal(effects[1].route,'/abcdef/queue/withdraw');assert.equal(effects[1].body.requestId,'withdraw-request-01');
+ await assert.rejects(connector.execute('queue-withdraw',{session:'cccccc',id:'queued-item-0000001',requestId:'withdraw-request-01'}),e=>e.status===403||e.status===404);
+ await assert.rejects(connector.execute('submit',{session:'abcdef',requestId:'submit-invalid-ref',query:'test',images:[{id:'cccccc_img_a_b',mimeType:'image/png'}]}));
+ assert.equal(effects.length,2,'foreign image must not be submitted');
+ await connector.execute('submit',{session:'abcdef',requestId:'submit-owned-image',query:'test',images:[{id:'abcdef_img_a_b',mimeType:'image/png'}]});
+ await waitFor(()=>effects.length===3);assert.equal(effects[2].body.images[0].id,'abcdef_img_a_b');
 });

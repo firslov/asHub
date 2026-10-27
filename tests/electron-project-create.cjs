@@ -9,14 +9,18 @@ app.setPath('userData', tmp);
 const watchdog = setTimeout(() => app.exit(1), 30000);
 app.whenReady().then(async () => {
  let server, win;
- const sessions = [{ instanceId:'fixture',title:'资料整理',kind:'agent',cwd:'/workspace/research' }];
+ const sessions = [{ instanceId:'fixture',title:'资料整理',kind:'agent',cwd:'/workspace/research',model:'gpt-6-astra',thinkingLevel:'high' }];
  const projects = [{ id:'project',name:'论文审阅',sessionIds:['fixture'] }];
+ let policy={proxyEnabled:true,sessions:{}};
  const submissions = []; let deletes=0, failDelete=true; let pinned=[];
  try {
   server=http.createServer(async(req,res)=>{
    const json = value => {res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value));};
    if(req.url==='/fixture/' && req.method==='DELETE'){deletes++;if(failDelete){res.statusCode=500;return json({error:'delete failed'});}await new Promise(r=>setTimeout(r,60));sessions.splice(0,1);return json({ok:true});}
    if(req.url==='/api/sessions/pinned')return json({pinned});
+   if(req.url==='/api/models')return json({providers:[{name:'codex',models:[{id:'gpt-6-astra',thinkingLevels:['low','high','max']},{id:'plain',thinkingLevels:[]}]}]});
+   if(req.url==='/fixture/title') {let raw='';for await(const c of req)raw+=c;sessions[0].title=JSON.parse(raw).title;return json({ok:true,title:sessions[0].title});}
+   if(req.url==='/api/settings/network'){if(req.method==='PUT'){let raw='';for await(const c of req)raw+=c;const b=JSON.parse(raw);if(b.enabled===null)delete policy.sessions[b.session];else policy.sessions[b.session]=b.enabled;}return json(policy);}
    if(req.url==='/api/projects')return json(projects);
    if(req.url==='/sessions')return json(sessions);
    if(req.url==='/api/projects/workspaces')return json({});
@@ -40,8 +44,25 @@ app.whenReady().then(async () => {
   await js(`document.getElementById('page-loader').remove();localStorage.setItem('ash.lang','zh');(async()=>{const s=await import('/js/store.js');s.setSessions(${JSON.stringify(sessions)});const p=await import('/js/projects.js');p.showProjects(true);})()`);
   await wait(`!!document.querySelector('.project-group-actions button')`);
   assert.equal(await js(`document.querySelector('.project-group-actions button').textContent`),'新建对话');
+  assert.equal(await js(`document.querySelector('.project-directory').textContent`),'/workspace/research');
+  assert.equal(await js(`document.querySelector('.project-chat-location').textContent.includes('/workspace')`),false);
+  assert.equal(await js(`document.querySelector('.project-chat-location').textContent.includes('high')`),true);
+  await js(`document.querySelector('.project-chat-action').click();document.querySelector('dialog input').value='研究计划';document.querySelector('dialog .primary').click()`);
+  await wait(`!document.querySelector('dialog')`);assert.equal(sessions[0].title,'研究计划');
+  await wait(`!document.querySelector('.project-chat-proxy').disabled`);
+  await js(`document.querySelector('.project-chat-proxy').click()`);
+  await wait(`document.querySelector('.project-chat-proxy').getAttribute('aria-pressed')==='false'`);assert.equal(policy.sessions.fixture,false);
+  sessions.push({instanceId:'external',title:'补充资料',kind:'agent',cwd:'/workspace/references/外部文献',model:'gpt-6-astra',projectExternal:true});projects[0].sessionIds.push('external');
+  await js(`(async()=>{const store=await import('/js/store.js');store.setSessions(${JSON.stringify(sessions)});const p=await import('/js/projects.js');p.showProjects(false);p.showProjects(true);})()`);
+  await wait(`!!document.querySelector('.project-chat-directory')`);
+  assert.equal(await js(`document.querySelector('.project-chat-directory').textContent`),'其他目录 · 外部文献');
+  assert.equal(await js(`document.querySelector('.project-chat-directory').title`),'/workspace/references/外部文献');
+  await fs.promises.writeFile('/tmp/ashub-project-directory.png',(await win.webContents.capturePage()).toPNG());
+  sessions.pop();projects[0].sessionIds.pop();
+  await js(`(async()=>{const store=await import('/js/store.js');store.setSessions(${JSON.stringify(sessions)});const p=await import('/js/projects.js');p.showProjects(false);p.showProjects(true);})()`);
+  await wait(`!document.querySelector('.project-chat-directory') && !!document.querySelector('.project-group-actions button')`);
   await js(`document.querySelector('.project-group-actions button').click()`);
-  assert.equal(await js(`document.querySelector('dialog input[type=text]').value`),'/workspace/research');
+  assert.equal(await js(`document.querySelector('dialog input[type=text]:not([name=title])').value`),'/workspace/research');
   assert.equal(await js(`document.querySelector('dialog input[type=checkbox]').checked`),false);
   await js(`document.querySelector('dialog .primary').click()`);
   await wait(`document.querySelector('dialog .project-error').textContent.includes('Fixture')`);
@@ -49,6 +70,15 @@ app.whenReady().then(async () => {
   await js(`document.querySelector('dialog input[type=checkbox]').click();document.querySelector('dialog .primary').click()`);
   await wait(`!document.querySelector('dialog .primary').disabled`);
   assert.equal(submissions[1].isolated,true);
+  await js(`document.querySelector('dialog input[name=title]').value='文献复核';document.querySelector('.project-model-toggle').click()`);
+  await wait(`document.querySelectorAll('.project-model-option').length===3`);
+  await js(`document.querySelectorAll('.project-model-option')[1].click()`);
+  assert.deepEqual(await js(`Array.from(document.querySelectorAll('.project-choices')[0].children,b=>b.textContent)`),['默认','low','high','max']);
+  await js(`document.querySelectorAll('.project-choices')[0].lastChild.click();document.querySelectorAll('.project-choices')[1].lastChild.click();document.querySelector('dialog .primary').click()`);
+  await wait(`!document.querySelector('dialog .primary').disabled`);
+  assert.deepEqual(submissions[2],{projectId:'project',cwd:'/workspace/research',isolated:true,title:'文献复核',model:'gpt-6-astra',provider:'codex',thinking:'max',proxyEnabled:false});
+  await js(`document.querySelector('.project-model-toggle').click();document.querySelectorAll('.project-model-option')[2].click()`);
+  assert.deepEqual(await js(`Array.from(document.querySelectorAll('.project-choices')[0].children,b=>b.textContent)`),['默认']);
   for(const width of [1180,390]){
    win.setContentSize(width,850);await new Promise(r=>setTimeout(r,80));
    const bounds=await js(`(()=>{const d=document.querySelector('dialog'),r=d.getBoundingClientRect();return {left:r.left,right:r.right,screen:innerWidth,overflow:d.scrollWidth-d.clientWidth};})()`);
@@ -67,16 +97,25 @@ app.whenReady().then(async () => {
     await fs.promises.writeFile('/tmp/ashub-project-delete-'+width+'.png',(await win.webContents.capturePage()).toPNG());
   }
   await js(`document.querySelector('dialog').close()`);
+  await wait(`!document.querySelector('dialog')`);
   await js(`document.querySelector('.project-chat-delete').click()`);
   assert.equal(deletes,0,'opening confirmation deleted the conversation');
+  assert.equal(await js(`document.querySelector('dialog input[value=keep]').checked`),true);
+  for(const width of [1180,390]) {
+    win.setContentSize(width,850);await new Promise(r=>setTimeout(r,80));
+    const bounds=await js(`(()=>{const d=document.querySelector('dialog'),r=d.getBoundingClientRect();return {left:r.left,right:r.right,screen:innerWidth,overflow:d.scrollWidth-d.clientWidth};})()`);
+    assert(bounds.left>=0&&bounds.right<=bounds.screen&&bounds.overflow<=1,JSON.stringify(bounds));
+    await fs.promises.writeFile('/tmp/ashub-project-remove-'+width+'.png',(await win.webContents.capturePage()).toPNG());
+  }
+
   await js(`document.querySelector('dialog').close()`);
   await wait(`!document.querySelector('dialog')`);
   assert.equal(deletes,0,'cancel deleted the conversation');
-  await js(`document.querySelector('.project-chat-delete').click();document.querySelector('dialog .project-delete').click()`);
+  await js(`document.querySelector('.project-chat-delete').click();document.querySelector('dialog input[value=delete]').click();document.querySelector('dialog .project-chat-confirm').click()`);
   await wait(`document.querySelector('dialog .project-error').textContent.includes('delete failed')`);
   assert.equal(await js(`!!document.querySelector('.project-chat')`),true,'failed delete hid the conversation');
   failDelete=false;
-  await js(`(async()=>{const m=await import('/js/session-manager.js');m.openTabs.value=['fixture'];m.activeSessionId.value='fixture';document.querySelector('dialog .project-delete').click();document.querySelector('dialog .project-delete').click();})()`);
+  await js(`(async()=>{const m=await import('/js/session-manager.js');m.openTabs.value=['fixture'];m.activeSessionId.value='fixture';document.querySelector('dialog .project-chat-confirm').click();document.querySelector('dialog .project-chat-confirm').click();})()`);
   await wait(`!document.querySelector('dialog') && !document.querySelector('.project-chat')`);
   assert.equal(deletes,2,'duplicate delete while pending');
   assert.deepEqual(await js(`(async()=>{const m=await import('/js/session-manager.js');return [m.activeSessionId.value,m.openTabs.value]})()`),['',[]]);

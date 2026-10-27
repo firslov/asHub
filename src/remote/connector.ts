@@ -237,7 +237,7 @@ export class RemoteConnector {
   async execute(op: string, args: any): Promise<any> {
     if (!this.config || this.config.enabled === false || this.stopped) throw error('移动访问已关闭', 403);
     const epoch = this.generation;
-    if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, thinking: true };
+    if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, thinking: true, queue: true };
     if (op === 'project-groups') return this.groups(epoch);
     if (op === 'project-tasks') return this.projectTasks(args, epoch);
     if (op === 'sessions') { const result = await this.sessions(); this.current(epoch); return result; }
@@ -258,6 +258,11 @@ export class RemoteConnector {
     // Disabling or rebinding advances the generation while session lookup may be awaiting the Hub.
     if (epoch !== this.generation || this.stopped) throw error('移动访问授权已变更，请重新确认', 403);
     if (op === 'artifact') return this.artifact(args, session, epoch);
+    if (op === 'queue') return this.local(`/${session.instanceId}/queue`);
+    if (op === 'queue-withdraw') {
+      if (typeof args.id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(args.id)) throw error('排队消息 ID 无效');
+      return this.local(`/${session.instanceId}/queue/withdraw`, { id: args.id, requestId: args.requestId });
+    }
     if (op === 'thinking') return this.local(`/${session.instanceId}/thinking`);
     if (op === 'set-thinking') {
       if (session.isProcessing) throw error('请等待本轮回复结束', 409);
@@ -298,7 +303,9 @@ export class RemoteConnector {
       // Shell shortcuts and slash commands are separate local capabilities, not remote chat.
       if (/^\s*[!/]/.test(query)) throw error('请使用普通对话；命令和终端操作请在桌面进行', 403);
       const images = args.images || [];
-      if (!Array.isArray(images) || images.length > 4 || images.some((x: any) => !x || typeof x.data !== 'string' || x.data.length > 4 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(x.data) || !/^image\/(png|jpeg|webp|gif)$/.test(x.mimeType))) throw error('图片格式或大小无效');
+      if (!Array.isArray(images) || images.length > 4 || images.some((x: any) => !x || !/^image\/(png|jpeg|webp|gif)$/.test(x.mimeType) || (x.id !== undefined
+        ? typeof x.id !== 'string' || !new RegExp(`^${session.instanceId}_img_[a-z0-9]+_[a-z0-9]+$`).test(x.id)
+        : typeof x.data !== 'string' || x.data.length > 4 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(x.data)))) throw error('图片格式或大小无效');
       return this.once(args.requestId, 'submit', { session: session.instanceId, query, images }, () => this.local(`/${session.instanceId}/submit`, { query, images }, true));
     } finally {
       const remaining = (this.validating.get(key) || 1) - 1;

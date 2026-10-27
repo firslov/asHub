@@ -1,3 +1,6 @@
+import { networkPolicy, saveNetworkPolicy, loadNetworkPolicy } from "./network-settings.js";
+import { thinkingLabel } from "./thinking-control.js";
+import { toast } from "./toast.js";
 import { projectSessionStatus, sharesActiveWorkspace } from "./project-status.js";
 import { allSessions, setSessions } from "./store.js";
 import { activeSessionId, spaEnabled, switchTo, closeTab, openTabs, sessions } from "./session-manager.js";
@@ -9,6 +12,7 @@ let groups = [], visible = false, loading = false, error = "", generation = 0;
 let dialog = null;
 let workspaces = {}, pollTimer = null, polling = false, workspacePolling = false, rendered = "", statusGeneration = 0;
 const collapsed = new Set();
+const networkSaving = new Set();
 try { for (const id of JSON.parse(localStorage.getItem("ash.project-folded") || "[]")) collapsed.add(id); } catch {}
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
 const button = (text, fn, cls = "project-button") => { const n = el("button", cls, text); n.type = "button"; n.addEventListener("click", fn); return n; };
@@ -37,7 +41,7 @@ export function showProjects(show) {
 function render() {
   if (!root || !visible) return;
   // Preserve focus and expanded navigation when a status poll has no changes.
-  const signature = JSON.stringify([groups, loading, error, chats(), activeSessionId.value, [...collapsed], workspaces, t("projects.title")]);
+  const signature = JSON.stringify([groups, loading, error, chats(), activeSessionId.value, [...collapsed], workspaces, networkPolicy.value, [...networkSaving], t("projects.title")]);
   if (signature === rendered) return;
   rendered = signature;
   root.replaceChildren();
@@ -60,6 +64,7 @@ function render() {
     const block = el("section", "project-group");
     const row = el("div", "project-heading");
     const members = list.filter(s => p.sessionIds.includes(s.instanceId));
+    const primaryCwd = p.sessionIds.map(id => members.find(s => s.instanceId === id)).find(s => s?.cwd)?.cwd;
     const toggle = button("", () => {
       if (collapsed.has(p.id)) collapsed.delete(p.id); else collapsed.add(p.id);
       try { localStorage.setItem("ash.project-folded", JSON.stringify([...collapsed])); } catch {}
@@ -77,6 +82,10 @@ function render() {
     const createChat = button(t("projects.newChat"), () => newProjectChat(p), "project-history"); createChat.title = t("projects.newChat"); createChat.setAttribute("aria-label", t("projects.newChat"));
     const manage = button("···", () => edit(p), "project-manage"); manage.title = t("projects.manage"); manage.setAttribute("aria-label", t("projects.manage") + ": " + p.name);
     row.append(toggle, manage); block.append(row);
+    if (primaryCwd) {
+      const path = el('div', 'project-directory', [workspaces[primaryCwd]?.branch, primaryCwd].filter(Boolean).join(' · '));
+      path.title = path.textContent; block.append(path);
+    }
     const actions = el("div", "project-group-actions"); actions.append(createChat, history); block.append(actions);
     if (!collapsed.has(p.id)) {
       if (!members.length) block.append(button(t("projects.add"), () => edit(p), "project-empty"));
@@ -90,21 +99,63 @@ function render() {
         const status = projectSessionStatus(s), shared = sharesActiveWorkspace(s, chats(), workspaces);
         const body = el("span", "project-chat-body");
         body.append(el("span", "project-chat-name", s.title || t("untitled")));
-        const workspace = workspaces[s.cwd];
-        const location = [workspace?.branch, s.cwd].filter(Boolean).join(" · ");
+        const policy = networkPolicy.value;
+        const vpn = policy ? (policy.sessions[s.instanceId] ?? policy.proxyEnabled) : null;
+        const location = [s.model || t('projects.defaultModel'), thinkingLabel(s.thinkingLevel || 'default'), vpn === null ? '' : t(vpn ? 'network.on' : 'network.off')].filter(Boolean).join(' · ');
         if (location) { const detail = el("small", "project-chat-location", location); detail.title = location; body.append(detail); }
+        if (s.cwd && (s.projectExternal ?? (!!primaryCwd && s.cwd !== primaryCwd))) {
+          const directory = el('small', 'project-chat-directory', t('projects.otherDirectory') + ' · ' + (s.cwd.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) || s.cwd));
+          directory.title = s.cwd; body.append(directory);
+        }
         const labels = [status !== 'idle' ? t("projects.status." + status) : "", s.queuedCount > 0 && status !== 'queued' ? t("projects.queueCount", { n: s.queuedCount }) : "", shared ? t("projects.sharedWorkspace") : ""].filter(Boolean);
         if (labels.length) body.append(el("small", "project-chat-status " + status, labels.join(" · ")));
         if (shared) link.title += "\n" + t("projects.sharedWorkspaceHint");
         link.append(el("span", "project-chat-dot " + status), body);
         const chatRow = el('div', 'project-chat-row');
-        const remove = button('×', () => deleteProjectChat(s), 'project-chat-delete');
-        remove.title = t('projects.deleteChat'); remove.setAttribute('aria-label', t('projects.deleteChat') + ': ' + (s.title || t('untitled')));
-        chatRow.append(link, remove); block.append(chatRow);
+        const remove = button('×', () => deleteProjectChat(s, p), 'project-chat-delete');
+        remove.title = t('projects.removeChat'); remove.setAttribute('aria-label', t('projects.removeChat') + ': ' + (s.title || t('untitled')));
+        const actions = el('div', 'project-chat-actions');
+        const rename = button('', () => renameProjectChat(s), 'project-chat-action');
+        rename.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15Z"/></svg>';
+        rename.title = rename.ariaLabel = t('network.rename');
+        const proxy = button('', () => changeProxy(s.instanceId), 'project-chat-action project-chat-proxy');
+        proxy.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6Z"/>${vpn ? '<path d="m8 12 3 3 5-6"/>' : '<path d="m9 9 6 6m0-6-6 6"/>'}</svg>`;
+        proxy.title = proxy.ariaLabel = t(vpn ? 'network.on' : 'network.off') + '\n' + t('network.tabHint');
+        proxy.ariaPressed = String(!!vpn); proxy.disabled = !policy || networkSaving.has(s.instanceId);
+        proxy.addEventListener('contextmenu', e => { e.preventDefault(); void changeProxy(s.instanceId, true); });
+        actions.append(rename, proxy, remove); chatRow.append(link, actions); block.append(chatRow);
       }
     }
     root.append(block);
   }
+}
+async function changeProxy(id, inherit = false) {
+  const policy = networkPolicy.peek(); if (!policy || networkSaving.has(id)) return;
+  networkSaving.add(id); render();
+  try { await saveNetworkPolicy(inherit ? null : !(policy.sessions[id] ?? policy.proxyEnabled), id); }
+  catch (e) { toast(t('network.failed'), { type: 'error', detail: String(e) }); }
+  finally { networkSaving.delete(id); render(); }
+}
+function renameProjectChat(session) {
+  const view = projectDialog(t('network.rename')); if (!view) return;
+  const field = el('label', 'project-field', t('projects.chatTitle'));
+  const input = el('input', 'p-input'); input.value = session.title || ''; input.maxLength = 100; field.append(input);
+  const error = el('p', 'project-error'); error.setAttribute('role', 'alert');
+  let busy = false;
+  const save = button(t('projects.save'), async () => {
+    if (busy || !input.value.trim()) return;
+    busy = true; input.disabled = save.disabled = view.close.disabled = true; error.textContent = '';
+    try {
+      await projectApi('/' + session.instanceId + '/title', { title: input.value.trim() });
+      ++statusGeneration;
+      setSessions(allSessions.value.map(s => s.instanceId === session.instanceId ? { ...s, title: input.value.trim() } : s));
+      document.dispatchEvent(new Event('sse:title')); view.node.close();
+    } catch (e) { error.textContent = e.message; }
+    finally { busy = false; input.disabled = save.disabled = view.close.disabled = false; }
+  }, 'project-button primary');
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); save.click(); } });
+  view.node.addEventListener('cancel', e => { if (busy) e.preventDefault(); });
+  view.content.append(field, error, save); input.focus(); input.select();
 }
 async function projectApi(route, body) {
   const res = await fetch(route, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
@@ -150,33 +201,60 @@ function projectDialog(title) {
   document.body.append(node); node.showModal(); close.focus();
   return { node, content, close };
 }
-function deleteProjectChat(session) {
-  const view = projectDialog(t('projects.deleteChat')); if (!view) return;
-  view.content.append(el('p', 'project-note', t('projects.deleteChatConfirm', { title: session.title || t('untitled') })),
-    el('p', 'project-note', t('projects.deleteChatHint')));
+function deleteProjectChat(session, project) {
+  const view = projectDialog(t('projects.removeChat')); if (!view) return;
+  view.content.append(el('p', 'project-note', session.title || t('untitled')));
+  const choices = el('div', 'project-removal-options');
+  const descriptions = { keep: 'projects.moveToSessionsHint', archive: 'projects.archiveChatHint', delete: 'projects.deleteChatHint' };
+  const labels = { keep: 'projects.moveToSessions', archive: 'projects.archiveChat', delete: 'projects.deletePermanently' };
+  let mode = 'keep', busy = false, archived = false;
+  const inputs = [];
   const error = el('p', 'project-error'); error.setAttribute('role', 'alert');
-  let busy = false;
-  const remove = button(t('projects.deleteChat'), async () => {
+  for (const value of ['keep', 'archive', 'delete']) {
+    const label = el('label', 'project-removal-option');
+    const radio = el('input'); radio.type = 'radio'; radio.name = 'project-chat-removal'; radio.value = value; radio.checked = mode === value;
+    const text = el('span', 'project-option-body'); text.append(el('span', '', t(labels[value])), el('small', '', t(descriptions[value])));
+    radio.addEventListener('change', () => { if (radio.checked) { mode = value; confirm.textContent = t(labels[mode]); confirm.classList.toggle('danger', mode === 'delete'); } });
+    inputs.push(radio); label.append(radio, text); choices.append(label);
+  }
+  const detach = async () => {
+    // Archiving may already have succeeded before a connection failure. Retry
+    // only the membership update, and accept an already-removed project/member.
+    const current = await projectApi('/api/projects');
+    if (current.some(p => p.id === project.id && p.sessionIds.includes(session.instanceId)))
+      await request({ action: 'members', id: project.id, remove: [session.instanceId] });
+  };
+  const confirm = button(t(labels.keep), async () => {
     if (busy) return;
-    busy = true; remove.disabled = view.close.disabled = true; error.textContent = '';
+    busy = true; confirm.disabled = view.close.disabled = true; inputs.forEach(n => n.disabled = true); error.textContent = '';
     try {
-      const response = await fetch(`/${session.instanceId}/`, { method: 'DELETE' });
-      if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
-      ++statusGeneration; // Ignore any pre-deletion status snapshot still in flight.
-      setSessions(allSessions.value.filter(s => s.instanceId !== session.instanceId));
+      if (mode === 'keep') await detach();
+      else if (mode === 'archive') {
+        if (!archived) { await projectApi('/api/sessions/archive', { id: session.instanceId }); archived = true; }
+        await detach();
+      } else {
+        const response = await fetch(`/${session.instanceId}/`, { method: 'DELETE' });
+        if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+      }
+      ++statusGeneration;
+      if (mode === 'keep') setSessions(allSessions.value.map(s => s.instanceId === session.instanceId && s.projectId === project.id ? { ...s, projectId: null, projectExternal: false } : s));
+      else setSessions(allSessions.value.filter(s => s.instanceId !== session.instanceId));
       view.node.close();
-      if (!spaEnabled() && activeSessionId.value === session.instanceId) { window.location.href = '/'; return; }
-      if (openTabs.peek().includes(session.instanceId)) await closeTab(session.instanceId, { backendClosed: true });
-      else if (activeSessionId.value === session.instanceId) { window.location.href = '/'; return; }
-      else sessions.get(session.instanceId)?.remove();
       document.dispatchEvent(new CustomEvent('ash:sessions-changed'));
+      if (mode !== 'keep') {
+        if (!spaEnabled() && activeSessionId.value === session.instanceId) { window.location.href = '/'; return; }
+        if (openTabs.peek().includes(session.instanceId)) await closeTab(session.instanceId, { backendClosed: true });
+        else if (activeSessionId.value === session.instanceId) { window.location.href = '/'; return; }
+        else sessions.get(session.instanceId)?.remove();
+      }
       await refresh();
     } catch (e) { error.textContent = e.message; }
-    finally { busy = false; remove.disabled = view.close.disabled = false; }
-  }, 'project-button project-delete');
+    finally { busy = false; confirm.disabled = view.close.disabled = false; inputs.forEach(n => n.disabled = archived); }
+  }, 'project-button primary project-chat-confirm');
   view.node.addEventListener('cancel', ev => { if (busy) ev.preventDefault(); });
-  view.content.append(error, remove);
+  view.content.append(choices, error, confirm);
 }
+
 function taskHistory(project) {
   const view = projectDialog(t('projects.tasks')); if (!view) return;
   const list = el('div', 'project-task-list');
@@ -220,9 +298,61 @@ function taskHistory(project) {
 function newProjectChat(project) {
   const view = projectDialog(t('projects.newChat')); if (!view) return;
   view.content.append(el('p', 'project-note', t('projects.newChatHint')));
+  const titleField = el('label', 'project-field', t('projects.chatTitle'));
+  const title = el('input', 'p-input'); title.name = 'title'; title.maxLength = 100; title.placeholder = t('projects.autoTitle'); titleField.append(title);
+  const modelField = el('div', 'project-field'); modelField.append(el('span', '', t('projects.model')));
+  const modelToggle = button(t('projects.defaultModel'), () => { modelList.hidden = !modelList.hidden; modelToggle.ariaExpanded = String(!modelList.hidden); if (!modelList.hidden) modelSearch.focus(); }, 'project-model-toggle');
+  modelToggle.ariaExpanded = 'false';
+  const modelList = el('div', 'project-model-list'); modelList.hidden = true;
+  const modelSearch = el('input', 'p-input'); modelSearch.type = 'search'; modelSearch.placeholder = t('projects.searchModel'); modelSearch.ariaLabel = t('projects.searchModel');
+  const modelOptions = el('div', 'project-model-options'); modelList.append(modelSearch, modelOptions); modelField.append(modelToggle, modelList);
+  const thinkingField = el('div', 'project-field'); thinkingField.append(el('span', '', t('model.thinking.title')));
+  const levels = el('div', 'project-choices'); thinkingField.append(levels);
+  const vpnField = el('div', 'project-field'); vpnField.append(el('span', '', t('network.title')));
+  const vpnChoices = el('div', 'project-choices'); vpnField.append(vpnChoices);
+  let selectedModel = null, thinking = 'default', proxyEnabled = null, catalog = [], catalogLoaded = false;
+  const chooseLevel = () => {
+    levels.replaceChildren();
+    const choices = selectedModel?.thinkingLevels?.length ? ['default', ...selectedModel.thinkingLevels] : ['default'];
+    for (const level of choices) {
+      const b = button(thinkingLabel(level), () => { thinking = level; chooseLevel(); }, 'project-choice');
+      b.ariaPressed = String(thinking === level); b.disabled = busy || !!createdId; levels.append(b);
+    }
+  };
+  const chooseVpn = () => {
+    vpnChoices.replaceChildren();
+    for (const [value, label] of [[null, 'network.reset'], [true, 'network.on'], [false, 'network.off']]) {
+      const b = button(t(label), () => { proxyEnabled = value; chooseVpn(); }, 'project-choice');
+      b.ariaPressed = String(proxyEnabled === value); b.disabled = busy || !!createdId; vpnChoices.append(b);
+    }
+  };
+  const chooseModel = model => {
+    selectedModel = model; thinking = 'default'; chooseLevel();
+    modelToggle.textContent = model ? model.id + ' · ' + model.provider : t('projects.defaultModel');
+    modelList.hidden = true; modelToggle.ariaExpanded = 'false'; modelToggle.focus();
+  };
+  const drawModels = () => {
+    const query = modelSearch.value.trim().toLowerCase(); modelOptions.replaceChildren();
+    modelOptions.append(button(t('projects.defaultModel'), () => chooseModel(null), 'project-model-option'));
+    for (const model of catalog.filter(m => (m.id + ' ' + m.provider).toLowerCase().includes(query))) {
+      const b = button('', () => chooseModel(model), 'project-model-option');
+      b.append(el('span', '', model.id), el('small', '', model.provider)); b.ariaPressed = String(selectedModel === model); modelOptions.append(b);
+    }
+    if (!catalogLoaded) modelOptions.append(button(t('projects.retry'), loadModels, 'project-history'));
+  };
+  const loadModels = async () => {
+    modelOptions.replaceChildren(el('p', 'project-note', t('projects.loading')));
+    try {
+      const data = await projectApi('/api/models'); if (!view.node.open) return;
+      catalog = (data.providers || []).flatMap(p => p.models.map(m => ({ ...m, provider: p.name })));
+      catalogLoaded = true; drawModels();
+    } catch { if (view.node.open) drawModels(); }
+  };
+  modelSearch.addEventListener('input', drawModels);
+  modelList.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); modelList.hidden = true; modelToggle.ariaExpanded = 'false'; modelToggle.focus(); } });
   const field = el('label', 'project-field', t('projects.directory'));
   const cwd = el('input', 'p-input'); cwd.type = 'text'; cwd.autocomplete = 'off';
-  cwd.value = chats().find(s => project.sessionIds.includes(s.instanceId))?.cwd || '';
+  cwd.value = project.sessionIds.map(id => chats().find(s => s.instanceId === id)).find(s => s?.cwd)?.cwd || '';
   cwd.placeholder = t('projects.directoryPlaceholder');
   field.append(cwd);
   const browse = button(t('projects.chooseDirectory'), async () => {
@@ -248,13 +378,17 @@ function newProjectChat(project) {
     if (busy || picking) return;
     if (createdId) { openCreated(); return; }
     if (!cwd.value.trim()) return;
-    const body = { projectId: project.id, cwd: cwd.value.trim(), isolated: isolated.checked };
+    const body = { projectId: project.id, cwd: cwd.value.trim(), isolated: isolated.checked,
+      ...(title.value.trim() ? { title: title.value.trim() } : {}),
+      ...(selectedModel ? { model: selectedModel.id, provider: selectedModel.provider, thinking } : {}),
+      ...(proxyEnabled !== null ? { proxyEnabled } : {}) };
     busy = true; error.textContent = ''; update();
-    view.close.disabled = cwd.disabled = isolated.disabled = browse.disabled = true;
+    view.close.disabled = cwd.disabled = isolated.disabled = browse.disabled = title.disabled = modelToggle.disabled = true;
+    modelList.hidden = true; modelToggle.ariaExpanded = 'false'; chooseLevel(); chooseVpn();
     try {
       const result = await projectApi('/api/projects/session', body);
       createdId = result.instanceId;
-      await refresh(); await pollStatus(); openCreated();
+      await loadNetworkPolicy(); await refresh(); await pollStatus(); openCreated();
     } catch (e) {
       createdId ||= e.instanceId || '';
       error.textContent = e.message;
@@ -265,12 +399,12 @@ function newProjectChat(project) {
     }
     finally {
       busy = false; view.close.disabled = false;
-      cwd.disabled = isolated.disabled = browse.disabled = !!createdId; update();
+      cwd.disabled = isolated.disabled = browse.disabled = title.disabled = modelToggle.disabled = !!createdId; chooseLevel(); chooseVpn(); update();
     }
   }, 'project-button primary');
   cwd.addEventListener('input', update); update();
   view.node.addEventListener('cancel', ev => { if (busy) ev.preventDefault(); });
-  view.content.append(field, browse, option, hint, error, create); cwd.focus();
+  view.content.append(titleField, modelField, thinkingField, vpnField, field, browse, option, hint, error, create); chooseLevel(); chooseVpn(); void loadModels(); title.focus();
 }
 function edit(project) {
   if (dialog) return;
@@ -382,7 +516,7 @@ function edit(project) {
   document.body.append(dialog); dialog.showModal(); name.focus();
 }
 if (root) {
-  effect(() => { allSessions.value; activeSessionId.value; render(); });
+  effect(() => { allSessions.value; activeSessionId.value; networkPolicy.value; render(); });
   document.addEventListener("langchange", render);
   window.addEventListener("focus", () => { if (visible && !dialog) void refresh(); });
 }

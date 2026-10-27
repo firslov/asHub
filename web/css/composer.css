@@ -746,3 +746,7 @@
 .model-thinking-option:disabled { opacity:.5; cursor:wait; }
 .model-thinking-note { margin:9px 0 0; color:var(--text-faint); font-size:var(--fs-xs); line-height:1.6; }
 .model-thinking-retry { padding-left:0; margin-top:6px; }
+
+.queue-edit { display:block; margin-top:10px; padding:3px 0; border:0; background:none; color:var(--text-faint); font:inherit; font-size:var(--fs-xs); cursor:pointer; }
+.queue-edit:hover { color:var(--accent-dim); }
+.queue-edit:disabled { opacity:.5; cursor:wait; }

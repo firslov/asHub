@@ -14,14 +14,16 @@ function setup(options = {}) {
     showModal(){this.open=true;}
     close(){this.open=false;this.dispatchEvent({type:'close'});}
   }
-  const root=new Node(),body=new Node(); const calls=[], events=[], closed=[];
+  const root=new Node(),body=new Node(); const calls=[], events=[], closed=[], snapshots=[];
   const activeSessionId={value:options.active || ''};
   const window=Object.assign(new Node(),{location:{}});
   const project={id:'project',name:'Existing',sessionIds:['a','archived']};
   let fail=false;
   const document={body,activeElement:null,createElement:tag=>new Node(tag),getElementById:id=>id==='projects'?root:null,addEventListener(){},dispatchEvent(e){events.push(e.type);}};
   const e=env({modules:{
-    './store.js':{setSessions(){},allSessions:{value:[{instanceId:'a',title:'Alpha',kind:'agent',cwd:'/workspace'},{instanceId:'b',title:'Beta',kind:'agent'}]}},
+    './network-settings.js':{networkPolicy:{value:null,peek:()=>null},loadNetworkPolicy:async()=>{},saveNetworkPolicy:async()=>{}},
+    './toast.js':{toast(){}},
+    './store.js':{setSessions:v=>snapshots.push(v),allSessions:{value:options.sessions || [{instanceId:'a',title:'Alpha',kind:'agent',cwd:'/workspace'},{instanceId:'b',title:'Beta',kind:'agent'}]}},
     './session-manager.js':{activeSessionId,spaEnabled:()=>options.spa || false,openTabs:{peek:()=>options.tabs || []},closeTab:async id=>{closed.push(id);if(activeSessionId.value===id)activeSessionId.value='';},sessions:new Map()},
     '../vendor/signals-core.js':{effect:fn=>fn()}, './i18n.js':{t:key=>key},
   }, globals:{document,window,localStorage:{getItem:()=>null,setItem(){}},fetch:async(url,opts)=>{
@@ -31,8 +33,8 @@ function setup(options = {}) {
     if (options.fetch) return options.fetch(url, opts);
     return {ok:!fail,json:async()=>[project]};
   }}});
-  const mod=e.load('web/js/projects.js','export const audit={edit,taskHistory,newProjectChat};');
-  return {mod,root,body,calls,events,closed,project,window,activeSessionId,fail:()=>fail=true};
+  const mod=e.load('web/js/projects.js','export const audit={edit,taskHistory,newProjectChat,deleteProjectChat};');
+  return {mod,root,body,calls,events,closed,snapshots,project,window,activeSessionId,fail:()=>fail=true};
 }
 test('project picker preserves hidden and archived selections and sends only membership deltas',async()=>{
  const s=setup();s.mod.showProjects(true);await tick();s.mod.audit.edit(s.project);
@@ -128,7 +130,7 @@ test('project new conversation defaults to shared directory and joins its projec
  const s=setup({fetch:async(url)=>({ok:true,json:async()=>url==='/api/projects/session'?{instanceId:'new-chat'}:[]})});
  s.mod.audit.newProjectChat(s.project);
  const dialog=s.body.children.at(-1), content=dialog.children[0], inputs=content.querySelectorAll('input');
- assert.equal(inputs[0].value,'/workspace'); assert.equal(inputs[1].checked,false);
+ assert.equal(inputs[2].value,'/workspace'); assert.equal(inputs[3].checked,false);
  content.lastChild.dispatchEvent({type:'click'}); await tick(); await tick();
  assert.deepEqual(s.calls.find(c=>c.url==='/api/projects/session').body,{projectId:'project',cwd:'/workspace',isolated:false});
  assert.equal(dialog.open,false);
@@ -136,11 +138,11 @@ test('project new conversation defaults to shared directory and joins its projec
 test('empty project can create a first conversation and optionally request an isolated directory', async()=>{
  const s=setup();s.mod.audit.newProjectChat({id:'empty',sessionIds:[]});
  const dialog=s.body.children.at(-1),content=dialog.children[0],inputs=content.querySelectorAll('input');
- assert.equal(content.lastChild.disabled,true); inputs[0].value='/repo';inputs[0].dispatchEvent({type:'input'});
- inputs[1].checked=true;inputs[1].dispatchEvent({type:'change'});assert.equal(content.lastChild.disabled,false);
+ assert.equal(content.lastChild.disabled,true); inputs[2].value='/repo';inputs[2].dispatchEvent({type:'input'});
+ inputs[3].checked=true;inputs[3].dispatchEvent({type:'change'});assert.equal(content.lastChild.disabled,false);
  s.fail(); content.lastChild.dispatchEvent({type:'click'});await tick();
  assert.deepEqual(s.calls.at(-1).body,{projectId:'empty',cwd:'/repo',isolated:true});
- assert.equal(dialog.open,true);assert.equal(inputs[0].disabled,false);assert.equal(inputs[1].checked,true);
+ assert.equal(dialog.open,true);assert.equal(inputs[2].disabled,false);assert.equal(inputs[3].checked,true);
 });
 test('project creation blocks duplicate submits and Escape while request is pending',async()=>{
  let finish;
@@ -202,4 +204,52 @@ for (const spa of [false,true]) test(`deleting the active project conversation r
  remove.dispatchEvent({type:'click'});await tick();
  if(spa){assert.deepEqual(s.closed,['a']);assert.equal(s.activeSessionId.value,'');assert.equal(s.window.location.href,undefined);}
  else assert.equal(s.window.location.href,'/');
+});
+
+for (const mode of ['keep','archive','delete']) test(`removing one project conversation supports ${mode}`,async()=>{
+ const operations=[];
+ const s=setup({active:'a',tabs:['a'],spa:true,fetch:async(url,opts)=>{operations.push([url,opts?.method]);return {ok:true,json:async()=>url==='/api/projects'?[s.project]:{ok:true}};}});
+ s.mod.audit.deleteProjectChat({instanceId:'a',title:'Alpha'},s.project);
+ const dialog=s.body.children.at(-1),form=dialog.children[0],inputs=form.querySelectorAll('input');
+ assert.equal(inputs[0].checked,true);assert.equal(operations.length,0);
+ const option=inputs.find(n=>n.value===mode);option.checked=true;option.dispatchEvent({type:'change'});
+ form.lastChild.dispatchEvent({type:'click'});form.lastChild.dispatchEvent({type:'click'});await tick();await tick();
+ assert.equal(dialog.open,false);
+ assert.equal(operations.filter(([u,m])=>u==='/a/'&&m==='DELETE').length,mode==='delete'?1:0);
+ assert.equal(operations.filter(([u])=>u==='/api/sessions/archive').length,mode==='archive'?1:0);
+ const membership=s.calls.find(c=>c.body?.action==='members');
+ if(mode!=='delete')assert.deepEqual(membership.body,{action:'members',id:'project',remove:['a']});
+ assert.deepEqual(s.closed,mode==='keep'?[]:['a']);
+ assert.equal(s.activeSessionId.value,mode==='keep'?'a':'');
+ assert(s.events.includes('ash:sessions-changed'));
+});
+test('archive removal retry does not archive twice or enable a destructive mode',async()=>{
+ let failMembership=true,archives=0;
+ const s=setup({fetch:async(url,opts)=>{
+   if(url==='/api/sessions/archive')archives++;
+   if(url==='/api/projects'&&opts?.method==='POST'&&failMembership)return {ok:false};
+   return {ok:true,json:async()=>url==='/api/projects'?[s.project]:{ok:true}};
+ }});
+ s.mod.audit.deleteProjectChat({instanceId:'a'},s.project);
+ const form=s.body.children.at(-1).children[0],radio=form.querySelectorAll('input').find(n=>n.value==='archive');radio.checked=true;radio.dispatchEvent({type:'change'});
+ form.lastChild.dispatchEvent({type:'click'});await tick();
+ assert.equal(archives,1);assert.equal(s.body.children.at(-1).open,true);
+ assert(form.querySelectorAll('input').every(n=>n.disabled));
+ failMembership=false;form.lastChild.dispatchEvent({type:'click'});await tick();
+ assert.equal(archives,1);assert.equal(s.body.children.at(-1).open,false);
+});
+test('failed archive leaves membership intact and allows retry',async()=>{
+ const s=setup({fetch:async()=>({ok:false,json:async()=>({error:'archive failed'})})});
+ s.mod.audit.deleteProjectChat({instanceId:'a'},s.project);const form=s.body.children.at(-1).children[0];
+ const option=form.querySelectorAll('input').find(n=>n.value==='archive');option.checked=true;option.dispatchEvent({type:'change'});
+ form.lastChild.dispatchEvent({type:'click'});await tick();
+ assert.equal(s.calls.length,1);assert.equal(s.calls[0].url,'/api/sessions/archive');
+ assert.equal(s.body.children.at(-1).open,true);assert.equal(option.disabled,false);assert.deepEqual(s.closed,[]);
+});
+
+test('project creation keeps the reference directory when an external chat was modified more recently',()=>{
+ const s=setup({sessions:[{instanceId:'b',title:'External',cwd:'/external',kind:'agent'},{instanceId:'a',title:'Main',cwd:'/main',kind:'agent'}]});
+ s.mod.audit.newProjectChat({id:'project',sessionIds:['a','b']});
+ const fields=s.body.children.at(-1).querySelectorAll('input');
+ assert.equal(fields.find(n=>n.type==='text'&&n.name!=='title').value,'/main');
 });

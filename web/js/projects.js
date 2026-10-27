@@ -64,7 +64,7 @@ function render() {
     const block = el("section", "project-group");
     const row = el("div", "project-heading");
     const members = list.filter(s => p.sessionIds.includes(s.instanceId));
-    const primaryCwd = p.sessionIds.map(id => members.find(s => s.instanceId === id)).find(s => s?.cwd)?.cwd;
+    const primaryCwd = p.cwd;
     const toggle = button("", () => {
       if (collapsed.has(p.id)) collapsed.delete(p.id); else collapsed.add(p.id);
       try { localStorage.setItem("ash.project-folded", JSON.stringify([...collapsed])); } catch {}
@@ -296,6 +296,8 @@ function taskHistory(project) {
   view.content.append(button(t('projects.refresh'), load), list); void load();
 }
 function newProjectChat(project) {
+  if (!project.cwd) { edit(project); return; }
+  const projectRoot = project.cwd;
   const view = projectDialog(t('projects.newChat')); if (!view) return;
   view.content.append(el('p', 'project-note', t('projects.newChatHint')));
   const titleField = el('label', 'project-field', t('projects.chatTitle'));
@@ -350,40 +352,28 @@ function newProjectChat(project) {
   };
   modelSearch.addEventListener('input', drawModels);
   modelList.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); modelList.hidden = true; modelToggle.ariaExpanded = 'false'; modelToggle.focus(); } });
-  const field = el('label', 'project-field', t('projects.directory'));
-  const cwd = el('input', 'p-input'); cwd.type = 'text'; cwd.autocomplete = 'off';
-  cwd.value = project.sessionIds.map(id => chats().find(s => s.instanceId === id)).find(s => s?.cwd)?.cwd || '';
-  cwd.placeholder = t('projects.directoryPlaceholder');
-  field.append(cwd);
-  const browse = button(t('projects.chooseDirectory'), async () => {
-    picking = true; browse.disabled = true; update();
-    try {
-      const picked = window.electronAPI?.pickDirectory ? await window.electronAPI.pickDirectory() : await projectApi('/pick-dir');
-      if (view.node.open && !picked.cancelled && picked.cwd) { cwd.value = picked.cwd; update(); }
-    } catch (e) { if (view.node.open) error.textContent = e.message; }
-    finally { picking = false; browse.disabled = busy; update(); }
-  });
+  const field = el('div', 'project-field'); field.append(el('span', '', t('projects.rootDirectory')), el('p', 'project-directory', projectRoot));
   const option = el('label', 'project-option'), isolated = el('input'); isolated.type = 'checkbox'; isolated.checked = false;
   option.append(isolated, el('span', 'project-option-body', t('projects.independentDirectory')));
   const hint = el('p', 'project-note', t('projects.isolateHint')); hint.hidden = true;
   isolated.addEventListener('change', () => { hint.hidden = !isolated.checked; });
   const error = el('p', 'project-error'); error.setAttribute('role', 'alert');
-  let busy = false, picking = false, createdId = '';
-  const update = () => { create.disabled = busy || picking || (!createdId && !cwd.value.trim()); };
+  let busy = false, createdId = '';
+  const update = () => { create.disabled = busy; };
   const openCreated = () => {
     if (spaEnabled()) switchTo(createdId); else window.location.href = '/' + createdId + '/';
     view.node.close();
   };
   const create = button(t('projects.createIsolated'), async () => {
-    if (busy || picking) return;
+    if (busy) return;
     if (createdId) { openCreated(); return; }
-    if (!cwd.value.trim()) return;
-    const body = { projectId: project.id, cwd: cwd.value.trim(), isolated: isolated.checked,
+    // Bind creation to the root displayed when this dialog opened.
+    const body = { projectId: project.id, cwd: projectRoot, isolated: isolated.checked,
       ...(title.value.trim() ? { title: title.value.trim() } : {}),
       ...(selectedModel ? { model: selectedModel.id, provider: selectedModel.provider, thinking } : {}),
       ...(proxyEnabled !== null ? { proxyEnabled } : {}) };
     busy = true; error.textContent = ''; update();
-    view.close.disabled = cwd.disabled = isolated.disabled = browse.disabled = title.disabled = modelToggle.disabled = true;
+    view.close.disabled = isolated.disabled = title.disabled = modelToggle.disabled = true;
     modelList.hidden = true; modelToggle.ariaExpanded = 'false'; chooseLevel(); chooseVpn();
     try {
       const result = await projectApi('/api/projects/session', body);
@@ -399,12 +389,12 @@ function newProjectChat(project) {
     }
     finally {
       busy = false; view.close.disabled = false;
-      cwd.disabled = isolated.disabled = browse.disabled = title.disabled = modelToggle.disabled = !!createdId; chooseLevel(); chooseVpn(); update();
+      isolated.disabled = title.disabled = modelToggle.disabled = !!createdId; chooseLevel(); chooseVpn(); update();
     }
   }, 'project-button primary');
-  cwd.addEventListener('input', update); update();
+  update();
   view.node.addEventListener('cancel', ev => { if (busy) ev.preventDefault(); });
-  view.content.append(titleField, modelField, thinkingField, vpnField, field, browse, option, hint, error, create); chooseLevel(); chooseVpn(); void loadModels(); title.focus();
+  view.content.append(titleField, modelField, thinkingField, vpnField, field, option, hint, error, create); chooseLevel(); chooseVpn(); void loadModels(); title.focus();
 }
 function edit(project) {
   if (dialog) return;
@@ -420,6 +410,20 @@ function edit(project) {
   const nameLabel = el("label", "project-field", t("projects.name"));
   const name = el("input", "p-input"); name.required = true; name.maxLength = 80; name.value = project?.name || ""; name.autocomplete = "off";
   nameLabel.append(name);
+  const directoryLabel = el('label', 'project-field', t('projects.rootDirectory'));
+  const initialRoot = project?.cwd || '';
+  const cwd = el('input', 'p-input'); cwd.name = 'cwd'; cwd.required = true; cwd.autocomplete = 'off'; cwd.value = initialRoot; cwd.placeholder = t('projects.directoryPlaceholder'); directoryLabel.append(cwd);
+  const directoryHint = el('p', 'project-note', t(project && !project.cwd ? 'projects.rootRequired' : 'projects.rootHint'));
+  let picking = false;
+  const browse = button(t('projects.chooseDirectory'), async () => {
+    if (busy || picking) return;
+    picking = true; browse.disabled = cwd.disabled = save.disabled = true;
+    try {
+      const picked = window.electronAPI?.pickDirectory ? await window.electronAPI.pickDirectory() : await projectApi('/pick-dir');
+      if (currentDialog.open && !picked.cancelled && picked.cwd) cwd.value = picked.cwd;
+    } catch (e) { if (currentDialog.open) status.textContent = e.message; }
+    finally { picking = false; browse.disabled = cwd.disabled = save.disabled = busy; }
+  });
   const hint = el("p", "project-note", t("projects.hint"));
   const search = el("input", "p-input"); search.type = "search"; search.placeholder = t("projects.search"); search.setAttribute("aria-label", t("projects.search"));
   const picker = el("div", "project-picker");
@@ -459,7 +463,7 @@ function edit(project) {
     if (!deleting) {
       deleting = true; heading.textContent = t("projects.delete"); remove.textContent = t("projects.confirmDelete");
       name.readOnly = true;
-      hint.hidden = search.hidden = picker.hidden = save.hidden = true;
+      hint.hidden = search.hidden = picker.hidden = save.hidden = directoryLabel.hidden = directoryHint.hidden = browse.hidden = true;
       deleteOptions.hidden = false; keep.focus(); return;
     }
     void persist({ action: "delete", id: project.id, deleteConversations: !keep.checked });
@@ -467,7 +471,7 @@ function edit(project) {
   if (remove) footer.append(remove);
   footer.append(cancel, save);
   async function persist(body) {
-    if (busy) return; busy = true; status.textContent = "";
+    if (busy || picking) return; busy = true; status.textContent = "";
     for (const control of form.querySelectorAll("button, input")) control.disabled = true;
     try {
       const result = await request(body);
@@ -505,10 +509,13 @@ function edit(project) {
     ev.preventDefault();
     if (deleting) return; // Only the explicit confirmation button deletes a project.
     if (!name.value.trim()) { name.focus(); return; }
+    if (!cwd.value.trim()) { cwd.focus(); return; }
     void persist({ action: project ? "edit" : "create", id: project?.id, name: name.value,
+      // Unrelated edits must not reset a root changed in another window.
+      ...(!project || cwd.value.trim() !== initialRoot ? { cwd: cwd.value.trim() } : {}),
       add: [...selected].filter(id => !initial.has(id)), remove: [...initial].filter(id => !selected.has(id)) });
   });
-  form.append(top, nameLabel, hint, search, picker, deleteOptions, status, footer); dialog.append(form);
+  form.append(top, nameLabel, directoryLabel, browse, directoryHint, hint, search, picker, deleteOptions, status, footer); dialog.append(form);
   // Modal keyboard actions must not reach global shortcuts (Escape cancels a turn).
   dialog.addEventListener("keydown", ev => ev.stopPropagation());
   dialog.addEventListener("cancel", ev => { if (busy) ev.preventDefault(); });

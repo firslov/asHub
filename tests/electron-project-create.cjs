@@ -10,7 +10,7 @@ const watchdog = setTimeout(() => app.exit(1), 30000);
 app.whenReady().then(async () => {
  let server, win;
  const sessions = [{ instanceId:'fixture',title:'资料整理',kind:'agent',cwd:'/workspace/research',model:'gpt-6-astra',thinkingLevel:'high' }];
- const projects = [{ id:'project',name:'论文审阅',sessionIds:['fixture'] }];
+ const projects = [{ id:'project',name:'论文审阅',cwd:'/workspace/research',sessionIds:['fixture'] }];
  let policy={proxyEnabled:true,sessions:{}};
  const submissions = []; let deletes=0, failDelete=true; let pinned=[];
  try {
@@ -62,7 +62,8 @@ app.whenReady().then(async () => {
   await js(`(async()=>{const store=await import('/js/store.js');store.setSessions(${JSON.stringify(sessions)});const p=await import('/js/projects.js');p.showProjects(false);p.showProjects(true);})()`);
   await wait(`!document.querySelector('.project-chat-directory') && !!document.querySelector('.project-group-actions button')`);
   await js(`document.querySelector('.project-group-actions button').click()`);
-  assert.equal(await js(`document.querySelector('dialog input[type=text]:not([name=title])').value`),'/workspace/research');
+  assert.equal(await js(`document.querySelector('dialog .project-directory').textContent`),'/workspace/research');
+  assert.equal(await js(`document.querySelector('dialog input[name=cwd]')===null`),true);
   assert.equal(await js(`document.querySelector('dialog input[type=checkbox]').checked`),false);
   await js(`document.querySelector('dialog .primary').click()`);
   await wait(`document.querySelector('dialog .project-error').textContent.includes('Fixture')`);
@@ -87,6 +88,18 @@ app.whenReady().then(async () => {
   }
   await js(`document.querySelector('dialog').close()`);
   await wait(`!document.querySelector('dialog')`);
+  await js(`document.querySelector('.project-add').click();document.querySelector('dialog input').value='新项目'`);
+  assert.equal(await js(`document.querySelector('dialog input[name=cwd]').required`),true);
+  assert.equal(await js(`document.querySelector('dialog form').checkValidity()`),false);
+  await js(`document.querySelector('dialog input[name=cwd]').value='/workspace/new-project'`);
+  assert.equal(await js(`document.querySelector('dialog form').checkValidity()`),true);
+  for(const width of [1180,390]) {
+    win.setContentSize(width,850);await new Promise(r=>setTimeout(r,80));
+    const bounds=await js(`(()=>{const d=document.querySelector('dialog'),r=d.getBoundingClientRect();return {left:r.left,right:r.right,screen:innerWidth,overflow:d.scrollWidth-d.clientWidth};})()`);
+    assert(bounds.left>=0&&bounds.right<=bounds.screen&&bounds.overflow<=1,JSON.stringify(bounds));
+    await fs.promises.writeFile('/tmp/ashub-project-root-'+width+'.png',(await win.webContents.capturePage()).toPNG());
+  }
+  await js(`document.querySelector('dialog').close()`);await wait(`!document.querySelector('dialog')`);
   await js(`document.querySelector('.project-group .project-manage').click();document.querySelector('dialog .project-delete').click()`);
   assert.equal(await js(`document.querySelector('.project-delete-options').hidden`),false);
   assert.equal(await js(`document.querySelector('.project-delete-options input').checked`),true);

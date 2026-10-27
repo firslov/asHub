@@ -11,8 +11,8 @@ function fixture(t) {
 test('projects persist across reload; moving membership is unique and deletion preserves unrelated data', t => {
   const {e, store, ProjectStore} = fixture(t);
   const can = id => ['a','b','c'].includes(id);
-  const a = store.update({action:'create',name:' Alpha ',add:['a','b','a']},can)[0];
-  const b = store.update({action:'create',name:'Beta'},can)[1];
+  const a = store.update({action:'create',cwd:e.dir,name:' Alpha ',add:['a','b','a']},can)[0];
+  const b = store.update({action:'create',cwd:e.dir,name:'Beta'},can)[1];
   store.update({action:'members',id:b.id,add:['b','c']},can);
   const restored = new ProjectStore(path.join(e.dir,'projects.json'));
   assert.deepEqual(JSON.parse(JSON.stringify(restored.list().map(p=>p.sessionIds))), [['a'],['b','c']]);
@@ -23,13 +23,13 @@ test('projects persist across reload; moving membership is unique and deletion p
   assert.equal(store.list()[0].id,b.id);
 });
 test('invalid edits are atomic and corrupt storage is never overwritten', t => {
-  const {e,store} = fixture(t); const p = store.update({action:'create',name:'Keep'},()=>true)[0];
+  const {e,store} = fixture(t); const p = store.update({action:'create',cwd:e.dir,name:'Keep'},()=>true)[0];
   const file = path.join(e.dir,'projects.json'), before = fs.readFileSync(file,'utf8');
   assert.throws(()=>store.update({action:'edit',id:p.id,name:'Changed',add:['missing']},()=>false));
   assert.equal(fs.readFileSync(file,'utf8'),before);
-  for (const name of ['', ' ', 'x'.repeat(81), 8]) assert.throws(()=>store.update({action:'create',name},()=>true));
+  for (const name of ['', ' ', 'x'.repeat(81), 8]) assert.throws(()=>store.update({action:'create',cwd:e.dir,name},()=>true));
   fs.writeFileSync(file,'{broken');
-  assert.throws(()=>store.update({action:'create',name:'New'},()=>true));
+  assert.throws(()=>store.update({action:'create',cwd:e.dir,name:'New'},()=>true));
   assert.equal(fs.readFileSync(file,'utf8'),'{broken');
 });
 async function communication(t) {
@@ -38,7 +38,7 @@ async function communication(t) {
   const sessions = new Map();
   const opts = {makeBridge:o=>new Bridge(o), conversationAccess:id=>conversationAccess(id,sessions,store)};
   const a = await createSession(sessions,opts,e.dir), b = await createSession(sessions,opts,e.dir), c = await createSession(sessions,opts,e.dir);
-  const project = store.update({action:'create',name:'Project',add:[a.id,b.id]},()=>true)[0];
+  const project = store.update({action:'create',cwd:e.dir,name:'Project',add:[a.id,b.id]},()=>true)[0];
   const access = a.bridge.opts.conversationAccess;
   return {e,store,project,sessions,a,b,c,access};
 }
@@ -103,4 +103,33 @@ test('conversation tools forward cancellation and report errors as tool failures
   assert.equal((await tools.find(x=>x.name==='conversation_send').execute({id:'b',message:'hi'})).isError,true);
   controller.abort(); assert.equal((await read.execute({id:'a'},null,{signal:controller.signal})).isError,true);
   assert.equal(calls.length,1);
+});
+
+test('project root persists independently of membership and validates folder edits atomically', t => {
+ const {e,store,ProjectStore}=fixture(t),root=path.join(e.dir,'root'),other=path.join(e.dir,'other');fs.mkdirSync(root);fs.mkdirSync(other);
+ const p=store.update({action:'create',name:'Rooted',cwd:root,add:['external']},()=>true)[0];
+ store.update({action:'members',id:p.id,remove:['external'],add:['new']},()=>true);
+ assert.equal(new ProjectStore(path.join(e.dir,'projects.json')).list()[0].cwd,root);
+ const file=path.join(e.dir,'not-a-folder');fs.writeFileSync(file,'data');
+ for(const cwd of [undefined,null,'','relative',path.join(e.dir,'missing'),file]){
+  assert.throws(()=>store.update({action:'create',name:'Invalid',cwd},()=>true));
+  if(cwd!==undefined)assert.throws(()=>store.update({action:'edit',id:p.id,name:'Wrong',cwd},()=>true));
+  assert.equal(store.list()[0].cwd,root);assert.equal(store.list()[0].name,'Rooted');
+ }
+ store.update({action:'edit',id:p.id,name:'Rooted',cwd:other},()=>true);
+ assert.equal(store.list()[0].cwd,other);assert.deepEqual([...store.list()[0].sessionIds],['new']);
+});
+test('legacy groups remain readable and allow explicitly setting a root without changing membership', t => {
+ const {e,store}=fixture(t);const legacy={id:'legacy',name:'Existing',sessionIds:['a','archived']};
+ fs.writeFileSync(path.join(e.dir,'projects.json'),JSON.stringify([legacy]));
+ assert.equal(store.list()[0].cwd,undefined);
+ store.update({action:'edit',id:'legacy',name:'Existing',cwd:e.dir},()=>false);
+ assert.equal(store.list()[0].cwd,e.dir);assert.deepEqual([...store.list()[0].sessionIds],legacy.sessionIds);
+});
+
+test('an unchanged unavailable root does not block project metadata or membership edits', t => {
+ const {e,store}=fixture(t),root=path.join(e.dir,'removable');fs.mkdirSync(root);
+ const p=store.update({action:'create',name:'Project',cwd:root},()=>true)[0];fs.rmdirSync(root);
+ store.update({action:'edit',id:p.id,name:'Renamed',cwd:root,add:['a']},()=>true);
+ assert.equal(store.list()[0].name,'Renamed');assert.equal(store.list()[0].cwd,root);assert.deepEqual([...store.list()[0].sessionIds],['a']);
 });

@@ -6,9 +6,10 @@ import { settingsValidationError } from './config-validation.js';
 
 export const PLUGIN_DISABLED = 'ashub.plugins.disabled';
 const scripts = ['.js', '.mjs', '.ts', '.tsx', '.mts'];
+export const PLUGIN_ENTRY_FILES = scripts.map(ext => `index${ext}`);
 export interface PluginEntry {
   id: string; name: string; source: string; enabled: boolean; specifier: string;
-  directoryNames: string[];
+  directoryNames: string[]; version?: string; configNamespaces?: string[];
 }
 export interface PluginStatus { id: string; name: string; state: 'loading' | 'loaded' | 'error' | 'registered' | 'inactive' | 'frontend'; error?: string; configNamespaces?: string[] }
 // Bundled integrations supported by this asHub/kernel version. They are not
@@ -71,7 +72,20 @@ export function pluginCatalog(file: string): PluginEntry[] {
     const existing = entries.get(id);
     if (existing) { if (directoryName) existing.directoryNames.push(directoryName); return; }
     const base = path.basename(resolved).replace(/\.(tsx?|m?js|mts)$/, '');
-    entries.set(id, { id, name: base === 'index' ? path.basename(path.dirname(resolved)) : base,
+    let metadata: { name?: string; version?: string; configNamespaces?: string[] } = {};
+    if (base === 'index') {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(path.dirname(resolved), 'package.json'), 'utf8'));
+        if (typeof pkg.version === 'string' && pkg.version.length < 80) metadata.version = pkg.version;
+        const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(resolved), 'ashub-plugin.json'), 'utf8'));
+        if (manifest.schemaVersion === 1 && manifest.id === pkg.name) {
+          if (typeof manifest.name === 'string' && manifest.name.length <= 100) metadata.name = manifest.name;
+          metadata.configNamespaces = Object.keys(manifest.defaults ?? {}).filter(key => { try { validatePluginNamespace(key); return true; } catch { return false; } });
+        }
+      } catch { /* Older plugins have no installation metadata. */ }
+    }
+    entries.set(id, { id, name: metadata.name ?? (base === 'index' ? path.basename(path.dirname(resolved)) : base),
+      version: metadata.version, configNamespaces: metadata.configNamespaces,
       source: resolved, specifier: resolved, directoryNames: directoryName ? [directoryName] : [], enabled: true });
   };
   for (const spec of settings.extensions ?? []) add(spec);
@@ -124,6 +138,9 @@ function checkPluginNamespace(file: string, id: string, namespace: unknown): ass
     return;
   }
   if (!pluginCatalog(file).some(p => p.id === id)) throw new Error('Plugin no longer installed; refresh the list');
+  validatePluginNamespace(namespace);
+}
+export function validatePluginNamespace(namespace: unknown): asserts namespace is string {
   if (typeof namespace !== 'string' || !namespace.trim() || namespace !== namespace.trim() || namespace.length > 128
       || /[\x00-\x1f\x7f]/.test(namespace) || /^ashub(?:[.]|$)/i.test(namespace) || reservedNamespaces.has(namespace)) {
     throw new Error('Use a plugin settings namespace, not an application settings key');

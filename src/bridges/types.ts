@@ -26,6 +26,8 @@ export interface BridgeOpts {
   /** Hub-owned identity, stable across lazy restore and application restarts. */
   sessionId?: string;
   conversationAccess?: ConversationAccess;
+  hostAccess?: import("../host-operations.js").HostAccess;
+  instructions?: string;
   cwd?: string;
   /** What kind of session to spawn. Defaults to "agent". */
   kind?: SessionKind;

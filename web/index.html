@@ -90,6 +90,7 @@
   <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
   <script defer src="/vendor/xterm/xterm.js"></script>
   <script defer src="/vendor/marked.min.js"></script>
+  <script defer src="/js/markdown-compat.js"></script>
   <script defer src="/vendor/dompurify.min.js"></script>
   <script defer src="/vendor/highlight.min.js"></script>
   <script defer src="/vendor/highlight-scheme.min.js"></script>
@@ -718,9 +719,12 @@
       <div class="p-body">
         <p class="plugins-intro" data-i18n="plugins.hint">Changes apply when a conversation's kernel starts. Restart asHub to apply them to existing conversations without losing history.</p>
         <div class="plugins-actions">
+          <button class="p-btn-primary" id="plugins-install" type="button" data-i18n="plugins.install">Install plugin</button>
+          <input id="plugin-archive" type="file" accept=".zip,application/zip" hidden>
           <button class="p-btn" id="plugins-refresh" type="button" data-i18n="plugins.refresh">Refresh status</button>
         </div>
         <p id="plugins-message" class="plugins-message" role="status" aria-live="polite"></p>
+        <section id="plugin-install-preview" class="plugin-install-preview" hidden></section>
         <div id="plugins-list"></div>
         <p class="plugins-note" data-i18n="plugins.installHint">Install trusted extensions in ~/.agent-sh/extensions/ or add their paths to settings.extensions. Terminal-only interfaces need separate web support.</p>
       </div>

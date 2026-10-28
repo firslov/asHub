@@ -1,4 +1,5 @@
 import { withNetworkSession } from "../network-policy.js";
+import { ExplicitApprovals } from "../host-operations.js";
 import { conversationTools } from "../conversation-tools.js";
 /**
  * AshBridge — runs agent-sh's kernel in-process and forwards bus events.
@@ -325,6 +326,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private providerGeneration = 0;
   private backendRegistered = false;
   private pendingPermissions = new Map<string, { resolve: (d: { outcome: string; reason?: string }) => void; timer: ReturnType<typeof setTimeout>; kind: string }>();
+  private explicitApprovals = new ExplicitApprovals((name, payload) => this.emit("event", { name, payload }));
   private permissionSessionApproved = new Set<string>();
   private autoApprove = false;
   private _contextProducerUnsubscribe: (() => void) | null = null;
@@ -410,6 +412,17 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.core = core;
     const sessionId = this.opts.sessionId || randomUUID();
     core.handlers.define("session:current-id", () => sessionId);
+    if (this.opts.hostAccess) {
+      core.handlers.define("ashub:catalog", (p: { signal?: AbortSignal } = {}) => {
+        this.assertOpen(); return this.opts.hostAccess!.catalog(p.signal);
+      });
+      core.handlers.define("ashub:execute", (p: { request: unknown; signal?: AbortSignal }) => {
+        this.assertOpen();
+        return this.opts.hostAccess!.execute(p.request, (preview, signal) => {
+          this.assertOpen(); return this.explicitApprovals.request(preview, signal);
+        }, p.signal);
+      });
+    }
 
     this.requests = new RequestMonitor(path.join(CONFIG_DIR, "logs"), sessionId,
       payload => this.emit("event", { name: "agent:request-status", payload }));
@@ -446,6 +459,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
       const agent = (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent;
       for (const tool of conversationTools(this.opts.conversationAccess)) agent.registerTool(tool);
+    }
+    const instructions = this.opts.instructions ?? this.opts.restoreState?.conversationInstructions;
+    if (typeof instructions === "string" && instructions) {
+      (extCtx as unknown as { agent: { registerInstruction(name: string, text: string): void } }).agent.registerInstruction("conversation-brief", instructions);
     }
     guardLlmUnicode(core.handlers.call("llm:get-client"));
     guardImageContext(core.handlers.call("llm:get-client"), path.join(CONFIG_DIR, "hub-sessions", "uploads"), sessionId);
@@ -1986,6 +2003,7 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   /** Called by hub when user clicks Approve/Deny/ApproveAll on permission prompt. */
   decidePermission(requestId: string, outcome: string, sessionWide?: boolean): void {
+    if (this.explicitApprovals?.decide(requestId, outcome)) return;
     const entry = this.pendingPermissions.get(requestId);
     if (!entry) return;
     clearTimeout(entry.timer);
@@ -2117,6 +2135,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   cancel(): void {
+    this.explicitApprovals?.cancel();
     // A preparing turn has not reached the kernel, which cannot cancel it.
     // Settle it now; the asynchronous preparation checks its identity before
     // dispatching, so it also cannot interfere with a newer submission.
@@ -2212,7 +2231,8 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   getRestoreState(): Record<string, unknown> | undefined {
     const thinkingSelections = this.thinking?.restoreState();
-    return thinkingSelections ? { thinkingSelections } : undefined;
+    const conversationInstructions = this.opts.instructions ?? this.opts.restoreState?.conversationInstructions;
+    return thinkingSelections || conversationInstructions ? { ...(thinkingSelections ? { thinkingSelections } : {}), ...(conversationInstructions ? { conversationInstructions } : {}) } : undefined;
   }
 
   setThinking(level: string): void {
@@ -2528,6 +2548,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   private releaseResources(): void {
+    this.explicitApprovals?.cancel();
     this.requests?.end();
     const preparing = this.preparingTurn;
     if (preparing && this.pendingTurn === preparing) {

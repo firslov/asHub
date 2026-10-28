@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "ashub-project-management",
+  "name": "项目管理",
+  "minNode": "22.12.0",
+  "permissions": [
+    "创建项目或对话、修改配置、移出项目、归档和永久删除均需用户逐次确认，安装插件不授予自动操作权限"
+  ]
+}

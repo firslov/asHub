@@ -16,6 +16,7 @@ function setup(options = {}) {
   }
   const root=new Node(),body=new Node(); const calls=[], events=[], closed=[], snapshots=[];
   const activeSessionId={value:options.active || ''};
+  const allSessions={value:options.sessions || [{instanceId:'a',title:'Alpha',kind:'agent',cwd:'/workspace'},{instanceId:'b',title:'Beta',kind:'agent'}]},effects=[];
   const window=Object.assign(new Node(),{location:{}});
   const project={id:'project',name:'Existing',cwd:'/workspace',sessionIds:['a','archived']};
   let fail=false;
@@ -23,17 +24,17 @@ function setup(options = {}) {
   const e=env({modules:{
     './network-settings.js':{networkPolicy:{value:null,peek:()=>null},loadNetworkPolicy:async()=>{},saveNetworkPolicy:async()=>{}},
     './toast.js':{toast(){}},
-    './store.js':{setSessions:v=>snapshots.push(v),allSessions:{value:options.sessions || [{instanceId:'a',title:'Alpha',kind:'agent',cwd:'/workspace'},{instanceId:'b',title:'Beta',kind:'agent'}]}},
+    './store.js':{setSessions:v=>{snapshots.push(v);if(options.liveSessions){allSessions.value=v;effects.forEach(fn=>fn());}},allSessions},
     './session-manager.js':{activeSessionId,spaEnabled:()=>options.spa || false,openTabs:{peek:()=>options.tabs || []},closeTab:async id=>{closed.push(id);if(activeSessionId.value===id)activeSessionId.value='';},sessions:new Map()},
-    '../vendor/signals-core.js':{effect:fn=>fn()}, './i18n.js':{t:key=>key},
+    '../vendor/signals-core.js':{effect:fn=>{effects.push(fn);fn();}}, './i18n.js':{t:key=>key},
   }, globals:{document,window,localStorage:{getItem:()=>null,setItem(){}},fetch:async(url,opts)=>{
-    if (url === '/sessions') return {ok:true,json:async()=>[]};
+    if (url === '/sessions') return {ok:true,json:async()=>options.sessionList ? options.sessionList() : []};
     if (url === '/api/projects/workspaces') return {ok:true,json:async()=>({})};
     calls.push({url,body:opts?.body?JSON.parse(opts.body):null});
     if (options.fetch) return options.fetch(url, opts);
     return {ok:!fail,json:async()=>[project]};
   }}});
-  const mod=e.load('web/js/projects.js','export const audit={edit,taskHistory,newProjectChat,deleteProjectChat};');
+  const mod=e.load('web/js/projects.js','export const audit={edit,taskHistory,newProjectChat,deleteProjectChat,pollStatus};');
   return {mod,root,body,calls,events,closed,snapshots,project,window,activeSessionId,fail:()=>fail=true};
 }
 test('project picker preserves hidden and archived selections and sends only membership deltas',async()=>{
@@ -315,4 +316,58 @@ test('project editor still sends an intentionally changed root',async()=>{
  form.querySelectorAll('input')[1].value='/new-root';
  form.dispatchEvent({type:'submit',preventDefault(){}});await tick();
  assert.equal(s.calls.at(-1).body.cwd,'/new-root');
+});
+
+const descendants=node=>node.children.flatMap(child=>[child,...descendants(child)]);
+test('background polling discovers plugin-created project members without reopening or editing the project',async()=>{
+ let groups=[{id:'project',name:'Team',cwd:'/workspace',sessionIds:['a']}];
+ let chats=[{instanceId:'a',title:'Coordinator',kind:'agent',cwd:'/workspace',projectId:'project'}];
+ const s=setup({liveSessions:true,sessions:chats,sessionList:()=>chats,fetch:async()=>({ok:true,json:async()=>groups})});
+ s.mod.showProjects(true);await tick();
+ assert.deepEqual(descendants(s.root).filter(n=>n.className==='project-chat-name').map(n=>n.textContent),['Coordinator']);
+ groups=[{...groups[0],sessionIds:['a','c']}];chats=[...chats,{instanceId:'c',title:'Researcher',kind:'agent',cwd:'/workspace',projectId:'project'}];
+ await s.mod.audit.pollStatus();await tick();
+ assert.deepEqual(descendants(s.root).filter(n=>n.className==='project-chat-name').map(n=>n.textContent),['Coordinator','Researcher']);
+ // Projects created by another conversation/window must also appear, and moves
+ // must remove the member from the old group rather than duplicating it.
+ groups=[{...groups[0],sessionIds:['a']},{id:'new',name:'New team',cwd:'/other',sessionIds:['c']}];
+ chats=chats.map(c=>c.instanceId==='c'?{...c,projectId:'new'}:c);
+ await s.mod.audit.pollStatus();await tick();
+ const rendered=s.root.children.filter(n=>n.className==='project-group');assert.equal(rendered.length,2);
+ assert.deepEqual(descendants(rendered[0]).filter(n=>n.className==='project-chat-name').map(n=>n.textContent),['Coordinator']);
+ assert.deepEqual(descendants(rendered[1]).filter(n=>n.className==='project-chat-name').map(n=>n.textContent),['Researcher']);
+ assert.equal(s.body.children.length,0,'synchronization must not open a management dialog');
+});
+
+test('a stale background project response cannot overwrite a successful local edit',async()=>{
+ const initial={id:'project',name:'Before',cwd:'/workspace',sessionIds:['a']};
+ let hold=false,release;
+ const s=setup({fetch:async(_url,opts)=>{
+  if(opts?.method==='POST')return {ok:true,json:async()=>[{...initial,name:'After'}]};
+  if(hold)return new Promise(resolve=>{release=resolve;});
+  return {ok:true,json:async()=>[initial]};
+ }});
+ s.mod.showProjects(true);await tick();hold=true;await s.mod.audit.pollStatus();await tick();assert(release);
+ s.mod.audit.edit(initial);const form=s.body.children.at(-1).children[0];
+ form.querySelectorAll('input')[0].value='After';form.dispatchEvent({type:'submit',preventDefault(){}});await tick();
+ release({ok:true,json:async()=>[initial]});await tick();
+ assert.equal(descendants(s.root).find(n=>n.className==='project-name').textContent,'After');
+});
+
+test('slow or failed project refresh preserves the list and does not stall conversation polling',async()=>{
+ const initial={id:'project',name:'Team',cwd:'/workspace',sessionIds:['a']};
+ let mode='ready',release,reads=0;
+ const s=setup({fetch:async()=>{
+  reads++;
+  if(mode==='slow')return new Promise(resolve=>{release=resolve;});
+  if(mode==='fail')return {ok:false};
+  return {ok:true,json:async()=>[initial]};
+ }});
+ s.mod.showProjects(true);await tick();mode='slow';const before=s.snapshots.length;
+ await s.mod.audit.pollStatus();await s.mod.audit.pollStatus();assert.equal(s.snapshots.length,before+2);
+ assert.equal(reads,2,'only one background project request may be in flight');
+ assert.equal(descendants(s.root).find(n=>n.className==='project-name').textContent,'Team');
+ release({ok:false});await tick();mode='fail';await s.mod.audit.pollStatus();await tick();
+ assert.equal(descendants(s.root).find(n=>n.className==='project-name').textContent,'Team');
+ mode='ready';await s.mod.audit.pollStatus();await tick();assert.equal(reads,4);
 });

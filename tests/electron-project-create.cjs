@@ -36,12 +36,14 @@ app.whenReady().then(async () => {
    res.setHeader('Content-Type',f.endsWith('.js')?'text/javascript':f.endsWith('.css')?'text/css':'text/html');res.end(content);
   });
   server.listen(0,'127.0.0.1');await once(server,'listening');
-  win=new BrowserWindow({show:false,width:1180,height:850,webPreferences:{contextIsolation:true,nodeIntegration:false}});
+  win=new BrowserWindow({show:false,width:1180,height:850,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
   await win.loadURL(`http://127.0.0.1:${server.address().port}`);
   const js=async s=>{try{return await win.webContents.executeJavaScript(s)}catch(e){console.error('Failed script:',s);throw e;}};
   win.webContents.on('console-message',event=>{if(event.level==='error')console.log('renderer:',event.message);});
-  const wait=async s=>{for(let i=0;i<100;i++){if(await js(s))return;await new Promise(r=>setTimeout(r,20));}throw Error('UI timeout: '+s);};
-  await js(`document.getElementById('page-loader').remove();localStorage.setItem('ash.lang','zh');(async()=>{const s=await import('/js/store.js');s.setSessions(${JSON.stringify(sessions)});const p=await import('/js/projects.js');p.showProjects(true);})()`);
+  const wait=async (s,attempts=100)=>{for(let i=0;i<attempts;i++){if(await js(s))return;await new Promise(r=>setTimeout(r,20));}throw Error('UI timeout: '+s);};
+  // The isolated window stays hidden, but exercise foreground polling as in
+  // the desktop app while the user is viewing a project.
+  await js(`Object.defineProperty(document,'hidden',{get:()=>false});document.getElementById('page-loader').remove();localStorage.setItem('ash.lang','zh');(async()=>{const s=await import('/js/store.js');s.setSessions(${JSON.stringify(sessions)});const p=await import('/js/projects.js');p.showProjects(true);})()`);
   await wait(`!!document.querySelector('.project-group-actions button')`);
   assert.equal(await js(`document.querySelector('.project-group-actions button').textContent`),'新建对话');
   assert.equal(await js(`document.querySelector('.project-directory').textContent`),'/workspace/research');
@@ -53,14 +55,14 @@ app.whenReady().then(async () => {
   await js(`document.querySelector('.project-chat-proxy').click()`);
   await wait(`document.querySelector('.project-chat-proxy').getAttribute('aria-pressed')==='false'`);assert.equal(policy.sessions.fixture,false);
   sessions.push({instanceId:'external',title:'补充资料',kind:'agent',cwd:'/workspace/references/外部文献',model:'gpt-6-astra',projectExternal:true});projects[0].sessionIds.push('external');
-  await js(`(async()=>{const store=await import('/js/store.js');store.setSessions(${JSON.stringify(sessions)});const p=await import('/js/projects.js');p.showProjects(false);p.showProjects(true);})()`);
-  await wait(`!!document.querySelector('.project-chat-directory')`);
+  // Simulate creation through a plugin/another client. No local store update,
+  // tab switch or management dialog should be needed to see the new member.
+  await wait(`!!document.querySelector('.project-chat-directory')`,350);
   assert.equal(await js(`document.querySelector('.project-chat-directory').textContent`),'其他目录 · 外部文献');
   assert.equal(await js(`document.querySelector('.project-chat-directory').title`),'/workspace/references/外部文献');
   await fs.promises.writeFile('/tmp/ashub-project-directory.png',(await win.webContents.capturePage()).toPNG());
   sessions.pop();projects[0].sessionIds.pop();
-  await js(`(async()=>{const store=await import('/js/store.js');store.setSessions(${JSON.stringify(sessions)});const p=await import('/js/projects.js');p.showProjects(false);p.showProjects(true);})()`);
-  await wait(`!document.querySelector('.project-chat-directory') && !!document.querySelector('.project-group-actions button')`);
+  await wait(`!document.querySelector('.project-chat-directory') && !!document.querySelector('.project-group-actions button')`,350);
   await js(`document.querySelector('.project-group-actions button').click()`);
   assert.equal(await js(`document.querySelector('dialog .project-directory').textContent`),'/workspace/research');
   assert.equal(await js(`document.querySelector('dialog input[name=cwd]')===null`),true);

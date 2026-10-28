@@ -1,0 +1,13 @@
+{
+  "name": "ashub-project-management",
+  "version": "0.2.0",
+  "description": "项目管理：经用户确认创建成员、修改对话配置、移出项目、归档和删除",
+  "type": "module",
+  "main": "index.mjs",
+  "files": [
+    "index.mjs",
+    "README.md",
+    "ashub-plugin.json"
+  ],
+  "license": "MIT"
+}

@@ -546,3 +546,39 @@ test('Codex configuration rejects known field type errors before writing, includ
   savePluginConfig(f.file, id, namespace, { models: [] }, current.revision);
   assert.deepEqual(getPluginConfig(f.file, id, namespace).config.models, []);
 });
+
+test('project management plugin uses host services, propagates cancellation and unloads cleanly', async () => {
+  const f = fixture(fs.readFileSync(new URL('../examples/extensions/project-management/index.mjs', import.meta.url), 'utf8'), 'project-management.mjs');
+  const { core, ctx } = await makeContext(), runtime = new PluginRuntime(f.file), requests = [];
+  core.handlers.define('ashub:catalog', () => ({ version: 1, operations: ['conversation.update','conversation.detach','conversation.archive','conversation.delete'], currentId: 'coordinator', projects: [], models: [] }));
+  core.handlers.define('ashub:execute', p => { requests.push(p); return { status: 'completed', results: [] }; });
+  await runtime.load(ctx);
+  const tool = name => ctx.agent.getTools().find(t => t.name === name);
+  assert(tool('project_management_catalog').readOnly);
+  const controller = new AbortController();
+  let result = await tool('project_management_create_project').execute({ requestKey: 'project-01', name: 'Research', cwd: '/tmp/research' }, undefined, { signal: controller.signal });
+  assert(!result.isError); assert.equal(requests[0].signal, controller.signal);
+  assert.deepEqual(requests[0].request.operations[0], { type: 'project.create', input: { name: 'Research', cwd: '/tmp/research', members: ['coordinator'] } });
+  const members = [{ title: 'Reviewer', projectId: 'project', model: 'model', provider: 'provider', thinking: 'high', proxyEnabled: false, instructions: 'Review evidence' }];
+  result = await tool('project_management_create_members').execute({ requestKey: 'members-01', members });
+  assert(!result.isError); assert.deepEqual(requests[1].request.operations, [{ type: 'conversation.create', input: members[0] }]);
+  controller.abort(); result = await tool('project_management_create_members').execute({ requestKey: 'members-02', members }, undefined, { signal: controller.signal });
+  assert(result.isError); assert.equal(requests.length, 2);
+  core.handlers.define('ashub:execute', () => ({ status: 'denied', results: [] }));
+  result = await tool('project_management_create_members').execute({ requestKey: 'members-03', members });assert(result.isError);
+  core.handlers.define('ashub:execute', p => { requests.push(p); return { status: 'completed', results: [] }; });
+  const beforeExisting=requests.length;
+  for (const action of ['update','detach','archive','delete']) {
+    const args={requestKey:'existing-'+action, id:'member', ...(action==='update'?{title:'New title',thinking:'high',proxyEnabled:null}:{})};
+    const c=new AbortController();
+    const r=await tool('project_management_'+action+'_conversation').execute(args,undefined,{signal:c.signal});
+    assert(!r.isError); assert.equal(requests.at(-1).signal,c.signal);
+    const {requestKey,...input}=args;
+    assert.deepEqual(requests.at(-1).request.operations,[{type:'conversation.'+action,input}]);
+  }
+  assert.equal(requests.length,beforeExisting+4);
+  core.handlers.define('ashub:catalog', () => ({version:1,operations:['conversation.create']}));
+  result=await tool('project_management_delete_conversation').execute({requestKey:'old-host-01',id:'member'});
+  assert(result.isError); assert.equal(requests.length,beforeExisting+4,'unsupported host never receives mutations');
+  runtime.close(); assert(!tool('project_management_create_members')); assert(!tool('project_management_delete_conversation'));
+});

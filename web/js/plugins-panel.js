@@ -1,3 +1,4 @@
+import { initPluginInstall } from './plugin-install.js';
 import { t } from './i18n.js';
 import { registerPanel } from './panel-manager.js';
 const panel = document.getElementById('plugins-overlay');
@@ -53,6 +54,7 @@ function render(plugins) {
     configure.type = 'button';
     const editor = !plugin.builtin || plugin.configNamespace ? pluginEditor(plugin, configure) : null;
     head.append(title);
+    if (plugin.version) head.append(node('span', 'plugin-badge', plugin.version));
     if (!plugin.builtin || plugin.configNamespace) head.append(configure);
     if (plugin.builtin) {
       item.dataset.builtin = 'true';
@@ -116,7 +118,7 @@ const editors = new Map();
 function pluginEditor(plugin, trigger) {
   let state = editors.get(plugin.id);
   if (!state) {
-    const known = [...new Set((plugin.sessions || []).flatMap(s => s.configNamespaces || []))];
+    const known = [...new Set([...(plugin.configNamespaces || []), ...(plugin.sessions || []).flatMap(s => s.configNamespaces || [])])];
     state = { namespace: plugin.configNamespace || known[0] || plugin.name, loadedNamespace: '', text: '', savedText: '', revision: '', opened: false, busy: false, message: '', confirmReload: false };
     editors.set(plugin.id, state);
   }
@@ -214,3 +216,5 @@ function pluginEditor(plugin, trigger) {
   state.paint();
   return box;
 }
+
+initPluginInstall(panel, () => { if (!panel.hidden && !saving) void load(); });

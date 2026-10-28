@@ -3597,3 +3597,12 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   border-left: 2px solid var(--border-mid);
   padding-left: 0.5rem;
 }
+
+/* Generic explicit-operation previews, shared by all plugins. */
+.approval-items { min-width: 0; max-height: 45vh; overflow: auto; margin: 12px 0; }
+.approval-items section + section { border-top: 1px solid currentColor; border-color: color-mix(in srgb, currentColor 15%, transparent); padding-top: 12px; margin-top: 12px; }
+.approval-items strong { font-size: 13px; font-weight: 600; }
+.approval-items dl { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 3fr); gap: 6px 12px; font-size: 12px; line-height: 1.6; margin: 8px 0; }
+.approval-items dt { opacity: .65; }
+.approval-items dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .approval-items dl { grid-template-columns: 1fr; gap: 2px; } .approval-items dd { margin-bottom: 8px; } }

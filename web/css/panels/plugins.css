@@ -38,3 +38,21 @@
 @media (max-width: 480px) {
   #plugins-overlay [data-builtin] .plugin-name { flex-basis: auto; }
 }
+
+#plugins-overlay .plugin-install-preview { margin-top: var(--space-4); padding: var(--space-4) 0; border-top: 1px solid var(--border); }
+#plugins-overlay .plugin-install-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; font-size: var(--fs-sm); }
+#plugins-overlay .plugin-install-heading strong { font-weight: 500; overflow-wrap: anywhere; }
+#plugins-overlay .plugin-install-fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; font-size: var(--fs-xs); line-height: 1.6; }
+#plugins-overlay .plugin-install-fields dt { color: var(--text-faint); }
+#plugins-overlay .plugin-install-fields dd { margin: 0; overflow-wrap: anywhere; }
+#plugins-overlay .plugin-install-script { display: block; font: var(--fs-xs)/1.6 var(--font-mono); color: var(--text-dim); overflow-wrap: anywhere; }
+#plugins-overlay .plugin-install-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+#plugins-overlay .plugin-install-status { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); }
+#plugins-overlay .plugin-install-status.is-working::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: plugin-install-pulse 1.6s ease-in-out infinite; }
+#plugins-overlay .plugin-install-blocked, #plugins-overlay .plugin-install-error { color: var(--text); }
+#plugins-overlay.plugin-drop-active .p-body { outline: 1px dashed var(--accent); outline-offset: -10px; }
+@keyframes plugin-install-pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { #plugins-overlay .plugin-install-status.is-working::before { animation: none; } }
+@media (max-width: 480px) { #plugins-overlay .plugin-install-fields { grid-template-columns: 1fr; gap: 4px; } #plugins-overlay .plugin-install-fields dd { margin-bottom: 6px; } }
+
+#plugins-overlay .plugin-install-defaults { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-xs)/1.6 var(--font-mono); }

@@ -1,3 +1,5 @@
+import { PluginInstaller, MAX_PLUGIN_ZIP } from './plugin-installer.js';
+import { HostOperations, type HostAccess, type Operation, type PreparedOperation } from "./host-operations.js";
 import { reasoningProfile, SessionThinking } from "./providers/reasoning.js";
 import { mobileReplayStart, mobileReplayFrame } from "./remote/replay.js";
 import { readNetworkPolicy, writeNetworkPolicy } from "./network-policy.js";
@@ -43,6 +45,7 @@ import { invalidateGlobalSkillsCache } from "agent-sh/skills";
 
 export interface HubOpts {
   conversationAccess?: (id: string) => ConversationAccess;
+  hostAccess?: (id: string) => HostAccess;
   collaboration?: CollaborationTasks;
   port: number;
   remoteSecretStore?: RemoteSecretStore;
@@ -114,6 +117,10 @@ interface Session {
    *  after itself. */
   _deletingFiles?: boolean;
   _contextBroken?: boolean;
+  /** Exclusive, explicitly approved host operation in progress. */
+  _hostOperation?: boolean;
+  /** HTTP commands may await provider setup without starting an agent turn. */
+  _commandsRunning?: number;
   _uploads?: Set<Promise<unknown>>;
   /** Idle-watchdog timer handle — see startIdleWatchdog/stopIdleWatchdog. */
   _idleTimer?: ReturnType<typeof setTimeout>;
@@ -834,6 +841,12 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   let deletingProject = false;
   opts.collaboration = new CollaborationTasks(path.join(SESSIONS_DIR, "collaboration"));
   opts.conversationAccess = id => conversationAccess(id, sessions, projects, opts.collaboration);
+  const pluginInstaller = new PluginInstaller(settingsPath(), undefined, process.platform, target => {
+    const ids = new Set(pluginCatalog(settingsPath()).filter(p => path.dirname(p.source) === target).map(p => p.id));
+    return [...sessions.values()].some(s => s.isProcessing && s.bridge?.getPluginStatus?.().some(p => ids.has(p.id) && p.state === 'loaded'));
+  });
+  const operations = new HostOperations(path.join(SESSIONS_DIR, "operation-receipts"));
+  opts.hostAccess = id => hostAccess(id, sessions, projects, opts, operations, () => deletingProject);
 
   const access = createAccessGuard(opts.host);
   const mobile = new RemoteConnector({ store: opts.remoteSecretStore, dataDir: path.join(SESSIONS_DIR, "remote"), localToken: access.token });
@@ -952,6 +965,8 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         else {
           const input = JSON.parse(await readBody(req));
           if (deletingProject) throw new Error("Project deletion in progress; retry shortly");
+          const affected = projects.list().find(p => p.id === input?.id)?.sessionIds ?? [];
+          if ([...affected, ...(Array.isArray(input?.add) ? input.add : [])].some(id => sessions.get(id)?._hostOperation)) throw new Error("Conversation operation in progress");
           if ((input?.action === 'create' || input?.action === 'edit') && typeof input.cwd === 'string') input.cwd = expandHome(input.cwd.trim());
           if (input?.action === 'delete' && input.deleteConversations !== undefined && typeof input.deleteConversations !== 'boolean') throw new Error("Invalid deleteConversations option");
           if (input?.action === 'delete' && input.deleteConversations === true) {
@@ -972,6 +987,27 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       } catch (e) { res.writeHead(req.method === "GET" ? 500 : 400); res.end(String(e)); }
       return;
     }
+    if (url.split('?')[0] === '/api/plugins/install') {
+      res.setHeader('Cache-Control', 'no-store');
+      try {
+        const query = new URL(url, 'http://localhost').searchParams;
+        let result: unknown;
+        if (req.method === 'POST' && query.get('action') === 'preview') {
+          if (req.headers['content-type']?.split(';')[0] !== 'application/zip') throw Error('Select a ZIP archive');
+          result = await pluginInstaller.preview(await readLimitedBody(req, MAX_PLUGIN_ZIP));
+        } else if (req.method === 'POST' && query.get('action') === 'confirm') {
+          const body = JSON.parse((await readLimitedBody(req, 1024)).toString('utf8'));
+          if (!body || typeof body.token !== 'string') throw Error('Invalid installation token');
+          result = pluginInstaller.confirm(body.token);
+        } else if (req.method === 'GET') result = query.get('action') === 'preview'
+          ? pluginInstaller.previewStatus(query.get('id') ?? '') : pluginInstaller.status(query.get('id') ?? '');
+        else if (req.method === 'DELETE') { pluginInstaller.discard(query.get('id') ?? ''); result = { ok: true }; }
+        else { res.writeHead(405); res.end('Method not allowed'); return; }
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result));
+      } catch (e) { res.writeHead((e as { status?: number }).status ?? 400); res.end(String(e)); }
+      return;
+    }
+
     if (url.split('?')[0] === "/api/plugins/config") {
       try {
         let result;
@@ -1028,6 +1064,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         res.writeHead(400); res.end("invalid network setting"); return;
       }
       try {
+        if (data.session && sessions.get(data.session)?._hostOperation) { res.writeHead(409); res.end("Conversation operation in progress"); return; }
         const policy = writeNetworkPolicy(data.enabled, data.session);
         res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(policy));
       } catch { res.writeHead(500); res.end("network setting could not be saved"); }
@@ -1070,7 +1107,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       if (req.method === "DELETE" && rest === "/" && fs.existsSync(path.join(SESSIONS_DIR, `${id}.deleted`))) return closeSession(res, sessions, id);
       const session = sessions.get(id);
       if (!session) { res.statusCode = 404; res.end("no session"); return; }
-      if (session._closing || session._closed) { res.writeHead(409); res.end("session closing"); return; }
+      if (session._closing || session._closed || (session._hostOperation && req.method !== "GET" && req.method !== "HEAD")) { res.writeHead(409); res.end("session busy or closing"); return; }
       if (req.method === "GET" || req.method === "HEAD") {
         if (rest === "/artifacts") {
           const params = new URLSearchParams(rawRest.split("?")[1] ?? "");
@@ -1225,7 +1262,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       stopping = true;
       mobile.close();
       lifecycle.abort();
-      return shutdownTask ??= restoring.then(() => shutdownHub(server, sessions));
+      return shutdownTask ??= Promise.all([restoring, pluginInstaller.close()]).then(() => shutdownHub(server, sessions));
     },
   };
 }
@@ -1690,6 +1727,7 @@ async function createSession(
   cwd: string,
   existing?: { id: string; title?: string; kind?: SessionKind; replay: string[]; startedAt: number; messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string; provider?: string; lastModified?: number; lastFrameSeq?: number; backendState?: Record<string, unknown>; backendId?: string },
   spawnKind: SessionKind = "agent",
+  setup?: { instructions?: string; model?: string; provider?: string; proxyEnabled?: boolean | null },
 ): Promise<Session> {
   if (opts.signal?.aborted) throw new Error("Hub shutting down");
   let id = existing?.id ?? randomBytes(3).toString("hex");
@@ -1740,9 +1778,17 @@ async function createSession(
       )
     : undefined;
 
-  const bridge: Bridge = isRestored && isAgent
-    ? null as unknown as Bridge
-    : opts.makeBridge({ sessionId: id, cwd, kind, initialMessages, compactionStrategy, conversationAccess: opts.conversationAccess?.(id) });
+  let bridge: Bridge;
+  try {
+    if (typeof setup?.proxyEnabled === "boolean") writeNetworkPolicy(setup.proxyEnabled, id);
+    bridge = isRestored && isAgent ? null as unknown as Bridge
+      : opts.makeBridge({ sessionId: id, cwd, kind, initialMessages, compactionStrategy, ...setup, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id) });
+  } catch (error) {
+    if (typeof setup?.proxyEnabled === "boolean") { try { writeNetworkPolicy(null, id); } catch {} }
+    await store?.seal();
+    if (!existing) await deleteSessionFiles(id).catch(() => {});
+    throw error;
+  }
 
   const defaultTitle = isTerminalKind ? `▷ ${path.basename(cwd) || cwd}` : "";
   const session: Session = {
@@ -1968,7 +2014,7 @@ async function createSession(
         checkRestore();
         const storeRef = session.store;
         const msgs = storeRef ? storeRef.buildMessages() : undefined;
-        const b = opts.makeBridge({ sessionId: id, conversationAccess: opts.conversationAccess?.(id), cwd: session.cwd, kind: session.kind, initialMessages: msgs, model: session.model, provider: session.provider, compactionStrategy, isRestored: true, restoreState: session.backendState, restoreBackend: session.backendId });
+        const b = opts.makeBridge({ sessionId: id, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id), cwd: session.cwd, kind: session.kind, initialMessages: msgs, model: session.model, provider: session.provider, compactionStrategy, isRestored: true, restoreState: session.backendState, restoreBackend: session.backendId });
         if (session.backendId && b.backendId && session.backendId !== b.backendId) {
           b.close();
           throw new Error("This session belongs to another backend; restart with its original backend.");
@@ -2101,6 +2147,7 @@ async function createSession(
     _writeBufs.delete(id);
     await Promise.allSettled([_writeLocks.get(id), _metaLocks.get(id)].filter(Boolean));
     _replayOwners.delete(id);
+    if (typeof setup?.proxyEnabled === "boolean") { try { writeNetworkPolicy(null, id); } catch {} }
     if (!existing) await deleteSessionFiles(id).catch(e => console.error("[hub] failed initialization cleanup:", e));
     throw err;
   } finally {
@@ -2624,6 +2671,11 @@ async function generateTitleAsync(session: Session): Promise<void> {
 
 // ── HTTP handlers ───────────────────────────────────────────────────
 
+/** Read saved reasoning without eagerly starting restored conversation kernels. */
+function sessionThinkingLevel(s: Session) {
+  return s.bridge?.getThinking?.()?.level ?? s.lastAgentInfo?.thinkingLevel ?? (s.model && s.provider ? new SessionThinking(s.backendState?.thinkingSelections).state({ id: s.model, provider: s.provider }).level : "default");
+}
+
 function listSessions(res: http.ServerResponse, sessions: Map<string, Session>, projects: ProjectStore): void {
   const groups = projects.list();
   const membership = new Map(groups.flatMap(p => p.sessionIds.map(id => [id, p.id] as const)));
@@ -2640,7 +2692,7 @@ function listSessions(res: http.ServerResponse, sessions: Map<string, Session>, 
       kind: s.kind,
       model: s.model,
       provider: s.provider,
-      thinkingLevel: s.bridge?.getThinking?.()?.level ?? s.lastAgentInfo?.thinkingLevel ?? (s.model && s.provider ? new SessionThinking(s.backendState?.thinkingSelections).state({ id: s.model, provider: s.provider }).level : "default"),
+      thinkingLevel: sessionThinkingLevel(s),
       cwd: s.cwd,
       readOnlyContext: s.bridge?.readOnlyContext ?? (s.backendId === "ash" ? false : !!s.backendState),
       supportsCwdChange: !!s.bridge?.supportsCwdChange,
@@ -2689,9 +2741,16 @@ async function archiveSession(
   try { id = (JSON.parse(body) as { id?: string }).id ?? ""; } catch {}
   if (!id || !/^[0-9a-f]{4,32}$/i.test(id)) { res.statusCode = 400; res.end("invalid id"); return; }
 
+  if (sessions.get(id)?._hostOperation || sessions.get(id)?._closing) { res.writeHead(409); res.end("Conversation busy or closing"); return; }
+  await archiveSessionById(sessions, id);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function archiveSessionById(sessions: Map<string, Session>, id: string): Promise<void> {
   const session = sessions.get(id);
   if (session) {
-    if (session._closing) { res.writeHead(409); res.end("session closing"); return; }
+    if (session._closing) throw new Error("session closing");
     session.collaboration?.stopSession(session.id);
     session._closing = true;
     session._cancelRestore?.();
@@ -2736,8 +2795,6 @@ async function archiveSession(
     if (!_writeBufs.get(id)?.frames.length) _replayOwners.delete(id);
   }
   if (!session) await saveArchivedSession(id, Date.now());
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ ok: true }));
 }
 
 async function unarchiveSession(
@@ -2976,7 +3033,8 @@ async function listFiles(res: http.ServerResponse, session: Session, subdir?: st
   res.end(JSON.stringify({ cwd: targetDir, files }));
 }
 
-async function deleteSession(sessions: Map<string, Session>, id: string): Promise<void> {
+async function deleteSession(sessions: Map<string, Session>, id: string, approvedOperation = false): Promise<void> {
+  if (sessions.get(id)?._hostOperation && !approvedOperation) throw new Error("Conversation operation in progress");
   let pending = _pendingDeletes.get(id);
   if (!pending) {
     pending = (async () => {
@@ -3026,6 +3084,7 @@ async function closeSession(res: http.ServerResponse, sessions: Map<string, Sess
 
 async function updateTitle(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   const body = await readBody(req);
+  if (session._hostOperation) { res.writeHead(409); res.end("Conversation operation in progress"); return; }
   let title = "";
   try { title = ((JSON.parse(body) as { title?: string }).title ?? "").trim(); } catch {}
   if (!title) { res.statusCode = 400; res.end("empty title"); return; }
@@ -3037,6 +3096,7 @@ async function updateTitle(req: http.IncomingMessage, res: http.ServerResponse, 
 async function generateTitle(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   // Use the stored firstQuery, or accept one from the request body.
   const body = await readBody(req);
+  if (session._hostOperation) { res.writeHead(409); res.end("Conversation operation in progress"); return; }
   let query = session.firstQuery?.trim() ?? "";
   try {
     const parsed = JSON.parse(body) as { query?: string };
@@ -3321,6 +3381,7 @@ async function submitQuery(session: Session, query: string,
   });
 
   return withContextLock(session, async () => {
+    if (session._hostOperation) throw new Error("Conversation operation in progress");
     beforeSubmit?.();
     if (session._closed || session._closing) { throw new Error("session closed"); }
     if (session._contextBroken) { throw new Error("context recovery required; restart asHub before continuing this session"); }
@@ -3454,6 +3515,7 @@ async function setThinking(
   session: Session,
 ): Promise<void> {
   const body = await readBody(req);
+  if (session._hostOperation) { res.writeHead(409); res.end("Conversation operation in progress"); return; }
   let level = "", model: unknown, provider: unknown;
   try {
     const parsed = JSON.parse(body);
@@ -3483,6 +3545,7 @@ async function execCommand(
   session: Session,
 ): Promise<void> {
   const body = await readBody(req);
+  if (session._hostOperation) { res.writeHead(409); res.end("Conversation operation in progress"); return; }
   let name = "", args = "";
   try {
     const parsed = JSON.parse(body) as { name?: string; args?: string };
@@ -3504,10 +3567,11 @@ async function execCommand(
     id: `hub:${session.id}:${n}`, name: n,
   });
   pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query: args ? `${name} ${args}` : name, command: true }));
+  session._commandsRunning = (session._commandsRunning ?? 0) + 1;
   try { await session.bridge.execCommand(name, args); } catch (err) {
     pushFrame(session, "ui:error", sseFrame(meta("ui:error"), { message: String(err) }), { transient: true });
     res.writeHead(500); res.end(`command failed: ${String(err)}`); return;
-  }
+  } finally { session._commandsRunning = (session._commandsRunning ?? 1) - 1; }
   saveSessionMetaDebounced(session);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
@@ -3716,6 +3780,7 @@ async function forkEndpoint(req: http.IncomingMessage, res: http.ServerResponse,
 }
 async function setCwdEndpoint(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
   const body = await readBody(req);
+  if (session._hostOperation) { res.writeHead(409); res.end("Conversation operation in progress"); return; }
   let cwd: string;
   try { cwd = JSON.parse(body).cwd; } catch { res.statusCode = 400; res.end("invalid body"); return; }
   if (!cwd || typeof cwd !== "string") { res.statusCode = 400; res.end("missing cwd"); return; }
@@ -3844,6 +3909,7 @@ async function rebuildReplayFromKernel(session: Session): Promise<void> {
 class ContextBusyError extends Error {}
 function withIdleContextLock<T>(session: Session, fn: () => Promise<T>): Promise<T> {
   return withContextLock(session, async () => {
+    if (session._hostOperation) throw new ContextBusyError("Conversation operation in progress");
     if (session._closing || session._closed) throw new ContextBusyError("session closing");
     if (session._contextBroken) throw new ContextBusyError("context recovery required; restart asHub before continuing this session");
     if (session.bridge.readOnlyContext) throw new ContextBusyError("backend context is read-only");
@@ -4975,6 +5041,21 @@ async function uninstallSkill(req: http.IncomingMessage, res: http.ServerRespons
   } finally { skillOperations.delete(dest); }
 }
 
+function readLimitedBody(req: http.IncomingMessage, limit: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []; let size = 0, failed = false;
+    const fail = (error: Error) => { if (!failed) { failed = true; chunks.length = 0; reject(error); } };
+    req.on('data', (chunk: Buffer) => {
+      if (failed) return;
+      size += chunk.length;
+      if (size > limit) { fail(Object.assign(Error('Upload too large'), { status: 413 })); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => { if (!failed) resolve(Buffer.concat(chunks)); });
+    req.on('error', fail); req.on('aborted', () => fail(Error('Upload cancelled')));
+  });
+}
+
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
@@ -5359,4 +5440,244 @@ function conversationAccess(sourceId: string, sessions: Map<string, Session>, pr
       }
     },
   };
+}
+
+/** Versioned host services for trusted extensions. No team/role policy lives here. */
+function hostAccess(sourceId: string, sessions: Map<string, Session>, projects: ProjectStore, opts: HubOpts, operations: HostOperations, deleting: () => boolean): HostAccess {
+  const source = () => {
+    const s = sessions.get(sourceId);
+    if (opts.signal?.aborted || !s || s.kind !== 'agent' || s._closing || s._closed) throw new Error('Source conversation unavailable');
+    return s;
+  };
+  const busy = (s: Session) => !!(s.isProcessing || s.bridge?.isProcessing?.()
+    || s.queuedItems?.size || s.queuedQueries?.length || s._commandsRunning
+    || _titleLocks.has(s) || _pendingDeletes.has(s.id));
+  const describe = (s: Session, groups = projects.list(), network = readNetworkPolicy()) => ({ id: s.id, title: s.title, cwd: s.cwd,
+    provider: s.provider, model: s.model,
+    thinking: sessionThinkingLevel(s),
+    proxyEnabled: network.sessions[s.id] ?? null,
+    projectId: groups.find(p => p.sessionIds.includes(s.id))?.id ?? null,
+    busy: busy(s) || !!s._hostOperation,
+  });
+  const catalog = async (signal?: AbortSignal) => {
+    signal?.throwIfAborted(); const s = source();
+    const models = (await s.bridge.getModels?.())?.models ?? [];
+    signal?.throwIfAborted(); source();
+    const groups = projects.list(), network = readNetworkPolicy();
+    return { version: 1, operations: ['project.create', 'conversation.create', 'conversation.update', 'conversation.detach', 'conversation.archive', 'conversation.delete'], currentId: sourceId,
+      currentProjectId: groups.find(p => p.sessionIds.includes(sourceId))?.id ?? null,
+      conversations: [...sessions.values()].filter(s => s.kind === 'agent' && !s._closed && !s._closing).map(s => describe(s, groups, network)),
+      projects: groups, models, network: { proxyEnabled: network.proxyEnabled } };
+  };
+  const prepare = async (op: Operation, signal?: AbortSignal): Promise<PreparedOperation> => {
+    signal?.throwIfAborted(); source();
+    const b = op.input;
+    const text = (value: unknown, name: string, max: number) => {
+      if (typeof value !== 'string' || !value.trim() || value.length > max || value.includes('\0')) throw new Error(`Invalid ${name}`);
+      return value.trim();
+    };
+    const directory = (value: unknown) => {
+      const raw = text(value, 'directory', 4096), expanded = expandHome(raw);
+      if (!path.isAbsolute(expanded)) throw new Error('Directory must be absolute');
+      const cwd = path.resolve(expanded);
+      if (!fs.statSync(cwd).isDirectory()) throw new Error('Directory must exist');
+      return cwd;
+    };
+    const fields = (values: Record<string, unknown>) => Object.entries(values).map(([label, value]) => ({ label, value: String(value) }));
+    if (op.type === 'project.create') {
+      const name = text(b.name, 'project name', 80), cwd = directory(b.cwd), real = fs.realpathSync(cwd);
+      if (b.members !== undefined && (!Array.isArray(b.members) || b.members.some(id => id !== sourceId) || b.members.length > 1)) throw new Error('Only the requesting conversation can be added at creation');
+      const members = (b.members ?? []) as string[];
+      const originalProject = projects.list().find(p => p.sessionIds.includes(sourceId))?.id;
+      const validate = () => {
+        signal?.throwIfAborted(); source(); if (deleting()) throw new Error('Project deletion in progress');
+        if (directory(cwd) !== cwd || fs.realpathSync(cwd) !== real) throw new Error('Directory changed');
+        if (members.length && projects.list().find(p => p.sessionIds.includes(sourceId))?.id !== originalProject) throw new Error('Conversation membership changed');
+      };
+      return { preview: { title: '创建项目 / Create project', fields: fields({ '名称 / Name': name, '路径 / Directory': cwd, '加入的对话 / Members': members.length ? `${source().title || sourceId} (${sourceId})` : '—', ...(members.length && originalProject ? { '移出项目 / Move from': projects.list().find(p => p.id === originalProject)?.name ?? originalProject } : {}) }) }, validate,
+        async execute() {
+          validate(); const before = new Set(projects.list().map(p => p.id));
+          const next = projects.update({ action: 'create', name, cwd, add: members }, id => sessions.has(id));
+          return { type: op.type, project: next.find(p => !before.has(p.id)) };
+        } };
+    }
+    if (['conversation.update', 'conversation.detach', 'conversation.archive', 'conversation.delete'].includes(op.type)) {
+      const id = text(b.id, 'conversation id', 100), target = sessions.get(id);
+      if (!target || target.kind !== 'agent' || target._closing || target._closed) throw new Error('Target conversation unavailable');
+      if (id === sourceId && ['conversation.archive', 'conversation.delete'].includes(op.type)) throw new Error('Cannot archive or delete the requesting conversation');
+      const updating = op.type === 'conversation.update';
+      const allowed = updating ? ['id', 'title', 'provider', 'model', 'thinking', 'proxyEnabled'] : ['id'];
+      if (Object.keys(b).some(k => !allowed.includes(k))) throw new Error('Unsupported conversation parameter');
+      if (updating && Object.keys(b).length === 1) throw new Error('No configuration changes requested');
+      const changes: Record<string, string | boolean | null> = {};
+      if (b.title !== undefined) changes.title = text(b.title, 'conversation title', 100);
+      if ((b.provider === undefined) !== (b.model === undefined)) throw new Error('Model and provider must be specified together');
+      if (b.model !== undefined) {
+        changes.model = text(b.model, 'model', 200); changes.provider = text(b.provider, 'provider', 100);
+        if (/[\s@]/.test(String(changes.model) + changes.provider)) throw new Error('Invalid model or provider');
+        // Never silently carry an old model's thinking setting to a new model.
+        changes.thinking = b.thinking === undefined ? 'default' : text(b.thinking, 'thinking', 30);
+      } else if (b.thinking !== undefined) changes.thinking = text(b.thinking, 'thinking', 30);
+      if ('proxyEnabled' in b) {
+        if (b.proxyEnabled !== null && typeof b.proxyEnabled !== 'boolean') throw new Error('Invalid VPN setting');
+        changes.proxyEnabled = b.proxyEnabled as boolean | null;
+      }
+      const idle = () => {
+        signal?.throwIfAborted(); source();
+        if (deleting()) throw new Error('Project deletion in progress');
+        if (sessions.get(id) !== target || target._closing || target._closed) throw new Error('Target conversation unavailable');
+        if (busy(target)) throw new Error('Conversation is busy; wait for its work to finish');
+      };
+      idle();
+      if (target._hostOperation) throw new Error('Conversation operation in progress');
+      if (updating && ('model' in changes || 'thinking' in changes)) await target._ensureBridge?.();
+      idle();
+      const before = describe(target), originalProject = projects.list().find(p => p.id === before.projectId);
+      if (op.type === 'conversation.detach' && !originalProject) throw new Error('Conversation is not in a project');
+      const snapshot = () => JSON.stringify({ ...describe(target), busy: undefined,
+        lastModified: target.lastModified, project: projects.list().find(p => p.sessionIds.includes(id))?.name });
+      const expected = snapshot();
+      const check = () => { idle(); if (snapshot() !== expected) throw new Error('Conversation changed; submit a new plan'); };
+      const validate = async () => {
+        check();
+        if (target._hostOperation) throw new Error('Conversation operation in progress');
+        if ('model' in changes || 'thinking' in changes) {
+          const model = changes.model ?? before.model, provider = changes.provider ?? before.provider;
+          const available = (await target.bridge.getModels?.())?.models.find(m => m.model === model && m.provider === provider);
+          check();
+          if (!available) throw new Error('Model is not available in the target conversation');
+          if (changes.thinking !== 'default' && !available.thinkingLevels?.includes(String(changes.thinking))) throw new Error('Unsupported thinking level');
+          if ('model' in changes && !target.bridge.execCommand) throw new Error('Backend does not support model selection');
+          if (!target.bridge.setThinking && changes.thinking !== 'default') throw new Error('Backend does not support thinking selection');
+        }
+      };
+      await validate();
+      const labels = { 'conversation.update': '修改对话 / Update conversation', 'conversation.detach': '移出项目 / Remove from project',
+        'conversation.archive': '归档对话 / Archive conversation', 'conversation.delete': '永久删除对话 / Permanently delete conversation' };
+      const display = (key: string, value: unknown) => key === 'proxyEnabled' ? value === null ? '继承全局 / Inherit global' : value ? '开启 / On' : '关闭 / Off' : String(value ?? 'default');
+      const fieldNames: Record<string, string> = { title: '名称 / Name', model: '模型 / Model', provider: '提供商 / Provider', thinking: '思考 / Thinking', proxyEnabled: 'VPN' };
+      const previewFields = fields({ '对话 / Conversation': `${before.title} (${id})`, '项目 / Project': originalProject ? `${originalProject.name} (${originalProject.id})` : '独立对话 / Independent', '目录 / Directory': before.cwd });
+      for (const [key, value] of Object.entries(changes)) previewFields.push({ label: fieldNames[key]!, value: `${display(key, before[key as keyof typeof before])} → ${display(key, value)}` });
+      if (!updating) previewFields.push({ label: '影响 / Effect', value: op.type === 'conversation.detach' ? '保留历史和原目录，放回会话列表 / Keep history and directory; return to conversations'
+        : op.type === 'conversation.archive' ? '移出项目并归档，保留历史，可从归档恢复 / Remove from project and archive; history can be restored'
+        : '永久删除对话历史和上传附件，无法撤销；不删除工作目录文件 / Delete history and uploaded attachments permanently; workspace files are kept' });
+      return { preview: { title: labels[op.type as keyof typeof labels], fields: previewFields }, validate,
+        async execute() {
+          await validate(); check();
+          if (target._hostOperation) throw new Error('Conversation operation in progress');
+          target._hostOperation = true;
+          try {
+            if (updating) {
+              await withContextLock(target, async () => {
+                check();
+                if ('model' in changes) {
+                  await target.bridge.execCommand!('/model', `${changes.model}@${changes.provider}`);
+                  idle();
+                  if (target.model !== changes.model || target.provider !== changes.provider) throw new Error('Model selection was not applied');
+                }
+                if ('thinking' in changes) {
+                  idle(); const thinking = target.bridge.getThinking?.();
+                  if (thinking?.supported && target.bridge.setThinking && (changes.thinking === 'default' || thinking.levels.includes(String(changes.thinking)))) {
+                    target.bridge.setThinking(String(changes.thinking));
+                    if (changes.thinking !== 'default' && target.bridge.getThinking?.()?.level !== changes.thinking) throw new Error('Thinking selection was not applied');
+                  }
+                  else if (changes.thinking !== 'default') throw new Error('Unsupported thinking level');
+                }
+                idle();
+                if ('proxyEnabled' in changes) writeNetworkPolicy(changes.proxyEnabled as boolean | null, id);
+                if ('title' in changes) await setSessionTitle(target, String(changes.title), true);
+                target.lastModified = Date.now(); await saveSessionMeta(target);
+              });
+            } else {
+              check();
+              if (op.type === 'conversation.archive') await archiveSessionById(sessions, id);
+              if (op.type === 'conversation.delete') await deleteSession(sessions, id, true);
+              // Detach only after archive/delete succeeds, retaining retry context on failure.
+              const currentProject = projects.list().find(p => p.sessionIds.includes(id));
+              if (currentProject) projects.update({ action: 'members', id: currentProject.id, remove: [id] }, () => false);
+            }
+            return { type: op.type, instanceId: id, ...(updating ? { conversation: { ...describe(target), busy: false } } : {}) };
+          } catch (error) {
+            // Model changes can already have succeeded. Persist/report actual state;
+            // the durable receipt prevents a blind replay of partial operations.
+            if (updating && !target._closed && !target._closing) {
+              try { await saveSessionMeta(target); } catch { /* Report the original failure. */ }
+            }
+            throw new Error(`Conversation ${id}: operation may be partially applied; inspect before retrying. ${String(error)}`);
+          } finally { target._hostOperation = false; }
+        } };
+    }
+    if (op.type !== 'conversation.create') throw new Error(`Unsupported host operation: ${op.type}`);
+    const title = text(b.title, 'conversation title', 100);
+    const projectId = b.projectId === null || b.projectId === undefined ? null : text(b.projectId, 'project id', 100);
+    const project = projectId ? projects.list().find(p => p.id === projectId) : undefined;
+    if (projectId && !project) throw new Error('Project no longer exists');
+    const cwd = directory(project ? project.cwd : b.cwd), real = fs.realpathSync(cwd);
+    if (project && b.cwd !== undefined && directory(b.cwd) !== cwd) throw new Error('New project conversations must use the project root directory');
+    const provider = text(b.provider ?? source().provider, 'provider', 100), model = text(b.model ?? source().model, 'model', 200);
+    if (/[\s@]/.test(provider + model)) throw new Error('Invalid model or provider');
+    const thinking = b.thinking === undefined ? 'default' : text(b.thinking, 'thinking', 30);
+    if (b.proxyEnabled !== undefined && b.proxyEnabled !== null && typeof b.proxyEnabled !== 'boolean') throw new Error('Invalid VPN setting');
+    const proxyEnabled = b.proxyEnabled ?? null;
+    const instructions = b.instructions === undefined ? '' : text(b.instructions, 'conversation instructions', 8000);
+    const checkState = () => {
+      signal?.throwIfAborted(); source(); if (deleting()) throw new Error('Project deletion in progress');
+      const current = projectId ? projects.list().find(p => p.id === projectId) : undefined;
+      if (projectId && (!current || current.cwd !== project?.cwd || current.name !== project?.name)) throw new Error('Project changed; submit a new plan');
+      if (directory(cwd) !== cwd || fs.realpathSync(cwd) !== real) throw new Error('Directory changed');
+    };
+    const validate = async () => {
+      checkState();
+      const available = (await catalog(signal)).models.find(m => m.model === model && m.provider === provider);
+      checkState();
+      if (!available) throw new Error('Model is not available in this conversation');
+      if (thinking !== 'default' && !available.thinkingLevels?.includes(thinking)) throw new Error('Unsupported thinking level');
+    };
+    await validate();
+    return { preview: { title: '创建对话 / Create conversation', fields: fields({ '名称 / Name': title, '项目 / Project': project ? `${project.name} (${project.id})` : '独立对话 / Independent', '路径 / Directory': cwd,
+      '模型 / Model': `${model}@${provider}`, '思考 / Thinking': thinking, VPN: proxyEnabled === null ? '继承全局 / Inherit global' : proxyEnabled ? '开启 / On' : '关闭 / Off',
+      ...(instructions ? { '说明 / Instructions': instructions } : {}) }) }, validate,
+      async execute() {
+        await validate(); checkState();
+        const created = await createSession(sessions, opts, cwd, undefined, 'agent', { model, provider, instructions, proxyEnabled });
+        try {
+          await validate();
+          if (instructions && created.bridge.getRestoreState?.()?.conversationInstructions !== instructions) throw new Error('Backend does not support persistent conversation instructions');
+          if (!created.bridge.execCommand) throw new Error('Backend does not support model selection');
+          await created.bridge.execCommand('/model', `${model}@${provider}`);
+          checkState();
+          if (created.model !== model || created.provider !== provider) throw new Error('Model selection was not applied');
+          if (thinking !== 'default') {
+            if (!created.bridge.setThinking || !created.bridge.getThinking?.().levels.includes(thinking)) throw new Error('Unsupported thinking level');
+            created.bridge.setThinking(thinking);
+          } else if (created.bridge.getThinking?.().supported) created.bridge.setThinking?.('default');
+          await validate();
+          checkState();
+          if (projectId) projects.update({ action: 'members', id: projectId, add: [created.id] }, id => sessions.has(id));
+          await setSessionTitle(created, title, true);
+          await saveSessionMeta(created);
+          return { type: op.type, instanceId: created.id, title, projectId, cwd, model, provider, thinking, proxyEnabled };
+        } catch (e) {
+          // Preserve created resources; never blindly replay a partially applied operation.
+          let detail = String(e);
+          try { await saveSessionMeta(created); }
+          catch (saveError) { detail += `; metadata save failed: ${String(saveError)}`; }
+          throw new Error(`Conversation ${created.id} was created but setup did not finish: ${detail}`);
+        }
+      } };
+  };
+  return { catalog, execute: (request, approve, signal) => {
+    source();
+    const signals = [opts.signal, signal].filter((s): s is AbortSignal => !!s);
+    const combined = signals.length ? AbortSignal.any(signals) : undefined;
+    const targets = new Set<string>();
+    return operations.run(sourceId, request, op => {
+      if (['conversation.update', 'conversation.detach', 'conversation.archive', 'conversation.delete'].includes(op.type)) {
+        const id = String(op.input.id);
+        if (targets.has(id)) throw new Error('Only one operation per existing conversation is allowed in a plan');
+        targets.add(id);
+      }
+      return prepare(op, combined);
+    }, approve, combined);
+  } };
 }

@@ -1,3 +1,4 @@
+import { appendApprovalPreview } from "./approval-preview.js";
 import { findQueued, attachQueueEdit } from "./queued-messages.js";
 import { loadThinking, saveThinking, thinkingChoices, thinkingLabel } from "./thinking-control.js";
 import { refreshActivity } from "./stream/activity.js";
@@ -1066,6 +1067,9 @@ export const handlers = {
         `</div>` +
       `</div>`;
 
+    if (p?.explicit) card.querySelector('.approve-all')?.remove();
+    if (Array.isArray(p?.items)) appendApprovalPreview(card.querySelector('.permission-main'), p.items);
+
     // Diff preview appended after main (collapsed with fade + expand toggle)
     let diffWrap = null;
     let diffPreview = null;
@@ -1123,6 +1127,7 @@ export const handlers = {
     const countText = card.querySelector(".perm-count-text");
     const expiresAt = p?.expiresAt ?? Date.now() + 30_000;
     let remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+    if (countText) countText.textContent = String(remaining);
     const tick = () => {
       // Session tab closed or stream rebuilt (resync / branch switch) —
       // stop the countdown instead of idling on a detached card.
@@ -1130,7 +1135,7 @@ export const handlers = {
       remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
       if (countText) countText.textContent = String(remaining);
       if (ringCircle) {
-        const offset = 62.83 * (1 - remaining / 30);
+        const offset = 62.83 * (1 - remaining / ((p?.durationMs || 30_000) / 1000));
         ringCircle.setAttribute("stroke-dashoffset", String(offset));
       }
       if (remaining <= 5) {

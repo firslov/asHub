@@ -10,7 +10,7 @@ import { t } from "./i18n.js";
 const root = document.getElementById("projects");
 let groups = [], visible = false, loading = false, error = "", generation = 0;
 let dialog = null;
-let workspaces = {}, pollTimer = null, polling = false, workspacePolling = false, rendered = "", statusGeneration = 0;
+let workspaces = {}, pollTimer = null, polling = false, groupPolling = false, workspacePolling = false, rendered = "", statusGeneration = 0;
 const collapsed = new Set();
 const networkSaving = new Set();
 try { for (const id of JSON.parse(localStorage.getItem("ash.project-folded") || "[]")) collapsed.add(id); } catch {}
@@ -172,6 +172,16 @@ async function projectApi(route, body) {
 }
 async function pollStatus() {
   if (!visible || document.hidden) return;
+  // Plugins and other clients can change project membership without a local
+  // management action. Refresh that snapshot too, without flashing a loader or
+  // letting a slow request hold up conversation status updates.
+  if (!loading && !groupPolling) {
+    groupPolling = true;
+    const seq = generation;
+    void request().then(result => {
+      if (visible && seq === generation) { groups = result; error = ""; render(); }
+    }).catch(() => {}).finally(() => { groupPolling = false; });
+  }
   // Git discovery may be slow on network drives; never hold up task status.
   if (!workspacePolling) {
     workspacePolling = true;

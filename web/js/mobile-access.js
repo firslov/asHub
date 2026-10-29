@@ -1,4 +1,5 @@
 import { registerPanel } from './panel-manager.js';
+import { featureEnabled, features } from './extensions/feature-state.js';
 
 const trigger = document.getElementById('mobile-access-toggle');
 const panel = document.createElement('section');
@@ -67,6 +68,7 @@ function controls() {
 }
 function showStatus(message, state = '') { status.textContent = message; status.dataset.state = state; }
 async function api(route = '', body) {
+  if (!featureEnabled('mobile-access')) throw Error('移动访问已停用');
   const r = await fetch('/api/mobile' + route, { method: body === undefined ? 'GET' : 'POST', headers: { 'X-Ashub-Local': '1', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   const result = await r.json(); if (!r.ok) throw Error(result.error); return result;
 }
@@ -90,6 +92,7 @@ function close() {
   form.elements.namedItem('password').value = ''; renderRecoveries();
 }
 function open() {
+  if (!featureEnabled('mobile-access')) return;
   panel.hidden = false; view++; ready = false; controls(); showStatus('正在读取连接状态…');
   $('mobile-link').hidden = true; $('mobile-retry').hidden = true; renderRecoveries();
   void refresh(true); clearInterval(timer); timer = setInterval(() => { if (!busy && ready && $('mobile-retry').hidden) void refresh(); }, 5000);
@@ -121,3 +124,4 @@ $('mobile-disable').onclick = async () => {
   catch (e) { if (!panel.hidden) { showStatus(e.message, 'error'); $('mobile-retry').hidden = false; } }
   finally { busy = false; controls(); }
 };
+features.subscribe(() => { if (!featureEnabled('mobile-access')) close(); });

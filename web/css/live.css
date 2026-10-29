@@ -558,6 +558,9 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 
+/* Feature visibility must override the toolbar button flex layout. */
+.toolbar-btn[hidden] { display: none; }
+
 .toolbar-btn:active {
   transform: scale(0.9);
   box-shadow: 0 1px 4px var(--accent-glow);

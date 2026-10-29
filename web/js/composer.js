@@ -6,6 +6,7 @@ import { createUserBox } from "./actions.js";
 import { attachAutocomplete } from "./autocomplete.js";
 import { attachAtMentionAutocomplete } from "./at-mention.js";
 import { closeOtherPanels } from "./panel-manager.js";
+import { loadFeature, featureEnabled, features } from './extensions/feature-state.js';
 import { activeSession } from "./session-manager.js";
 import { toast } from "./toast.js";
 import { t } from "./i18n.js";
@@ -385,14 +386,16 @@ let promptManagerMod = null;
 let promptManagerPromise = null;
 
 const loadPromptManager = () => {
+  if (!featureEnabled('quick-prompts')) return Promise.resolve();
   if (promptManagerMod) return Promise.resolve();
   if (!promptManagerPromise) {
     // Cache the in-flight promise (not a boolean flag) so concurrent
     // triggers — typing "#" while the toolbar toggle click is awaiting —
     // share the same import instead of the later one returning early with
     // nothing ever wired up.
-    promptManagerPromise = import("./prompt-manager.js")
+    promptManagerPromise = loadFeature('quick-prompts')
       .then((mod) => {
+        if (!mod) { promptManagerPromise = null; return; }
         promptManagerMod = mod;
         if (input) promptAcImpl = mod.attachPromptAutocomplete(input);
       })
@@ -405,6 +408,7 @@ const loadPromptManager = () => {
 };
 
 input?.addEventListener("input", () => {
+  if (!featureEnabled('quick-prompts')) return;
   if (promptManagerMod || promptManagerPromise) return;
   if (!input.value.trimStart().startsWith("#")) return;
   loadPromptManager().then(() => {
@@ -415,22 +419,13 @@ input?.addEventListener("input", () => {
   });
 });
 
-// Prompts panel toggle: the module wires its own toggle listener on load,
-// which misses the very click that loaded it — open the panel explicitly
-// afterwards (mirrors its toggleCommands: close others, open prompts tab).
-document.getElementById("prompt-toggle")?.addEventListener("click", async () => {
-  if (promptManagerMod) return; // loaded — the module's own listener toggles
-  await loadPromptManager();
-  if (!promptManagerMod) return;
-  closeOtherPanels("prompts");
-  promptManagerMod.setPromptOpen(true, "prompts");
-});
+features.subscribe(() => { if (!featureEnabled('quick-prompts')) promptAcImpl?.close(); });
 
 // Stub delegating to the real autocomplete once prompt-manager.js loads;
 // inert (never opens) until then.
 const promptAc = {
-  hasSelection: () => promptAcImpl?.hasSelection() ?? false,
-  acceptCurrent: () => promptAcImpl?.acceptCurrent(),
+  hasSelection: () => featureEnabled('quick-prompts') && (promptAcImpl?.hasSelection() ?? false),
+  acceptCurrent: () => { if (featureEnabled('quick-prompts')) promptAcImpl?.acceptCurrent(); },
   close: () => promptAcImpl?.close(),
 };
 const atAc = attachAtMentionAutocomplete(input);

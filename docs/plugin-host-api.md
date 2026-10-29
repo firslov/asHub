@@ -48,3 +48,24 @@ Capability-detect through `catalog.operations`; older v1 hosts only offer creati
 - `conversation.delete`: `id`. Permanently remove history and uploaded attachments, then remove project membership. Workspace files are kept.
 
 Targets must be live, idle agent conversations with no queued work. Archive/delete cannot target the requesting conversation. Each target can occur only once per plan. The approval preview identifies the target and directory, shows before/after configuration, and distinguishes reversible membership removal, restorable archival, and irreversible deletion. After approval the host rechecks target identity, configuration, membership and activity; concurrent changes invalidate the plan. Existing-operation execution blocks conflicting conversation mutations. No model turn is started. A partial failure reports the target ID and is not automatically replayed; check current state before a new plan. The API adds no project-management-specific policy to asHub.
+
+
+## Read-only application host protocol
+
+Application extensions receive `ctx.services.host` with `capabilities()`, `snapshot()` and `subscribe(listener)` (returns an unsubscribe function). Register the unsubscribe function with `ctx.onDispose`. Snapshot objects are detached from internal state. There is no unbound execute method: operations still require the source-bound session handlers and explicit user approval above.
+
+The authenticated desktop HTTP interface additionally exposes:
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/host/capabilities` | v1 queries/operations, invalidation transport, explicit approval and receipt semantics |
+| `GET /api/host/snapshot` | `{version:1, epoch, revision, sessions, projects, extensions}` |
+| `GET /api/host/events` | SSE `snapshot` on connection, then `invalidation` notices |
+| `GET /api/extensions` | `{version:1, features:[{id,name,enabled,state,scope,...}]}` |
+| `POST /api/extensions/:id/enabled` | `{enabled:boolean}`, existing auth/Origin/Host checks; 409 if busy |
+
+SSE data contains `{version:1, epoch, revision, kind?, id?}`. Kinds are `sessions`, `projects`, `network`, `extensions` and `configuration`. SSE IDs are `epoch:revision`. No message bodies, credentials or approval tokens are included. Epoch changes on Hub startup. Revision increases within one epoch only. This is a bounded invalidation channel without durable replay: refetch on connection/reconnection, epoch change or a missed revision. Slow consumers are disconnected instead of accumulating unbounded pending events.
+
+The session shape in the snapshot matches legacy `GET /sessions`; projects match `/api/projects`. Snapshots reflect current in-process state, not a cross-process transaction with arbitrary external file edits. Legacy HTTP routes and the v1 plugin handler names remain supported. Only explicit 404/405/501 indicates an older host; authentication or server failures must not be treated as capability absence.
+
+Application extension states are `inactive`, `starting`, `active`, `stopping` and `error`. An enabled extension can still be unavailable during startup or after failure. A failed optional extension does not block core session routes. Feature disable preserves stored data. The remote gateway intentionally does not forward these unrestricted local host/plugin-management routes; it retains its permission-filtered remote protocol.

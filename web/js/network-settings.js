@@ -39,3 +39,8 @@ export function saveNetworkPolicy(enabled, session) {
 if (channel) channel.onmessage = () => { void loadNetworkPolicy(); };
 window.addEventListener?.('focus', () => { void loadNetworkPolicy(); });
 void loadNetworkPolicy();
+
+// Host events also cover changes originating in plugins or another client.
+document.addEventListener?.('ash:host-state-changed', event => {
+  if (!event.detail?.domains || event.detail.domains.some(domain => ['network', 'configuration'].includes(domain))) void loadNetworkPolicy();
+});

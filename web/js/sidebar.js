@@ -539,7 +539,7 @@ const renderSessionItem = (s, isPinned = false) => {
 // changed. Returns true on change so callers can trigger a rebuild.
 const refreshPinned = async () => {
   try {
-    const pinnedRes = await fetch("/api/sessions/pinned");
+    const pinnedRes = await fetch("/api/sessions/pinned", { cache: "no-store" });
     if (!pinnedRes.ok) return false;
     const data = await pinnedRes.json();
     if (!Array.isArray(data.pinned)) return false;
@@ -562,7 +562,7 @@ const renderSessions = async (force = false, opts = null) => {
       list = lastSessionsList;
     } else {
       const request = ++sessionsFetchSeq;
-      const response = await fetch("/sessions");
+      const response = await fetch("/sessions", { cache: "no-store" });
       if (!response.ok) return;
       list = await response.json();
       if (request !== sessionsFetchSeq || !Array.isArray(list)) return;
@@ -577,6 +577,7 @@ const renderSessions = async (force = false, opts = null) => {
     // invalidates this early return even when the session list is unchanged.
     const fullHash = JSON.stringify([filterQuery(), list.map((s) => [
       s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt, s.kind ?? "agent", s.projectId,
+      s.projectExternal, s.model, s.provider, s.thinkingLevel, s.waitingApproval, s.queuedCount, s.lastTurnError, s.readOnlyContext, s.supportsCwdChange,
     ])]);
     if (!force && fullHash === fullHashCache) return;
 
@@ -586,6 +587,7 @@ const renderSessions = async (force = false, opts = null) => {
     // turn end; those are synced into the cached objects in place instead.
     const contentHash = JSON.stringify(list.map((s) => [
       s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.kind ?? "agent", s.projectId,
+      s.projectExternal, s.model, s.provider, s.thinkingLevel, s.waitingApproval, s.queuedCount, s.lastTurnError, s.readOnlyContext, s.supportsCwdChange,
     ]));
     let storeInSync = !force && contentHash === storeContentHash;
     if (storeInSync) {
@@ -1131,18 +1133,28 @@ renderSessions();
 // SSE events (title, processing) come through session-view; we hook in via
 // the sidebar's own event listeners on the document.
 let _refreshQueued = false;
-const queueRefresh = () => {
+let _refreshPinnedQueued = false;
+const queueRefresh = (event) => {
+  if (event?.type === "ash:host-state-changed") {
+    // Project membership also determines which rows belong in this list.
+    const domains = event.detail?.domains;
+    if (Array.isArray(domains) && !domains.some(kind => kind === "sessions" || kind === "projects")) return;
+    ++sessionsFetchSeq; ++sessionsRenderSeq;
+    _refreshPinnedQueued = true;
+  }
   if (_refreshQueued) return;
   _refreshQueued = true;
   queueMicrotask(async () => {
     _refreshQueued = false;
-    renderSessions();
+    const refreshPinned = _refreshPinnedQueued; _refreshPinnedQueued = false;
+    renderSessions(false, { refreshPinned });
   });
 };
 // Trigger on title changes, processing start/end via SSE events.
 document.addEventListener("ash:sessions-changed", queueRefresh);
 document.addEventListener("sse:title", queueRefresh);
 document.addEventListener("sse:processing-change", queueRefresh);
+document.addEventListener("ash:host-state-changed", queueRefresh);
 // Fallback: poll every 5 minutes in case SSE events were missed. Also
 // re-reads the pinned set, which no event carries — without this, pin
 // toggles from another window never reach this one.

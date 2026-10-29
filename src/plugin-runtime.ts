@@ -275,10 +275,17 @@ export class PluginRuntime {
       if (this.closed) break;
       const state: PluginStatus = { id: plugin.id, name: plugin.name, state: 'loading', configNamespaces: [] };
       this.status.push(state);
+      if (plugin.compatibilityError) {
+        state.state = 'error'; state.error = plugin.compatibilityError;
+        ctx.bus.emit('ui:error', { message: `Plugin ${plugin.name}: ${state.error}` });
+        continue;
+      }
+      if (!plugin.sessionEnabled) { state.state = plugin.manifest?.ui ? 'frontend' : 'registered'; continue; }
       const scope = pluginScope(ctx); this.scopes.add(scope);
       // Snapshot per kernel: new kernels see saved edits without resetting the
       // process-wide kernel settings cache or changing running conversations.
       scope.ctx.getExtensionSettings = (namespace, defaults) => {
+        if (plugin.manifest?.schemaVersion === 2 && !plugin.manifest.configNamespaces.includes(namespace)) throw new Error('Plugin settings namespace was not declared');
         if (!state.configNamespaces!.includes(namespace)) state.configNamespaces!.push(namespace);
         const value = Object.hasOwn(settings, namespace) ? settings[namespace] : undefined;
         return value && typeof value === 'object' && !Array.isArray(value) ? { ...defaults, ...value } : defaults;
@@ -287,7 +294,7 @@ export class PluginRuntime {
       try {
         await Promise.race([
           (async () => {
-            const spec = plugin.specifier;
+            const spec = plugin.sessionSpecifier ?? plugin.specifier;
             if (/\.(ts|tsx|mts)$/.test(spec)) {
               // Match the kernel's ESM setup for directory-discovered TS plugins.
               const root = path.join(path.dirname(this.file), 'extensions');

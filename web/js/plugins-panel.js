@@ -1,3 +1,5 @@
+import { mountFeatureControls } from './extensions/feature-controls.js';
+import { refreshFeatures } from './extensions/feature-state.js';
 import { initPluginInstall } from './plugin-install.js';
 import { t } from './i18n.js';
 import { registerPanel } from './panel-manager.js';
@@ -5,6 +7,9 @@ const panel = document.getElementById('plugins-overlay');
 const list = document.getElementById('plugins-list');
 const message = document.getElementById('plugins-message');
 const refresh = document.getElementById('plugins-refresh');
+const featureSection = document.createElement('section'); featureSection.id = 'features-list';
+list.before(featureSection);
+mountFeatureControls(featureSection);
 let generation = 0, saving = false;
 const node = (tag, className, text) => {
   const el = document.createElement(tag); el.className = className;
@@ -92,6 +97,7 @@ function render(plugins) {
   }
 }
 async function load() {
+  void refreshFeatures();
   const mine = ++generation;
   refresh.disabled = true; message.textContent = t('loading'); list.replaceChildren();
   try {

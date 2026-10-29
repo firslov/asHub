@@ -15,6 +15,12 @@ export class RemoteConnector {
   private socket: WebSocket | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
+  private accepting = true;
+  private initialized = false;
+  private requests = new Set<Promise<unknown>>();
+  private subscriptions = new Set<Promise<unknown>>();
+  private requestBodies = new Set<IncomingMessage>();
+  private connectionDeadline: ReturnType<typeof setTimeout> | undefined;
   private generation = 0;
   private attempts = 0;
   private streams = new Map<string, AbortController>();
@@ -35,23 +41,61 @@ export class RemoteConnector {
     this.journal = path.join(opts.dataDir, 'remote-requests.json');
   }
   start(port: number) {
-    this.localUrl = `http://127.0.0.1:${port}`;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw error('Invalid local port');
+    const localUrl = `http://127.0.0.1:${port}`;
+    // Repeated listening notifications must not reload pending receipts or
+    // establish a second socket, including while an effect is in flight.
+    if (this.initialized && this.accepting) {
+      if (this.localUrl !== localUrl) throw error('移动访问已在其他本地端口启动', 409);
+      return;
+    }
+    if (this.isBusy() || this.subscriptions.size) throw error('请等待移动访问请求完成后再启动', 409);
+    this.localUrl = localUrl;
     try {
-      const saved = this.opts.store?.read();
-      if (saved) this.config = JSON.parse(saved);
-      try {
-        this.entries = JSON.parse(fs.readFileSync(this.journal, 'utf8'));
-        for (const e of Object.values(this.entries)) if (e.state === 'pending') e.state = 'unknown';
-        this.saveJournal();
-      } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
+      if (!this.initialized) {
+        const saved = this.opts.store?.read();
+        this.config = saved ? JSON.parse(saved) : null;
+        try {
+          this.entries = JSON.parse(fs.readFileSync(this.journal, 'utf8'));
+          for (const e of Object.values(this.entries)) if (e.state === 'pending') e.state = 'unknown';
+          this.saveJournal();
+        } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
+        this.initialized = true;
+      }
+      this.accepting = true; this.stopped = false; this.attempts = 0;
+      this.statusText = 'disabled'; this.lastError = '';
       this.connect();
     } catch { this.statusText = 'error'; this.lastError = '无法读取移动访问凭证或发送记录，请在桌面重新绑定'; }
   }
   status() { return { available: !!this.opts.store, enabled: !!this.config && this.config.enabled !== false, status: this.statusText, error: this.lastError,
     username: this.config?.username, deviceName: this.config?.deviceName, roots: this.config?.roots || [], gateway: this.gateway.href }; }
   close() {
-    this.stopped = true; this.generation++; clearTimeout(this.timer); this.socket?.close(); this.socket = null;
+    this.accepting = false;
+    this.stopConnection(); this.statusText = 'disabled';
+    for (const req of this.requestBodies) req.destroy(error('移动访问请求已取消，请重试', 409));
+  }
+  private stopConnection() {
+    this.stopped = true; this.generation++; clearTimeout(this.timer); clearTimeout(this.connectionDeadline); this.socket?.close(); this.socket = null;
     for (const c of this.streams.values()) c.abort(); this.streams.clear();
+  }
+  isBusy(): boolean { return !!(this.requests.size || this.operations.size || this.validating.size || this.connecting); }
+  /** Close admission before draining. Submitted effects finish and retain their
+   * durable receipt; cancelling their HTTP request could hide an applied effect. */
+  async drain(): Promise<void> {
+    while (this.requests.size || this.operations.size || this.subscriptions.size) {
+      await Promise.allSettled([...this.requests, ...this.operations.values(), ...this.subscriptions]);
+    }
+  }
+  private track<T>(pending: Set<Promise<unknown>>, run: () => Promise<T>): Promise<T> {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason: unknown) => void;
+    const task = new Promise<T>((done, failed) => { resolve = done; reject = failed; });
+    // Register admission before invoking any handler, including synchronous
+    // injected transports that may inspect lifecycle state reentrantly.
+    pending.add(task);
+    void task.then(() => pending.delete(task), () => pending.delete(task));
+    try { resolve(run()); } catch (error) { reject(error); }
+    return task;
   }
   private saveJournal() {
     fs.mkdirSync(path.dirname(this.journal), { recursive: true, mode: 0o700 });
@@ -60,23 +104,35 @@ export class RemoteConnector {
     try { fs.writeFileSync(fd, JSON.stringify(this.entries)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     fs.renameSync(tmp, this.journal);
   }
-  async handle(req: IncomingMessage, res: ServerResponse) {
+  handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    return this.track(this.requests, () => this.handleRequest(req, res));
+  }
+  private async handleRequest(req: IncomingMessage, res: ServerResponse) {
+    const epoch = this.generation;
     const reply = (status: number, value: unknown) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     try {
       // A custom header plus the hub's Origin/Host guard prevents cross-site requests.
       if (req.headers['x-ashub-local'] !== '1') throw error('Local application request required', 403);
       if (req.method === 'GET' && req.url === '/api/mobile') { reply(200, this.status()); return; }
       if (req.method !== 'POST') throw error('Method not allowed', 405);
+      if (!this.accepting) throw error('移动访问功能已停用', 409);
       if (!this.opts.store) throw error('请在支持系统安全存储的 asHub 桌面端中启用移动访问', 409);
       let size = 0; const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        size += bytes.length; if (size > 16384) throw error('Request too large', 413);
-        chunks.push(bytes);
-      }
+      this.requestBodies.add(req);
+      try {
+        for await (const chunk of req) {
+          if (!this.accepting || epoch !== this.generation) throw error('移动访问请求已取消，请重试', 409);
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          size += bytes.length; if (size > 16384) throw error('Request too large', 413);
+          chunks.push(bytes);
+        }
+      } finally { this.requestBodies.delete(req); }
+      // Closing while a chunked body is arriving must never launch enrollment
+      // or persist credentials after the application has stopped.
+      if (!this.accepting || epoch !== this.generation) throw error('移动访问请求已取消，请重试', 409);
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
       if (req.url === '/api/mobile/disconnect') {
-        this.close(); this.statusText = 'disabled'; this.lastError = '';
+        this.stopConnection(); this.statusText = 'disabled'; this.lastError = '';
         // Retain only the encrypted device identity for a later password-authenticated rebind.
         // A disabled connector never connects, executes requests, or resumes on restart.
         if (this.config) this.config = { ...this.config, enabled: false };
@@ -99,10 +155,10 @@ export class RemoteConnector {
           body: JSON.stringify({ username: body.username, password: body.password, create: body.create === true && !previous, deviceName: body.deviceName, ...(previous ? { deviceId: previous.deviceId, deviceToken: previous.deviceToken } : {}) }), signal: AbortSignal.timeout(25000), redirect: 'error' });
         const result = await r.json() as any;
         if (!r.ok) throw error(result.error || '绑定失败', r.status);
-        if (bindingGeneration !== this.generation) throw error('绑定已取消，请重新连接', 409);
+        if (!this.accepting || bindingGeneration !== this.generation) throw error('绑定已取消，请重新连接', 409);
         if (result.protocol !== 1 || typeof result.deviceToken !== 'string' || typeof result.deviceId !== 'string') throw error('网关协议不兼容');
         const config: Config = { deviceId: result.deviceId, deviceToken: result.deviceToken, username: result.username, roots, deviceName: String(body.deviceName || '我的电脑').slice(0, 80) };
-        this.opts.store.write(JSON.stringify(config)); this.close(); this.config = config; this.stopped = false; this.attempts = 0; this.lastError = ''; this.connect();
+        this.opts.store.write(JSON.stringify(config)); this.stopConnection(); this.config = config; this.stopped = false; this.attempts = 0; this.lastError = ''; this.connect();
         reply(200, { ...this.status(), recovery: result.recovery });
       } finally { this.connecting = false; }
     } catch (e: any) { reply(e.status || 400, { error: e.status ? e.message : '操作失败，请检查目录、网络和系统安全存储' }); }
@@ -113,9 +169,9 @@ export class RemoteConnector {
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     this.statusText = 'connecting';
     const ws = new WebSocket(url); this.socket = ws;
-    const deadline = setTimeout(() => ws.close(), 15000);
-    ws.onopen = () => this.send(ws, { type: 'hello', protocol: 1, deviceId: this.config?.deviceId, token: this.config?.deviceToken });
-    ws.onerror = () => { this.lastError = '连接中断，正在自动重连'; };
+    const deadline = this.connectionDeadline = setTimeout(() => ws.close(), 15000);
+    ws.onopen = () => { if (epoch === this.generation && !this.stopped) this.send(ws, { type: 'hello', protocol: 1, deviceId: this.config?.deviceId, token: this.config?.deviceToken }); };
+    ws.onerror = () => { if (epoch === this.generation && !this.stopped) this.lastError = '连接中断，正在自动重连'; };
     ws.onmessage = event => {
       if (epoch !== this.generation) return;
       try {
@@ -234,7 +290,10 @@ export class RemoteConnector {
       throw error('文件不存在或无法读取', 404);
     } finally { await opened?.file.close(); }
   }
-  async execute(op: string, args: any): Promise<any> {
+  execute(op: string, args: any): Promise<any> {
+    return this.track(this.requests, () => this.executeRequest(op, args));
+  }
+  private async executeRequest(op: string, args: any): Promise<any> {
     if (!this.config || this.config.enabled === false || this.stopped) throw error('移动访问已关闭', 403);
     const epoch = this.generation;
     if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, thinking: true, queue: true };
@@ -328,7 +387,11 @@ export class RemoteConnector {
     }).finally(() => { try { this.saveJournal(); } catch { this.lastError = '发送状态保存失败，请检查磁盘'; } this.operations.delete(key); });
     this.operations.set(key, task); return entry;
   }
-  private async subscribe(ws: WebSocket, id: string, sessionId: string, recent = false) {
+  private subscribe(ws: WebSocket, id: string, sessionId: string, recent = false): Promise<void> {
+    return this.track(this.subscriptions, () => this.subscribeRequest(ws, id, sessionId, recent));
+  }
+  private async subscribeRequest(ws: WebSocket, id: string, sessionId: string, recent = false) {
+    if (!this.accepting || this.stopped) { this.send(ws, { type: 'end', id }); return; }
     if (typeof id !== 'string' || id.length > 80 || this.streams.size >= 8 || this.streams.has(id)) { this.send(ws, { type: 'end', id }); return; }
     const c = new AbortController(); this.streams.set(id, c);
     const permissionCheck = setInterval(() => { void this.session(sessionId).catch(() => c.abort()); }, 15000);

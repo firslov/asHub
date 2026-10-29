@@ -33,15 +33,26 @@ export function createConversationAccess(sourceId: string, runtime: Conversation
     tasks ??= source().collaboration ?? new CollaborationTasks(tasksDirectory);
     return tasks;
   };
+  const checkTask = (id: string) => {
+    const task = registry().get(id);
+    if (task.sourceId !== sourceId && task.recipientId !== sourceId) throw new Error("Task outside this conversation");
+    const p = group();
+    if (!p?.sessionIds.includes(task.sourceId) || !p.sessionIds.includes(task.recipientId)) throw new Error("Task outside this project");
+  };
   return {
+    async waitTasks(targets, waitMs = 120000, signal) {
+      // The store validates and copies the same IDs before installing listeners.
+      const watched = Array.isArray(targets) ? targets.map(t => t && ({ id: t.id, afterRevision: t.afterRevision, afterState: t.afterState })) : targets;
+      return registry().waitMany(watched, waitMs, signal, () => {
+        source(); for (const target of watched) checkTask(target.id);
+      }, check => projects.subscribe(check));
+    },
+    async deliver(id, delivery, signal) {
+      signal?.throwIfAborted(); checkTask(id);
+      return registry().deliver(id, sourceId, delivery);
+    },
     async task(id, offset = 0, waitMs = 0, signal) {
-      const check = () => {
-        const task = registry().get(id);
-        if (task.sourceId !== sourceId && task.recipientId !== sourceId) throw new Error("Task outside this conversation");
-        const p = group();
-        if (!p?.sessionIds.includes(task.sourceId) || !p.sessionIds.includes(task.recipientId)) throw new Error("Task outside this project");
-      };
-      check(); await registry().wait(id, waitMs, signal); check();
+      checkTask(id); await registry().wait(id, waitMs, signal); checkTask(id);
       return registry().page(id, offset);
     },
     list() {

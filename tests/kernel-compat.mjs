@@ -97,10 +97,16 @@ try {
     try { const exit = await within(new Promise(resolve => proc.onExit(resolve))); assert.equal(exit.exitCode, 7); assert.match(output, /NATIVE_PTY_OK/); }
     finally { try { proc.kill(); } catch {} }
   });
-  const bridge = new AshBridge({ cwd: dir, provider: 'compat', model: 'compat-model', conversationAccess: {
-    list: () => ({ currentId: 'fixture', project: { name: 'Fixture' }, conversations: [] }),
-    read: async () => ({ messages: [] }), send: async () => ({ ok: true }),
-  } }); bridges.add(bridge);
+  const { CollaborationTasks } = await import('../dist/collaboration.js');
+  const { ProjectStore } = await import('../dist/projects.js');
+  const { createConversationAccess } = await import('../dist/services/conversation-service.js');
+  const tasksDirectory = path.join(dir, 'collaboration'), tasks = new CollaborationTasks(tasksDirectory);
+  const projects = new ProjectStore(path.join(dir, 'projects.json'));
+  projects.update({ action: 'create', name: 'Fixture', cwd: dir, add: ['fixture', 'coordinator'] }, () => true);
+  const sessions = new Map(['fixture', 'coordinator'].map(id => [id, { id, kind: 'agent', title: id, cwd: dir }]));
+  const access = createConversationAccess('fixture', { sessions, projects, tasks, tasksDirectory,
+    withContextLock: async (_session, fn) => fn(), submitQuery: async () => { throw Error('No model dispatch in fixture'); } });
+  const bridge = new AshBridge({ cwd: dir, provider: 'compat', model: 'compat-model', conversationAccess: access }); bridges.add(bridge);
   await check('real AshBridge initializes with ESM TypeScript extension', async () => {
     await within(bridge.ready());
     assert.match(bridge.core.bus.emitPipe('compat:extension-loaded', { url: '' }).url, /compat\.ts/);
@@ -152,7 +158,7 @@ try {
   });
   await check('project tools reach the model and execute through the kernel', async () => {
     const names = requests.at(-1).tools.map(t => t.function.name);
-    for (const name of ['conversation_list', 'conversation_read', 'conversation_send']) assert(names.includes(name), name);
+    for (const name of ['conversation_list', 'conversation_read', 'conversation_send', 'conversation_task', 'conversation_wait', 'conversation_deliver']) assert(names.includes(name), name);
     let round = 0;
     modelReply = () => ++round === 1
       ? { tool_calls: [{ index: 0, id: 'project-list', type: 'function', function: { name: 'conversation_list', arguments: '{}' } }] }
@@ -161,6 +167,65 @@ try {
       await within(bridge.submit('List project conversations'));
       const result = (await bridge.snapshot()).messages.find(m => m.role === 'tool' && m.tool_call_id === 'project-list');
       assert.equal(JSON.parse(result.content).currentId, 'fixture');
+    } finally { modelReply = () => ({ content: 'KERNEL_REPLY_OK' }); }
+  });
+  await check('collaboration delivery and wait execute through real model tools and plugin handlers', async () => {
+    const task = tasks.create('coordinator', 'fixture', 'Check evidence', 'Check evidence'); tasks.start(task.id);
+    task.text = 'PROCESS LOG MUST NOT ENTER SUMMARY';
+    const delivery = { summary: 'Evidence checked', artifacts: [{ label: 'Report', path: path.join(dir, 'report.md') }], unresolved: [] };
+    let round = 0;
+    modelReply = () => ++round === 1
+      ? { tool_calls: [{ index: 0, id: 'deliver-call', type: 'function', function: { name: 'conversation_deliver', arguments: JSON.stringify({ id: task.id, ...delivery }) } }] }
+      : { content: 'DELIVERY_SUBMITTED' };
+    try {
+      await within(bridge.submit('Submit the explicit delivery for this fixture task'));
+      const result = (await bridge.snapshot()).messages.find(m => m.role === 'tool' && m.tool_call_id === 'deliver-call');
+      assert.equal(JSON.parse(result.content).submitted, true);
+      assert.deepEqual(tasks.get(task.id).delivery, delivery);
+      assert.equal(tasks.get(task.id).state, 'running', 'delivery is not turn completion');
+      const controller = new AbortController(); controller.abort();
+      await assert.rejects(bridge.core.handlers.call('ashub:collaboration:wait', { targets: [{ id: task.id }], signal: controller.signal }));
+      await assert.rejects(bridge.core.handlers.call('ashub:collaboration:deliver', { id: task.id, delivery, signal: controller.signal }));
+      const pending = bridge.core.handlers.call('ashub:collaboration:wait', { targets: [{ id: task.id }], waitMs: 1000 });
+      await bridge.core.handlers.call('ashub:collaboration:deliver', { id: task.id, delivery: { ...delivery, summary: 'Updated evidence checked' } });
+      tasks.finish(task.id, 'completed');
+      const first = await within(pending);
+      assert.equal(first.results[0].delivery.summary, 'Updated evidence checked');
+      assert(!JSON.stringify(first).includes('PROCESS LOG'));
+      assert.equal((await bridge.core.handlers.call('ashub:collaboration:wait', { targets: first.cursors })).reason, 'settled');
+      round = 0;
+      modelReply = () => ++round === 1
+        ? { tool_calls: [{ index: 0, id: 'wait-call', type: 'function', function: { name: 'conversation_wait', arguments: JSON.stringify({ targets: [{ id: task.id }], waitMs: 0 }) } }] }
+        : { content: 'RESULT_COLLECTED' };
+      await within(bridge.submit('Collect the completed fixture result'));
+      const collected = (await bridge.snapshot()).messages.find(m => m.role === 'tool' && m.tool_call_id === 'wait-call');
+      assert.equal(JSON.parse(collected.content).results[0].delivery.summary, 'Updated evidence checked');
+      assert(!collected.content.includes('PROCESS LOG'));
+    } finally { modelReply = () => ({ content: 'KERNEL_REPLY_OK' }); }
+  });
+  await check('large delivery batches survive actual kernel output limits with complete cursors', async () => {
+    const targets = [], seen = new Set();
+    const delivery = { summary: '结'.repeat(2000), artifacts: Array.from({ length: 8 }, (_, i) => ({ label: String(i) + '件'.repeat(119), path: 'p'.repeat(1000) })), unresolved: Array(8).fill('题'.repeat(300)) };
+    for (let i = 0; i < 16; i++) {
+      const task = tasks.create('coordinator', 'fixture', 'work' + i, 'work' + i); tasks.start(task.id);
+      await access.deliver(task.id, delivery); tasks.finish(task.id, 'completed'); targets.push({ id: task.id });
+    }
+    let round = 0;
+    modelReply = () => ++round === 1
+      ? { tool_calls: [{ index: 0, id: 'large-wait-call', type: 'function', function: { name: 'conversation_wait', arguments: JSON.stringify({ targets, waitMs: 0 }) } }] }
+      : { content: 'LARGE_PAGE_COLLECTED' };
+    try {
+      await within(bridge.submit('Collect the completed large fixture batch'));
+      const toolResult = (await bridge.snapshot()).messages.find(m => m.role === 'tool' && m.tool_call_id === 'large-wait-call');
+      let page = JSON.parse(toolResult.content);
+      assert(page.hasMore); assert.equal(page.cursors.length, 16);
+      for (let n = 0; n < 17; n++) {
+        for (const result of page.results) { assert(!seen.has(result.id)); seen.add(result.id); assert.deepEqual(result.delivery, delivery); }
+        if (!page.hasMore) break;
+        page = await bridge.core.handlers.call('ashub:collaboration:wait', { targets: page.cursors, waitMs: 0 });
+      }
+      assert.equal(seen.size, 16);
+      assert.equal((await access.waitTasks(page.cursors, 0)).reason, 'settled');
     } finally { modelReply = () => ({ content: 'KERNEL_REPLY_OK' }); }
   });
   await check('bridge subagent delegates through the installed upstream runner', async () => {

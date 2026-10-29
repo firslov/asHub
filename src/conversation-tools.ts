@@ -25,7 +25,7 @@ export function conversationTools(access: ConversationAccess): ToolDefinition[] 
   }));
   tools.push({
     name: "conversation_task", readOnly: true,
-    description: "Check a collaboration task returned by conversation_send. Optionally wait up to 30 seconds for completion. Read all output using nextOffset while hasMore is true; contexts and tool logs are not copied. Completed means the recipient turn ended, not that its claims have been verified.",
+    description: "Read the full user-visible transcript of a collaboration task returned by conversation_send. Prefer conversation_wait for concise delivery results. Optionally wait up to 30 seconds for completion. Read all output using nextOffset while hasMore is true; contexts and tool logs are not copied. Completed means the recipient turn ended, not that its claims have been verified.",
     input_schema: { type: "object", properties: {
       id: { type: "string", description: "Task ID from conversation_send" },
       offset: { type: "integer", minimum: 0, description: "Result character offset; use returned nextOffset" },
@@ -36,6 +36,43 @@ export function conversationTools(access: ConversationAccess): ToolDefinition[] 
         const a = args as { id: string; offset?: number; waitMs?: number };
         ctx?.signal?.throwIfAborted();
         return { content: JSON.stringify(await access.task(a.id, a.offset ?? 0, a.waitMs ?? 0, ctx?.signal)), exitCode: 0, isError: false };
+      } catch (e) { return { content: String(e), exitCode: 1, isError: true }; }
+    },
+  });
+  tools.push({
+    name: "conversation_wait", readOnly: true, showOutput: true, maxResultBytes: 128000,
+    description: "Wait for any of 1–16 collaboration tasks to end (up to 120 seconds). Returns only unseen terminal results with explicitly submitted delivery, never progress logs. Pass the full returned cursors as targets on the next call to avoid repeats. If hasMore is true, continue with these cursors and waitMs:0 to read deferred results. Omit a cursor to reread a result. A timeout returns compact statuses only; settled means all watched results were already delivered. delivery:null means no explicit delivery was submitted; use conversation_task for the original transcript. Completion is not independent verification.",
+    input_schema: { type: "object", properties: {
+      targets: { type: "array", minItems: 1, maxItems: 16, items: { type: "object", properties: {
+        id: { type: "string", description: "Task ID from conversation_send" },
+        afterRevision: { type: "integer", minimum: 0, description: "Use the cursor returned for this task" },
+        afterState: { type: "string", enum: ["queued", "running", "completed", "failed", "cancelled", "interrupted"], description: "Preserve the returned state cursor across restarts" },
+      }, required: ["id"], additionalProperties: false } },
+      waitMs: { type: "integer", minimum: 0, maximum: 120000, description: "Default 120000; use 0 for a snapshot" },
+    }, required: ["targets"], additionalProperties: false },
+    async execute(args, _onChunk, ctx) {
+      try {
+        ctx?.signal?.throwIfAborted();
+        const a = args as { targets: import("./collaboration.js").TaskWatch[]; waitMs?: number };
+        return { content: JSON.stringify(await access.waitTasks(a.targets, a.waitMs ?? 120000, ctx?.signal)), exitCode: 0, isError: false };
+      } catch (e) { return { content: String(e), exitCode: 1, isError: true }; }
+    },
+  }, {
+    name: "conversation_deliver", readOnly: false, showOutput: true,
+    description: "Submit a concise explicit delivery for the collaboration task currently executing in THIS recipient conversation. Use its Task ID from the incoming message. Records the result without sending a new message, waking another model, or marking the turn complete. Include conclusions, artifact references and unresolved issues; references are not fetched or verified. May replace the delivery during this same running task; cannot modify another task or a finished task.",
+    input_schema: { type: "object", properties: {
+      id: { type: "string", description: "Task ID of the incoming collaboration message" },
+      summary: { type: "string", minLength: 1, maxLength: 2000 },
+      artifacts: { type: "array", maxItems: 8, items: { type: "object", properties: {
+        label: { type: "string", minLength: 1, maxLength: 120 }, path: { type: "string", minLength: 1, maxLength: 1000 },
+      }, required: ["label", "path"], additionalProperties: false } },
+      unresolved: { type: "array", maxItems: 8, items: { type: "string", minLength: 1, maxLength: 300 } },
+    }, required: ["id", "summary", "artifacts", "unresolved"], additionalProperties: false },
+    async execute(args, _onChunk, ctx) {
+      try {
+        ctx?.signal?.throwIfAborted();
+        const a = args as unknown as import("./collaboration.js").TaskDelivery & { id: string };
+        return { content: JSON.stringify(await access.deliver(a.id, { summary: a.summary, artifacts: a.artifacts, unresolved: a.unresolved }, ctx?.signal)), exitCode: 0, isError: false };
       } catch (e) { return { content: String(e), exitCode: 1, isError: true }; }
     },
   });

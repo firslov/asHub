@@ -133,3 +133,224 @@ test('structurally invalid receipt is excluded without hiding valid collaboratio
  assert.equal(store.list().length,1,'malformed metadata must not enter the task list');
  assert.equal(store.list()[0].id,valid.id);assert.equal(fs.readFileSync(file,'utf8'),damaged);
 });
+
+const delivery = (summary = 'Verified result') => ({ summary, artifacts: [{ label: 'Report', path: '/workspace/report.md' }], unresolved: [] });
+const plain = value => JSON.parse(JSON.stringify(value));
+test('multi-task wait returns the first completed result, never process logs, and cursors exclude repeats', async t => {
+ const f=await setup(t);
+ const slow=f.tasks.create(f.a.id,f.b.id,'slow','slow'), fast=f.tasks.create(f.a.id,f.b.id,'fast','fast');
+ f.tasks.start(fast.id);
+ f.routeEvent(f.b,{name:'agent:response-chunk',payload:{blocks:[{type:'text',text:'PROCESS '.repeat(10000)}]}});
+ let resolved=false;
+ const waiting=f.access.waitTasks([{id:slow.id},{id:fast.id}]).then(r=>{resolved=true;return r;});
+ await tick(); assert(!resolved);
+ await f.b.bridge.opts.conversationAccess.deliver(fast.id,delivery());
+ await tick(); assert(!resolved,'submitting a delivery must not pretend the turn ended');
+ f.tasks.finish(fast.id,'completed');
+ const first=await waiting;
+ assert.equal(first.reason,'changed'); assert.deepEqual(plain(first.results.map(r=>r.id)),[fast.id]);
+ assert.equal(first.results[0].delivery.summary,'Verified result');
+ assert.equal(first.results[0].totalChars,80000); assert(!JSON.stringify(first).includes('PROCESS'));
+ assert(JSON.stringify(first).length<2000,'result should remain small regardless of transcript size');
+ resolved=false;
+ const next=f.access.waitTasks(first.cursors).then(r=>{resolved=true;return r;});
+ await tick(); assert(!resolved,'already completed task must not prevent waiting for the remaining one');
+ f.tasks.start(slow.id); await tick(); assert(!resolved,'starting a task should not wake the coordinating model');
+ f.tasks.finish(slow.id,'completed'); const second=await next;
+ assert.deepEqual(plain(second.results.map(r=>r.id)),[slow.id]);
+ assert.equal(second.results[0].delivery,null,'missing delivery must not be guessed from transcript');
+ const settled=await f.access.waitTasks(second.cursors);
+ assert.equal(settled.reason,'settled');assert.equal(settled.results.length,0);
+ assert.equal(f.tasks.listeners.size,0);assert.equal(f.projects.listeners.size,0);
+});
+
+test('timeouts are compact, support 120 seconds without a model round trip, and preserve completion cursors',async t=>{
+ const f=await setup(t),task=f.tasks.create(f.a.id,f.b.id,'work','work');f.tasks.start(task.id);
+ await f.b.bridge.opts.conversationAccess.deliver(task.id,delivery());
+ task.text='DO NOT REPEAT';
+ const waiting=f.access.waitTasks([{id:task.id}]);
+ const timer=[...f.e.timers.values()].find(t=>t.ms===120000);assert(timer);timer.fn();
+ const timeout=await waiting;
+ assert.equal(timeout.reason,'timeout');assert.equal(timeout.results.length,0);
+ assert(!JSON.stringify(timeout).includes('DO NOT REPEAT'));assert(!JSON.stringify(timeout).includes('Verified result'));
+ assert.equal(f.tasks.listeners.size,0);assert.equal(f.projects.listeners.size,0);
+ f.tasks.finish(task.id,'completed');const done=await f.access.waitTasks(timeout.cursors,0);
+ assert.equal(done.results[0].delivery.summary,'Verified result');
+ await assert.rejects(f.access.waitTasks([{id:task.id}],120001),/waitMs/);
+});
+
+test('wait cancels promptly on abort, membership changes, source closure and shutdown without leaks',async t=>{
+ const f=await setup(t),task=f.tasks.create(f.a.id,f.b.id,'work','work');f.tasks.start(task.id);
+ const controller=new AbortController();const aborted=f.access.waitTasks([{id:task.id}],120000,controller.signal);
+ controller.abort();await assert.rejects(aborted);
+ assert.equal(f.tasks.listeners.size,0);assert.equal(f.projects.listeners.size,0);
+ const removed=f.access.waitTasks([{id:task.id}]);
+ f.projects.update({action:'members',id:f.project.id,remove:[f.b.id]},()=>true);
+ await assert.rejects(removed,/outside this project/);
+ assert.equal(f.tasks.listeners.size,0);assert.equal(f.projects.listeners.size,0);
+ f.projects.update({action:'members',id:f.project.id,add:[f.b.id]},()=>true);
+ const closed=f.access.waitTasks([{id:task.id}]);
+ f.tasks.stopSession(f.a.id); f.a._closing=true;
+ await assert.rejects(closed,/Source conversation unavailable/);f.a._closing=false;
+ const shutdown=f.access.waitTasks([{id:task.id}]);
+ f.tasks.stopSession(f.b.id);
+ const result=await shutdown;assert.equal(result.results[0].state,'cancelled');
+ assert.equal(f.tasks.listeners.size,0);assert.equal(f.projects.listeners.size,0);
+});
+
+test('task authorization covers every target, rejects malformed cursors, and snapshots plugin input',async t=>{
+ const f=await setup(t),task=f.tasks.create(f.a.id,f.b.id,'work','work');
+ const unrelated=f.tasks.create('other',f.b.id,'private','private');
+ for(const targets of [[],null,[null],[{}],[{id:task.id},{id:task.id}],Array.from({length:17},(_,i)=>({id:String(i)})),[{id:task.id,afterRevision:-1}],[{id:task.id,afterRevision:0.5}]]) {
+  await assert.rejects(f.access.waitTasks(targets,0));
+ }
+ await assert.rejects(f.access.waitTasks([{id:task.id,afterRevision:99}],0),/ahead/);
+ await assert.rejects(f.access.waitTasks([{id:task.id},{id:unrelated.id}],0),/outside this conversation/);
+ assert.equal(f.tasks.listeners.size,0);assert.equal(f.projects.listeners.size,0);
+ const targets=[{id:task.id}];const waiting=f.access.waitTasks(targets);
+ targets[0].id=unrelated.id;targets.push({id:unrelated.id});
+ f.tasks.finish(task.id,'completed');const result=await waiting;
+ assert.deepEqual(plain(result.results.map(r=>r.id)),[task.id]);
+});
+
+test('deliveries are recipient-only, bound to the running turn, durable and idempotent',async t=>{
+ const f=await setup(t),task=f.tasks.create(f.a.id,f.b.id,'work','work'), access=f.b.bridge.opts.conversationAccess;
+ await assert.rejects(access.deliver(task.id,delivery()),/currently running/);
+ f.tasks.start(task.id);
+ await assert.rejects(f.access.deliver(task.id,delivery()),/recipient/);
+ const input=delivery();await access.deliver(task.id,input);const revision=task.revision;
+ input.summary='mutated';input.artifacts[0].path='mutated';
+ assert.equal(task.delivery.summary,'Verified result');assert.equal(task.delivery.artifacts[0].path,'/workspace/report.md');
+ await access.deliver(task.id,delivery());assert.equal(task.revision,revision,'retry must not advance revision');
+ await access.deliver(task.id,delivery('Updated conclusion'));assert.equal(task.revision,revision+1);
+ const queued=f.tasks.create(f.a.id,f.b.id,'next','next');await assert.rejects(access.deliver(queued.id,delivery()),/currently running/);
+ for(const bad of [null,{},delivery(' '),delivery('x'.repeat(2001)),{...delivery(),artifacts:Array(9).fill({label:'a',path:'p'})},{...delivery(),artifacts:[{label:'a',path:''}]},{...delivery(),unresolved:['x'.repeat(301)]}]) {
+  await assert.rejects(access.deliver(task.id,bad),/Invalid delivery/);
+ }
+ const aborted=new AbortController();aborted.abort();await assert.rejects(access.deliver(task.id,delivery(),aborted.signal));
+ const restored=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+ assert.equal(restored.get(task.id).state,'interrupted');assert.equal(restored.get(task.id).delivery.summary,'Updated conclusion');
+ assert(restored.get(task.id).revision>task.revision);
+ f.tasks.finish(task.id,'completed');await assert.rejects(access.deliver(task.id,delivery()),/currently running/);
+ const result=await f.access.waitTasks([{id:task.id}],0);
+ result.results[0].delivery.summary='caller mutation';assert.equal(task.delivery.summary,'Updated conclusion');
+});
+
+test('delivery persistence failure is reported without overwriting the previous result',async t=>{
+ const f=await setup(t),task=f.tasks.create(f.a.id,f.b.id,'work','work');f.tasks.start(task.id);
+ const access=f.b.bridge.opts.conversationAccess;await access.deliver(task.id,delivery());
+ const revision=task.revision,rename=fs.renameSync;
+ fs.renameSync=(from,to)=>{if(to===path.join(f.e.dir,'tasks',task.id+'.json'))throw Error('disk unavailable');return rename(from,to);};
+ try { await assert.rejects(access.deliver(task.id,delivery('lost')),/disk unavailable/); }
+ finally { fs.renameSync=rename; }
+ assert.equal(task.delivery.summary,'Verified result');assert.equal(task.revision,revision);
+ const file=JSON.parse(fs.readFileSync(path.join(f.e.dir,'tasks',task.id+'.json'),'utf8'));
+ assert.equal(file.delivery.summary,'Verified result');
+});
+
+test('failed tasks retain explicit delivery without claiming success; legacy receipts and transcript remain compatible',async t=>{
+ const f=await setup(t),task=f.tasks.create(f.a.id,f.b.id,'work','work');f.tasks.start(task.id);
+ await f.b.bridge.opts.conversationAccess.deliver(task.id,delivery('Partial result'));
+ task.text='Full original output 😀';f.tasks.finish(task.id,'failed','upstream failed');
+ const result=await f.access.waitTasks([{id:task.id}],0);
+ assert.equal(result.results[0].state,'failed');assert.equal(result.results[0].error,'upstream failed');
+ assert.equal(result.results[0].delivery.summary,'Partial result');
+ assert.equal((await f.access.task(task.id)).text,task.text);
+ const file=path.join(f.e.dir,'tasks',task.id+'.json'),old=JSON.parse(fs.readFileSync(file));delete old.revision;delete old.delivery;fs.writeFileSync(file,JSON.stringify(old));
+ const restored=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+ const legacy=await restored.waitMany([{id:task.id}],0);
+ assert.equal(legacy.results[0].delivery,null);assert.equal(legacy.results[0].revision,0);
+ assert.equal(restored.page(task.id).text,task.text);
+ assert.equal((await restored.waitMany(legacy.cursors,0)).reason,'settled');
+});
+
+test('new generic tools forward cancellation, use concise wait by default, and expose delivery as a mutation',async t=>{
+ const f=await setup(t),{conversationTools}=f.e.load('src/conversation-tools.ts'),calls=[];
+ const tools=conversationTools({...f.access,waitTasks:async(...args)=>{calls.push(args);return {results:[]};},deliver:async(...args)=>{calls.push(args);return {submitted:true};}});
+ const wait=tools.find(t=>t.name==='conversation_wait'),deliver=tools.find(t=>t.name==='conversation_deliver'),controller=new AbortController();
+ assert(wait.readOnly);assert.equal(deliver.readOnly,false);
+ assert.equal((await wait.execute({targets:[{id:'test'}]},null,{signal:controller.signal})).isError,false);
+ assert.equal(calls[0][1],120000);assert.equal(calls[0][2],controller.signal);
+ const value=delivery();assert.equal((await deliver.execute({id:'test',...value},null,{signal:controller.signal})).isError,false);
+ assert.deepEqual(plain(calls[1][1]),value);assert.equal(calls[1][2],controller.signal);
+ controller.abort();assert((await wait.execute({targets:[{id:'test'}]},null,{signal:controller.signal})).isError);
+ assert((await deliver.execute({id:'test',...value},null,{signal:controller.signal})).isError);assert.equal(calls.length,2);
+});
+
+test('large simultaneous deliveries stay below the kernel limit and cursors never skip deferred results',async t=>{
+ const f=await setup(t), targets=[], expected=new Map();
+ const large={summary:'结'.repeat(2000),artifacts:Array.from({length:8},(_,i)=>({label:String(i)+'件'.repeat(119),path:'p'.repeat(1000)})),unresolved:Array(8).fill('题'.repeat(300))};
+ for(let i=0;i<16;i++) {
+  const task=f.tasks.create(f.a.id,f.b.id,'work'+i,'work'+i);f.tasks.start(task.id);
+  await f.b.bridge.opts.conversationAccess.deliver(task.id,large);f.tasks.finish(task.id,'completed');
+  targets.push({id:task.id});expected.set(task.id,large);
+ }
+ let cursors=targets, pages=0;const seen=new Set();
+ for(let n=0;n<17;n++) {
+  const result=await f.access.waitTasks(cursors,0);pages++;
+  assert(JSON.stringify(result).length<100000,'kernel truncates a single-line JSON tool response above 100000 characters');
+  for(const item of result.results) { assert(!seen.has(item.id),'result repeated');seen.add(item.id);assert.deepEqual(plain(item.delivery),expected.get(item.id)); }
+  for(const cursor of result.cursors) if(!seen.has(cursor.id)) assert.equal(cursor.afterRevision,undefined,'unreturned delivery must not be acknowledged');
+  cursors=result.cursors;
+  if(!result.hasMore) break;
+ }
+ assert.equal(seen.size,16);assert(pages>1,'large batches need paging');
+ assert.equal((await f.access.waitTasks(cursors,0)).reason,'settled');
+});
+
+test('terminal state change after failed persistence and restart is not hidden by a reused revision',async t=>{
+ const f=await setup(t),task=f.tasks.create(f.a.id,f.b.id,'work','work');f.tasks.start(task.id);
+ await f.b.bridge.opts.conversationAccess.deliver(task.id,delivery());
+ const rename=fs.renameSync;
+ fs.renameSync=(from,to)=>{if(to===path.join(f.e.dir,'tasks',task.id+'.json'))throw Error('disk unavailable');return rename(from,to);};
+ try { f.tasks.finish(task.id,'completed'); } finally { fs.renameSync=rename; }
+ const first=await f.access.waitTasks([{id:task.id}],0);assert.equal(first.results[0].state,'completed');
+ const restored=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+ const next=await restored.waitMany(first.cursors,0);
+ assert.equal(next.reason,'changed');assert.equal(next.results[0].state,'interrupted');
+ assert.equal(next.results[0].delivery.summary,'Verified result');
+ assert.equal((await restored.waitMany(next.cursors,0)).reason,'settled');
+});
+
+test('sparse delivery arrays from plugin handlers cannot persist unreadable receipts',async t=>{
+ const f=await setup(t),task=f.tasks.create(f.a.id,f.b.id,'work','work');f.tasks.start(task.id);
+ const access=f.b.bridge.opts.conversationAccess;await access.deliver(task.id,delivery());
+ for(const bad of [{...delivery(),artifacts:Array(1)},{...delivery(),unresolved:Array(1)}]) await assert.rejects(access.deliver(task.id,bad),/Invalid delivery/);
+ assert.equal(new f.CollaborationTasks(path.join(f.e.dir,'tasks')).get(task.id).delivery.summary,'Verified result');
+});
+
+test('escaped delivery fields and long errors remain bounded without dropping the explicit delivery',async t=>{
+ const f=await setup(t),targets=[];
+ const value={summary:'\u0001'.repeat(2000),artifacts:Array(8).fill({label:'\u0001'.repeat(120),path:'\u0001'.repeat(1000)}),unresolved:Array(8).fill('\u0001'.repeat(300))};
+ for(let i=0;i<16;i++) {
+  const task=f.tasks.create(f.a.id,f.b.id,'work','work');f.tasks.start(task.id);
+  await f.b.bridge.opts.conversationAccess.deliver(task.id,value);f.tasks.finish(task.id,'failed','\u0001'.repeat(100000));targets.push({id:task.id});
+ }
+ const result=await f.access.waitTasks(targets,0);
+ assert.equal(result.results.length,1);assert(result.hasMore);
+ assert.equal(result.results[0].errorTruncated,true);assert.equal(result.results[0].error.length,1000);
+ assert.deepEqual(plain(result.results[0].delivery),value);
+ const {conversationTools}=f.e.load('src/conversation-tools.ts');
+ const max=conversationTools(f.access).find(t=>t.name==='conversation_wait').maxResultBytes;
+ assert(JSON.stringify(result).length<max);
+ assert.equal((await f.access.task(targets[0].id)).error.length,100000,'original error must remain accessible');
+});
+
+test('deferred pages retain prior running cursors and detect lower revisions after multiple failed saves',async t=>{
+ const f=await setup(t),targets=[];
+ const value={summary:'结'.repeat(2000),artifacts:Array(8).fill({label:'x',path:'p'.repeat(1000)}),unresolved:[]};
+ for(let i=0;i<8;i++){const task=f.tasks.create(f.a.id,f.b.id,'work','work');f.tasks.start(task.id);await f.b.bridge.opts.conversationAccess.deliver(task.id,value);targets.push({id:task.id});}
+ const running=await f.access.waitTasks(targets,0);
+ for(const target of targets)f.tasks.finish(target.id,'completed');
+ const page=await f.access.waitTasks(running.cursors,0);assert(page.hasMore);
+ const read=new Set(page.results.map(r=>r.id));
+ for(let i=0;i<page.cursors.length;i++)if(!read.has(page.cursors[i].id))assert.deepEqual(plain(page.cursors[i]),plain(running.cursors[i]));
+ const task=f.tasks.create(f.a.id,f.b.id,'disk failure','disk failure'),rename=fs.renameSync;
+ fs.renameSync=(from,to)=>{if(to===path.join(f.e.dir,'tasks',task.id+'.json'))throw Error('disk unavailable');return rename(from,to);};
+ try { f.tasks.start(task.id);f.tasks.finish(task.id,'completed'); } finally { fs.renameSync=rename; }
+ const completed=await f.access.waitTasks([{id:task.id}],0);
+ const restored=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+ assert(restored.get(task.id).revision<task.revision);
+ assert.equal((await restored.waitMany(completed.cursors,0)).results[0].state,'interrupted');
+ await assert.rejects(f.access.waitTasks([{id:task.id,afterState:'invalid'}],0));
+});

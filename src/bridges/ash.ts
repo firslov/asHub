@@ -424,6 +424,16 @@ export class AshBridge extends EventEmitter implements Bridge {
       });
     }
 
+    if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
+      const access = this.opts.conversationAccess;
+      core.handlers.define("ashub:collaboration:wait", (p: { targets: import("../collaboration.js").TaskWatch[]; waitMs?: number; signal?: AbortSignal }) => {
+        this.assertOpen(); return access.waitTasks(p.targets, p.waitMs, p.signal);
+      });
+      core.handlers.define("ashub:collaboration:deliver", (p: { id: string; delivery: import("../collaboration.js").TaskDelivery; signal?: AbortSignal }) => {
+        this.assertOpen(); return access.deliver(p.id, p.delivery, p.signal);
+      });
+    }
+
     this.requests = new RequestMonitor(path.join(CONFIG_DIR, "logs"), sessionId,
       payload => this.emit("event", { name: "agent:request-status", payload }));
 

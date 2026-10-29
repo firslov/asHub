@@ -72,6 +72,11 @@ jobs:
       - if: matrix.target == 'win'
         run: node scripts/pre-dist-win.cjs
       - run: npx electron-builder ${{ matrix.flags }} --publish never
+      - name: Verify packaged macOS runtime
+        if: matrix.target == 'mac'
+        run: |
+          node --test tests/mac-packaging.cjs
+          node tests/mac-runtime.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}

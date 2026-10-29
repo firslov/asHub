@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 
 export interface Project { id: string; name: string; cwd?: string; sessionIds: string[] }
 export class ProjectStore {
+  private listeners = new Set<() => void>();
+  subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   constructor(private file: string) {}
   list(): Project[] {
     let raw: string;
@@ -53,6 +55,7 @@ export class ProjectStore {
     const tmp = this.file + "." + randomUUID() + ".tmp";
     try { fs.writeFileSync(tmp, JSON.stringify(projects, null, 2), { mode: 0o600 }); fs.renameSync(tmp, this.file); }
     finally { try { fs.unlinkSync(tmp); } catch {} }
+    for (const listener of [...this.listeners]) listener();
     return projects;
   }
 }

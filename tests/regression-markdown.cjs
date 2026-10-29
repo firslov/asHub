@@ -42,6 +42,32 @@ for (const remote of hasRemote ? [false, true] : [false]) {
     assert.equal(marked.parse('**没有证据。**正式库 **其他**'), '<p><strong>没有证据。</strong>正式库 <strong>其他</strong></p>\n');
     assert.equal(marked.parse('**包含 `code` 和 *说明*。**正式库'), '<p><strong>包含 <code>code</code> 和 <em>说明</em>。</strong>正式库</p>\n');
   });
+  test(`${label}: Chinese bold labels followed by digits preserve text and delimiters`, () => {
+    const { marked } = load(remote);
+    const source = '- **执行：**5次续算全部退出0，实际运行合计约17分钟；峰值内存 **5.52 GiB**，交换空间使用为0。';
+    assert.equal(marked.parse(source), '<ul>\n<li><strong>执行：</strong>5次续算全部退出0，实际运行合计约17分钟；峰值内存 <strong>5.52 GiB</strong>，交换空间使用为0。</li>\n</ul>\n');
+    for (const digit of ['0', '5', '９', '𝟝']) {
+      const raw = `**执行：**${digit}次`;
+      assert.equal(marked.parse(raw), `<p><strong>执行：</strong>${digit}次</p>\n`);
+      const token = marked.lexer(raw)[0].tokens[0];
+      assert.equal(token.raw, '**执行：**');
+      assert.equal(token.text, '执行：');
+    }
+    assert.match(marked.parse('| 状态 |\n| --- |\n| **执行：**5次 |'), /<td><strong>执行：<\/strong>5次<\/td>/);
+    assert.equal(marked.parse('**执行：**5次 **预算：**3/48'), '<p><strong>执行：</strong>5次 <strong>预算：</strong>3/48</p>\n');
+    assert.equal(marked.parse('**执行 `code` 和 *检查*：**5次'), '<p><strong>执行 <code>code</code> 和 <em>检查</em>：</strong>5次</p>\n');
+  });
+  test(`${label}: numeric label streaming prefixes converge without losing content`, () => {
+    const { marked } = load(remote);
+    const baseline = load(remote, false).marked;
+    const source = '**执行：**5次续算全部退出0';
+    for (let i = 0; i <= source.length; i++) {
+      const prefix = source.slice(0, i);
+      const html = marked.parse(prefix);
+      if (i < '**执行：**'.length) assert.equal(html, baseline.parse(prefix));
+      else assert.equal(html, `<p><strong>执行：</strong>${prefix.slice('**执行：**'.length)}</p>\n`);
+    }
+  });
   test(`${label}: standard Markdown and protected syntax retain original behavior`, () => {
     const baseline = load(remote, false).marked;
     const { marked } = load(remote);
@@ -61,6 +87,14 @@ for (const remote of hasRemote ? [false, true] : [false]) {
       '<https://example.com/**没有证据。**正式库>',
       '$**中文。**后文$', '$$**中文。**后文$$',
       String.raw`\(**中文。**后文\)`, String.raw`\[**中文。**后文\]`,
+      '**执行： **5次', '** 执行：**5次', '**English:**5', '**执行：**abc',
+      '***执行：**5次', '**执行：***5次', '**执行：**',
+      '`**执行：**5次`', '```md\n**执行：**5次\n```', '    **执行：**5次',
+      String.raw`\*\*执行：\*\*5次`, String.raw`**执行\*\*说明：**5次`,
+      '<pre>**执行：**5次</pre>', '<code>**执行：**5次</code>',
+      '<span title="**执行：**5次">内容</span>',
+      '[文档](https://example.com/**执行：**5)', '![图](image.png "**执行：**5")',
+      '$**执行：**5$', String.raw`\(**执行：**5\)`, '**执行\n说明：**5次',
       '**第一行\n第二行。**后文',
     ]) assert.equal(marked.parse(source), baseline.parse(source), source);
   });

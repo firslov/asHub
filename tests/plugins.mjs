@@ -582,3 +582,26 @@ test('project management plugin uses host services, propagates cancellation and 
   assert(result.isError); assert.equal(requests.length,beforeExisting+4,'unsupported host never receives mutations');
   runtime.close(); assert(!tool('project_management_create_members')); assert(!tool('project_management_delete_conversation'));
 });
+
+
+for (const supported of [false, true]) test(`project delivery conventions are capability-gated and unload cleanly (${supported})`, async () => {
+  const f = fixture(fs.readFileSync(new URL('../examples/extensions/project-management/index.mjs', import.meta.url), 'utf8'), 'project-management.mjs');
+  const { core, ctx } = await makeContext(), runtime = new PluginRuntime(f.file);
+  core.handlers.define('ashub:catalog', () => ({ currentId: 'fixture', operations: [] }));
+  core.handlers.define('ashub:execute', () => { throw Error('No mutation expected during activation'); });
+  if (supported) {
+    core.handlers.define('ashub:collaboration:wait', () => { throw Error('No waiting during activation'); });
+    core.handlers.define('ashub:collaboration:deliver', () => { throw Error('No delivery during activation'); });
+  }
+  const instructions = () => ctx.bus.emitPipe('agent:instructions', { instructions: [] }).instructions;
+  try {
+    await runtime.load(ctx);
+    const guide = instructions().find(i => i.name === 'project-management-delivery');
+    assert.equal(!!guide, supported);
+    if (guide) {
+      for (const marker of ['conversation_wait', 'conversation_deliver', 'cursors', 'delivery 为 null', 'failed/cancelled/interrupted']) assert(guide.text.includes(marker), marker);
+    }
+    assert(ctx.agent.getTools().some(t => t.name === 'project_management_create_members'));
+  } finally { runtime.close(); }
+  assert(!instructions().some(i => i.name === 'project-management-delivery'));
+});

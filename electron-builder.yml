@@ -12,6 +12,9 @@ asar: false
 
 npmRebuild: false
 
+beforePack: scripts/before-pack.cjs
+afterPack: scripts/after-pack.cjs
+
 extraResources:
   - from: web/
     to: web/

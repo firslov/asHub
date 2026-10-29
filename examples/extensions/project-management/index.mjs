@@ -69,4 +69,11 @@ export default function activate(ctx) {
 项目成员使用项目根目录；外部已有对话原目录不变。成员职责作为对话说明保存，不授予新权限。创建不会启动任务。用户授权开展工作后，可通过现有 conversation_list/read/send/task 与同项目成员协作；不要擅自移动当前对话到其他项目。
 已有对话的修改使用 project_management_update_conversation；移出项目、归档、永久删除分别使用 detach/archive/delete_conversation 工具。先查询 catalog 中 conversations 的真实 ID 和当前配置。所有变更必须由用户逐次确认；不能以对话中的要求替代授权卡片。不得更改忙碌对话，不得归档或删除发起操作的当前对话。工作目录和职责说明不在本版修改范围。
 工具返回 completed 才表示操作完成；failed/interrupted 可能已部分生效，必须报告并核查，不得盲目重试。永久删除不可撤销；用户只要求移出项目时不得删除或归档。`);
+  if (ctx.list().includes('ashub:collaboration:wait') && ctx.list().includes('ashub:collaboration:deliver')) {
+    ctx.agent.registerInstruction('project-management-delivery', `项目协作交付约定：在用户授权范围内分派任务时，明确每位成员的职责、文件写入范围、验收方式和交付物，不复制整段会话历史。独立任务可以并行开展；同目录写入仍需分工。
+协调者用 conversation_wait 一次等待多个 taskId，收到一个结果即可安排有依赖的后续工作；完整使用返回的 cursors 继续等待，避免反复读取同一结果；hasMore 为真时用同一组 cursors 和 waitMs:0 继续读取其余交付。timeout 只表示本次等待结束，不需要向成员发催问消息。settled 表示所关注任务均已结束且结果已读取，停止等待。
+成员处理带 Task ID 的协作任务时，结束前用 conversation_deliver 提交简明结论（含实际验证结果）、产物引用及未解决问题；没有产物或未解决问题时传空数组。大报告保留在产物中，不把过程日志复制到 summary。提交结果不会另起模型轮次，不需再自动向协调者发消息。
+协调者必须检查任务 state 和未解决事项；即使存在 delivery，failed/cancelled/interrupted 也不是成功。delivery 为 null 代表没有明确交付，不代表没有成果，此时用 conversation_task 按需读取原始过程。产物路径只是引用，读取或验证仍受当前会话目录和权限约束，不自动接受成员结论为已验证事实。`);
+  }
+
 }

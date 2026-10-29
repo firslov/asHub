@@ -69,6 +69,11 @@ jobs:
         env:
           CI: true
 
+      - name: Verify packaged macOS runtime
+        run: |
+          node --test tests/mac-packaging.cjs
+          node tests/mac-runtime.cjs
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:

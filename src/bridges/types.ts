@@ -16,6 +16,8 @@ export interface BusEvent {
 export type SessionKind = "agent" | "terminal" | "ash-terminal";
 
 export interface ConversationAccess {
+  waitTasks(targets: import("../collaboration.js").TaskWatch[], waitMs?: number, signal?: AbortSignal): Promise<unknown>;
+  deliver(id: string, delivery: import("../collaboration.js").TaskDelivery, signal?: AbortSignal): Promise<unknown>;
   task(id: string, offset?: number, waitMs?: number, signal?: AbortSignal): Promise<unknown>;
   list(): unknown;
   read(id: string, limit: number, signal?: AbortSignal): Promise<unknown>;

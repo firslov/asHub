@@ -11,6 +11,7 @@ const root = document.getElementById("projects");
 let groups = [], visible = false, loading = false, error = "", generation = 0;
 let dialog = null;
 let workspaces = {}, pollTimer = null, polling = false, groupPolling = false, workspacePolling = false, rendered = "", statusGeneration = 0;
+let statusReadSeq = 0, groupReadSeq = 0, workspaceReadSeq = 0;
 const collapsed = new Set();
 const networkSaving = new Set();
 try { for (const id of JSON.parse(localStorage.getItem("ash.project-folded") || "[]")) collapsed.add(id); } catch {}
@@ -18,15 +19,15 @@ const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls)
 const button = (text, fn, cls = "project-button") => { const n = el("button", cls, text); n.type = "button"; n.addEventListener("click", fn); return n; };
 const chats = () => allSessions.value.filter(s => s.kind === "agent");
 async function request(body) {
-  const res = await fetch("/api/projects", body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const res = await fetch("/api/projects", body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : { cache: "no-store" });
   if (!res.ok) throw new Error(body ? t("projects.saveFailed") : t("projects.loadFailed"));
   const result = await res.json();
   if (body) document.dispatchEvent(new CustomEvent("ash:sessions-changed"));
   return result;
 }
-async function refresh() {
+async function refresh(options) {
   const seq = ++generation;
-  loading = true; error = ""; render();
+  loading = options?.background !== true; error = ""; render();
   try { const result = await request(); if (seq === generation) groups = result; }
   catch (e) { if (seq === generation) error = e.message; }
   finally { if (seq === generation) { loading = false; render(); } }
@@ -158,7 +159,7 @@ function renameProjectChat(session) {
   view.content.append(field, error, save); input.focus(); input.select();
 }
 async function projectApi(route, body) {
-  const res = await fetch(route, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const res = await fetch(route, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : { cache: "no-store" });
   if (!res.ok) {
     let message = t("projects.loadFailed"), instanceId;
     try {
@@ -170,31 +171,32 @@ async function projectApi(route, body) {
   }
   return res.json();
 }
-async function pollStatus() {
+async function pollStatus(options) {
   if (!visible || document.hidden) return;
   // Plugins and other clients can change project membership without a local
   // management action. Refresh that snapshot too, without flashing a loader or
   // letting a slow request hold up conversation status updates.
-  if (!loading && !groupPolling) {
+  if (options?.groups !== false && !loading && (!groupPolling || options?.force)) {
     groupPolling = true;
-    const seq = generation;
+    const seq = generation, read = ++groupReadSeq;
     void request().then(result => {
-      if (visible && seq === generation) { groups = result; error = ""; render(); }
-    }).catch(() => {}).finally(() => { groupPolling = false; });
+      if (visible && seq === generation && read === groupReadSeq) { groups = result; error = ""; render(); }
+    }).catch(() => {}).finally(() => { if (read === groupReadSeq) groupPolling = false; });
   }
   // Git discovery may be slow on network drives; never hold up task status.
-  if (!workspacePolling) {
+  if (!workspacePolling || options?.force) {
     workspacePolling = true;
+    const read = ++workspaceReadSeq;
     void projectApi('/api/projects/workspaces').then(locations => {
-      if (visible) { workspaces = locations; render(); }
-    }).catch(() => {}).finally(() => { workspacePolling = false; });
+      if (visible && read === workspaceReadSeq) { workspaces = locations; render(); }
+    }).catch(() => {}).finally(() => { if (read === workspaceReadSeq) workspacePolling = false; });
   }
-  if (polling) return;
+  if (polling && !options?.force) return;
   polling = true;
-  const seq = statusGeneration;
-  try { const sessions = await projectApi('/sessions'); if (visible && seq === statusGeneration) setSessions(sessions); }
+  const seq = statusGeneration, read = ++statusReadSeq;
+  try { const sessions = await projectApi('/sessions'); if (visible && seq === statusGeneration && read === statusReadSeq) setSessions(sessions); }
   catch { /* Keep the last successful view during a brief disconnect. */ }
-  finally { polling = false; }
+  finally { if (read === statusReadSeq) polling = false; }
 }
 function projectDialog(title) {
   if (dialog) return null;
@@ -536,4 +538,16 @@ if (root) {
   effect(() => { allSessions.value; activeSessionId.value; networkPolicy.value; render(); });
   document.addEventListener("langchange", render);
   window.addEventListener("focus", () => { if (visible && !dialog) void refresh(); });
+  document.addEventListener("ash:host-state-changed", event => {
+    const domains = event.detail?.domains;
+    if (Array.isArray(domains) && !domains.some(kind => kind === "sessions" || kind === "projects")) return;
+    // Discard requests from before the host invalidation, including a poll
+    // that is still pending when a new host epoch appears. The dialog lives
+    // outside this list, so its drafts and focus survive the background read.
+    ++generation; ++statusGeneration; ++groupReadSeq; ++statusReadSeq; ++workspaceReadSeq;
+    groupPolling = polling = workspacePolling = false;
+    if (!visible) return;
+    void refresh({ background: true });
+    void pollStatus({ force: true, groups: false });
+  });
 }

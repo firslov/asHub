@@ -9,7 +9,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 
 test('successful proxy save stays visible when the follow-up read fails', async () => {
   let policy = { proxyEnabled: true, sessions: {} }, reads = 0;
-  const e = env({globals:{window:{addEventListener(){}},fetch:async (_url,init) => {
+  const e = env({globals:{document:{addEventListener(){}},window:{addEventListener(){}},fetch:async (_url,init) => {
     if (init?.method === 'PUT') { policy = {...policy,proxyEnabled:JSON.parse(init.body).enabled}; return ok(policy); }
     if (++reads > 1) throw Error('connection interrupted after save');
     return ok(policy);
@@ -25,7 +25,7 @@ test('overlapping global and session saves preserve both edits and ignore stale 
   let policy = { proxyEnabled: true, sessions: {} };
   const firstWrite = deferred(), staleRead = deferred(), puts = [];
   let reads = 0;
-  const e = env({globals:{window:{addEventListener(){}},fetch:async (_url,init) => {
+  const e = env({globals:{document:{addEventListener(){}},window:{addEventListener(){}},fetch:async (_url,init) => {
     if (init?.method !== 'PUT') {
       if (++reads === 2) return staleRead.promise;
       return ok(policy);
@@ -49,7 +49,7 @@ test('overlapping global and session saves preserve both edits and ignore stale 
 
 test('a failed save leaves the confirmed state intact and does not block the next save', async () => {
   let puts = 0;
-  const e = env({globals:{window:{addEventListener(){}},fetch:async (_url,init) => {
+  const e = env({globals:{document:{addEventListener(){}},window:{addEventListener(){}},fetch:async (_url,init) => {
     if (init?.method === 'PUT') {
       if (++puts === 1) return {ok:false,status:503};
       return ok({proxyEnabled:false,sessions:{}});

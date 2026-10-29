@@ -2,11 +2,11 @@
 #plugins-overlay .plugins-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
 #plugins-overlay .plugins-message { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.6; overflow-wrap: anywhere; }
 #plugins-overlay .plugins-message:empty { display: none; }
-#plugins-overlay .plugin-item { padding: var(--space-4) 0; border-top: 1px solid var(--border); min-width: 0; }
+#plugins-overlay :is(.plugin-item, .feature-item) { padding: var(--space-4) 0; border-top: 1px solid var(--border); min-width: 0; }
 #plugins-overlay .plugin-heading { display: flex; align-items: center; gap: var(--space-3); }
 #plugins-overlay .plugin-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); font-weight: 500; }
-#plugins-overlay .plugin-toggle { flex: none; font-size: var(--fs-xs); }
-#plugins-overlay .plugin-toggle[aria-checked="true"] { color: var(--accent); }
+#plugins-overlay :is(.plugin-toggle, .feature-toggle) { flex: none; font-size: var(--fs-xs); }
+#plugins-overlay :is(.plugin-toggle, .feature-toggle)[aria-checked="true"] { color: var(--accent); }
 #plugins-overlay .plugin-source { margin: 6px 0; color: var(--text-faint); font-family: var(--font-mono); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 #plugins-overlay .plugin-status, #plugins-overlay .plugin-details { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.7; }
 #plugins-overlay .plugin-details { margin-top: var(--space-2); }
@@ -32,7 +32,7 @@
   #plugins-overlay .plugin-config-editor { font-size: 16px; }
 }
 
-#plugins-overlay .plugin-group-title { margin: 24px 0 8px; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 500; letter-spacing: .04em; }
+#plugins-overlay :is(.plugin-group-title, .feature-group-title) { margin: 24px 0 8px; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 500; letter-spacing: .04em; }
 #plugins-overlay .plugin-badge { flex: none; color: var(--text-faint); font-size: var(--fs-xs); }
 #plugins-overlay .plugin-description { margin: 6px 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.7; overflow-wrap: anywhere; }
 @media (max-width: 480px) {
@@ -56,3 +56,20 @@
 @media (max-width: 480px) { #plugins-overlay .plugin-install-fields { grid-template-columns: 1fr; gap: 4px; } #plugins-overlay .plugin-install-fields dd { margin-bottom: 6px; } }
 
 #plugins-overlay .plugin-install-defaults { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-xs)/1.6 var(--font-mono); }
+
+/* Declarative extensions use the same drawer, fields and spacing as bundled panels. */
+.extension-menu { font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px; }
+.extension-panel .p-head { min-width: 0; }
+.extension-panel .p-title { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.extension-body { overflow-wrap: anywhere; }
+.extension-text, .extension-status { white-space: pre-wrap; font-size: var(--fs-sm); line-height: 1.7; }
+.extension-status { color: var(--text-dim); }
+.extension-list { padding-left: 20px; font-size: var(--fs-sm); line-height: 1.8; }
+.extension-form { display: grid; gap: 8px; margin: var(--space-4) 0; }
+.extension-form label { font-size: var(--fs-xs); color: var(--text-dim); }
+.extension-form .extension-field { width: 100%; min-width: 0; }
+.extension-form input[type="checkbox"] { width: auto; justify-self: start; accent-color: var(--accent); }
+.extension-form .plugin-config-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.extension-form .plugins-message { font-size: var(--fs-xs); line-height: 1.7; color: var(--text-dim); }
+.extension-action { margin: 8px 8px 8px 0; }
+@media (max-width: 480px) { .extension-form .extension-field { font-size: 16px; } }

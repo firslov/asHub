@@ -2,6 +2,7 @@ import { t } from "./i18n.js";
 import { toast } from "./toast.js";
 import { activeSession } from "./session-manager.js";
 import { effect } from "../vendor/signals-core.js";
+import { featureEnabled, features } from './extensions/feature-state.js';
 
 const skillsOverlay = document.getElementById("skills-overlay");
 const skillsToggle = document.getElementById("skills-toggle");
@@ -25,7 +26,7 @@ const skillsCwd = () => activeSession.peek()?.state?.cwd || "";
 const uninstall = async (name, target) => {
   // A rendered row owns its path and cwd together; never combine an old
   // row with the currently active project's cwd.
-  if (!target?.path || target.cwd !== skillsCwd()) return false;
+  if (!featureEnabled('skills-marketplace') || !target?.path || target.cwd !== skillsCwd()) return false;
   try {
     const response = await fetch("/api/skills/uninstall", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, path: target.path, cwd: target.cwd, sourceId: target.sourceId }) });
     if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
@@ -62,6 +63,7 @@ skillsTabs?.addEventListener("click", (e) => {
 // ── Overlay toggle ──
 
 export const setSkillsOpen = (on) => {
+  if (on && !featureEnabled('skills-marketplace')) return;
   if (!skillsOverlay) return;
   if (on) {
     skillsOverlay.removeAttribute("hidden");
@@ -100,6 +102,7 @@ export const initSkillsPanel = () => {
 };
 
 const refreshSkills = async () => {
+  if (!featureEnabled('skills-marketplace')) return;
   const request = ++skillsFetchSeq;
   const cwd = skillsCwd();
   const source = currentSource;
@@ -169,7 +172,7 @@ const renderSkills = (query) => {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.id;
       const name = btn.dataset.name;
-      if (!id || btn.disabled || cwd !== skillsCwd()) return;
+      if (!featureEnabled('skills-marketplace') || !id || btn.disabled || cwd !== skillsCwd()) return;
       if (paths.has(name) && sources.get(name) !== sourceId(id)) return;
       if (paths.has(name)) {
         // Uninstall
@@ -217,6 +220,7 @@ const renderSkills = (query) => {
 };
 
 const refreshInstalled = async () => {
+  if (!featureEnabled('skills-marketplace')) return;
   if (!installedList) return;
   const request = ++installedFetchSeq;
   const cwd = skillsCwd();
@@ -295,4 +299,7 @@ effect(() => {
 });
 document.addEventListener("ash:cwd-change", (event) => {
   if (event.detail?.sessionId === activeSession.peek()?.id) invalidateProjectSkills();
+});
+features.subscribe(() => {
+  if (!featureEnabled('skills-marketplace')) { ++skillsFetchSeq; ++installedFetchSeq; setSkillsOpen(false); }
 });

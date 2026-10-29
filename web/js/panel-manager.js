@@ -4,7 +4,11 @@
 
 const panels = {};
 const _hasListener = new Set();
+const guards = new Map();
+const cleanups = new Map();
+const observers = new Map();
 let panelIntent = 0;
+let loadingPanel = null;
 
 const isPanelOpen = (panelId) => {
   const el = document.getElementById(panelId);
@@ -24,14 +28,24 @@ const closeOthers = (except) => {
 
 export const closeOtherPanels = (except) => { ++panelIntent; closeOthers(except); };
 
-export const registerPanel = (name, { toggleBtnId, panelId, load, open, close }) => {
+export const closePanel = (name) => {
+  if (loadingPanel?.name === name) { ++panelIntent; loadingPanel = null; }
+  const panel = panels[name];
+  if (panel && isPanelOpen(panel.panelId)) { try { panel.close(); } catch {} }
+  if (panel) document.getElementById(panel.toggleBtnId)?.classList.remove('active');
+};
+
+export const unregisterPanel = (name) => {
+  closePanel(name); cleanups.get(name)?.(); cleanups.delete(name);
+  delete panels[name]; guards.delete(name); _hasListener.delete(name);
+};
+
+export const registerPanel = (name, { toggleBtnId, panelId, load, open, close, enabled }) => {
+  if (enabled) guards.set(name, enabled);
   if (!load) {
     // Direct registration (eager or from lazy-loaded module)
     panels[name] = { panelId, toggleBtnId, open, close };
   }
-
-  if (_hasListener.has(name)) return; // Listener already set by first call
-  _hasListener.add(name);
 
   const btn = document.getElementById(toggleBtnId);
   const panelEl = document.getElementById(panelId);
@@ -39,15 +53,24 @@ export const registerPanel = (name, { toggleBtnId, panelId, load, open, close })
   const syncExpanded = () => btn?.setAttribute("aria-expanded", String(isPanelOpen(panelId)));
   syncExpanded();
   // Close buttons and programmatic panel switches also update accessible state.
-  if (panelEl) new MutationObserver(syncExpanded).observe(panelEl, { attributes: true, attributeFilter: ["hidden"] });
-  btn?.addEventListener("click", async () => {
+  // A lazy feature may create its drawer only after the first registration.
+  if (panelEl && !observers.has(name)) {
+    const observer = new MutationObserver(syncExpanded);
+    observer.observe(panelEl, { attributes: true, attributeFilter: ["hidden"] }); observers.set(name, observer);
+  }
+  if (_hasListener.has(name)) return; // Listener already set by first call
+  _hasListener.add(name);
+  const onClick = async () => {
+    if (guards.get(name)?.() === false) return;
     const intent = ++panelIntent;
     // Lazy-load on first click
     if (!panels[name]) {
+      loadingPanel = { name, intent };
       btn.disabled = true;
       try { await load(); } catch { /* panel failed to load */ }
-      btn.disabled = false;
-      if (!panels[name] || intent !== panelIntent) return;
+      if (loadingPanel?.intent === intent) loadingPanel = null;
+      btn.disabled = guards.get(name)?.() === false;
+      if (!panels[name] || intent !== panelIntent || guards.get(name)?.() === false) return;
     }
 
     if (isPanelOpen(panelId)) {
@@ -60,7 +83,9 @@ export const registerPanel = (name, { toggleBtnId, panelId, load, open, close })
       if (result?.catch) result.catch(() => {});
       btn?.classList.add("active");
     }
-  });
+  };
+  btn?.addEventListener("click", onClick);
+  cleanups.set(name, () => { observers.get(name)?.disconnect(); observers.delete(name); btn?.removeEventListener('click', onClick); });
 };
 
 // ESC closes any open panel.  Bubble phase (not capture) so a target-phase

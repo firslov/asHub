@@ -29,6 +29,8 @@ import { cancelTurn } from "./composer.js";
 import { switchTo, openTabs, activeSessionId, closeTab } from "./session-manager.js";
 import "./prefs.js";
 import { registerPanel } from "./panel-manager.js";
+import { initializeFeatureUI } from './extensions/feature-ui.js';
+import { initializeHostSync } from './host-sync.js';
 import "./links.js";
 import "./version.js";
 import "./updater.js";
@@ -50,7 +52,8 @@ import("./no-session.js");
 // Lazy-loaded panels — loaded on first click
 registerPanel("config",    { toggleBtnId: "config-toggle",     panelId: "config-overlay",    load: () => import("./config-panel.js") });
 registerPanel("plugins", { toggleBtnId: "plugins-toggle", panelId: "plugins-overlay", load: () => import("./plugins-panel.js") });
-registerPanel("skills",    { toggleBtnId: "skills-toggle",    panelId: "skills-overlay",    load: () => import("./skills-panel.js") });
+initializeFeatureUI();
+initializeHostSync();
 registerPanel("ctx",       { toggleBtnId: "ctx-toggle",       panelId: "ctx-panel",        load: () => import("./context-panel.js") });
 registerPanel("files",     { toggleBtnId: "files-toggle",     panelId: "files-panel",      load: () => import("./files-panel.js") });
 registerPanel("tree",      { toggleBtnId: "tree-toggle",      panelId: "tree-panel",       load: () => import("./tree-panel.js") });

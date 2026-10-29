@@ -7,6 +7,7 @@
 import { t } from "./i18n.js";
 import { toast } from "./toast.js";
 import { attachAutocomplete } from "./autocomplete.js";
+import { featureEnabled } from './extensions/feature-state.js';
 
 const LS_PROMPTS = "ash.prompts";
 const LS_PROMPT_PREFIX = "ash.prompt.";
@@ -265,6 +266,7 @@ export const setActiveTab = (tab) => {
 
 // ── Panel open / close ────────────────────────────────────────────
 export const setPromptOpen = (on, tab = "prompts") => {
+  if (on && !featureEnabled('quick-prompts')) return;
   if (on) {
     prompts = loadPrompts();
     promptOverlay.removeAttribute("hidden");
@@ -311,7 +313,7 @@ export const attachPromptAutocomplete = (inputEl) => {
     listEl: document.getElementById("autocomplete"),
     shouldOpen: (b) => {
       const trimmed = b.trimStart();
-      return trimmed.startsWith("#") && prompts.length > 0;
+      return featureEnabled('quick-prompts') && trimmed.startsWith("#") && prompts.length > 0;
     },
     fetcher: async (buffer) => {
       const trimmed = buffer.trimStart();
@@ -326,6 +328,7 @@ export const attachPromptAutocomplete = (inputEl) => {
         }));
     },
     accept: (it) => {
+      if (!featureEnabled('quick-prompts')) return;
       inputEl.value = it.content;
       // Match the slash accept in composer.js: notify listeners so shell
       // mode detection ("!" quick prompts) and autocomplete re-evaluation

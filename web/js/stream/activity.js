@@ -1,4 +1,7 @@
 import { t } from "../i18n.js";
+import "../conversation-presentation.js";
+
+const { toolActivityKey } = globalThis.AsHubConversationPresentation;
 
 // Presentation only: every original node, result and event listener is retained.
 // Explicit lifecycle hooks avoid observing or rescanning streaming log text.
@@ -12,14 +15,7 @@ export function resetActivity(session) {
 }
 export function disposeActivity(session) { sessions.delete(session); }
 
-const toolLabel = (row) => {
-  const kind = row?.dataset.kind ?? "";
-  const name = row?.dataset.toolName ?? "";
-  if (kind === "read" || /^(read|read_file|ls|list_files)$/.test(name)) return "activity.reading";
-  if (kind === "search" || /^(grep|glob|search|web_search|web_fetch)$/.test(name)) return "activity.searching";
-  if (kind === "edit" || kind === "write" || /^(write|edit|write_file|edit_file|apply_patch)$/.test(name)) return "activity.writing";
-  return "activity.working";
-};
+const toolLabel = (row) => toolActivityKey({ kind: row?.dataset.kind, name: row?.dataset.toolName });
 
 const setText = (node, value) => { if (node.textContent !== value) node.textContent = value; };
 

@@ -21,7 +21,15 @@ function ui() {
  const sv={id:'aaaaaa',state:{isSubmitting:false,cwd:'project A'},agentInfo:{modalities:['image']}};const active=signal(sv);const calls=[],toasts=[],boxes=[];
  const agentInfo=new Proxy({}, {get:(_,key)=>active.peek()?.agentInfo?.[key]??''});
  const win=new El();const ac=()=>({hasSelection:()=>false,close(){}});
+ // Legacy component fixtures explicitly inject an enabled optional-feature host.
+ // Real feature discovery/lifecycle behavior is tested by regression-feature-ui
+ // and Chromium fixtures; it must not add unrelated catalog requests here.
+ const featureFlags=new Map(),featureListeners=new Set();
+ const featureState={featureEnabled:id=>featureFlags.get(id)!==false,featuresReady:()=>new Promise(()=>{}),loadFeature:async()=>null,
+  features:{subscribe(fn){featureListeners.add(fn);fn();return()=>featureListeners.delete(fn);}}};
+ const setFeatureEnabled=(id,enabled)=>{featureFlags.set(id,enabled);for(const fn of featureListeners)fn();};
  const modules={
+  './extensions/feature-state.js':featureState,'./feature-state.js':featureState,
   './state.js':{agentInfo,currentSessionId:()=>active.peek()?.id,state:sv.state,queryHistory:{push(){},_index:-1,reset(){}}},
   './utils.js':{escape:s=>String(s),toBlobUrl:()=> 'blob:fake'},
   './stream/tool-group.js':{appendAfterPending(){}},
@@ -31,8 +39,8 @@ function ui() {
   './session-manager.js':{activeSession:active},'./toast.js':{toast:(...a)=>toasts.push(a)},'./i18n.js':{t:s=>s},
   '../vendor/signals-core.js':{signal,computed:f=>({peek:f,get value(){return f();}}),effect:f=>{effects.push(f);f();}},
  };
- const e=env({modules,globals:{agentInfo,_renderedProvider:'',document:doc,window:win,requestAnimationFrame:f=>f(),Event:class{constructor(type){this.type=type;}},fetch:async(url,opts)=>{calls.push({url,opts});return {ok:true,json:async()=>({id:'image-id'})}},location:{pathname:'/',origin:'http://localhost'},localStorage:{getItem:()=>null},sessionStorage:{getItem:()=>null},customElements:{whenDefined:()=>new Promise(()=>{})},history:{pushState(){},replaceState(){}},queueMicrotask:queueMicrotask}});
+ const e=env({modules,globals:{...featureState,agentInfo,_renderedProvider:'',document:doc,window:win,requestAnimationFrame:f=>f(),Event:class{constructor(type){this.type=type;}},fetch:async(url,opts)=>{calls.push({url,opts});return {ok:true,json:async()=>({id:'image-id'})}},location:{pathname:'/',origin:'http://localhost'},localStorage:{getItem:()=>null},sessionStorage:{getItem:()=>null},customElements:{whenDefined:()=>new Promise(()=>{})},history:{pushState(){},replaceState(){}},queueMicrotask:queueMicrotask}});
  const composer=()=>e.load('web/js/composer.js','export const audit={doSubmit,updateSendBtn,setImages:v=>{attachedImages=v;imageDrafts.set(currentSessionId(),v)},getImages:()=>attachedImages};').audit;
- return {e,doc,ids,active,calls,toasts,boxes,modules,composer};
+ return {e,doc,ids,active,calls,toasts,boxes,modules,composer,setFeatureEnabled};
 }
 module.exports={ui,El,signal};

@@ -4,6 +4,9 @@ import {
 } from "../utils.js";
 import { append } from "./tool-group.js";
 import { t } from "../i18n.js";
+import "../conversation-presentation.js";
+
+const { usageMetrics } = globalThis.AsHubConversationPresentation;
 
 export const hideUsage = (session) => {
   const strip = session?.usageStripEl;
@@ -17,30 +20,24 @@ export const renderUsage = (session) => {
   if (!st?.lastUsage) return;
   const usageEl = session?.usageEl;
   if (!usageEl) return;
-  const inTok = st.lastUsage.prompt_tokens ?? 0;
-  const outTok = st.lastUsage.completion_tokens ?? 0;
-  const cacheHit = st.lastUsage.prompt_cache_hit_tokens ?? 0;
-  const cacheMiss = st.lastUsage.prompt_cache_miss_tokens ?? 0;
-  let pct = 0;
+  const metrics = usageMetrics(st.lastUsage, st.contextWindow);
+  const { input: inTok, cacheHit, cacheMiss, cacheRatio } = metrics;
+  const pct = metrics.contextPercent ?? 0;
   let ctxText = `${(inTok / 1000).toFixed(1)}k`;
-  if (st.contextWindow > 0) {
-    pct = Math.round((inTok / st.contextWindow) * 100);
+  if (metrics.contextPercent !== null) {
     ctxText = `${(inTok / 1000).toFixed(1)}k / ${(st.contextWindow / 1000).toFixed(0)}k`;
   }
-  const totalTok = st.lastUsage.total_tokens ?? (inTok + outTok);
-  const cacheTotal = cacheHit + cacheMiss;
-  const cacheRatio = cacheTotal > 0 ? cacheHit / cacheTotal : 0;
   const cacheRatioPct = cacheRatio * 100;
   const cacheRatioClass = cacheRatioPct >= 80 ? "high" : cacheRatioPct >= 40 ? "mid" : "low";
   // Floor to 1 decimal so a near-miss (e.g. 99.85%) never reads as a perfect 100%.
-  const cachePctLabel = (Math.floor(cacheRatioPct * 10) / 10).toFixed(1);
+  const cachePctLabel = metrics.cachePercent.toFixed(1);
   const cacheTooltip = `${t("usage.cache")}: ${fmtNum(cacheHit)} / ${fmtNum(cacheMiss)} (${cachePctLabel}%)`;
   // SVG ring: r=9, circumference ≈ 56.5487
   const ringCircum = 56.5487;
   const ringOffset = ringCircum * (1 - cacheRatio);
-  const cacheHtml = st.lastUsage.cache_reported === false
+  const cacheHtml = !metrics.cacheReported
     ? `<span class="usage-chip usage-cache" title="${t("usage.cache.unreported")}">${t("usage.cache.unknown")}</span>`
-    : (cacheHit > 0 || cacheMiss > 0)
+    : metrics.hasCache
     ? `<span class="usage-chip usage-cache" title="${cacheTooltip}">` +
         `<svg class="cache-ring" viewBox="0 0 24 24" width="16" height="16">` +
           `<circle class="cache-ring-track" cx="12" cy="12" r="9"/>` +
@@ -52,10 +49,10 @@ export const renderUsage = (session) => {
     : "";
 
   usageEl.innerHTML =
-    `<span class="usage-chip usage-total" title="${t("usage.total")}">${fmtNum(totalTok)}</span>` +
+    `<span class="usage-chip usage-total" title="${t("usage.total")}">${fmtNum(metrics.total)}</span>` +
     cacheHtml +
     `<span class="usage-chip usage-ctx" title="${t("usage.context")}">` +
-      (st.contextWindow > 0
+      (metrics.contextPercent !== null
         ? `<span class="usage-bar"><span style="width:${pct}%"></span></span>`
         : "") +
       `${ctxText}` +

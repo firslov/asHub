@@ -128,15 +128,13 @@ await check('AB03 frontend config notification clears balances and rejects late 
   const u = ui(), requests = [], session = { agentInfo: { provider: 'deepseek' }, balanceEl: new El() };
   Object.assign(u.e.context, { sessions: new Map([['aaaaaa', session]]), refreshModelChip() {},
     fetch: url => new Promise(resolve => requests.push({ url, resolve })) });
-  // Evaluate the actual balance declarations and listener as one block, with UI dependencies controlled.
-  const sf = ast('web/js/sse.js');
-  const wanted = new Set(['BALANCE_PROVIDERS', '_balanceCache', '_balanceGeneration', 'fetchProviderBalance', 'renderBalance', 'syncAllBalanceChips', 'refreshProviderBalance']);
-  const nodes = sf.statements.filter(n =>
-    (ts.isFunctionDeclaration(n) && wanted.has(n.name?.text)) ||
-    (ts.isVariableStatement(n) && n.declarationList.declarations.some(d => wanted.has(d.name.getText(sf)))) ||
-    (ts.isExpressionStatement(n) && ts.isCallExpression(n.expression) && n.expression.expression.getText(sf) === 'document.addEventListener' && n.expression.arguments[0]?.text === 'ash:models-changed'));
-  vm.runInContext(nodes.map(n => n.getText(sf)).join('\n'), u.e.context);
-  const refresh = vm.runInContext('refreshProviderBalance', u.e.context);
+  // Load the extracted optional feature with controlled host state; retain the
+  // original stale-account and config-notification behavioral assertions.
+  u.modules['./feature-state.js'] = { features: { subscribe() {} }, featureEnabled: () => true, featuresReady: () => new Promise(() => {}) };
+  const balance = u.e.load('web/js/extensions/provider-balance.js').createProviderBalanceUI({
+    sessions: u.e.context.sessions, refreshModelChip() {},
+  });
+  const refresh = balance.refreshProviderBalance;
   const response = amount => ({ ok: true, json: async () => ({ is_available: true, balance_infos: [{ currency: 'USD', total_balance: amount }] }) });
   const first = refresh('deepseek'); requests[0].resolve(response('100.00')); await first;
   assert(session.balanceEl._balanceLabel.includes('100.00'), 'initial balance missing');
@@ -148,7 +146,7 @@ await check('AB03 frontend config notification clears balances and rejects late 
   fresh.resolve(response('2.00')); await tick();
   requests[1].resolve(response('100.00')); await pending;
   assert(session.balanceEl._balanceLabel.includes('2.00'), 'late old-account response replaced new balance');
-  vm.runInContext('syncAllBalanceChips()', u.e.context);
+  balance.syncAllBalanceChips();
   assert(session.balanceEl._balanceLabel.includes('2.00'), 'frontend cache still contains old balance');
 });
 

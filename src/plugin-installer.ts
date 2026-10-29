@@ -6,7 +6,8 @@ import { pipeline } from 'node:stream/promises';
 import * as yauzl from 'yauzl';
 import { satisfies, validRange } from 'semver';
 import { updateSettingsFile } from './settings-store.js';
-import { pluginCatalog, validatePluginNamespace, PLUGIN_ENTRY_FILES } from './plugins.js';
+import { pluginCatalog, PLUGIN_ENTRY_FILES } from './plugins.js';
+import { readPluginManifest, pluginCompatibility, validatePluginEntries, type NormalizedPluginManifest } from './extensions/manifest.js';
 
 export const MAX_PLUGIN_ZIP = 32 * 1024 * 1024;
 const MAX_EXPANDED = 128 * 1024 * 1024, TTL = 30 * 60_000;
@@ -60,20 +61,30 @@ async function extractZip(data: Buffer, dest: string) {
     zip.readEntry();
   });
 }
-interface Manifest {
-  schemaVersion: 1; id: string; name?: string; platforms?: string[]; minNode?: string;
-  dependencies?: Array<{ id: string; minVersion: string }>;
-  setup?: { script: string; description: string };
-  permissions?: string[];
-  defaults?: Record<string, Record<string, unknown>>;
-}
 interface Check { label: string; ok: boolean; detail: string }
 interface Plan {
-  token: string; directory: string; packageRoot: string; id: string; name: string; version: string; entry: string;
-  manifest?: Manifest; nodeRange?: string; npm: boolean; target: string; previous: string; expiresAt: number; checks: Check[];
+  token: string; directory: string; packageRoot: string; id: string; name: string; version: string; entry?: string; manifestFingerprint?: string; packageMetadata: string;
+  manifest?: NormalizedPluginManifest; nodeRange?: string; npm: boolean; target: string; previous: string; expiresAt: number; checks: Check[];
 }
-interface Job { id: string; name: string; version: string; state: 'running' | 'succeeded' | 'failed'; step: string; error?: string; backup?: string; restartRequired: boolean }
+export interface PluginInstalledNotice { readonly jobId: string; readonly packageId: string; readonly name: string; readonly version: string; readonly target: string }
+interface Job { notificationError?: string; id: string; name: string; version: string; state: 'running' | 'succeeded' | 'failed'; step: string; error?: string; backup?: string; restartRequired: boolean }
 function json(file: string) { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+// Keep approved identity, entry resolution and runtime requirements stable.
+// Setup may generate build outputs and update non-runtime descriptive metadata.
+const approvedPackageKeys = ['name', 'version', 'main', 'type', 'exports', 'imports', 'engines', 'os', 'cpu', 'dependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta'];
+function stableMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableMetadata);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableMetadata((value as Record<string, unknown>)[key])]));
+  return value;
+}
+function packageMetadata(pkg: Record<string, unknown>): string {
+  return JSON.stringify(stableMetadata(Object.fromEntries(approvedPackageKeys.filter(key => Object.hasOwn(pkg, key)).map(key => [key, pkg[key]]))));
+}
+function validateApprovedPackage(plan: Plan): void {
+  const pkg = json(path.join(plan.packageRoot, 'package.json'));
+  if (!object(pkg) || packageMetadata(pkg) !== plan.packageMetadata) throw Error('Plugin package identity, entry or runtime requirements changed during setup');
+}
+
 function fingerprint(target: string): string {
   if (!fs.existsSync(target)) return '';
   const st = fs.lstatSync(target);
@@ -113,9 +124,13 @@ export class PluginInstaller {
   private jobs = new Map<string, Job>();
   private active?: Promise<void>;
   private previews = 0;
+  private previewTasks = new Set<Promise<unknown>>();
+  private closing?: Promise<void>;
   private controller = new AbortController();
   private base: string;
-  constructor(private settingsFile: string, private run = runPluginSetup, private platform: string = process.platform, private inUse: (target: string) => boolean = () => false) {
+  constructor(private settingsFile: string, private run = runPluginSetup, private platform: string = process.platform, private inUse: (target: string) => boolean = () => false,
+    private onInstalled?: (notice: PluginInstalledNotice) => void | Promise<void>, private notificationTimeoutMs = 10_000) {
+    if (!Number.isFinite(notificationTimeoutMs) || notificationTimeoutMs <= 0) throw new Error('Invalid installation notification timeout');
     this.base = path.join(path.dirname(settingsFile), 'plugin-install');
   }
   private cleanup() {
@@ -127,7 +142,7 @@ export class PluginInstaller {
     const root = path.join(path.dirname(this.settingsFile), 'extensions');
     const candidates = new Set<string>();
     for (const p of pluginCatalog(this.settingsFile)) {
-      const dir = path.dirname(p.source);
+      const dir = p.packageRoot ?? path.dirname(p.source);
       try { if (json(path.join(dir, 'package.json')).name === packageName) candidates.add(dir); } catch {}
     }
     if (candidates.size > 1) throw Error('Multiple copies of this plugin are installed; remove duplicates first');
@@ -142,20 +157,33 @@ export class PluginInstaller {
     if (p.previous) checks.push({ label: 'inUse', ok: !this.inUse(p.target), detail: 'Finish active tasks using this plugin before upgrading' });
     checks.push({ label: 'platform', ok: !m?.platforms || m.platforms.includes(this.platform), detail: m?.platforms?.join(', ') ?? 'Any' });
     checks.push({ label: 'node', ok: atLeast(process.versions.node, m?.minNode ?? '22.12.0') && (!p.nodeRange || satisfies(process.versions.node, p.nodeRange)), detail: `Node ${process.versions.node} / ${p.nodeRange ?? '>= ' + (m?.minNode ?? '22.12.0')}` });
+    if (m) {
+      const compatibility = pluginCompatibility(m, { platform: this.platform });
+      checks.push({ label: 'host', ok: compatibility.compatible, detail: compatibility.errors.join('; ') || 'Host API and requested capabilities supported' });
+    }
+    const installed = m?.dependencies.length ? pluginCatalog(this.settingsFile, { platform: this.platform }) : [];
     for (const dep of m?.dependencies ?? []) {
       let ok = false, found = '';
-      const file = path.join(path.dirname(this.settingsFile), 'extensions', dep.id, 'package.json');
-      try {
-        found = json(file).version;
-        const entry = pluginCatalog(this.settingsFile).find(e => path.dirname(e.source) === path.dirname(file));
-        ok = !!entry?.enabled && atLeast(found, dep.minVersion);
-      } catch {}
+      const entries = installed.filter(entry => {
+        if (entry.manifest?.id === dep.id) return true;
+        try { return json(path.join(entry.packageRoot ?? path.dirname(entry.source), 'package.json')).name === dep.id; } catch { return false; }
+      });
+      if (entries.length && new Set(entries.map(entry => entry.packageRoot ?? path.dirname(entry.source))).size === 1) {
+        const entry = entries.find(entry => entry.enabled && entry.compatibility?.compatible !== false) ?? entries[0]!; found = entry.version ?? '';
+        ok = entry.enabled && entry.compatibility?.compatible !== false && atLeast(found, dep.minVersion);
+      }
       checks.push({ label: 'dependency', ok, detail: `${dep.id} >= ${dep.minVersion}${found ? ` (${found})` : ''}` });
     }
     if (p.npm) checks.push({ label: 'npm', ok: !!npmCLI(), detail: 'npm ci --omit=dev --ignore-scripts --no-audit --no-fund' });
     return checks;
   }
-  async preview(data: Buffer) {
+  preview(data: Buffer) {
+    const task = this.createPreview(data);
+    this.previewTasks.add(task);
+    void task.then(() => this.previewTasks.delete(task), () => this.previewTasks.delete(task));
+    return task;
+  }
+  private async createPreview(data: Buffer) {
     this.controller.signal.throwIfAborted(); this.cleanup();
     if (!data.length || data.length > MAX_PLUGIN_ZIP) throw Error('ZIP must be between 1 byte and 32 MB');
     if (this.plans.size + this.previews >= 3) throw Error('Close an existing installation preview first');
@@ -174,36 +202,23 @@ export class PluginInstaller {
       if (!object(pkg) || !safeId.test(pkg.name) || !version.test(pkg.version)) throw Error('Plugin requires a valid package name and version');
       const nodeRange = pkg.engines?.node;
       if (nodeRange !== undefined && (typeof nodeRange !== 'string' || !validRange(nodeRange))) throw Error('Invalid Node version requirement');
-      let manifest: Manifest | undefined;
+      const manifest = readPluginManifest(root, pkg.name);
       const mf = path.join(root, 'ashub-plugin.json');
-      if (fs.existsSync(mf)) {
-        const m = json(mf);
-        if (!object(m) || m.schemaVersion !== 1 || !safeId.test(m.id) || m.id !== pkg.name) throw Error('Invalid installation manifest');
-        if (m.name !== undefined) text(m.name, 100);
-        if (m.platforms !== undefined && (!Array.isArray(m.platforms) || !m.platforms.length || !m.platforms.every((v: string) => ['darwin', 'win32', 'linux'].includes(v)))) throw Error('Invalid platforms');
-        if (m.minNode !== undefined && !/^\d+\.\d+\.\d+$/.test(m.minNode)) throw Error('Invalid minimum Node version');
-        if (m.dependencies !== undefined && (!Array.isArray(m.dependencies) || m.dependencies.length > 10 || !m.dependencies.every((d: any) => object(d) && safeId.test(d.id) && d.id !== m.id && /^\d+\.\d+\.\d+$/.test(d.minVersion)))) throw Error('Invalid plugin dependencies');
-        if (m.permissions !== undefined && (!Array.isArray(m.permissions) || m.permissions.length > 10 || !m.permissions.every((v: unknown) => { text(v); return true; }))) throw Error('Invalid permission hints');
-        if (m.setup) { relative(m.setup.script); text(m.setup.description, 500); if (!m.setup.script.endsWith('.mjs') && !m.setup.script.endsWith('.js')) throw Error('Setup must be a Node script'); }
-        if (m.defaults !== undefined) {
-          if (!object(m.defaults) || Object.keys(m.defaults).length > 5 || JSON.stringify(m.defaults).length > 16000) throw Error('Invalid configuration defaults');
-          for (const [namespace, config] of Object.entries(m.defaults)) { validatePluginNamespace(namespace); if (!object(config)) throw Error('Default configuration must be an object'); }
-        }
-        manifest = m;
-      }
-      const entry = PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(root, n)));
-      if (!entry || (pkg.main && (typeof pkg.main !== 'string' || pkg.main.replace(/^\.\//, '') !== entry))) throw Error('Plugin must expose its entry as index.js, index.mjs or index.ts');
-      if (manifest?.setup && !fs.statSync(path.join(root, manifest.setup.script)).isFile()) throw Error('Missing setup script');
+      const manifestFingerprint = manifest ? createHash('sha256').update(fs.readFileSync(mf)).digest('hex') : undefined;
+      const entry = manifest ? (manifest.entries.session ?? manifest.entries.application) : PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(root, n)));
+      if ((!entry && !manifest?.ui) || (pkg.main && (typeof pkg.main !== 'string' || pkg.main.replace(/^\.\//, '') !== entry))) throw Error('Plugin must expose its declared entry, or index.js, index.mjs or index.ts for legacy packages');
+      if (entry && !fs.statSync(path.join(root, entry)).isFile()) throw Error('Missing plugin entry');
       for (const key of ['dependencies', 'optionalDependencies']) if (pkg[key] !== undefined && (!object(pkg[key]) || !Object.values(pkg[key]).every(v => typeof v === 'string'))) throw Error('Invalid npm dependencies');
       const npm = Object.keys({ ...pkg.dependencies, ...pkg.optionalDependencies }).length > 0;
       if (npm && !fs.existsSync(path.join(root, 'package-lock.json'))) throw Error('Plugins with npm dependencies must include package-lock.json');
       const target = this.target(pkg.name, pkg.name);
       if (fs.existsSync(target)) {
-        const previousEntry = PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(target, n)));
-        // Existing settings and plugin IDs are bound to the entry path.
-        if (previousEntry && previousEntry !== entry) throw Error('Plugin entry changed; update this package manually to preserve its settings and enable state');
+        const previousManifest = readPluginManifest(target, pkg.name);
+        const previousEntry = previousManifest ? (previousManifest.entries.session ?? previousManifest.entries.application ?? 'index.mjs') : PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(target, n)));
+        // The catalog ID and disabled setting are bound to the canonical entry.
+        if (previousEntry && previousEntry !== (entry ?? 'index.mjs')) throw Error('Plugin entry changed; update this package manually to preserve its settings and enable state');
       }
-      const p: Plan = { token, directory, packageRoot: root, id: pkg.name, name: manifest?.name ?? pkg.name, version: pkg.version, entry, manifest, nodeRange, npm,
+      const p: Plan = { token, directory, packageRoot: root, id: pkg.name, name: manifest?.name ?? pkg.name, version: pkg.version, entry, manifestFingerprint, packageMetadata: packageMetadata(pkg), manifest, nodeRange, npm,
         target, previous: fingerprint(target), expiresAt: Date.now() + TTL, checks: [] };
       p.checks = this.checks(p); this.plans.set(token, p);
       return this.previewStatus(token);
@@ -219,6 +234,7 @@ export class PluginInstaller {
     p.checks = this.checks(p);
     return { token, name: p.name, version: p.version, target: p.target, previousVersion: p.previous ? json(path.join(p.target, 'package.json')).version : null,
       legacy: !p.manifest, checks: p.checks, canInstall: p.checks.every(c => c.ok), npm: p.npm, setup: p.manifest?.setup ?? null,
+      manifest: p.manifest, compatibility: p.manifest ? pluginCompatibility(p.manifest, { platform: this.platform }) : undefined,
       permissions: p.manifest?.permissions ?? [], defaults: p.manifest?.defaults ?? {}, expiresAt: p.expiresAt };
   }
   discard(token: string) {
@@ -241,7 +257,7 @@ export class PluginInstaller {
   }
   private async install(p: Plan, job: Job) {
     const home = path.dirname(this.settingsFile), signal = this.controller.signal;
-    let backup: string | undefined, placed = false;
+    let backup: string | undefined, placed = false, committed = false;
     try {
       const data = path.join(home, 'plugin-data', p.id); fs.mkdirSync(data, { recursive: true, mode: 0o700 });
       if (p.npm) {
@@ -252,12 +268,28 @@ export class PluginInstaller {
         job.step = 'setup'; await this.run(path.join(p.packageRoot, p.manifest.setup.script), [], p.packageRoot, home, data, signal);
       }
       signal.throwIfAborted(); job.step = 'validating';
-      // Setup may generate another index file. Discovery priority must still
-      // match the approved entry, whose path also identifies disabled plugins.
-      if (PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(p.packageRoot, n))) !== p.entry) throw Error('Plugin entry changed during setup');
-      if (/\.m?js$/.test(p.entry)) await this.run('--check', [path.join(p.packageRoot, p.entry)], p.packageRoot, home, data, signal);
+      validateApprovedPackage(p);
+      // Revalidate declarations after setup as well as before it. A build must
+      // not replace the approved entry, scope, capabilities or UI metadata.
+      if (p.manifest) {
+        const fingerprint = createHash('sha256').update(fs.readFileSync(path.join(p.packageRoot, 'ashub-plugin.json'))).digest('hex');
+        if (fingerprint !== p.manifestFingerprint) throw Error('Plugin manifest changed during setup');
+        validatePluginEntries(p.packageRoot, p.manifest);
+        if (p.manifest.schemaVersion === 1 && PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(p.packageRoot, n))) !== p.entry) throw Error('Plugin entry changed during setup');
+      } else if (fs.existsSync(path.join(p.packageRoot, 'ashub-plugin.json')) || PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(p.packageRoot, n))) !== p.entry) throw Error('Plugin entry or manifest changed during setup');
+      for (const entry of p.manifest ? Object.values(p.manifest.entries) : [p.entry!]) {
+        if (/\.m?js$/.test(entry)) await this.run('--check', [path.join(p.packageRoot, entry)], p.packageRoot, home, data, signal);
+        if (!fs.statSync(path.join(p.packageRoot, entry)).isFile()) throw Error('Plugin entry missing after setup');
+      }
       signal.throwIfAborted(); job.step = 'installing';
-      if (!fs.statSync(path.join(p.packageRoot, p.entry)).isFile()) throw Error('Plugin entry missing after setup');
+      // Syntax checks are awaited, so repeat approval checks immediately before
+      // the synchronous placement/commit window as well.
+      validateApprovedPackage(p);
+      if (p.manifest) {
+        if (createHash('sha256').update(fs.readFileSync(path.join(p.packageRoot, 'ashub-plugin.json'))).digest('hex') !== p.manifestFingerprint) throw Error('Plugin manifest changed during setup');
+        validatePluginEntries(p.packageRoot, p.manifest);
+        if (p.manifest.schemaVersion === 1 && PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(p.packageRoot, n))) !== p.entry) throw Error('Plugin entry changed during setup');
+      } else if (fs.existsSync(path.join(p.packageRoot, 'ashub-plugin.json')) || PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(p.packageRoot, n))) !== p.entry) throw Error('Plugin entry or manifest changed during setup');
       if (fingerprint(p.target) !== p.previous) throw Error('Installed plugin changed during setup');
       if (!this.checks(p).every(c => c.ok)) throw Error('A plugin dependency changed during setup');
       fs.mkdirSync(path.dirname(p.target), { recursive: true });
@@ -271,7 +303,7 @@ export class PluginInstaller {
         for (const [key, value] of Object.entries(p.manifest!.defaults!)) if (!Object.hasOwn(settings, key)) settings[key] = value;
         return settings;
       });
-      job.backup = backup; job.state = 'succeeded'; job.step = 'done';
+      job.backup = backup; committed = true;
     } catch (e) {
       job.state = 'failed'; job.error = String(e); job.step = 'failed';
       if (placed) {
@@ -285,6 +317,37 @@ export class PluginInstaller {
       p.expiresAt = Date.now() + TTL;
       try { fs.rmSync(p.directory, { recursive: true, force: true }); } catch {}
     }
+    if (committed) {
+      // Package and settings are already committed. Notification failure must
+      // never roll back the package or turn a successful installation into failure.
+      if (this.onInstalled) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const notice = Object.freeze({ jobId: job.id, packageId: p.id, name: p.name, version: p.version, target: p.target });
+          await Promise.race([
+            Promise.resolve().then(() => this.onInstalled!(notice)),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Installation notification timed out')), this.notificationTimeoutMs); }),
+          ]);
+        } catch (error) { job.notificationError = String(error); }
+        finally { if (timer) clearTimeout(timer); }
+      }
+      job.state = 'succeeded'; job.step = 'done';
+    }
   }
-  async close() { this.controller.abort(); await this.active; for (const key of this.plans.keys()) this.discard(key); }
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
+    this.controller.abort();
+    this.closing = (async () => {
+      // Preview extraction owns staging writes too. Wait for its abort check
+      // and finally cleanup before announcing that installer shutdown is done.
+      const active = this.active;
+      const results = await Promise.allSettled([active ?? Promise.resolve(), ...this.previewTasks]);
+      const errors: unknown[] = results[0]?.status === 'rejected' ? [results[0].reason] : [];
+      for (const key of [...this.plans.keys()]) {
+        try { this.discard(key); } catch (error) { errors.push(error); }
+      }
+      if (errors.length) throw new AggregateError(errors, 'Plugin installer cleanup failed');
+    })();
+    return this.closing;
+  }
 }

@@ -18,6 +18,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: node --test tests/kernel-patch.cjs tests/codex-browser.mjs
       - run: npm run typecheck:web
       - run: node --test tests/regression-windows.cjs tests/regression-thinking.cjs tests/regression-links.cjs tests/regression-projects.cjs tests/regression-collaboration.cjs tests/worktrees.mjs
       - run: node tests/http-artifacts.cjs
@@ -35,4 +36,7 @@ jobs:
           $app = Resolve-Path 'release/win-unpacked/asHub.exe'
           $test = Resolve-Path 'tests/windows-runtime.mjs'
           & $app $test (Resolve-Path 'release/win-unpacked/resources/app')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:ASHUB_TEST_APP_ROOT = (Resolve-Path 'release/win-unpacked/resources/app').Path
+          & $app --test (Resolve-Path 'tests/codex-browser.mjs')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

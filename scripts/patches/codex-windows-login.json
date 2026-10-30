@@ -1,0 +1,16 @@
+{
+  "description": "Temporary agent-sh Windows Codex login fix; remove after adopting upstream fix.",
+  "upstreamCommit": "8ab306693531a16c2d9bacdef06b65f89c8882da",
+  "files": [
+    {
+      "path": "src/agent/extensions/codex-provider/auth.ts",
+      "before": "export function openBrowser(url: string): void {\n  const [cmd, args] = process.platform === \"darwin\" ? [\"open\", [url]]\n    : process.platform === \"win32\" ? [\"cmd\", [\"/c\", \"start\", \"\", url]]\n    : [\"xdg-open\", [url]];\n  try {\n    spawn(cmd, args as string[], { stdio: \"ignore\", detached: true }).on(\"error\", () => {}).unref();\n  } catch { /* the URL is also printed for manual use */ }\n}",
+      "after": "export function openBrowser(url: string): void {\n  const windows = process.platform === \"win32\";\n  // cmd /c start treats OAuth query separators (&) as commands. Keep the URL\n  // out of shell source entirely, including quotes and percent-encoded values.\n  const [cmd, args] = process.platform === \"darwin\" ? [\"open\", [url]]\n    : windows ? [\"powershell.exe\", [\"-NoProfile\", \"-NonInteractive\", \"-Command\",\n      \"Start-Process -FilePath $env:AGENT_SH_CODEX_LOGIN_URL\"]]\n    : [\"xdg-open\", [url]];\n  try {\n    spawn(cmd, args as string[], {\n      stdio: \"ignore\", detached: true,\n      ...(windows ? { windowsHide: true, env: { ...process.env, AGENT_SH_CODEX_LOGIN_URL: url } } : {}),\n    }).on(\"error\", () => {}).unref();\n  } catch { /* the URL is also printed for manual use */ }\n}"
+    },
+    {
+      "path": "dist/agent/extensions/codex-provider/auth.js",
+      "before": "export function openBrowser(url) {\n    const [cmd, args] = process.platform === \"darwin\" ? [\"open\", [url]]\n        : process.platform === \"win32\" ? [\"cmd\", [\"/c\", \"start\", \"\", url]]\n            : [\"xdg-open\", [url]];\n    try {\n        spawn(cmd, args, { stdio: \"ignore\", detached: true }).on(\"error\", () => { }).unref();\n    }\n    catch { /* the URL is also printed for manual use */ }\n}",
+      "after": "export function openBrowser(url) {\n    const windows = process.platform === \"win32\";\n    // cmd /c start treats OAuth query separators (&) as commands. Keep the URL\n    // out of shell source entirely, including quotes and percent-encoded values.\n    const [cmd, args] = process.platform === \"darwin\" ? [\"open\", [url]]\n        : windows ? [\"powershell.exe\", [\"-NoProfile\", \"-NonInteractive\", \"-Command\",\n                \"Start-Process -FilePath $env:AGENT_SH_CODEX_LOGIN_URL\"]]\n            : [\"xdg-open\", [url]];\n    try {\n        spawn(cmd, args, {\n            stdio: \"ignore\", detached: true,\n            ...(windows ? { windowsHide: true, env: { ...process.env, AGENT_SH_CODEX_LOGIN_URL: url } } : {}),\n        }).on(\"error\", () => { }).unref();\n    }\n    catch { /* the URL is also printed for manual use */ }\n}"
+    }
+  ]
+}

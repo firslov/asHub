@@ -370,5 +370,77 @@ async function runSwarmTool(x,items,entries){
   thinking.hideThinking(x.session);x.activity.resetActivity(x.session);
   thinking.updateRequestStatus(x.session,{phase:'clear'});assert(!x.session.thinking.el);
  });
+ await check('Activity completion timestamps freeze across later events, toggles and translation',()=>{
+  const x=fixture(),ts=Date.UTC(2026,9,30,8,12,34);
+  x.activity.beginActivityFrame(x.session,{ts:ts-1000}); const row=x.tool();
+  const time=x.box().querySelector('.execution-activity-time');assert(time.hidden);
+  row.classList.add('ok');x.activity.beginActivityFrame(x.session,{ts});
+  x.groups.append(x.session,x.node('agent-reply','Answer'));
+  assert(!time.hidden&&time.dateTime===new Date(ts).toISOString());
+  x.activity.beginActivityFrame(x.session,{ts:ts+60000});x.finish();
+  x.box().querySelector('.execution-activity-head').click();x.lang();
+  assert(time.dateTime===new Date(ts).toISOString());
+ });
+ await check('Activity stopped and failed events preserve their original time after cleanup',()=>{
+  for(const outcome of ['agent:cancelled','agent:error']){
+   const x=fixture(),ts=Date.UTC(2026,9,30,8,12,34);x.tool();
+   x.activity.beginActivityFrame(x.session,{ts});x.finish(outcome);
+   const time=x.box().querySelector('.execution-activity-time');assert(!time.hidden);
+   x.activity.beginActivityFrame(x.session,{ts:ts+1000});x.finish();
+   assert(time.dateTime===new Date(ts).toISOString());
+  }
+ });
+ await check('Activity history without original timestamps never invents completion time',()=>{
+  for(const meta of [{},{ts:Date.now(),id:'hub:session:branch:12'}]){
+   const x=fixture();x.activity.beginActivityFrame(x.session,meta);x.tool();x.finish();
+   assert(x.box().querySelector('.execution-activity-time').hidden);
+  }
+ });
+ await check('Later approvals cannot reopen settled activity or rewrite its completion timestamp',()=>{
+  const x=fixture(),ts=Date.UTC(2026,9,30,8,12,34),row=x.tool();row.classList.add('ok');
+  x.activity.beginActivityFrame(x.session,{ts});x.groups.append(x.session,x.node('agent-reply','First result'));
+  const settled=row.closest('.execution-activity'),time=settled.querySelector('.execution-activity-time');
+  const pending=x.tool('write'),card=x.node('permission-card');
+  x.activity.beginActivityFrame(x.session,{ts:ts+1000});x.groups.append(x.session,card);
+  x.activity.activityEvent(x.session,'permission:request');
+  assert(settled.dataset.state==='settled'&&!time.hidden,'earlier completed activity was reopened by an unrelated approval');
+  assert(pending.closest('.execution-activity').dataset.state==='waiting');
+  x.activity.beginActivityFrame(x.session,{ts:ts+2000});card.classList.add('decided');
+  x.activity.activityEvent(x.session,'permission:resolved');
+  assert(time.dateTime===new Date(ts).toISOString());
+  assert(pending.closest('.execution-activity').dataset.state==='running');
+ });
+ await check('Background completion uses its own event time after the main turn ends',()=>{
+  const x=fixture(),ts=Date.UTC(2026,9,30,8,12,34),block=x.node('subagent-block'),spinner=x.node('subagent-spinner');
+  block.append(spinner);x.groups.insertStreamNode(x.session,block);
+  x.activity.beginActivityFrame(x.session,{ts});x.finish();
+  const time=x.box().querySelector('.execution-activity-time');assert(time.hidden);
+  x.activity.beginActivityFrame(x.session,{ts:ts+2000});spinner.remove();x.activity.refreshActivity(block);
+  assert(!time.hidden&&time.dateTime===new Date(ts+2000).toISOString());
+  x.activity.beginActivityFrame(x.session,{ts:ts+5000});x.lang();
+  assert(time.dateTime===new Date(ts+2000).toISOString());
+ });
+ await check('Replayed response segment cannot predate a parallel tool completion',()=>{
+  const ts=Date.UTC(2026,9,30,8,12,34),times=[];
+  for(const replay of [false,true]){
+   const x=fixture();x.activity.beginActivityFrame(x.session,{ts:ts-1000});const row=x.tool();
+   const reply=()=>{x.activity.beginActivityFrame(x.session,{ts});x.groups.append(x.session,x.node('agent-reply','Partial result'));};
+   if(!replay)reply();
+   x.activity.beginActivityFrame(x.session,{ts:ts+2000});row.classList.add('ok');x.activity.refreshActivity(row);
+   if(replay)reply();
+   times.push(x.box().querySelector('.execution-activity-time').dateTime);
+  }
+  assert(times.every(t=>t===new Date(ts+2000).toISOString()),'replay used the earlier text start instead of the later tool completion: '+times);
+ });
+ await check('Parallel completion times stay scoped to their own activity blocks',()=>{
+  const x=fixture(),ts=Date.UTC(2026,9,30,8,12,34),at=n=>x.activity.beginActivityFrame(x.session,{ts:ts+n});
+  at(0);const a=x.tool();at(1000);x.groups.append(x.session,x.node('agent-reply','First'));
+  at(2000);const b=x.tool();
+  at(4000);b.classList.add('ok');x.activity.refreshActivity(b);
+  at(5000);a.classList.add('ok');x.activity.refreshActivity(a);
+  at(3000);x.groups.append(x.session,x.node('agent-reply','Second'));
+  assert(a.closest('.execution-activity').querySelector('.execution-activity-time').dateTime===new Date(ts+5000).toISOString());
+  assert(b.closest('.execution-activity').querySelector('.execution-activity-time').dateTime===new Date(ts+4000).toISOString());
+ });
  console.log(JSON.stringify({checks:results.length,passed:results.filter(x=>x.passed).length,failed:results.filter(x=>!x.passed).length}));
 })();

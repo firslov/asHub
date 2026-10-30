@@ -510,6 +510,7 @@ const translations = {
     "request.sending": "Sending context · awaiting response",
     "request.waiting": "Connected · awaiting reply",
     "request.retrying": "Retrying connection",
+    "activity.collaboration.wait": "Waiting for collaboration results",
     "activity.reading": "Reading relevant information",
     "activity.searching": "Finding relevant information",
     "activity.writing": "Updating files",
@@ -528,7 +529,8 @@ const translations = {
     "thought": "thought",
 
     // ── Tool group ─────────────────────────────────────────────────
-    "n.tools": "{n} tools",
+    "activity.steps": "{n} calls",
+    "n.tools": "{n} calls",
 
     // ── Todo list ──────────────────────────────────────────────────
     "todo.tasks": "Tasks",
@@ -1100,6 +1102,7 @@ const translations = {
     "request.sending": "正在发送上下文并等待响应",
     "request.waiting": "已连接，正在等待回复",
     "request.retrying": "正在重试连接",
+    "activity.collaboration.wait": "正在等待协作结果",
     "activity.reading": "正在查阅资料",
     "activity.searching": "正在查找资料",
     "activity.writing": "正在更新文件",
@@ -1115,10 +1118,11 @@ const translations = {
     "activity.hide": "收起详情",
     "thinking": "思考中…",
     "thinking.level": "思考强度：{level}",
-    "thought": "已思考",
+    "thought": "思路",
 
     // ── Tool group ─────────────────────────────────────────────────
-    "n.tools": "{n} 个工具",
+    "activity.steps": "{n} 次调用",
+    "n.tools": "{n} 次调用",
 
     // ── Todo list ──────────────────────────────────────────────────
     "todo.tasks": "任务",

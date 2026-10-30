@@ -3,10 +3,11 @@ import {
   diffToText, copyToClipboard,
 } from "../utils.js";
 import { append } from "./tool-group.js";
-import { t } from "../i18n.js";
+import { t, lang } from "../i18n.js";
 import "../conversation-presentation.js";
 
 const { usageMetrics } = globalThis.AsHubConversationPresentation;
+const { toolDisplayName } = globalThis.AsHubConversationPresentation;
 
 export const hideUsage = (session) => {
   const strip = session?.usageStripEl;
@@ -182,22 +183,24 @@ const renderToolIcon = (kind) => {
 };
 
 export const buildToolRow = (p) => {
+  observeToolLanguage();
   const row = document.createElement("div");
   row.className = "tool-row";
   if (p?.toolCallId) row.dataset.callId = p.toolCallId;
   if (p?.kind) row.dataset.kind = p.kind;
   // Bare tool name for collapsed group summaries (icon/title markup varies).
   row.dataset.toolName = p?.name ?? p?.title ?? "";
+  row.dataset.toolTitle = p?.title ?? "";
+  row.title = row.dataset.toolName;
 
   const iconSvg = renderToolIcon(p?.kind);
   const fallbackIcon = typeof p?.icon === "string" && p.icon.length > 0 ? p.icon : "";
-  const hasCustomIcon = iconSvg.length > 0 || fallbackIcon.length > 0;
   const iconHtml = iconSvg || escape(fallbackIcon || "·");
   const raw = (p?.rawInput && typeof p.rawInput === "object") ? p.rawInput : {};
   // agent-loop appends ": <description>" to bash titles; strip it.
-  let title = p?.title ?? t("tool");
+  let title = p?.title || p?.name || t("tool");
   if ((raw.command || raw.source) && title.includes(":")) title = title.split(":")[0];
-  if (hasCustomIcon) title = "";
+  title = toolDisplayName({ ...p, title }, lang?.value);
 
   const hasSource = typeof raw.source === "string" && raw.source.trim().length > 0;
   const sourceLanguage = typeof p?.sourceLanguage === "string" ? p.sourceLanguage : "";
@@ -210,7 +213,7 @@ export const buildToolRow = (p) => {
   if (!detail) {
     if (raw.command) detail = `$ ${raw.command}`;
     else if (hasSource) detail = raw.source;
-    else detail = raw.pattern ?? raw.query ?? raw.path ?? "";
+    else detail = raw.pattern ?? raw.query ?? raw.path ?? (p?.name?.startsWith("conversation_") ? raw.id ?? (Array.isArray(raw.targets) ? raw.targets.map(target => target?.id).filter(id => typeof id === "string").join(", ") : "") : "");
   }
 
   const cmdFull = (raw.command && typeof raw.command === "string" && raw.command.length > CMD_COLLAPSE)
@@ -221,7 +224,7 @@ export const buildToolRow = (p) => {
   if (cmdFull) raw.command = cmdFull;
 
   row.innerHTML =
-    `<span class="tool-name">${iconHtml}${title ? " " + escape(title) : ""}</span>` +
+    `<span class="tool-name">${iconHtml}${title ? ` <span class="tool-label">${escape(title)}</span>` : ""}</span>` +
     (detailHtml ? ` ${detailHtml}` : "");
 
   if (cmdFull) {
@@ -318,3 +321,15 @@ export const renderToolBody = (lines) => {
   return wrap;
 };
 
+// Existing rows follow the interface language without replacing output nodes.
+let observingToolLanguage = false;
+function observeToolLanguage() {
+  if (observingToolLanguage) return;
+  observingToolLanguage = true;
+  document.addEventListener("langchange", () => {
+    document.querySelectorAll(".tool-row").forEach(row => {
+      const label = row.querySelector(".tool-label");
+      if (label) label.textContent = toolDisplayName({ name: row.dataset.toolName, title: row.dataset.toolTitle }, lang?.value);
+    });
+  });
+}

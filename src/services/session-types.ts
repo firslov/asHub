@@ -20,6 +20,8 @@ export interface Session {
   _cancelRestore?: () => void;
   replay: string[];
   segmentText: string;
+  /** First visible response chunk, retained when streaming text is persisted. */
+  segmentStartedAt?: number;
   segmentSeq: number;
   sseClients: Set<http.ServerResponse>;
   model?: string;

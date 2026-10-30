@@ -68,7 +68,7 @@ for (const client of ['desktop', 'remote']) {
     if (client === 'desktop') {
       const source = read('web/js/stream/activity.js');
       const context = rules(undefined, { document: { addEventListener() {} } });
-      vm.runInContext(source.slice(source.indexOf('const { toolActivityKey }')).replace(/^export /gm, '')
+      vm.runInContext(source.slice(source.indexOf('const { toolActivityKey,')).replace(/^export /gm, '')
         + '\nglobalThis.toolLabelForTest = toolLabel;', context);
       labelFor = tool => context.toolLabelForTest({ dataset: tool });
     } else {
@@ -163,4 +163,32 @@ test('remote offline shell caches the shared dependency with the app', remoteOpt
   let install; listeners.get('install')({ waitUntil(promise) { install = promise; } }); await install;
   assert(files.includes('./conversation-presentation.js')); assert(files.includes('./app.js'));
   assert.notEqual(cache, 'ashub-mobile-shell-v34', 'old shell cache must be invalidated for the new dependency');
+});
+
+test('tool labels describe real operations with safe unknown-tool fallback', () => {
+  const {toolDisplayName,toolActivityKey}=rules().AsHubConversationPresentation;
+  assert.equal(toolDisplayName({name:'conversation_wait'},'zh'),'等待协作结果');
+  assert.equal(toolActivityKey({name:'conversation_wait',kind:'execute'}),'activity.collaboration.wait');
+  assert.equal(toolDisplayName({name:'conversation_send'},'en'),'Send collaboration message');
+  for(const name of ['plugin_custom','constructor','toString']) assert.equal(toolDisplayName({name}),name);
+  assert.equal(toolDisplayName({name:'custom',title:'Inspect worksheet'}),'Inspect worksheet');
+});
+test('thought previews remove formatting without corrupting Unicode or mutating source', () => {
+  const {thinkingPreview}=rules().AsHubConversationPresentation;
+  const source='**核对口径**\n\n## Next step\n[参考资料](https://example.test) `code`';
+  assert.equal(thinkingPreview(source),'核对口径 Next step 参考资料 code');
+  const preview=thinkingPreview('🟡'.repeat(110));
+  assert.equal(Array.from(preview).length,101);assert(preview.endsWith('…'));assert.equal(preview.toWellFormed(),preview);
+});
+
+for (const client of ['desktop', 'remote']) test(`${client} activity times use original metadata and reject reconstructed history`, clientOptions(client), () => {
+  const file = client === 'desktop' ? 'web/js/conversation-presentation.js' : 'remote/public/conversation-presentation.js';
+  const {activityTimestamp, renderActivityTime} = rules(file).AsHubConversationPresentation;
+  const ts = Date.UTC(2026,9,30,8,12,34), date = new Date(ts), value = activityTimestamp({ts});
+  assert.equal(value.iso,date.toISOString());
+  assert.equal(value.label,[date.getHours(),date.getMinutes(),date.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':'));
+  assert.equal(activityTimestamp({ts:date.toISOString()}).iso,value.iso);
+  for (const meta of [null, {}, {ts:''}, {ts:'invalid'}, {ts:Infinity}, {ts:true}, {ts,id:'hub:abc:branch:12'}]) assert.equal(activityTimestamp(meta),null);
+  const node={}; renderActivityTime(node,value); assert.equal(node.hidden,false); assert.equal(node.dateTime,value.iso); assert(node.title.includes('2026-10-30'));
+  renderActivityTime(node,null); assert.equal(node.hidden,true); assert.equal(node.textContent,'');
 });

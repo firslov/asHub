@@ -46,7 +46,9 @@ test('Windows launcher preserves the complete OAuth URL outside shell source', (
     assert.equal(command, 'powershell.exe');
     assert.deepEqual(args, ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process -FilePath $env:AGENT_SH_CODEX_LOGIN_URL']);
     assert.equal(options.env.AGENT_SH_CODEX_LOGIN_URL, url);
-    assert.equal(options.env.PATH, process.env.PATH);
+    const pathKey = Object.keys(process.env).find(key => key.toLowerCase() === 'path');
+    assert.ok(pathKey);
+    assert.equal(options.env[pathKey], process.env[pathKey]);
     assert.equal(options.windowsHide, true);
     assert.equal(options.stdio, 'ignore');
     assert.equal(options.detached, true);

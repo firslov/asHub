@@ -4,6 +4,10 @@ import { append, insertStreamNode } from "./tool-group.js";
 import { t } from "../i18n.js";
 import { escape } from "../utils.js";
 
+import "../conversation-presentation.js";
+const { thinkingPreview, renderThinkingContent } = globalThis.AsHubConversationPresentation;
+const thinkingSources = new WeakMap();
+
 export const hasThinkingDots = (session) => (session?.thinking.el ?? null) != null;
 export const hasThinkingBlock = (session) => (session?.thinking.block ?? null) != null;
 
@@ -166,11 +170,14 @@ export const finalizeThinking = (session) => {
   if (!inner || !inner.textContent?.trim()) {
     block.remove();
   } else {
+    const source = inner.textContent;
+    thinkingSources.set(block, source);
+    renderThinkingContent(inner, source);
     const head = block.querySelector(".thinking-block-head");
     if (head) {
       // Keep a one-line preview in the collapsed head so folded thinking
       // blocks stay informative instead of reading as empty "thought".
-      const preview = inner.textContent.trim().replace(/\s+/g, " ").slice(0, 100);
+      const preview = thinkingPreview(source);
       head.innerHTML = `<span class="thinking-label">${t("thought")}</span>` +
         (preview ? `<span class="thinking-preview">${escape(preview)}</span>` : "");
     }
@@ -185,14 +192,9 @@ document.addEventListener("langchange", () => {
   document.querySelectorAll(".thinking-status-label").forEach((el) => { el.textContent = t(el.dataset.labelKey || "activity.thinking"); });
   document.querySelectorAll(".thinking-block-head").forEach((head) => {
     const block = head.closest(".thinking-block");
-    const isCollapsed = block?.classList?.contains("collapsed") ?? false;
-    // Preserve the collapsed preview (recompute from the body text) —
-    // rebuilding the head wholesale would drop it.
-    let previewHtml = "";
-    if (isCollapsed) {
-      const preview = block?.querySelector(".thinking-block-inner")?.textContent?.trim().replace(/\s+/g, " ").slice(0, 100) ?? "";
-      if (preview) previewHtml = `<span class="thinking-preview">${escape(preview)}</span>`;
-    }
-    head.innerHTML = `<span class="thinking-label">${t(isCollapsed ? "thought" : "thinking")}</span>${previewHtml}`;
+    // Keep the preview node even while expanded; CSS hides it until folded.
+    const preview = thinkingPreview(thinkingSources.get(block) ?? block?.querySelector(".thinking-block-inner")?.textContent ?? "");
+    const previewHtml = preview ? `<span class="thinking-preview">${escape(preview)}</span>` : "";
+    head.innerHTML = `<span class="thinking-label">${t(block?.dataset.activityDone === "1" ? "thought" : "thinking")}</span>${previewHtml}`;
   });
 });

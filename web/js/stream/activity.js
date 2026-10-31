@@ -1,7 +1,7 @@
 import { t } from "../i18n.js";
 import "../conversation-presentation.js";
 
-const { toolActivityKey } = globalThis.AsHubConversationPresentation;
+const { toolActivityKey, activityTimestamp, renderActivityTime } = globalThis.AsHubConversationPresentation;
 
 // Presentation only: every original node, result and event listener is retained.
 // Explicit lifecycle hooks avoid observing or rescanning streaming log text.
@@ -11,30 +11,53 @@ const technical = (node) => ["tool-group", "thinking-block", "subagent-block", "
   .some((name) => node.classList?.contains(name));
 
 export function resetActivity(session) {
-  sessions.set(session, { current: null, turn: new Set(), waiting: false, requestLabel: null });
+  sessions.set(session, { current: null, turn: new Set(), waiting: false, requestLabel: null, timestamp: null });
 }
 export function disposeActivity(session) { sessions.delete(session); }
+
+// Capture metadata before handlers can seal or complete an activity block.
+export function beginActivityFrame(session, meta) {
+  const state = sessions.get(session);
+  if (state) state.timestamp = activityTimestamp(meta);
+}
 
 const toolLabel = (row) => toolActivityKey({ kind: row?.dataset.kind, name: row?.dataset.toolName });
 
 const setText = (node, value) => { if (node.textContent !== value) node.textContent = value; };
 
+function noteWorkTime(record) {
+  const time = record.state.timestamp;
+  if (time && (!record.lastWorkAt || time.iso > record.lastWorkAt.iso)) record.lastWorkAt = time;
+}
+
 function refresh(record) {
-  const { box, body, label, changes, hint, arrow } = record;
+  const { box, body, label, changes, hint, arrow, count } = record;
   const rows = Array.from(body.querySelectorAll(".tool-row"));
+  count.hidden = rows.length === 0;
+  setText(count, rows.length ? t("activity.steps", { n: rows.length }) : "");
   const pending = rows.filter((row) => !row.classList.contains("ok") && !row.classList.contains("err"));
   const delegated = body.querySelector(".subagent-spinner");
   const thinking = Array.from(body.querySelectorAll(".thinking-block"))
     .some((block) => block.dataset.activityDone !== "1");
-  const running = !record.waiting && (!record.finished
+  const running = !record.finished
     ? !record.sealed || pending.length > 0 || thinking || !!delegated
-    : record.finished === "done" && !!delegated);
-  box.dataset.state = record.waiting ? "waiting" : running ? "running" : "settled";
+    : record.finished === "done" && !!delegated;
+  // Later approvals must not reopen completed phases or replace their timestamps.
+  const waiting = record.waiting && running;
+  const nextState = waiting ? "waiting" : running ? "running" : "settled";
+  if (nextState !== 'settled') record.settledAt = null;
+  else if (box.dataset.state !== 'settled') {
+    // A persisted response segment can arrive after a later parallel result.
+    const time = record.state.timestamp;
+    record.settledAt = time && record.lastWorkAt?.iso > time.iso ? record.lastWorkAt : time;
+  }
+  renderActivityTime(record.time, record.settledAt);
+  box.dataset.state = nextState;
   // Failed attempts and child-task limits are diagnostic details, not the
   // outcome of the reply: the model may recover or use another approach.
   // Only a terminal error from the main agent warrants an outer warning.
   box.dataset.attention = record.finished === "error" ? "true" : "false";
-  const key = record.waiting ? "activity.waiting" : running
+  const key = waiting ? "activity.waiting" : running
     ? delegated ? "activity.delegating" : pending.length ? toolLabel(pending.at(-1)) : record.requestLabel || "activity.thinking"
     : record.finished === "stopped" ? "activity.stopped"
     : record.finished === "error" ? "activity.interrupted"
@@ -53,7 +76,7 @@ function refresh(record) {
 export function refreshActivity(node) {
   const box = node?.closest?.(".execution-activity");
   const record = box && records.get(box);
-  if (record) refresh(record);
+  if (record) { noteWorkTime(record); refresh(record); }
 }
 
 export function setRequestActivity(session, key) {
@@ -111,12 +134,17 @@ export function prepareActivityNode(session, node, target) {
     const arrow = document.createElement("span");
     arrow.className = "execution-activity-arrow";
     arrow.setAttribute("aria-hidden", "true");
-    head.append(dot, label, changes, hint, arrow);
+    const count = document.createElement("span");
+    count.className = "execution-activity-count";
+    const time = document.createElement('time');
+    time.className = 'execution-activity-time';
+    time.hidden = true;
+    head.append(dot, label, count, changes, hint, arrow, time);
     const body = document.createElement("div");
     body.className = "execution-activity-body";
     body.hidden = true;
     box.append(head, body);
-    record = { box, head, body, label, changes, hint, arrow, sealed: false, finished: "", waiting: state.waiting, requestLabel: state.requestLabel };
+    record = { box, head, body, label, changes, hint, arrow, count, time, state, settledAt: null, sealed: false, finished: "", waiting: state.waiting, requestLabel: state.requestLabel };
     records.set(box, record);
     state.current = record;
     state.turn.add(record);
@@ -128,6 +156,7 @@ export function prepareActivityNode(session, node, target) {
     newBox = box;
   }
   record.body.appendChild(node);
+  noteWorkTime(record);
   refresh(record);
   return newBox;
 }

@@ -1,4 +1,4 @@
-import { resetActivity, disposeActivity, activityEvent } from "./stream/activity.js";
+import { resetActivity, disposeActivity, activityEvent, beginActivityFrame } from "./stream/activity.js";
 import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
 import { compactReasoning } from "./stream/compact.js";
@@ -237,6 +237,7 @@ class SessionView extends HTMLElement {
     if (this.state.replaying) {
       this._replayFrameCount++;
     }
+    beginActivityFrame(this, frame?.meta);
     const fn = handlers[frame?.meta?.name];
     if (fn) {
       try { fn.call(this, frame.payload, frame.meta); }

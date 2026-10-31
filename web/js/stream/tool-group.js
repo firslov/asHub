@@ -1,8 +1,9 @@
 import { prepareActivityNode, refreshActivity } from "./activity.js";
 import { hideEmptyState, maybeScroll } from "./scroll.js";
-import { t } from "../i18n.js";
+import { t, lang } from "../i18n.js";
 import { refreshReasoningFailures } from "./compact.js";
 
+const { toolDisplayName } = globalThis.AsHubConversationPresentation;
 const TOOL_GROUP_COLLAPSE = 2;
 const groupState = new WeakMap();
 
@@ -82,7 +83,7 @@ const updateToolGroupHead = (g) => {
   const counts = new Map();
   for (const row of g.querySelectorAll(".tool-row")) {
     const name = row.dataset.toolName;
-    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    if (name) { const label = toolDisplayName({ name }, lang?.value); counts.set(label, (counts.get(label) ?? 0) + 1); }
   }
   const top = [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
@@ -165,11 +166,12 @@ export const bumpToolCount = (session) => {
   const g = openToolGroup(session);
   if (toolCount(g) >= TOOL_GROUP_COLLAPSE) {
     groupState.get(g).head.hidden = false;
+    if (!g.dataset.userToggled) setToolGroupCollapsed(g, true);
     updateToolGroupHead(g);
   }
 };
 
-// Collapse here, not in bumpToolCount, so rows stay visible while running.
+// Keep an explicitly opened group open when the stream moves on.
 export const closeToolGroup = (session) => {
   const g = session?.toolGroup.current;
   if (!g) return;

@@ -125,6 +125,21 @@ await check('R19 provider options use literal text and values',async()=>{
  const u=ui(),provider='evil"><img src=x onerror=alert(1)>',el=new El();Object.assign(u.e.context,{configProvider:el,panelProviderCatalog:{providers:[{name:provider}]},providerLabel:id=>id});const sf=ast('web/js/config-panel.js'),n=find(sf,n=>ts.isVariableDeclaration(n)&&n.name?.text==='populateProviderSelect');vm.runInContext('('+n.initializer.getText(sf)+')',u.e.context)();assert(el.children.length===1&&el.children[0].value===provider&&el.children[0].textContent===provider,'provider option interpreted as markup');
 });
 
+await check('R20 replay segments preserve the first visible chunk time across flushes and resets',async()=>{
+ const {e,h,s}=await create(),live=[],client={writableEnded:false,write:f=>live.push(frame(f))};s.sseClients.add(client);
+ const chunk=text=>h.routeEvent(s,{name:'agent:response-chunk',payload:{blocks:[{type:'text',text}]}});
+ e.clock(1000);chunk('');e.clock(2000);chunk('First');e.clock(3000);chunk(' answer');e.clock(4000);h.flushSegment(s);
+ const segment=live.filter(f=>f.meta.name==='agent:response-segment').at(-1);
+ assert(segment.meta.ts===2000,'replay time drifted from the first visible live chunk');assert(segment.payload.text==='First answer');
+ e.clock(5000);chunk('More');e.clock(6000);h.flushSegment(s);
+ assert(live.filter(f=>f.meta.name==='agent:response-segment').at(-1).meta.ts===5000,'next segment reused an old timestamp');
+ e.clock(7000);chunk('Discarded');s.segmentText='';e.clock(8000);chunk('New turn');e.clock(9000);h.flushSegment(s);
+ assert(live.filter(f=>f.meta.name==='agent:response-segment').at(-1).meta.ts===8000,'reset reused discarded segment time');
+ const replay=s.replay.map(frame).filter(f=>f.meta.name==='agent:response-segment');
+ assert(replay.map(f=>f.meta.ts).join(',')==='2000,5000,8000','persisted metadata changed');
+ return {timestamps:replay.map(f=>f.meta.ts)};
+});
+
 console.log(JSON.stringify({checks:findings.length,passed:findings.filter(f=>f.passed).length}));
 clearTimeout(watchdog);
 if(findings.some(f=>!f.passed))process.exitCode=1;

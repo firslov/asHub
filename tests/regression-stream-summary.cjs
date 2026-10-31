@@ -117,12 +117,20 @@ function handler(ctx,name){
   x.think.appendThinkingChunk(x.view,'discard');x.think.appendThinkingChunk(other,'keep');x.view.resetForBranchSwitch();x.flush();
   assert(!x.view.streamEl.querySelector('.thinking-block')&&other.streamEl.querySelector('.thinking-block-inner').textContent==='keep');
  });
+ await check('Stream continuous tools default to one summary and preserve explicit expansion',()=>{
+  const x=setup(),group=x.addGroup(),head=group.querySelector('.tool-group-head');
+  assert(group.classList.contains('collapsed')&&group.querySelector('.tool-group-body').inert);
+  head.click();const row=new Node();row.className='tool-row';row.dataset.toolName='conversation_wait';
+  x.groups.appendToGroup(x.session,row);x.groups.bumpToolCount(x.session);x.groups.closeToolGroup(x.session);
+  assert(!group.classList.contains('collapsed')&&!group.querySelector('.tool-group-body').inert);
+  assert(group.querySelectorAll('.tool-row').length===3,'records were removed');
+ });
  await check('Stream late tool completion refreshes its closed group, not the current group',()=>{
   const x=setup(),old=x.addGroup();x.groups.closeToolGroup(x.session);const current=x.addGroup(),row=old.querySelector('.tool-row');row.classList.add('err');x.groups.refreshToolSummaries(row);
   assert(old.querySelector('.activity-error')?.textContent.includes('1'));assert(!current.querySelector('.activity-error'));assert(old.classList.contains('collapsed')&&old.querySelector('.tool-group-body').inert,'refresh opened the group');
  });
  await check('Stream completion handler refreshes summaries before any final reply arrives',()=>{
-  const x=setup(),group=x.addGroup(),row=group.querySelector('.tool-row');group.querySelector('.tool-group-head').click();
+  const x=setup(),group=x.addGroup(),row=group.querySelector('.tool-row');assert(group.classList.contains('collapsed'));
   x.session.streamEl.querySelector=()=>row;
   Object.assign(x.e.context,{saIdFromToolId:()=>'',refreshActivity(){},refreshToolSummaries:x.groups.refreshToolSummaries,absorbAsToolBody:()=>true,maybeScroll:()=>{},CSS:{escape:x=>x}});
   handler(x.e.context,'agent:tool-completed').call(x.session,{toolCallId:'late-tool',exitCode:1,resultDisplay:{summary:'failed'}});

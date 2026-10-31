@@ -46,3 +46,31 @@
   .execution-activity-head { gap: 5px 8px; }
   .execution-activity-body { padding-left: 10px; }
 }
+
+/* Execution detail typography: compact rows, readable names, one visual rail. */
+.execution-activity-count { color: var(--text-faint); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.execution-activity-count[hidden] { display: none; }
+.live-wrap .execution-activity-body { max-width: 760px; margin-top: 4px; padding-top: 0; padding-bottom: 0; }
+.live-wrap .execution-activity-body > :is(.thinking-block, .tool-group, .reasoning-phase) { margin: 4px 0; }
+.live-wrap .execution-activity-body :is(.thinking-block-head, .tool-group-head) { font-weight: 400; padding: 4px 0; gap: 6px 10px; }
+.live-wrap .execution-activity-body .thinking-label { font-size: var(--fs-xs); color: var(--text-faint); flex: none; }
+.live-wrap .execution-activity-body .thinking-preview { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-wrap .thinking-block:not(.collapsed) .thinking-preview { display: none; }
+.live-wrap .thinking-block-inner { padding: 5px 0 9px; color: var(--text-mid); }
+.live-wrap .thinking-block-inner p { margin: 0 0 8px; }
+.live-wrap .thinking-block-inner p:last-child { margin-bottom: 0; }
+.live-wrap .thinking-block-inner strong { color: var(--text-dim); font-weight: 500; }
+.live-wrap .thinking-block-inner :is(ul, ol) { padding-left: 20px; margin: 4px 0; }
+.live-wrap .thinking-block-inner pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.live-wrap .execution-activity-body .tool-row { gap: 5px 10px; padding: 5px 0; }
+.live-wrap .execution-activity-body .tool-name { display: inline-flex; align-items: center; gap: 7px; font-size: var(--fs-xs); font-weight: 500; }
+.live-wrap .execution-activity-body .tool-detail { color: var(--text-faint); font-size: var(--fs-xs); }
+.live-wrap .execution-activity-body .tool-row.ok .tool-mark { color: var(--text-faint); }
+
+.live-wrap .thinking-block-inner.thinking-formatted { white-space: normal; }
+
+.live-wrap .thinking-block-inner table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.live-wrap .thinking-block-inner :is(th, td) { padding: 4px 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+
+.execution-activity-time { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: 2px; }
+.execution-activity-time[hidden] { display: none; }

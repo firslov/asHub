@@ -1,0 +1,66 @@
+/* Message index: one horizontal marker per message, current reading position lit. */
+:is(.live-wrap .session-stream, #messages).has-message-nav,
+:is(.live-wrap .session-stream, #messages).has-message-nav:hover {
+  scrollbar-width: none;
+  scrollbar-gutter: auto;
+}
+:is(.live-wrap .session-stream, #messages).has-message-nav::-webkit-scrollbar { display: none; }
+.conversation-nav {
+  position: fixed;
+  z-index: 6;
+  width: 28px;
+  box-sizing: border-box;
+  padding: 14px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, transparent, #000 min(28px, 25%), #000 max(calc(100% - 28px), 75%), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 min(28px, 25%), #000 max(calc(100% - 28px), 75%), transparent);
+}
+.conversation-nav[hidden] { display: none; }
+.conversation-nav::-webkit-scrollbar { display: none; }
+.conversation-nav .conversation-nav-tick {
+  display: block;
+  position: relative;
+  box-sizing: border-box;
+  width: 28px;
+  height: 8px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  touch-action: pan-y;
+}
+.conversation-nav-tick::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 8px;
+  width: 8px;
+  height: 1px;
+  border-radius: 1px;
+  background: var(--text-mid, var(--muted));
+  opacity: .3;
+  transition: opacity 120ms ease, width 120ms ease;
+}
+.conversation-nav-tick[aria-current="true"]::after {
+  width: 14px;
+  height: 2px;
+  background: var(--text);
+  opacity: .9;
+}
+.conversation-nav-tick:hover::after, .conversation-nav-tick:focus-visible::after { opacity: .9; width: 14px; }
+.conversation-nav-tick:focus-visible { outline: 1px solid var(--text-mid, var(--muted)); outline-offset: -1px; }
+@media (prefers-reduced-motion: reduce) { .conversation-nav-tick::after { transition: none; } }
+@media (forced-colors: active) {
+  .conversation-nav-tick::after { background: CanvasText; opacity: 1; }
+  .conversation-nav-tick[aria-current="true"]::after { background: Highlight; }
+}
+
+@media (max-width: 760px) {
+  :is(.live-wrap .session-stream, #messages) { padding-right: 32px; }
+}

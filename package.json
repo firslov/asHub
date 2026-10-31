@@ -35,6 +35,8 @@
     "test:background": "node --test tests/background.cjs",
     "test:background:ui": "electron tests/electron-background.cjs",
     "test:markdown:ui": "electron tests/electron-markdown.cjs",
+    "test:activity:ui": "electron tests/electron-activity.cjs",
+    "test:scrollbar:ui": "electron tests/electron-scrollbar.cjs",
     "test:composer:ui": "electron tests/electron-composer.cjs",
     "test:host:ui": "electron tests/electron-host-approvals.cjs",
     "test:plugins:install:ui": "electron tests/electron-plugin-install.cjs",

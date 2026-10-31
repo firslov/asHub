@@ -1699,7 +1699,10 @@ function routeEvent(session: Session, e: BusEvent): void {
 
   if (e.name === "agent:response-chunk") {
     const blocks = (e.payload as { blocks?: Array<{ type: string; text?: string }> })?.blocks ?? [];
-    for (const b of blocks) if (b.type === "text") session.segmentText += b.text ?? "";
+    for (const b of blocks) if (b.type === "text" && b.text) {
+      if (!session.segmentText) session.segmentStartedAt = meta.ts;
+      session.segmentText += b.text;
+    }
     const frame = sseFrame(meta, e.payload);
     for (const r of session.sseClients) {
       if (r.writableEnded) continue;
@@ -1718,6 +1721,7 @@ function routeEvent(session: Session, e: BusEvent): void {
     // errored turn may have left text in segmentText — never let it leak
     // into the queued turn that is about to start.
     session.segmentText = "";
+    session.segmentStartedAt = undefined;
     // submit() cleaned up its idle watchdog as soon as the bridge reported
     // this turn as queued, so arm a fresh one now that the turn is actually
     // starting — otherwise a stuck queued turn would leave isProcessing true
@@ -1847,12 +1851,14 @@ function flushSegment(session: Session): void {
   if (!session.segmentText) return;
   const meta = {
     source: session.id,
-    ts: Date.now(),
+    // Replays must seal preceding activity at the same time as live chunks.
+    ts: session.segmentStartedAt ?? Date.now(),
     id: `hub:${session.id}:seg:${session.segmentSeq++}`,
     name: "agent:response-segment",
   };
   const text = session.segmentText;
   session.segmentText = "";
+  session.segmentStartedAt = undefined;
   pushFrame(session, "agent:response-segment", sseFrame(meta, { text }));
 }
 
@@ -2752,6 +2758,7 @@ async function submitQuery(session: Session, query: string,
       // segmentText (see submit()'s catch). Reset here so a fresh turn can
       // never inherit it.
       session.segmentText = "";
+      session.segmentStartedAt = undefined;
       pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
       pushFrame(session, "agent:processing-start", sseFrame(meta("agent:processing-start"), {}));
     }
@@ -3639,6 +3646,7 @@ async function rebuildReplay(
   const frames = synthesizeBranchFrames(session, messages, entryIds);
   session.replay = frames;
   session.segmentText = "";
+  session.segmentStartedAt = undefined;
   session.segmentSeq = 0;
   // The replay array was replaced wholesale — the transient-frame FIFO's
   // references are no longer in it, so reset the accounting.

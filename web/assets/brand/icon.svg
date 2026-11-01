@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect x="0" y="0" width="512" height="512" rx="116" fill="#272824"/>
-<g transform="translate(-24 -24) scale(1.09375)" fill="none" stroke-width="32" stroke-linejoin="round">
-  <path d="M224 176H204Q184 176 184 196V336" stroke="#F3F0E8"/>
-  <path d="M288 336H308Q328 336 328 316V176" stroke="#F3F0E8"/>
-  <path d="M184 256H328" stroke="#C1A574"/>
-</g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="30" fill="#272824"/>
+  <g transform="translate(8 8) scale(.875)" color="#f3f0e8">
+  <path d="M42 43C42 36 46 32 52 28L73 16C79 13 84 16 84 22V43L70 51C66 53 64 56 64 61V86L47 76C43 74 42 71 42 67Z" fill="currentColor"/>
+  <path d="M42 67V70C42 74 45 77 49 79L58 84C62 87 65 87 69 84L82 76C87 73 90 76 90 80V91L65 106C58 110 53 113 46 109L19 93C13 89 13 82 19 78Z" fill="currentColor"/>
+  <path d="M84 43L106 56C113 60 116 66 116 74V100C116 106 111 109 106 106L94 99C90 97 89 94 90 89V76C90 72 88 69 83 66L68 57C63 54 63 50 69 47Z" fill="var(--brand-metal, #c1a574)"/>
+  </g>
 </svg>

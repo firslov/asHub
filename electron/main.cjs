@@ -227,11 +227,11 @@ function resolveWebRoot() {
 // Apply the shared palette to both the main window and detached tabs.
 function applyWindowTheme(win, isDark) {
   if (!win || win.isDestroyed()) return;
-  const color = isDark ? "#2d2a26" : "#f3eddf";
+  const color = isDark ? "#272824" : "#f3f0e8";
   win.setBackgroundColor(color);
   if (process.platform === "darwin") {
     try {
-      win.setTitleBarOverlay?.({ color, symbolColor: isDark ? "#ded2bc" : "#494239" });
+      win.setTitleBarOverlay?.({ color, symbolColor: isDark ? "#ebe7dc" : "#343630" });
     } catch {}
   }
 }
@@ -244,14 +244,14 @@ function createTearOutWindow(loadPath, screenPos) {
     minWidth: 900,
     minHeight: 600,
     title: "asHub",
-    backgroundColor: isDark ? "#2d2a26" : "#f3eddf",
+    backgroundColor: isDark ? "#272824" : "#f3f0e8",
     // Same chrome policy as the main window: frameless on Windows so the
     // in-page custom title bar is the only one; hiddenInset on macOS.
     frame: process.platform !== "win32",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     titleBarOverlay: process.platform === "darwin" ? {
-      color: isDark ? "#2d2a26" : "#f3eddf",
-      symbolColor: isDark ? "#ded2bc" : "#494239",
+      color: isDark ? "#272824" : "#f3f0e8",
+      symbolColor: isDark ? "#ebe7dc" : "#343630",
     } : undefined,
     acceptFirstMouse: true,
     show: false,
@@ -276,14 +276,6 @@ function createTearOutWindow(loadPath, screenPos) {
   win.setMenuBarVisibility(false);
   win.once("ready-to-show", () => win.show());
   win.loadURL(`http://127.0.0.1:${HUB_PORT}${loadPath}`);
-  if (process.platform === "darwin") {
-    win.webContents.on("did-finish-load", () => {
-      if (win.isDestroyed()) return;
-      win.webContents.executeJavaScript(
-        `document.querySelector('.title-bar').style.paddingLeft = '80px'`
-      ).catch(() => {});
-    });
-  }
   return win;
 }
 
@@ -295,15 +287,15 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "asHub",
-    backgroundColor: isDark ? "#2d2a26" : "#f3eddf",
+    backgroundColor: isDark ? "#272824" : "#f3f0e8",
     // hiddenInset: traffic-light buttons overlay content; titleBarOverlay
     // lets us style the native toolbar background through CSS.
     // Windows: frameless + custom title bar for theme integration.
     frame: process.platform !== "win32",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     titleBarOverlay: process.platform === "darwin" ? {
-      color: isDark ? "#2d2a26" : "#f3eddf",
-      symbolColor: isDark ? "#ded2bc" : "#494239",
+      color: isDark ? "#272824" : "#f3f0e8",
+      symbolColor: isDark ? "#ebe7dc" : "#343630",
     } : undefined,
     acceptFirstMouse: true,
     show: false,
@@ -335,15 +327,6 @@ function createWindow() {
       pendingUpdateVersion = null;
     }
   });
-
-  // Inject traffic-light safe area on macOS hiddenInset windows
-  if (process.platform === "darwin") {
-    mainWindow.webContents.on("did-finish-load", () => {
-      mainWindow.webContents.executeJavaScript(
-        `document.querySelector('.title-bar').style.paddingLeft = '80px'`
-      ).catch(() => {});
-    });
-  }
 
   if (isDev) {
     // DevTools available via Cmd+Opt+I — auto-opening triggers

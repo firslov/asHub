@@ -605,3 +605,30 @@ for (const supported of [false, true]) test(`project delivery conventions are ca
   } finally { runtime.close(); }
   assert(!instructions().some(i => i.name === 'project-management-delivery'));
 });
+
+for (const supported of [false,true]) test(`project supplements use only the public host handler and cleanly unload (${supported})`,async()=>{
+ const f=fixture(fs.readFileSync(new URL('../examples/extensions/project-management/index.mjs',import.meta.url),'utf8'),'project-management.mjs');
+ const {core,ctx}=await makeContext(),runtime=new PluginRuntime(f.file),calls=[];
+ core.handlers.define('ashub:catalog',()=>({currentId:'coordinator'}));
+ core.handlers.define('ashub:execute',()=>{throw Error('No CRUD during messaging');});
+ if(supported)core.handlers.define('ashub:collaboration:supplement',p=>{calls.push(p);return {state:p.message==='reject'?'rejected':'pending',taskId:p.id};});
+ const tool=name=>ctx.agent.getTools().find(t=>t.name===name);
+ try{
+  await runtime.load(ctx);
+  assert.equal(!!tool('project_management_supplement'),supported);
+  assert.equal(!!tool('project_management_supplement_status'),supported);
+  if(supported){
+   const c=new AbortController(),args={id:'task-1',requestKey:'update-001',message:'Keep original scope'};
+   const result=await tool('project_management_supplement').execute(args,undefined,{signal:c.signal});
+   assert(!result.isError);assert.deepEqual(calls[0],{...args,signal:c.signal});
+   assert(tool('project_management_supplement_status').readOnly);
+   await tool('project_management_supplement_status').execute({id:'task-1',requestKey:'update-001',message:'must not send'});
+   assert.equal(calls[1].message,undefined);
+   c.abort();assert((await tool('project_management_supplement').execute(args,undefined,{signal:c.signal})).isError);assert.equal(calls.length,2);
+   assert((await tool('project_management_supplement').execute({...args,message:'reject'})).isError);
+   const guide=ctx.bus.emitPipe('agent:instructions',{instructions:[]}).instructions.find(i=>i.name==='project-management-supplements');
+   assert(guide.text.includes('不发送“继续”'));assert(guide.text.includes('不证明理解或完成'));
+  }
+ }finally{runtime.close();}
+ assert(!tool('project_management_supplement'));assert(!tool('project_management_supplement_status'));
+});

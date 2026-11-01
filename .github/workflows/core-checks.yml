@@ -1,0 +1,60 @@
+name: Core checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ''
+      version:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Apply release version for validation
+        if: inputs.version != ''
+        env:
+          ASHUB_RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/release-version.cjs
+      - run: npm ci
+      - run: npm run check:core
+
+  desktop-ui:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Apply release version for validation
+        if: inputs.version != ''
+        env:
+          ASHUB_RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/release-version.cjs
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:architecture:ui
+      - run: npm run test:steering:ui
+      - run: npm run test:scheduled-tasks:ui

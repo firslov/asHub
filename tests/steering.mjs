@@ -26,6 +26,7 @@ test('real kernel steers at model/tool boundaries, keeps IDs, images and queue s
   await fs.writeFile(path.join(dir,'settings.json'),JSON.stringify({startupBanner:false,disabledBuiltins:['rolling-history','codex-provider'],defaultProvider:'fixture',providers:{fixture:{apiKey:'fake',baseURL:origin+'/v1',defaultModel:'fixture-model',models:[{id:'fixture-model',modalities:['text','image']}],contextWindow:32000}}}));
   const {AshBridge}=await import('../dist/bridges/ash.js');
   bridge=new AshBridge({cwd:dir,provider:'fixture',model:'fixture-model'});bridge.onEvent(e=>events.push(e));await bridge.ready();
+  assert.equal(bridge.steer('must not start idle work','idle-probe'),false);
   const responseGate=deferred(),toolGate=deferred();let toolStarted=false,toolRuns=0;
   bridge.extCtx.agent.registerTool({name:'steer_probe',description:'Fixture',input_schema:{type:'object',properties:{}},execute:async()=>{toolStarted=true;toolRuns++;await toolGate.promise;return {content:'tool-result'};}});
   handle=async(data,res)=>{if(requests.length===1){await responseGate.promise;respond(res,{content:'First phase.',tool_calls:[{index:0,id:'probe-1',type:'function',function:{name:'steer_probe',arguments:'{}'}}]});}else respond(res,{content:'Continued.'});};
@@ -52,7 +53,8 @@ test('real kernel steers at model/tool boundaries, keeps IDs, images and queue s
   const textGate=deferred(),textStart=requests.length;
   handle=async(data,res)=>{if(requests.length===textStart+1)await textGate.promise;respond(res,{content:'Text response'});};
   const textTurn=bridge.submit('Text-only work');await until(()=>requests.length===textStart+1);
-  await bridge.submit('One more detail','text-steer','steer');textGate.resolve();await textTurn;
+  assert.equal(bridge.steer('One more detail','text-steer'),true);textGate.resolve();await textTurn;
+  assert.equal(bridge.steer('must not start after completion','late-probe'),false);
   assert.equal(requests.length,textStart+2);
   assert(events.some(e=>e.name==='agent:steer-submit'&&e.payload.queueId==='text-steer'));
   assert(JSON.stringify(requests.at(-1).messages).includes('One more detail'));
@@ -83,7 +85,7 @@ test('real kernel steers at model/tool boundaries, keeps IDs, images and queue s
   let cancelledRes;const before=requests.length;
   handle=async(data,res)=>{cancelledRes=res;};
   const cancelled=bridge.submit('Cancel fixture');await until(()=>requests.length===before+1);
-  await bridge.submit('must not leak','drop','steer');bridge.cancel();await cancelled;
+  await bridge.submit('must not leak','drop','steer');bridge.cancel();assert.equal(bridge.steer('must not follow cancellation','cancel-probe'),false);await cancelled;
   await until(()=>events.some(e=>e.name==='agent:queued-done'&&e.payload.queueId==='drop'&&e.payload.dropped));
   assert.equal(bridge.steering.size,0);cancelledRes.destroy();
   handle=async(data,res)=>respond(res,{content:'After cancel'});

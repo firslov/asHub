@@ -49,3 +49,31 @@ test('mobile preview counts tasks rather than mid-task follow-ups',()=>{
  assert.equal(mobileReplayStart(frames,1),starts[13],'an active task must not begin at a follow-up');
  const active=frames.slice(starts[13]);assert.equal(mobileReplayStart(active),0);
 });
+
+test('diagnostic previews preserve the same result semantics as complete events', async () => {
+  const { default: cases } = await import('./fixtures/conversation-events.cjs');
+  const { readFileSync } = await import('node:fs');
+  const { runInNewContext } = await import('node:vm');
+  const context = {};
+  runInNewContext(readFileSync(new URL('../web/js/conversation-presentation.js', import.meta.url), 'utf8'), context);
+  const { diagnosticState } = context.AsHubConversationPresentation;
+  for (const c of cases) for (const name of ['agent:tool-completed', 'subagent:done']) {
+    const payload = { toolCallId: 'tool-1', subagentId: 'child-1', swarmId: 'swarm-1',
+      task: 'Review evidence', rawOutput: 'Large diagnostics '.repeat(400), ...c.payload };
+    const original = frame(name, payload), projected = JSON.parse(mobileReplayFrame(original).split('data: ')[1]).payload;
+    assert.equal(diagnosticState(projected), c.outcome, name + ': ' + c.name);
+    assert.equal(diagnosticState(payload), c.outcome);
+    assert.equal(projected.subagentId, payload.subagentId);
+    assert.equal(projected.toolCallId, payload.toolCallId);
+    assert.equal(projected.swarmId, payload.swarmId);
+    assert.equal(projected.degraded, payload.degraded);
+    assert.equal(projected.detailsOmitted, true);
+    assert.equal(original, frame(name, payload), 'preview does not mutate persisted history');
+    assert(mobileReplayFrame(original).length < 1900);
+  }
+  const payload = { error: '🟡'.repeat(5000), result: 'details'.repeat(1000) };
+  const projected = JSON.parse(mobileReplayFrame(frame('subagent:done', payload)).split('data: ')[1]).payload;
+  assert.equal(diagnosticState(projected), 'failed');
+  assert.equal(projected.error.isWellFormed(), true);
+  assert(projected.error.length <= 240, 'error details must remain bounded');
+});

@@ -34,3 +34,13 @@ test('waiting indicators and continued replies stay before queued input in live 
   assert.equal((replaying?stream:fragment).children.length,0,'replay must remain batched');
  }
 });
+
+test('strict task steering refuses preparation, cancellation and closed bridges without queue fallback',()=>{
+ const e=env(),Ash=e.load('src/bridges/ash.ts').AshBridge,events=[];
+ const b={closed:false,steeringOpen:true,pendingTurn:{},preparingTurn:null,steering:new Map(),parseSubmission:text=>({query:text}),core:{bus:{emit:(...args)=>events.push(args)}}};
+ for(const change of [{preparingTurn:{}},{steeringOpen:false},{pendingTurn:null},{closed:true}]){
+  assert.equal(Ash.prototype.steer.call({...b,...change},'no','id'),false);
+ }
+ assert.equal(events.length,0);assert.equal(b.steering.size,0);
+ assert.equal(Ash.prototype.steer.call(b,'yes','id'),true);assert.equal(events[0][0],'agent:steer');assert.equal(b.steering.get('id'),'yes');
+});

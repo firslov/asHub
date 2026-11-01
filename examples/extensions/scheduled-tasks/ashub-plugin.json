@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "id": "ashub-scheduled-tasks",
+  "name": "定时任务",
+  "entries": {
+    "application": "app.mjs"
+  },
+  "requires": {
+    "hostApi": "^1.0.0",
+    "capabilities": [
+      "application-lifecycle",
+      "plugin-resources",
+      "authorized-messages"
+    ]
+  },
+  "ui": {
+    "version": 1,
+    "panels": [
+      {
+        "id": "tasks",
+        "title": "定时任务",
+        "components": [
+          {
+            "type": "resource",
+            "id": "tasks"
+          }
+        ],
+        "icon": "clock"
+      }
+    ]
+  },
+  "permissions": [
+    "仅按用户确认的规则向指定对话提交任务消息",
+    "工具权限保持不变；电脑必须唤醒且 asHub 后台在线"
+  ],
+  "configNamespaces": []
+}

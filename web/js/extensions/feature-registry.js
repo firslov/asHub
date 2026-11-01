@@ -31,9 +31,10 @@ export class FeatureRegistry {
           const ui = validateDeclarativeUI(feature.ui);
           const namespaces = Array.isArray(feature.configNamespaces) && feature.configNamespaces.length <= 32 && feature.configNamespaces.every(value => typeof value === 'string' && value.length <= 128) ? [...feature.configNamespaces] : [];
           const forms = ui.panels.flatMap(panel => panel.components).filter(component => component.type === 'form' && component.mode === 'config');
-          if (forms.length && (typeof feature.pluginId !== 'string' || !feature.pluginId || feature.pluginId.length > 200 || !forms.every(form => namespaces.includes(form.namespace)))) throw Error('Unbound configuration form');
+          const bound = forms.length || ui.panels.some(panel => panel.components.some(component => component.type === 'resource'));
+          if (bound && (typeof feature.pluginId !== 'string' || !feature.pluginId || feature.pluginId.length > 200 || !forms.every(form => namespaces.includes(form.namespace)))) throw Error('Unbound configuration form');
           entry.ui = ui;
-          if (forms.length) { entry.pluginId = feature.pluginId; entry.configNamespaces = namespaces; }
+          if (bound) { entry.pluginId = feature.pluginId; entry.configNamespaces = namespaces; }
         } catch { entry.uiError = true; }
       }
       next.set(feature.id, entry);

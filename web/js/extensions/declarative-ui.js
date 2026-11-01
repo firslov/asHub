@@ -1,3 +1,4 @@
+import { mountResource } from './resource-view.js';
 import { validateDeclarativeUI, fieldDefaultValue } from './declarative-schema.js';
 import { registerPanel, unregisterPanel } from '../panel-manager.js';
 import { t } from '../i18n.js';
@@ -17,6 +18,11 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
   for (const definition of ui.panels) {
     const key = `extension-${feature.id.length}-${feature.id}-panel-${definition.id.length}-${definition.id}`;
     const trigger = node('button', 'toolbar-btn extension-menu', '▤');
+    if(definition.icon==='clock'){
+      trigger.textContent='';const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+      for(const [key,value]of Object.entries({width:'18',height:'18',viewBox:'0 0 14 14',fill:'none',stroke:'currentColor','stroke-width':'1.3','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'}))svg.setAttribute(key,value);
+      const shape=document.createElementNS(svg.namespaceURI,'path');shape.setAttribute('d','M12.5 7a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0M7 3.5V7l2.5 1.5');svg.append(shape);trigger.append(svg);
+    }
     trigger.type = 'button'; trigger.id = `${key}-toggle`; trigger.title = `${feature.name} · ${definition.title}`;
     trigger.setAttribute('aria-label', definition.title);
     const panel = node('section', 'p-drawer extension-panel'); panel.id = `${key}-panel`; panel.hidden = true;
@@ -26,7 +32,9 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
     const body = node('div', 'p-body extension-body'); head.append(heading, close); panel.append(head, body);
     const fields = [];
     for (const component of definition.components) {
-      if (component.type === 'text' || component.type === 'status') {
+      if (component.type === 'resource') {
+        const resource = node('div', 'extension-resource-host');body.append(resource);disposers.push(mountResource(resource, feature, component.id));
+      } else if (component.type === 'text' || component.type === 'status') {
         const block = node('p', component.type === 'text' ? 'extension-text' : `extension-status tone-${component.tone || 'neutral'}`, component.text);
         if (component.type === 'status') block.setAttribute('role', 'status'); body.append(block);
       } else if (component.type === 'list') {
@@ -94,7 +102,9 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
         body.append(button);
       }
     }
-    menuHost.append(trigger); panelHost.append(panel);
+    // Keep installed panels with the other tools, above settings and utilities.
+    const anchor = menuHost.querySelector(':scope > #config-toggle, :scope > .toolbar-sep');
+    menuHost.insertBefore(trigger, anchor); panelHost.append(panel);
     const hide = () => { panel.hidden = true; trigger.classList.remove('active'); };
     close.addEventListener('click', () => { hide(); trigger.focus(); });
     registerPanel(key, { toggleBtnId: trigger.id, panelId: panel.id, open: () => { panel.hidden = false; close.focus(); }, close: hide });

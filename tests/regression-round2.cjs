@@ -126,7 +126,7 @@ await check('R19 provider options use literal text and values',async()=>{
 });
 
 await check('R20 replay segments preserve the first visible chunk time across flushes and resets',async()=>{
- const {e,h,s}=await create(),live=[],client={writableEnded:false,write:f=>live.push(frame(f))};s.sseClients.add(client);
+ const {e,h,s}=await create(),live=[],client=new Res();client.write=f=>{live.push(frame(f));return true;};s.sseClients.add(client);
  const chunk=text=>h.routeEvent(s,{name:'agent:response-chunk',payload:{blocks:[{type:'text',text}]}});
  e.clock(1000);chunk('');e.clock(2000);chunk('First');e.clock(3000);chunk(' answer');e.clock(4000);h.flushSegment(s);
  const segment=live.filter(f=>f.meta.name==='agent:response-segment').at(-1);

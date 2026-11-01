@@ -8,6 +8,9 @@
   document.documentElement.dataset.platform =
     window.electronAPI?.platform ??
     (/Win/.test(navigator.platform) ? "win32" : navigator.platform === "MacIntel" ? "darwin" : "linux");
+  // Reserve native window controls before first paint, including detached windows.
+  // A macOS browser has its own chrome and must not inherit this inset.
+  document.documentElement.dataset.nativeTitlebar = window.electronAPI?.platform === "darwin" ? "mac" : "";
 </script>
 <head>
   <meta charset="UTF-8" />
@@ -103,26 +106,18 @@
     <header class="title-bar">
       <!-- Windows custom title bar (hidden on macOS) -->
       <div id="win-title-bar" class="win-title-bar os-other" hidden>
-        <div class="win-title-bar-drag" role="img" aria-label="asHub"><svg class="brand-wordmark" width="68" height="18" viewBox="0 0 128 34" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M20 13V29M20 21a8 8 0 1 0-16 0 8 8 0 0 0 16 0"/>
-  <path d="M42 14.5C39 12.5 30 11.7 29 17C28 22 43 19.5 43 25C43 30.5 32 30.5 28.5 27.5"/>
-  <path d="M53 5V29M72 5V29M53 17H72"/>
-  <path d="M82 13V22C82 31.5 97 31.5 97 22V13M97 22V29"/>
-  <path d="M108 5V29M108 21a8 8 0 1 1 16 0 8 8 0 0 1-16 0"/>
-</g></svg></div>
+        <div class="win-title-bar-drag" role="img" aria-label="asHub"><svg class="brand-wordmark" width="78" height="39" viewBox="0 -6 104 52" aria-hidden="true"><defs><linearGradient id="win-lettering" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--text, #343630)"/><stop offset="1" stop-color="var(--text-dim, #52564d)"/></linearGradient></defs>
+  <text x="2" y="31" fill="url(#win-lettering)" font-family="'Source Serif 4', Georgia, serif" font-size="34" letter-spacing="-.8" textLength="100" lengthAdjust="spacingAndGlyphs"><tspan fill="var(--accent, #755c37)" font-size="31" font-style="italic" font-weight="400">as</tspan><tspan dx="2" font-weight="600">Hub</tspan></text>
+  <path d="M3 36H17L25 32" fill="none" stroke="var(--accent, #755c37)" stroke-width=".85" stroke-linecap="round" opacity=".6"/></svg></div>
         <div class="win-title-bar-controls">
           <button class="win-btn minimize" aria-label="Minimize">‒</button>
           <button class="win-btn maximize" aria-label="Maximize">□</button>
           <button class="win-btn close" aria-label="Close">✕</button>
         </div>
       </div>
-      <span class="title-brand" role="img" aria-label="asHub"><svg class="brand-wordmark" width="68" height="18" viewBox="0 0 128 34" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M20 13V29M20 21a8 8 0 1 0-16 0 8 8 0 0 0 16 0"/>
-  <path d="M42 14.5C39 12.5 30 11.7 29 17C28 22 43 19.5 43 25C43 30.5 32 30.5 28.5 27.5"/>
-  <path d="M53 5V29M72 5V29M53 17H72"/>
-  <path d="M82 13V22C82 31.5 97 31.5 97 22V13M97 22V29"/>
-  <path d="M108 5V29M108 21a8 8 0 1 1 16 0 8 8 0 0 1-16 0"/>
-</g></svg></span>
+      <span class="title-brand" role="img" aria-label="asHub"><svg class="brand-wordmark" width="78" height="39" viewBox="0 -6 104 52" aria-hidden="true"><defs><linearGradient id="title-lettering" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--text, #343630)"/><stop offset="1" stop-color="var(--text-dim, #52564d)"/></linearGradient></defs>
+  <text x="2" y="31" fill="url(#title-lettering)" font-family="'Source Serif 4', Georgia, serif" font-size="34" letter-spacing="-.8" textLength="100" lengthAdjust="spacingAndGlyphs"><tspan fill="var(--accent, #755c37)" font-size="31" font-style="italic" font-weight="400">as</tspan><tspan dx="2" font-weight="600">Hub</tspan></text>
+  <path d="M3 36H17L25 32" fill="none" stroke="var(--accent, #755c37)" stroke-width=".85" stroke-linecap="round" opacity=".6"/></svg></span>
       <span class="title-bar-controls">
         <button id="sidebar-toggle" aria-controls="sidebar" aria-expanded="true" class="sidebar-btn sidebar-toggle" data-i18n-title="collapse.sidebar" title="Collapse sidebar">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -192,13 +187,9 @@
     <main class="main">
       <div class="page-loader" id="page-loader">
         <div class="page-loader-inner">
-          <svg class="page-loader-logo" width="56" height="56" viewBox="112 112 288 288" fill="none" aria-hidden="true">
-            <g fill="none" stroke-width="32" stroke-linejoin="round">
-              <path d="M224 176H204Q184 176 184 196V336" stroke="currentColor"/>
-              <path d="M288 336H308Q328 336 328 316V176" stroke="currentColor"/>
-              <path d="M184 256H328" stroke="var(--brand-metal)"/>
-  </g>
-          </svg>
+          <svg class="page-loader-logo brand-mark" width="56" height="56" viewBox="0 0 128 128" fill="none" aria-hidden="true">  <path d="M42 43C42 36 46 32 52 28L73 16C79 13 84 16 84 22V43L70 51C66 53 64 56 64 61V86L47 76C43 74 42 71 42 67Z" fill="currentColor"/>
+  <path d="M42 67V70C42 74 45 77 49 79L58 84C62 87 65 87 69 84L82 76C87 73 90 76 90 80V91L65 106C58 110 53 113 46 109L19 93C13 89 13 82 19 78Z" fill="currentColor"/>
+  <path d="M84 43L106 56C113 60 116 66 116 74V100C116 106 111 109 106 106L94 99C90 97 89 94 90 89V76C90 72 88 69 83 66L68 57C63 54 63 50 69 47Z" fill="var(--brand-metal, #c1a574)"/></svg>
           <span class="page-loader-text" data-i18n="loading">loading…</span>
           <div class="page-loader-bar" id="page-loader-bar">
             <div class="page-loader-bar-fill" id="page-loader-bar-fill"></div>
@@ -210,13 +201,9 @@
           <div class="no-session-empty terminal-body" id="no-session-empty" hidden>
             <div class="stream-empty-mini">
               <div class="stream-empty-logo">
-                <svg width="56" height="56" viewBox="112 112 288 288" fill="none" aria-hidden="true">
-                  <g fill="none" stroke-width="32" stroke-linejoin="round">
-                    <path d="M224 176H204Q184 176 184 196V336" stroke="currentColor"/>
-                    <path d="M288 336H308Q328 336 328 316V176" stroke="currentColor"/>
-                    <path d="M184 256H328" stroke="var(--brand-metal)"/>
-  </g>
-                </svg>
+                <svg class="brand-mark" width="88" height="88" viewBox="0 0 128 128" fill="none" aria-hidden="true">  <path d="M42 43C42 36 46 32 52 28L73 16C79 13 84 16 84 22V43L70 51C66 53 64 56 64 61V86L47 76C43 74 42 71 42 67Z" fill="currentColor"/>
+  <path d="M42 67V70C42 74 45 77 49 79L58 84C62 87 65 87 69 84L82 76C87 73 90 76 90 80V91L65 106C58 110 53 113 46 109L19 93C13 89 13 82 19 78Z" fill="currentColor"/>
+  <path d="M84 43L106 56C113 60 116 66 116 74V100C116 106 111 109 106 106L94 99C90 97 89 94 90 89V76C90 72 88 69 83 66L68 57C63 54 63 50 69 47Z" fill="var(--brand-metal, #c1a574)"/></svg>
               </div>
               <div class="stream-empty-line"></div>
             </div>
@@ -273,13 +260,9 @@
         <div class="stream-empty">
           <div class="stream-empty-mini">
             <div class="stream-empty-logo">
-              <svg width="56" height="56" viewBox="112 112 288 288" fill="none" aria-hidden="true">
-                <g fill="none" stroke-width="32" stroke-linejoin="round">
-                  <path d="M224 176H204Q184 176 184 196V336" stroke="currentColor"/>
-                  <path d="M288 336H308Q328 336 328 316V176" stroke="currentColor"/>
-                  <path d="M184 256H328" stroke="var(--brand-metal)"/>
-  </g>
-              </svg>
+              <svg class="brand-mark" width="88" height="88" viewBox="0 0 128 128" fill="none" aria-hidden="true">  <path d="M42 43C42 36 46 32 52 28L73 16C79 13 84 16 84 22V43L70 51C66 53 64 56 64 61V86L47 76C43 74 42 71 42 67Z" fill="currentColor"/>
+  <path d="M42 67V70C42 74 45 77 49 79L58 84C62 87 65 87 69 84L82 76C87 73 90 76 90 80V91L65 106C58 110 53 113 46 109L19 93C13 89 13 82 19 78Z" fill="currentColor"/>
+  <path d="M84 43L106 56C113 60 116 66 116 74V100C116 106 111 109 106 106L94 99C90 97 89 94 90 89V76C90 72 88 69 83 66L68 57C63 54 63 50 69 47Z" fill="var(--brand-metal, #c1a574)"/></svg>
             </div>
             <div class="stream-empty-line"></div>
           </div>

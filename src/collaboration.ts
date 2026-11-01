@@ -24,9 +24,15 @@ function parseDelivery(value: unknown): TaskDelivery {
   // References are descriptive data, never paths to read or URLs to fetch.
   return { summary: v.summary, artifacts: v.artifacts.map(a => ({ label: a.label, path: a.path })), unresolved: [...v.unresolved] };
 }
+export type SupplementState = "pending" | "consumed" | "modified" | "dropped" | "rejected" | "interrupted" | "uncertain";
+export interface TaskSupplement {
+  requestKey: string; message: string; text: string; queueId: string;
+  mode: "queue" | "steer"; state: SupplementState;
+}
+const supplementStates = ["pending", "consumed", "modified", "dropped", "rejected", "interrupted", "uncertain"];
 export interface CollaborationTask {
   id: string; sourceId: string; recipientId: string; message: string; query: string;
-  revision?: number; delivery?: TaskDelivery;
+  revision?: number; delivery?: TaskDelivery; supplements?: TaskSupplement[]; queueId?: string;
   state: TaskState; createdAt: number; updatedAt: number; text: string; error?: string;
 }
 const taskStates: TaskState[] = ["queued", "running", "completed", "failed", "cancelled", "interrupted"];
@@ -37,6 +43,11 @@ function validReceipt(task: unknown): task is CollaborationTask {
     && taskStates.includes(value.state as TaskState)
     && [value.createdAt, value.updatedAt].every(n => typeof n === "number" && Number.isFinite(n) && n >= 0)
     && (value.revision === undefined || (Number.isSafeInteger(value.revision) && (value.revision as number) >= 0))
+    && (value.queueId === undefined || typeof value.queueId === "string")
+    && (value.supplements === undefined || (Array.isArray(value.supplements) && value.supplements.length <= 32 &&
+      value.supplements.every(u => u && ["requestKey", "message", "text", "queueId"].every(k => typeof u[k] === "string") &&
+        ["queue", "steer"].includes(u.mode) && supplementStates.includes(u.state)) &&
+      new Set(value.supplements.map(u => u.requestKey)).size === value.supplements.length))
     && (value.delivery === undefined || validDelivery(value.delivery))
     && (value.error === undefined || typeof value.error === "string");
 }
@@ -58,10 +69,14 @@ export class CollaborationTasks {
         const task: unknown = JSON.parse(fs.readFileSync(path.join(directory, name), "utf8"));
         if (!validReceipt(task) || task.id + ".json" !== name) throw new Error("Invalid collaboration receipt");
         this.tasks.set(task.id, task);
+        let pending = false;
+        for (const update of task.supplements ?? []) if (update.state === "pending" || update.state === "uncertain") {
+          update.state = "interrupted"; pending = true;
+        }
         if (!taskTerminal(task.state)) {
           task.state = "interrupted"; task.error = "Application restarted before completion";
           task.updatedAt = Date.now(); task.revision = (task.revision ?? 0) + 1; this.save(task);
-        }
+        } else if (pending) this.save(task);
       } catch (e) { console.error("[collaboration] unreadable receipt retained:", name, e); }
     }
   }
@@ -77,6 +92,40 @@ export class CollaborationTasks {
   }
   get(id: string) { const task = this.tasks.get(id); if (!task) throw new Error("Task not found"); return task; }
   list() { return [...this.tasks.values()].sort((a, b) => b.createdAt - a.createdAt); }
+  bindQueue(id: string, queueId: string) {
+    const task = this.get(id), next = { ...task, queueId };
+    this.save(next); Object.assign(task, next);
+  }
+  queuedTask(sessionId: string, queueId: string | undefined, query: string | undefined) {
+    return this.list().find(t => t.recipientId === sessionId && t.state === "queued" &&
+      (queueId && t.queueId ? t.queueId === queueId : t.query === query));
+  }
+  isActive(id: string) { const task = this.get(id); return task.state === "running" && this.active.get(task.recipientId) === id; }
+  supplementReceipt(id: string, requestKey: string) {
+    const task = this.get(id), update = task.supplements?.find(u => u.requestKey === requestKey);
+    return update ? { taskId: id, requestKey, state: update.state, mode: update.mode, taskState: task.state } : null;
+  }
+  prepareSupplement(id: string, update: TaskSupplement, query?: string) {
+    const task = this.get(id);
+    if ((task.supplements?.length ?? 0) >= 32) throw new Error("Task supplement limit reached (32)");
+    if (task.supplements?.some(u => u.requestKey === update.requestKey)) throw new Error("Duplicate supplement key");
+    const next = { ...task, ...(query === undefined ? {} : {query}), supplements: [...(task.supplements ?? []), update],
+      revision: (task.revision ?? 0) + 1, updatedAt: Date.now() };
+    // Persist before any delivery. Uncertain attempts must never be replayed.
+    this.save(next); Object.assign(task, next);
+  }
+  uncertainSupplement(id: string, requestKey: string) {
+    const task = this.get(id), update = task.supplements?.find(u => u.requestKey === requestKey);
+    if (update && update.state === "pending") update.state = "uncertain";
+    try { this.save(task); } catch (e) { console.error("[collaboration] supplement receipt save failed", e); }
+    return this.supplementReceipt(id, requestKey);
+  }
+  rejectSupplement(id: string, requestKey: string, query?: string) {
+    const task = this.get(id), update = task.supplements?.find(u => u.requestKey === requestKey);
+    if (update) update.state = "rejected";
+    if (query !== undefined) task.query = query;
+    this.save(task);
+  }
   start(id: string) {
     const task = this.get(id);
     if (taskTerminal(task.state)) return;
@@ -90,6 +139,7 @@ export class CollaborationTasks {
     task.state = state; task.revision = (task.revision ?? 0) + 1; task.error = error; task.updatedAt = Date.now();
     if (this.active.get(task.recipientId) === id) this.active.delete(task.recipientId);
     this.chunks.delete(id);
+    for (const update of task.supplements ?? []) if (update.state === "pending" || update.state === "uncertain") update.state = "dropped";
     // A diagnostics write failure must not interrupt the user's agent output.
     try { this.save(task); } catch (e) { console.error("[collaboration] receipt save failed", e); }
     this.notify();
@@ -101,8 +151,24 @@ export class CollaborationTasks {
     void Promise.resolve().then(() => this.notify());
   }
   event(sessionId: string, name: string, payload: any) {
+    if (name === "agent:steer-submit" || name === "agent:queued-submit" || (name === "agent:queued-done" && payload?.dropped)) {
+      for (const task of this.tasks.values()) {
+        if (task.recipientId !== sessionId) continue;
+        const updates = (task.supplements ?? []).filter(u => (u.state === "pending" || u.state === "uncertain") && u.queueId === payload?.queueId);
+        if (!updates.length) continue;
+        for (const update of updates) {
+          update.state = payload?.dropped ? "dropped" : (typeof payload?.query === "string" &&
+            (update.mode === "queue" ? payload.query.includes(update.text) : payload.query === update.text)) ? "consumed" : "modified";
+        }
+        // A pre-correction delivery is no longer the final answer to this task.
+        if (!payload?.dropped) delete task.delivery;
+        task.revision = (task.revision ?? 0) + 1; task.updatedAt = Date.now();
+        try { this.save(task); } catch (e) { console.error("[collaboration] supplement receipt save failed", e); }
+      }
+      if (name === "agent:steer-submit") return; // Never start a second task in the same turn.
+    }
     if (name === "agent:queued-submit" || (name === "agent:queued-done" && payload?.dropped)) {
-      const task = this.list().find(t => t.recipientId === sessionId && t.state === "queued" && t.query === payload?.query);
+      const task = this.queuedTask(sessionId, payload?.queueId, payload?.query);
       if (task) { if (payload?.dropped) this.finish(task.id, "cancelled"); else this.start(task.id); }
       return;
     }

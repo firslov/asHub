@@ -19,12 +19,15 @@ export function validateDeclarativeUI(value) {
   if (!only(value, ['version', 'panels']) || value.version !== 1 || !array(value.panels, 8)) fail();
   const panelIds = new Set();
   for (const panel of value.panels) {
-    if (!only(panel, ['id', 'title', 'components']) || !id(panel.id) || panelIds.has(panel.id) || !text(panel.title, 200) || !array(panel.components, 32)) fail();
+    if (!only(panel, ['id', 'title', 'icon', 'components']) || !id(panel.id) || panelIds.has(panel.id) || !text(panel.title, 200) || !array(panel.components, 32)) fail();
+    if(panel.icon!==undefined&&!['clock','panel'].includes(panel.icon))fail();
     panelIds.add(panel.id);
     const formIds = new Set();
     for (const item of panel.components) {
       if (!record(item)) fail();
-      if (item.type === 'text') {
+      if (item.type === 'resource') {
+        if (!only(item, ['type', 'id']) || !id(item.id)) fail();
+      } else if (item.type === 'text') {
         if (!only(item, ['type', 'text']) || !text(item.text)) fail();
       } else if (item.type === 'status') {
         if (!only(item, ['type', 'text', 'tone']) || !text(item.text) || !['neutral', 'success', 'warning'].includes(item.tone || 'neutral')) fail();

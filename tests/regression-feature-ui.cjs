@@ -238,3 +238,14 @@ for (const reason of ['configuration', 'epoch']) test(`host ${reason} invalidati
   requests[1].resolve(payload('999')); await pending;
   assert.match(session.balanceEl._balanceLabel, /2/); assert.doesNotMatch(session.balanceEl._balanceLabel, /999/);
 });
+
+test('dynamic plugin resources retain bound package identity and reject unbound UI', async () => {
+  const { FeatureRegistry } = await moduleAt('feature-registry.js');
+  const registry = new FeatureRegistry([]);
+  const dynamic = { ...feature('plugin-task'), scope:'application', pluginId:'package-task', configNamespaces:[],
+    ui:{version:1,panels:[{id:'tasks',title:'Tasks',icon:'clock',components:[{type:'resource',id:'tasks'}]}]} };
+  registry.apply(snapshot([dynamic]));
+  assert.equal(registry.snapshot().features[0].pluginId,'package-task');
+  assert.equal(registry.snapshot().features[0].ui.panels[0].icon,'clock');
+  registry.apply(snapshot([{...dynamic,pluginId:undefined}]));assert.equal(registry.snapshot().features[0].ui,undefined);
+});

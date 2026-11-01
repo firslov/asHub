@@ -316,6 +316,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   readonly supportsQueue = true;
   readonly supportsSteering = true;
   private steering = new Map<string, string>();
+  private steeringOpen = false;
   readonly supportsCwdChange = true;
   private core: AgentShellCore | null = null;
   private requests?: RequestMonitor;
@@ -432,6 +433,9 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
       const access = this.opts.conversationAccess;
+      if (access.supplement) core.handlers.define("ashub:collaboration:supplement", (p: { id: string; requestKey: string; message?: string; signal?: AbortSignal }) => {
+        this.assertOpen(); return access.supplement!(p.id, p.requestKey, p.message, p.signal);
+      });
       core.handlers.define("ashub:collaboration:wait", (p: { targets: import("../collaboration.js").TaskWatch[]; waitMs?: number; signal?: AbortSignal }) => {
         this.assertOpen(); return access.waitTasks(p.targets, p.waitMs, p.signal);
       });
@@ -1951,6 +1955,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     // must reject so the UI doesn't spin forever (e.g. missing API key).
     onAny("agent:register-backend", () => { this.backendRegistered = true; });
 
+    onAny("agent:processing-start", () => { this.steeringOpen = true; });
+    for (const name of ["agent:processing-done", "agent:error", "agent:cancelled"]) {
+      onAny(name, () => { this.steeringOpen = false; });
+    }
     onAny("agent:steer-consumed", (payload) => {
       const {id} = payload as {id?: string};
       if (!id || !this.steering.has(id)) return;
@@ -2089,6 +2097,14 @@ export class AshBridge extends EventEmitter implements Bridge {
     return !!this.pendingTurn || this.queryQueue.length > 0;
   }
 
+  steer(text: string, queueId: string): boolean {
+    if (this.closed || !this.steeringOpen || !this.pendingTurn || this.preparingTurn || !this.core) return false;
+    this.steering.set(queueId, text);
+    const {query, images} = this.parseSubmission(text);
+    this.core.bus.emit("agent:steer", {text: query, images, id: queueId});
+    return true;
+  }
+
   async submit(text: string, queueId?: string, delivery: "queue" | "steer" = "queue"): Promise<{ stopReason: string }> {
     this.assertOpen();
     if (delivery === "steer" && queueId && this.pendingTurn && !this.preparingTurn && this.core) {
@@ -2223,6 +2239,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   cancel(): void {
+    this.steeringOpen = false;
     this.explicitApprovals?.cancel();
     // A preparing turn has not reached the kernel, which cannot cancel it.
     // Settle it now; the asynchronous preparation checks its identity before

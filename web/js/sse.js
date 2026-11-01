@@ -1,3 +1,4 @@
+import "./conversation-presentation.js";
 import { BALANCE_PROVIDERS, createProviderBalanceUI } from './extensions/provider-balance.js';
 import { appendApprovalPreview } from "./approval-preview.js";
 import { findQueued, attachQueueEdit, updateQueuedBox } from "./queued-messages.js";
@@ -522,6 +523,7 @@ export const handlers = {
   },
 
   "agent:processing-start"() {
+    this.state.suppressCompletionNotification = false;
     this.state.lastUsage = null;
     hideUsage(this);
     setBusy(this, true);
@@ -593,12 +595,15 @@ export const handlers = {
       if (p && BALANCE_PROVIDERS.has(p)) refreshProviderBalance(p);
     }
     if (!this.state.replaying) refreshGitBranch(this);
-    if (!this.state.replaying) {
+    // processing-done also closes canceled/failed turns. Only normal completion
+    // should announce a ready reply; the next explicit start resets this flag.
+    if (!this.state.replaying && !this.state.suppressCompletionNotification) {
       sendSystemNotification(t("notify.done.title"), sessionLabel(this));
     }
   },
 
   "agent:cancelled"() {
+    this.state.suppressCompletionNotification = true;
     cancelReply(this);
     hideThinking(this);
     finalizeThinking(this);
@@ -613,6 +618,7 @@ export const handlers = {
   },
 
   "agent:error"(p) {
+    this.state.suppressCompletionNotification = true;
     closeReply(this);
     hideThinking(this);
     finalizeThinking(this);
@@ -821,7 +827,7 @@ export const handlers = {
         const items = this._pendingSwarmCalls.get(id);
         this._pendingSwarmCalls.delete(id);
         const text = typeof p?.rawOutput === "string" ? p.rawOutput : "";
-        const launchFailed = p?.exitCode != null && p.exitCode !== 0;
+        const launchFailed = globalThis.AsHubConversationPresentation.diagnosticState(p) === "failed";
         const { failed, degraded } = readSwarmOutcome(text, items);
         if (text.trim() || launchFailed) {
           const block = document.createElement("div");
@@ -880,7 +886,7 @@ export const handlers = {
         const rendered = renderToolBody(lines);
         if (rendered) result.appendChild(rendered);
       }
-      const failed = p?.exitCode != null && p.exitCode !== 0;
+      const failed = globalThis.AsHubConversationPresentation.diagnosticState(p) === "failed";
       // No linked lifecycle means a rebuilt historical call or a launch
       // rejected before subagent:started. Its tool result is terminal.
       // A linked background launch can finish its tool while still running.
@@ -923,11 +929,11 @@ export const handlers = {
     const root = saBlock || ((this.state.replaying && this._replayFrag) || this.streamEl);
     const row = id ? root?.querySelector(`.tool-row[data-call-id="${CSS.escape(id)}"]`) : null;
     if (!row) return;
-    const ok = p?.exitCode === 0 || p?.exitCode == null;
+    const ok = globalThis.AsHubConversationPresentation.diagnosticState(p) !== "failed";
     row.classList.add(ok ? "ok" : "err");
     refreshToolSummaries(row);
     const summary = p?.resultDisplay?.summary ?? "";
-    const mark = ok ? "✓" : `✗ exit ${p?.exitCode}`;
+    const mark = ok ? "✓" : Number.isFinite(p?.exitCode) && p.exitCode !== 0 ? `✗ exit ${p.exitCode}` : "✗";
     const tail = document.createElement("span");
     tail.className = "tool-mark";
     tail.textContent = (summary ? ` ${summary} ` : "  ") + mark;
@@ -1261,10 +1267,11 @@ export const handlers = {
     const spinner = head?.querySelector(".subagent-spinner");
     if (spinner) spinner.remove();
     const icon = head?.querySelector(".subagent-icon");
-    const err = typeof p?.error === "string" && p.error ? p.error : null;
+    const outcome = globalThis.AsHubConversationPresentation.diagnosticState(p);
+    const err = outcome === "failed" ? (typeof p?.error === "string" && p.error ? p.error : t("subagent.failed")) : null;
     // Ran to a limit instead of finishing: render a warning "partial" state
     // distinct from the success ✓ and the failure ✗.
-    const degraded = !err && (p?.degraded === "budget" || p?.degraded === "iterations") ? p.degraded : null;
+    const degraded = outcome === "partial" ? p.degraded : null;
     if (icon) {
       icon.textContent = err ? "✗" : degraded ? "◐" : "✓";
       if (err) icon.style.color = "var(--error)";

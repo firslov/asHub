@@ -1,3 +1,8 @@
+import { replayEventName } from './history/replay-frame.js';
+import { ReplayWriter } from './history/replay-writer.js';
+import { getSseWriter } from './transport/sse-writer.js';
+import { ExtensionMessages } from './services/extension-messages.js';
+import { PluginInteractions } from './extensions/interactions.js';
 import { SessionLifecycle } from "./services/session-lifecycle.js";
 import type { RestoredSession } from "./services/session-lifecycle-types.js";
 import { readBodyWithSignal } from "./transport/body-reader.js";
@@ -86,12 +91,7 @@ function replayFrameId(frame: string): number | null {
 }
 
 function parseFrameName(frame: string): string {
-  const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
-  if (!dataLine) return "";
-  try {
-    const inner = JSON.parse(dataLine.slice("data: ".length));
-    return (inner?.meta?.name ?? "") as string;
-  } catch { return ""; }
+  return replayEventName(frame);
 }
 // NOTE: agent:thinking-chunk is deliberately NOT replayed/persisted — it is
 // by far the largest frame source (one frame per reasoning delta) and would
@@ -343,6 +343,7 @@ const _replayOwners = new Map<string, Session>();
 const _deletedIds = new Set<string>();
 const _writeBufs = new Map<string, { frames: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 const _writeLocks = new Map<string, Promise<void>>();
+const _replayWriters = new Map<string, ReplayWriter>();
 /** In-flight session-file deletions (closeSession) — awaited on shutdown
  *  so a close-then-quit can't leave orphaned files that resurrect the
  *  session on next launch.  Keyed by session id; entries self-remove in
@@ -369,6 +370,7 @@ function releaseClosedReplay(session: Session): void {
   if (!_writeLocks.has(session.id) && !_writeBufs.get(session.id)?.frames.length && _replayOwners.get(session.id) === session) {
     _replayOwners.delete(session.id);
     _writeBufs.delete(session.id);
+    _replayWriters.delete(session.id);
   }
 }
 
@@ -475,39 +477,34 @@ function persistReplayFile(sessionId: string, frames: string[]): Promise<void> {
   const buf = _writeBufs.get(sessionId);
   if (buf?.timer) { clearTimeout(buf.timer); buf.timer = null; }
   if (buf) buf.frames.length = 0;
-  // Capture both at enqueue time. A later tree append must never be marked
-  // durable by an earlier replay snapshot.
-  const contents = frames.filter(f => (REPLAY_NAMES.has(parseFrameName(f)) || parseFrameName(f) === "hub:branch-switched")).join("");
+  // Capture frame references and the matching leaf together. The writer keeps
+  // one active and one latest pending snapshot, appending only unchanged-prefix
+  // growth. Edits/branch switches retain atomic full replacement.
+  const savedFrames = frames.filter(f => { const name = parseFrameName(f); return REPLAY_NAMES.has(name) || name === "hub:branch-switched"; });
   const leaf = owner?.store?.getActiveLeaf() ?? null;
-  const file = path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`);
-  const checkpoint = path.join(SESSIONS_DIR, `${sessionId}.replay-state.json`);
-  const prev = (_writeLocks.get(sessionId) ?? Promise.resolve()).catch(() => {});
-  const p = prev.then(async () => {
-    if (owner?._deletingFiles || _deletedIds.has(sessionId)) return;
-    try {
-      await ensureSessionsDir();
-      await fs.promises.writeFile(file + ".tmp", contents);
-      await fs.promises.rename(file + ".tmp", file);
-      await fs.promises.writeFile(checkpoint + ".tmp", JSON.stringify({ leaf }));
-      await fs.promises.rename(checkpoint + ".tmp", checkpoint);
-    } catch (err) {
-      console.error(`[hub] replay save failed for ${sessionId}:`, err);
-      // Keep the complete replay in memory; retry an atomic replacement, not
-      // an append that may already have partially succeeded.
-      if (owner && !owner._deletingFiles) {
-        let retry = _writeBufs.get(sessionId);
-        if (!retry) { retry = { frames: [], timer: null }; _writeBufs.set(sessionId, retry); }
-        retry.frames.push("dirty");
-        if (!owner._closing && !owner._closed && !retry.timer) retry.timer = setTimeout(() => _flushBuf(sessionId), 5000);
-        pushFrame(owner, "ui:error", sseFrame({ source: sessionId, ts: Date.now(), name: "ui:error" }, { message: "History could not be saved. Keep this session open while storage is unavailable; saving will be retried." }), { transient: true });
-      }
-    } finally {
-      if (_writeLocks.get(sessionId) === p) {
-        _writeLocks.delete(sessionId);
-        if (owner?._closed && !_writeBufs.get(sessionId)?.frames.length && _replayOwners.get(sessionId) === owner) {
-          _replayOwners.delete(sessionId);
-          _writeBufs.delete(sessionId);
-        }
+  let writer = _replayWriters.get(sessionId);
+  if (!writer) {
+    writer = new ReplayWriter(path.join(SESSIONS_DIR, `${sessionId}.replay.jsonl`),
+      path.join(SESSIONS_DIR, `${sessionId}.replay-state.json`), undefined,
+      () => !_deletedIds.has(sessionId) && !owner?._deletingFiles, owner?.backendId !== 'acp');
+    _replayWriters.set(sessionId, writer);
+  }
+  const p = writer.save(savedFrames, leaf).catch(err => {
+    console.error(`[hub] replay save failed for ${sessionId}:`, err);
+    if (owner && !owner._deletingFiles) {
+      let retry = _writeBufs.get(sessionId);
+      if (!retry) { retry = { frames: [], timer: null }; _writeBufs.set(sessionId, retry); }
+      retry.frames.push("dirty");
+      if (!owner._closing && !owner._closed && !retry.timer) retry.timer = setTimeout(() => _flushBuf(sessionId), 5000);
+      pushFrame(owner, "ui:error", sseFrame({ source: sessionId, ts: Date.now(), name: "ui:error" }, { message: "History could not be saved. Keep this session open while storage is unavailable; saving will be retried." }), { transient: true });
+    }
+  }).finally(() => {
+    if (_writeLocks.get(sessionId) === p) {
+      _writeLocks.delete(sessionId);
+      if (owner?._closed && !_writeBufs.get(sessionId)?.frames.length && _replayOwners.get(sessionId) === owner) {
+        _replayOwners.delete(sessionId);
+        _writeBufs.delete(sessionId);
+        _replayWriters.delete(sessionId);
       }
     }
   });
@@ -521,6 +518,7 @@ async function unlinkIfExists(file: string): Promise<void> {
 }
 
 async function deleteSessionFiles(id: string): Promise<void> {
+  _replayWriters.delete(id);
   const files = [".meta.json.tmp", ".meta.json", ".replay.jsonl", ".replay.jsonl.tmp", ".replay-state.json", ".replay-state.json.tmp", ".messages.json", ".jsonl", ".jsonl.leaf"];
   const results = await Promise.allSettled(files.map(ext => unlinkIfExists(path.join(SESSIONS_DIR, `${id}${ext}`))));
   try {
@@ -795,8 +793,30 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     const features = extensionSnapshot();
     return { version: 1, ...hostEvents.version(), sessions: sessionService.list(projects), projects: projects.list(), extensions: features };
   };
+  const extensionMessages = new ExtensionMessages(path.join(SESSIONS_DIR, 'extension-messages.json'), {
+    target: id => {
+      const session = sessions.get(id);
+      return session && session.kind === 'agent' && !session._closed && !session._closing
+        ? { title: session.title, binding: JSON.stringify([session.id, session.cwd]) } : undefined;
+    },
+    busy: id => { const s = sessions.get(id); return !s || sessionBusy(s) || !!s._hostOperation; },
+    async dispatch(d, before, settled) {
+      const s = sessions.get(d.targetId);
+      if (!s) throw Error('Conversation unavailable');
+      await s._ensureBridge?.();
+      const query = `[插件任务 / Plugin task: ${d.label}]\nDelivery: ${d.id}\nSubmitted: ${new Date(d.createdAt).toISOString()}\nThis message was submitted under the user's saved authorization; tool permissions are unchanged.\n\n${d.message}`;
+      await submitQuery(s, query, undefined, undefined, () => {
+        if (sessions.get(d.targetId) !== s) throw Error('Conversation changed');
+        before();
+      }, undefined, 'queue', settled);
+    },
+  });
+  const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action));
   extensions = new ApplicationExtensionRegistry({ settingsFile: settingsPath(), capabilities: HOST_PLUGIN_CAPABILITIES,
-    discover: () => installedApplicationDefinitions(settingsPath(), { services: {
+    discover: () => installedApplicationDefinitions(settingsPath(), { bindServices: (id, context) => ({
+      dataDirectory: path.join(SESSIONS_DIR, 'plugin-data', encodeURIComponent(id)),
+      messages: extensionMessages.bind(id, context.signal), interactions: interactions.bind(id, context.signal),
+    }), services: {
       host: Object.freeze({ capabilities: () => JSON.parse(JSON.stringify(HOST_CAPABILITIES)), snapshot: () => JSON.parse(JSON.stringify(hostSnapshot())),
         subscribe: (listener: Parameters<HostEvents['subscribe']>[0]) => hostEvents.subscribe(listener) }),
     } }), definitions: [
@@ -826,6 +846,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       extensionSnapshot();
       return;
     }
+    if (await interactions.handle(req, res, async request => (await readLimitedBody(request, 65536)).toString('utf8'))) return;
     if (handleHostQuery(req, res, { events: hostEvents, signal: lifecycle.signal,
       snapshot: hostSnapshot })) return;
     if (await handleFeatureRequest(req, res, featureServices, extensions)) return;
@@ -1022,6 +1043,11 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
           res.writeHead(409); res.end("Message changed or is no longer queued"); return;
         }
         if (input.action === "edit" && !input.query.trim() && !item.images?.length) { res.writeHead(400); res.end("Empty message"); return; }
+        // A separate collaboration task cannot become part of another task's
+        // turn: its own delivery/result receipt would lose its execution boundary.
+        if (input.action === "promote" && session.collaboration?.queuedTask(session.id, item.id, item.query)) {
+          res.writeHead(409); res.end("Independent collaboration tasks must remain queued; use a task supplement for corrections"); return;
+        }
         // No await between checking the revision and applying the bridge mutation.
         const delivery = session.bridge.updateQueued?.(item.id, input.action === "edit" ? input.query : undefined, input.action === "promote");
         if (!delivery) { res.writeHead(409); res.end("Message is being processed or cannot be updated"); return; }
@@ -1135,6 +1161,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     server.listen(opts.port, opts.host, () => {
       const address = server.address();
       if (address && typeof address !== "string") mobile.start(address.port);
+      extensionMessages.start();
       void extensions.start().then(extensionSnapshot, error => {
         extensionSnapshot(); console.error("[hub] extension startup failed:", error);
       });
@@ -1159,7 +1186,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     shutdown: () => {
       stopping = true;
       lifecycle.abort();
-      return shutdownTask ??= Promise.allSettled([restoring, extensions.close(), pluginInstaller.close(), featureServices.skills.close(), featureServices.balance.close()])
+      return shutdownTask ??= Promise.allSettled([Promise.resolve().then(() => extensionMessages.close()), restoring, extensions.close(), pluginInstaller.close(), featureServices.skills.close(), featureServices.balance.close()])
         .then(async results => {
           // A broken optional extension must never skip durable core shutdown.
           await shutdownHub(server, sessions);
@@ -1563,7 +1590,7 @@ const sessionLifecycle = new SessionLifecycle({
     saveMetadata: session => saveSessionMeta(session),
     deleteFiles: id => deleteSessionFiles(id),
     persistReplay: (id, frames) => persistReplayFile(id, frames),
-    claimReplay: session => { _replayOwners.set(session.id, session); },
+    claimReplay: session => { _replayOwners.set(session.id, session); _replayWriters.delete(session.id); },
     async settleFailedInitialization(id) {
       const timer = _metaTimers.get(id);
       if (timer) clearTimeout(timer);
@@ -1770,7 +1797,7 @@ function routeEvent(session: Session, e: BusEvent): void {
     const frame = sseFrame(meta, e.payload);
     for (const r of session.sseClients) {
       if (r.writableEnded) continue;
-      try { r.write(frame); } catch {}
+      getSseWriter(r).write(frame);
     }
     return;
   }
@@ -2050,7 +2077,7 @@ function pushFrame(session: Session, name: string, frame: string, opts?: { trans
   if (m) session.lastFrameSeq = Math.max(session.lastFrameSeq, Number(m[1]));
   for (const r of session.sseClients) {
     if (r.writableEnded) continue;
-    try { r.write(frame); } catch {}
+    getSseWriter(r).write(frame);
   }
   if (["session:title", "shell:cwd-change", "agent:info", "agent:processing-start", "agent:processing-done", "agent:cancelled", "agent:error", "agent:queued", "agent:queued-submit", "agent:queued-done", "permission:request", "permission:resolved"].includes(name)) session._onHostChange?.(name);
 }
@@ -2205,7 +2232,7 @@ async function archiveSessionById(sessions: Map<string, Session>, id: string): P
     if (buf?.timer) { clearTimeout(buf.timer); buf.timer = null; }
     _writeBufs.delete(id);
     if (lock) { try { await lock; } catch {} }
-    if (!_writeBufs.get(id)?.frames.length) _replayOwners.delete(id);
+    if (!_writeBufs.get(id)?.frames.length) { _replayOwners.delete(id); _replayWriters.delete(id); }
   }
   if (!session) await saveArchivedSession(id, Date.now());
 }
@@ -2573,7 +2600,8 @@ async function openSseMulti(
   // slow `await session._ensureBridge()`, during which the client may
   // disconnect.
   res.on("error", () => {});
-  res.write(`: connected ${subs.length}\n\n`);
+  const writer = getSseWriter(res);
+  writer.write(`: connected ${subs.length}\n\n`);
 
   let disconnected = false;
   const attached = new Set<Session>();
@@ -2589,15 +2617,15 @@ async function openSseMulti(
     const session = sessions.get(id);
     if (!session) {
       const errFrame = `id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: "Session not found." } })}\n\n`;
-      try { res.write(errFrame); } catch {}
+      try { writer.write(errFrame); } catch {}
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
-      try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch {}
+      try { writer.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch {}
       return;
     }
     // Send keepalive before potentially-slow _ensureBridge so the
     // client's 500ms safety timer is reset and doesn't fire prematurely.
     if (tail > 0) {
-      try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "hub:replay-starting" } })}\n\n`); } catch { return; }
+      try { writer.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "hub:replay-starting" } })}\n\n`); } catch { return; }
     }
     // Lazily create bridge + restore session data if needed.
     try {
@@ -2606,10 +2634,10 @@ async function openSseMulti(
     } catch (err) {
       console.error(`[hub] _ensureBridge failed for ${id}:`, err);
       const errFrame = `id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: err instanceof Error ? err.message : "Failed to restore session data." } })}\n\n`;
-      try { res.write(errFrame); } catch {}
+      try { writer.write(errFrame); } catch {}
       // Keep persisted history readable even when the remote backend cannot resume.
     }
-    if (disconnected || res.writableEnded || session._closed || session._closing) return;
+    if (disconnected || writer.closed || res.writableEnded || session._closed || session._closing) return;
     if (tail > 0) {
       if (session.hasUnread) { session.hasUnread = false; session._onHostChange?.("read"); }
       // Persist any text emitted since the last flush (an in-flight turn's
@@ -2619,20 +2647,23 @@ async function openSseMulti(
       // segment frame (hasReply/sawLiveSegment guard in the frontend).
       flushSegment(session);
       const start = mobile ? mobileReplayStart(session.replay) : tail === Infinity ? 0 : Math.max(0, session.replay.length - tail);
-      if (mobile) res.write(sseFrame({ source: id, ts: Date.now(), name: "hub:history-window" }, { recent: true, hasEarlier: start > 0 }));
-      for (let i = start; i < session.replay.length; i++) {
-        try { res.write(permissionReplayFrame(session, mobile ? mobileReplayFrame(session.replay[i]!) : session.replay[i]!)); } catch { return; }
-      }
+      if (mobile) writer.write(sseFrame({ source: id, ts: Date.now(), name: "hub:history-window" }, { recent: true, hasEarlier: start > 0 }));
+      // Capture references before yielding; live frames are admitted after this
+      // batch and must never also appear inside the historical source.
+      const replay = session.replay.slice(start);
+      void writer.replay((function* () {
+        for (const frame of replay) yield permissionReplayFrame(session, mobile ? mobileReplayFrame(frame) : frame);
+      })());
       if (session.lastAgentInfo) {
         const meta = { source: id, ts: Date.now(), id: `hub:${id}:reemit:agent:info`, name: "agent:info" };
-        try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta, payload: session.lastAgentInfo })}\n\n`); } catch { return; }
+        try { writer.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta, payload: session.lastAgentInfo })}\n\n`); } catch { return; }
       }
       for (const [name, payload] of [["session:title", { title: session.title }], ["shell:cwd-change", { cwd: session.cwd }], ["hub:capabilities", { readOnlyContext: !session.bridge || !!session.bridge.readOnlyContext, supportsCwdChange: !!session.bridge?.supportsCwdChange }]] as const) {
-        try { res.write(sseFrame({ source: id, ts: Date.now(), name }, payload)); } catch { return; }
+        try { writer.write(sseFrame({ source: id, ts: Date.now(), name }, payload)); } catch { return; }
       }
-      try { res.write(sseFrame({ source: id, ts: Date.now(), name: "agent:request-status" }, session.lastRequestStatus ?? { phase: "clear" })); } catch { return; }
+      try { writer.write(sseFrame({ source: id, ts: Date.now(), name: "agent:request-status" }, session.lastRequestStatus ?? { phase: "clear" })); } catch { return; }
       const doneMeta = { source: id, ts: Date.now(), name: "hub:replay-done" };
-      try { res.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
+      try { writer.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: doneMeta })}\n\n`); } catch { return; }
     } else if (since > 0) {
       // Only clear hasUnread once this connection has actually received the
       // missed frames — clearing up-front would lose the unread badge if
@@ -2659,27 +2690,21 @@ async function openSseMulti(
           start = lo;
         }
       }
-      if (start !== null) {
-        for (let i = start; i < replay.length; i++) {
-          try { res.write(replay[i]!); sentAny = true; } catch { return; }
-        }
-      } else {
-        for (const line of replay) {
-          const m = line.match(frameIdRe);
-          if (m && Number(m[1]) > since) {
-            try { res.write(line); sentAny = true; } catch { return; }
-          }
-        }
-      }
+      const missed = start !== null ? replay.slice(start) : replay.filter(line => {
+        const m = line.match(frameIdRe); return !!m && Number(m[1]) > since;
+      });
+      sentAny = missed.length > 0;
+      void writer.replay(missed);
       if (sentAny && session.hasUnread) { session.hasUnread = false; session._onHostChange?.("read"); }
-      try { res.write(sseFrame({ source: id, ts: Date.now(), name: "agent:request-status" }, session.lastRequestStatus ?? { phase: "clear" })); } catch { return; }
+      try { writer.write(sseFrame({ source: id, ts: Date.now(), name: "agent:request-status" }, session.lastRequestStatus ?? { phase: "clear" })); } catch { return; }
     }
-    if (disconnected || res.writableEnded || session._closed || session._closing) return;
+    if (disconnected || writer.closed || res.writableEnded || session._closed || session._closing) return;
     session.sseClients.add(res);
     attached.add(session);
   }));
-
-
+  // Attach live subscriptions before waiting: events emitted during a slow
+  // replay stay behind the captured history and its terminal marker.
+  await writer.flush();
 }
 
 async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, session: Session): Promise<void> {
@@ -2788,6 +2813,7 @@ async function submitQuery(session: Session, query: string,
   beforeSubmit?: () => void,
   taskId?: string,
   delivery: "queue" | "steer" = "queue",
+  settled?: (state: "completed" | "failed" | "cancelled", error?: string) => void,
 ) {
   const meta = (name: string) => ({
     source: session.id,
@@ -2811,6 +2837,7 @@ async function submitQuery(session: Session, query: string,
 
     const queued = !!session.bridge.isProcessing?.();
     const queueId = queued ? randomUUID() : undefined;
+    if (taskId && queueId) session.collaboration?.bindQueue(taskId, queueId);
     if (queued) {
       (session.queuedQueries ??= []).push(query);
       (session.queuedItems ??= new Map()).set(queueId!, { id: queueId!, query, ...(imageRefs?.length ? { images: imageRefs } : {}) });
@@ -2866,7 +2893,7 @@ async function submitQuery(session: Session, query: string,
     Promise.race([session.bridge.submit(submitPayload, queueId, delivery), timeout])
       .then((result) => {
         cleanup();
-        if (session._closed || session._closing) return;
+        if (session._closed || session._closing) { settled?.("cancelled", "Conversation closed"); return; }
         if (result.stopReason === "queued" || result.stopReason === "steering") {
           const item = queueId ? session.queuedItems?.get(queueId) : undefined;
           if (!item) return; // Already consumed/withdrawn: never resurrect pending UI.
@@ -2874,6 +2901,7 @@ async function submitQuery(session: Session, query: string,
           pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query, queueId, delivery: item.delivery, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
           return;
         }
+        settled?.(session._cancelled ? "cancelled" : "completed");
         if (taskId) session.collaboration?.finish(taskId, session._cancelled ? "cancelled" : "completed");
         flushSegment(session);
         session.isProcessing = false;
@@ -2902,6 +2930,7 @@ async function submitQuery(session: Session, query: string,
         }
       })
       .catch((err) => {
+        settled?.("failed", String(err));
         if (taskId) session.collaboration?.finish(taskId, "failed", String(err));
         cleanup();
         if (session._closed || session._closing) return;
@@ -3728,7 +3757,7 @@ async function rebuildReplay(
   session._tagPending = [];
   for (const r of session.sseClients) {
     if (r.writableEnded) continue;
-    for (const f of frames) { try { r.write(f); } catch {} }
+    void getSseWriter(r).replay(frames.slice());
   }
   // Terminal marker so clients can mount the rebuilt batch atomically.
   // Mirrors openSseMulti's replay-done: broadcast-only, never buffered or
@@ -4332,7 +4361,12 @@ async function togglePin(req: http.IncomingMessage, res: http.ServerResponse, se
 
 /** Project membership is checked on every call, including after lazy restore. */
 function conversationAccess(sourceId: string, sessions: Map<string, Session>, projects: ProjectStore, tasks?: CollaborationTasks): ConversationAccess {
-  return createConversationAccess(sourceId, { sessions, projects, tasks, tasksDirectory: path.join(SESSIONS_DIR, "collaboration"), withContextLock, submitQuery });
+  return createConversationAccess(sourceId, { sessions, projects, tasks, tasksDirectory: path.join(SESSIONS_DIR, "collaboration"), withContextLock, submitQuery,
+    publishQueue(session, name, payload) {
+      pushFrame(session, name, sseFrame({source: session.id, ts: Date.now(), name}, payload));
+      session._onHostChange?.("queue-updated");
+    },
+  });
 }
 
 /** Bind source identity at composition; extensions cannot choose a different actor. */

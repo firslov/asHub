@@ -222,7 +222,7 @@
 #config-overlay .config-label { color: var(--text-dim); font-weight: 500; }
 #config-overlay .config-hint { line-height: 1.65; overflow-wrap: anywhere; }
 #config-overlay .config-select-chevron { right: 12px; }
-#config-overlay .config-toggle-wrap { padding: 12px; border: 1px solid var(--border-light); border-radius: 10px; background: var(--bg2); }
+#config-overlay .config-toggle-wrap { padding: 10px 0; }
 #config-overlay .config-toggle { position: relative; width: 100%; gap: 12px; }
 #config-overlay .config-toggle-label { line-height: 1.5; }
 /* Keep the native switch reachable by keyboard while using its custom visual. */

@@ -6,7 +6,7 @@ The public site at https://ashub.aihao.world uses the same visual identity as th
 
 - `index.html`: static preview, with working GitHub Releases download fallbacks
 - `download.html`: the same page, used by the production mirror renderer
-- `assets/site-20261102.css` / `assets/site-20261008.js`: layout and progressive enhancements
+- `assets/site-20261102-plugins.css` / `assets/site-20261008.js`: layout and progressive enhancements
 - `assets/showcase-workspace-0211-{en,zh}.jpg`: v0.21.1 main UI in English and Chinese
 - `assets/showcase-{dark,files}-0211.jpg`: current detail captures with isolated demo data
 - `assets/brand-20261102.svg`: the application icon from `web/assets/brand/icon.svg`
@@ -60,3 +60,5 @@ The Ubuntu host serves the page through Nginx → the `mirror` service. The serv
 Back up the template and affected assets first. Upload new, versioned assets before atomically replacing `download.html`. The service reads the template per request, so no service restart or Nginx change is needed. Keep release injection, updater routes and download routing intact.
 
 After deployment, verify the live page, all four platform links, loaded images and fonts, keyboard tabs, clipboard success/failure, and mobile overflow. Rollback consists of atomically restoring the backed-up template; old assets should remain available for cached pages.
+
+The dedicated `#plugins` section introduces optional project management, scheduled tasks and macOS desktop control, with ZIP installation steps and links to the host API. Examples are descriptions, not claims of preinstalled plugins or unattended tool permissions.

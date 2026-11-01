@@ -3,13 +3,19 @@ const assert = require('node:assert/strict');
 const {env, Bridge, fs, path, req, Res} = require('./harness.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function setup(t) {
-  const e = env(); t.after(() => fs.rmSync(e.dir, {recursive:true, force:true}));
+  const e = env();
   const {CollaborationTasks} = e.load('src/collaboration.ts');
   const tasks = new CollaborationTasks(path.join(e.dir, 'tasks'));
   const {ProjectStore} = e.load('src/projects.ts');
   const projects = new ProjectStore(path.join(e.dir,'projects.json'));
-  const {createSession,conversationAccess,routeEvent,listSessions,closeSession} = e.load('src/hub.ts','export {createSession,conversationAccess,routeEvent,listSessions,closeSession};');
+  const {createSession,conversationAccess,routeEvent,listSessions,closeSession,shutdownHub} = e.load('src/hub.ts','export {createSession,conversationAccess,routeEvent,listSessions,closeSession};');
   const sessions = new Map();
+  t.after(async () => {
+    // Replay and metadata writes can outlive a tool receipt. Drain the host
+    // before deleting its directory, just as application shutdown does.
+    await shutdownHub(undefined, sessions);
+    fs.rmSync(e.dir, {recursive:true, force:true});
+  });
   const opts = {collaboration:tasks, makeBridge:o=>new Bridge(o), conversationAccess:id=>conversationAccess(id,sessions,projects,tasks)};
   const a = await createSession(sessions,opts,e.dir), b = await createSession(sessions,opts,e.dir);
   const project = projects.update({action:'create',cwd:e.dir,name:'Team',add:[a.id,b.id]},()=>true)[0];

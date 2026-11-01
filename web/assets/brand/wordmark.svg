@@ -1,9 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="34" viewBox="0 0 128 34" fill="none">
-<g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M20 13V29M20 21a8 8 0 1 0-16 0 8 8 0 0 0 16 0"/>
-  <path d="M42 14.5C39 12.5 30 11.7 29 17C28 22 43 19.5 43 25C43 30.5 32 30.5 28.5 27.5"/>
-  <path d="M53 5V29M72 5V29M53 17H72"/>
-  <path d="M82 13V22C82 31.5 97 31.5 97 22V13M97 22V29"/>
-  <path d="M108 5V29M108 21a8 8 0 1 1 16 0 8 8 0 0 1-16 0"/>
-</g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -6 104 52" fill="none">
+  <defs><linearGradient id="brand-lettering" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--text, #343630)"/><stop offset="1" stop-color="var(--text-dim, #52564d)"/></linearGradient></defs>
+  <text x="2" y="31" fill="url(#brand-lettering)" font-family="'Source Serif 4', Georgia, serif" font-size="34" letter-spacing="-.8" textLength="100" lengthAdjust="spacingAndGlyphs"><tspan fill="var(--accent, #755c37)" font-size="31" font-style="italic" font-weight="400">as</tspan><tspan dx="2" font-weight="600">Hub</tspan></text>
+  <path d="M3 36H17L25 32" fill="none" stroke="var(--accent, #755c37)" stroke-width=".85" stroke-linecap="round" opacity=".6"/>
 </svg>

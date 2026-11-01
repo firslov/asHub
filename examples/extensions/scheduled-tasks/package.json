@@ -1,0 +1,20 @@
+{
+  "name": "ashub-scheduled-tasks",
+  "version": "0.1.1",
+  "type": "module",
+  "private": true,
+  "description": "Scheduled conversation tasks for asHub",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "files": [
+    "app.mjs",
+    "schedule.mjs",
+    "ashub-plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.mjs"
+  }
+}

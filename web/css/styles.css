@@ -10,21 +10,21 @@
 
 :root {
   --ui-chrome-height: var(--ui-title-bar-height, 52px);
-  /* Gruvbox Soft Light — warm parchment with muted earth-tone accents.
-     Adapted from https://github.com/morhetz/gruvbox; softened for the app UI. */
+  /* Ivory — warm stone, ink and patinated gold.
+     Gold is structural emphasis; semantic colors remain distinct. */
   color-scheme: light;
-  --bg: #f3eddf;
-  --bg2: #eae2d3;
-  --bg3: #e4dacb;
-  --bg4: #d3c6b3;
-  --bg-elevated: #f8f2e7;
-  --accent: #85552f;
-  --accent-rgb: 133, 85, 47;
-  --accent-dim: #80522e;
-  --accent-light: #98673d;
-  --accent-hover: #80522e;
+  --bg: #f4f2ec;
+  --bg2: #e9e6df;
+  --bg3: #e1ddd3;
+  --bg4: #d2cdc1;
+  --bg-elevated: #faf9f5;
+  --accent: #755c37;
+  --accent-rgb: 117, 92, 55;
+  --accent-dim: #6e5632;
+  --accent-light: #866c43;
+  --accent-hover: #6e5632;
   --accent-glow: rgba(var(--accent-rgb), 0.065);
-  --accent-soft: rgba(var(--accent-rgb), 0.11);
+  --accent-soft: rgba(var(--accent-rgb), 0.085);
   --accent-border: rgba(var(--accent-rgb), 0.30);
   --cyan: #466369;
   --cyan-rgb: 70, 99, 105;
@@ -32,16 +32,16 @@
   --cyan-light: #526f75;
   --cyan-glow: rgba(var(--cyan-rgb), 0.08);
   --cyan-soft: rgba(var(--cyan-rgb), 0.14);
-  --green: #59653b;
-  --green-rgb: 89, 101, 59;
-  --green-dim: #536037;
-  --green-light: #657244;
-  --red: #904c40;
-  --red-rgb: 144, 76, 64;
-  --red-dim: #85463c;
-  --red-light: #9c574a;
-  --purple: #74576c;
-  --purple-rgb: 116, 87, 108;
+  --green: #526447;
+  --green-rgb: 82, 100, 71;
+  --green-dim: #495b3e;
+  --green-light: #5b6c50;
+  --red: #8e4e46;
+  --red-rgb: 142, 78, 70;
+  --red-dim: #884a43;
+  --red-light: #9c574e;
+  --purple: #705a72;
+  --purple-rgb: 112, 90, 114;
   --amber: #775c2d;
   --aqua: #456755;
 
@@ -52,8 +52,8 @@
   --warning-rgb: 119, 92, 45;
   --error:          var(--red);
   --info:           var(--cyan);
-  --on-accent: #f8f2e7;
-  --on-error: #f8f2e7;
+  --on-accent: #faf8f2;
+  --on-error: #faf8f2;
 
   --success-bg:     color-mix(in srgb, var(--success) 8%, transparent);
   --success-border: color-mix(in srgb, var(--success) 30%, transparent);
@@ -73,32 +73,35 @@
   /* Shadow system — layered for depth */
   --shadow-panel-sm:  0 2px 8px rgba(0, 0, 0, 0.06);
   --shadow-panel-md:  0 4px 18px rgba(0, 0, 0, 0.08);
-  --shadow-panel-lg:  0 12px 40px rgba(0, 0, 0, 0.10);
+  --shadow-panel-lg:  0 2px 6px rgba(40, 37, 30, 0.04), 0 16px 48px rgba(40, 37, 30, 0.10);
   --shadow-elevated:  0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 8px rgba(0, 0, 0, 0.06);
 
   /* Text hierarchy, from primary content to quiet metadata. */
-  --text: #494239;
-  --text-dim: #5e554a;
-  --text-mid: #695e52;
-  --text-faint: #695e52;
-  --text-muted: #695e52;
-  --fg: #494239;
+  --text: #343630;
+  --text-dim: #52564d;
+  --text-mid: #5d6257;
+  --text-faint: #5f6358;
+  --text-muted: #5f6358;
+  --fg: #343630;
 
   /* Borders and surfaces */
-  --border: rgba(73, 66, 57, 0.12);
-  --border-light: rgba(73, 66, 57, 0.075);
-  --border-mid: rgba(73, 66, 57, 0.21);
+  --border: rgba(52, 54, 48, 0.12);
+  --border-light: rgba(52, 54, 48, 0.075);
+  --border-mid: rgba(52, 54, 48, 0.18);
   --border-accent: rgba(var(--accent-rgb), 0.25);
   /* Raised-edge highlight — a subtle "lit" line on the leading edge of an
      elevated surface.  Combined with the drop shadow it gives panels a
      machined/raised read instead of a flat 1px border. */
-  --edge-highlight: rgba(248, 242, 231, 0.4);
+  --edge-highlight: rgba(255, 255, 255, 0.70);
 
   /* Sophisticated shadows */
-  --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-sm:   0 1px 2px rgba(40, 37, 30, 0.035);
   --shadow-md:   0 4px 14px rgba(0, 0, 0, 0.06);
-  --shadow-lg:   0 8px 36px rgba(0, 0, 0, 0.07);
+  --shadow-lg:   0 2px 8px rgba(40, 37, 30, 0.035), 0 12px 36px rgba(40, 37, 30, 0.07);
   --shadow-glow: none;
+  /* Small controls meet the surface; the composer sits one level above it. */
+  --shadow-control: 0 1px 2px rgba(40, 37, 30, 0.05), 0 2px 5px rgba(40, 37, 30, 0.035);
+  --shadow-composer: 0 2px 4px rgba(40, 37, 30, 0.035), 0 10px 30px rgba(40, 37, 30, 0.065);
 
   /* Radius system */
   --radius-xs:  4px;
@@ -127,14 +130,19 @@
      border), with the drop shadow + edge highlight carrying the depth. */
   --surface-panel: var(--bg2);
   --surface-head:  var(--bg3);
+  --surface-message: color-mix(in srgb, var(--bg2) 62%, var(--bg));
+  --surface-code: color-mix(in srgb, var(--bg2) 55%, var(--bg));
+  --surface-selected: color-mix(in srgb, var(--bg-elevated) 94%, var(--accent) 6%);
+  --surface-field: color-mix(in srgb, var(--bg2) 40%, var(--bg));
   --icon-btn-size: 2rem;
 
   /* Scrollbar — thumb at 1.6:1 vs bg2: visible at a glance without
      reading as a border. */
-  --scrollbar-thumb: #b7a994;
+  --scrollbar-thumb: #aaa99d;
   --scrollbar-track: transparent;
 
   /* Logo / brand */
+  --brand-inlay: #c1a574;
   --logo-bg: var(--bg-elevated);
   --logo-border:  rgba(var(--accent-rgb), 0.14);
 
@@ -166,9 +174,9 @@
   /* Letter-spacing scale — one tracking system for the whole UI.
      Mono uppercase labels track wide; badges track medium; buttons and
      field labels track tight.  Don't add new literals. */
-  --tracking-label:    0.14em;  /* uppercase mono section/panel titles */
-  --tracking-label-sm: 0.08em;  /* small uppercase badges, micro labels */
-  --tracking-btn:      0.06em;  /* uppercase button & field-label text */
+  --tracking-label:    0.08em;  /* uppercase mono section/panel titles */
+  --tracking-label-sm: 0.05em;  /* small uppercase badges, micro labels */
+  --tracking-btn:      0.02em;  /* uppercase button & field-label text */
 
   /* Canonical font stacks — use these vars instead of repeating literals.
      Sans: UI text; Mono: code and technical metadata. */
@@ -189,52 +197,54 @@
   --brand-gradient:  linear-gradient(135deg, var(--accent) 0%, var(--accent-dim) 100%);
 }
 
-/* Gruvbox Soft Dark — warm charcoal, sand text and muted accents. */
+/* Graphite — charcoal and ivory, with the same restrained gold inlay. */
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #2d2a26;
-  --bg2: #34302b;
-  --bg3: #403a33;
-  --bg4: #50483e;
-  --bg-elevated: #3a352f;
-  --accent: #c89d6e;
-  --accent-rgb: 200, 157, 110;
-  --accent-dim: #c89d6e;
-  --accent-light: #d4ac80;
-  --accent-hover: #d4ac80;
+  --bg: #272824;
+  --bg2: #21221f;
+  --bg3: #343630;
+  --bg4: #44473e;
+  --bg-elevated: #30322d;
+  --surface-message: color-mix(in srgb, var(--bg-elevated) 78%, var(--bg));
+  --surface-code: var(--bg2);
+  --accent: #c1a574;
+  --accent-rgb: 193, 165, 116;
+  --accent-dim: #c1a574;
+  --accent-light: #d1b889;
+  --accent-hover: #d1b889;
   --accent-glow: rgba(var(--accent-rgb), 0.07);
-  --accent-soft: rgba(var(--accent-rgb), 0.12);
+  --accent-soft: rgba(var(--accent-rgb), 0.10);
   --accent-border: rgba(var(--accent-rgb), 0.32);
   --cyan: #94b0b2;
   --cyan-rgb: 148, 176, 178;
   --cyan-dim: #94b0b2;
   --cyan-light: #a1babe;
-  --green: #a5b080;
-  --green-rgb: 165, 176, 128;
-  --green-dim: #a5b080;
-  --green-light: #b0bc8d;
-  --red: #d59c8f;
-  --red-rgb: 213, 156, 143;
-  --red-dim: #d59c8f;
-  --red-light: #dfa99c;
-  --purple: #bba1b3;
-  --purple-rgb: 187, 161, 179;
-  --amber: #c5b17d;
+  --green: #a6b593;
+  --green-rgb: 166, 181, 147;
+  --green-dim: #a6b593;
+  --green-light: #b6c5a3;
+  --red: #d99f95;
+  --red-rgb: 217, 159, 149;
+  --red-dim: #d99f95;
+  --red-light: #e2afa6;
+  --purple: #bcaac5;
+  --purple-rgb: 188, 170, 197;
+  --amber: #c7b585;
   --aqua: #91ae97;
-  --warning: #c5b17d;
-  --warning-rgb: 197, 177, 125;
-  --on-accent: #2d2a26;
-  --on-error: #2d2a26;
-  --text: #ded2bc;
-  --text-dim: #c3b59e;
-  --text-mid: #b5a48f;
-  --text-faint: #b5a48f;
-  --text-muted: #b5a48f;
-  --fg: #ded2bc;
-  --border: rgba(222, 210, 188, 0.12);
-  --border-light: rgba(222, 210, 188, 0.075);
-  --border-mid: rgba(222, 210, 188, 0.20);
-  --edge-highlight: rgba(222, 210, 188, 0.05);
+  --warning: #c7b585;
+  --warning-rgb: 199, 181, 133;
+  --on-accent: #272824;
+  --on-error: #272824;
+  --text: #ebe7dc;
+  --text-dim: #cfcec2;
+  --text-mid: #b3b5a8;
+  --text-faint: #a2a598;
+  --text-muted: #a2a598;
+  --fg: #ebe7dc;
+  --border: rgba(235, 231, 220, 0.12);
+  --border-light: rgba(235, 231, 220, 0.075);
+  --border-mid: rgba(235, 231, 220, 0.18);
+  --edge-highlight: rgba(255, 255, 255, 0.065);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.18);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.22);
   --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.30);
@@ -243,7 +253,9 @@
   --shadow-panel-lg: var(--shadow-lg);
   --shadow-elevated: 0 1px 0 var(--edge-highlight), var(--shadow-md);
   --shadow-glow: none;
-  --scrollbar-thumb: #716658;
+  --shadow-control: 0 1px 2px rgba(0, 0, 0, 0.22), 0 3px 8px rgba(0, 0, 0, 0.12);
+  --shadow-composer: 0 2px 4px rgba(0, 0, 0, 0.16), 0 12px 32px rgba(0, 0, 0, 0.22);
+  --scrollbar-thumb: #686d5f;
   --logo-bg: var(--bg-elevated);
 }
 

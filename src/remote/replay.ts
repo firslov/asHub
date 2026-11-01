@@ -23,8 +23,14 @@ export function mobileReplayFrame(frame: string): string {
   const p = data.payload || {};
   data.payload = {
     name: p.name, title: p.title, toolName: p.toolName, toolCallId: p.toolCallId,
-    subagentId: p.subagentId, // Lifecycle identity must survive diagnostic previews.
-    success: p.success, detailsOmitted: true,
+    subagentId: p.subagentId, swarmId: p.swarmId,
+    // Identity and result semantics must survive previewing. Limit only the
+    // error's detail; dropping it would turn a failed call into an ended one.
+    success: p.success, isError: p.isError, exitCode: p.exitCode,
+    error: typeof p.error === 'string' ? unicodeSlice(p.error, 0, 240) : p.error ? true : p.error,
+    degraded: p.degraded, tokensUsed: p.tokensUsed, kind: p.kind,
+    task: typeof p.task === 'string' ? unicodeSlice(p.task, 0, 160) : undefined,
+    detailsOmitted: true,
     text: unicodeSlice(JSON.stringify(p), 0, 1200) + '\n…（完整记录可在完整历史中查看）',
   };
   return frame.replace(/^data: .+$/m, () => 'data: ' + JSON.stringify(data));

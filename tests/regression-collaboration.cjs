@@ -3,13 +3,19 @@ const assert = require('node:assert/strict');
 const {env, Bridge, fs, path, req, Res} = require('./harness.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function setup(t) {
-  const e = env(); t.after(() => fs.rmSync(e.dir, {recursive:true, force:true}));
+  const e = env();
   const {CollaborationTasks} = e.load('src/collaboration.ts');
   const tasks = new CollaborationTasks(path.join(e.dir, 'tasks'));
   const {ProjectStore} = e.load('src/projects.ts');
   const projects = new ProjectStore(path.join(e.dir,'projects.json'));
-  const {createSession,conversationAccess,routeEvent,listSessions,closeSession} = e.load('src/hub.ts','export {createSession,conversationAccess,routeEvent,listSessions,closeSession};');
+  const {createSession,conversationAccess,routeEvent,listSessions,closeSession,shutdownHub} = e.load('src/hub.ts','export {createSession,conversationAccess,routeEvent,listSessions,closeSession};');
   const sessions = new Map();
+  t.after(async () => {
+    // Replay and metadata writes can outlive a tool receipt. Drain the host
+    // before deleting its directory, just as application shutdown does.
+    await shutdownHub(undefined, sessions);
+    fs.rmSync(e.dir, {recursive:true, force:true});
+  });
   const opts = {collaboration:tasks, makeBridge:o=>new Bridge(o), conversationAccess:id=>conversationAccess(id,sessions,projects,tasks)};
   const a = await createSession(sessions,opts,e.dir), b = await createSession(sessions,opts,e.dir);
   const project = projects.update({action:'create',cwd:e.dir,name:'Team',add:[a.id,b.id]},()=>true)[0];
@@ -353,4 +359,126 @@ test('deferred pages retain prior running cursors and detect lower revisions aft
  assert(restored.get(task.id).revision<task.revision);
  assert.equal((await restored.waitMany(completed.cursors,0)).results[0].state,'interrupted');
  await assert.rejects(f.access.waitTasks([{id:task.id,afterState:'invalid'}],0));
+});
+
+async function supplementFixture(t, queued=false) {
+ const f=await setup(t); f.b.bridge.supportsQueue=true;
+ f.b.bridge.isProcessing=()=>queued || f.b.isProcessing;
+ f.b.bridge.submit=queued?async()=>({stopReason:'queued'}):()=>new Promise(()=>{});
+ const receipt=await f.access.send(f.b.id,'Original task'); await tick();
+ f.id=receipt.taskId; f.steers=[]; f.edits=[];
+ f.b.bridge.steer=(text,queueId)=>{f.steers.push({text,queueId});return true;};
+ f.b.bridge.updateQueued=(id,text)=>{f.edits.push({id,text});return 'queue';};
+ return f;
+}
+test('running supplements retain one active task, deduplicate concurrent retries and expose consumption',async t=>{
+ const f=await supplementFixture(t);
+ await f.b.bridge.opts.conversationAccess.deliver(f.id,delivery('Earlier delivery'));
+ const [a,b]=await Promise.all([f.access.supplement(f.id,'update-001','Exclude 2023'),f.access.supplement(f.id,'update-001','Exclude 2023')]);
+ assert.equal(a.state,'pending');assert.deepEqual(a,b);assert.equal(f.steers.length,1);assert.equal(f.tasks.list().length,1);
+ await assert.rejects(f.access.supplement(f.id,'update-001','Different'),/different content/);
+ const {text,queueId}=f.steers[0];assert.equal(f.b.queuedItems.get(queueId).delivery,'steer');
+ f.routeEvent(f.b,{name:'agent:steer-submit',payload:{query:text,queueId}});
+ assert.equal(f.tasks.get(f.id).state,'running');assert.equal(f.b.queuedItems.size,0);
+ assert.equal((await f.access.supplement(f.id,'update-001')).state,'consumed');assert.equal(f.tasks.get(f.id).delivery,undefined);
+ f.routeEvent(f.b,{name:'agent:response-chunk',payload:{blocks:[{type:'text',text:'Updated result'}]}});
+ assert.equal(f.tasks.get(f.id).text,'Updated result');
+ await f.b.bridge.opts.conversationAccess.deliver(f.id,delivery('Corrected evidence'));
+ f.tasks.finish(f.id,'completed');
+ assert.equal((await f.access.supplement(f.id,'update-001','Exclude 2023')).state,'consumed');
+ assert.equal((await f.access.supplement(f.id,'update-002','Later')).state,'task_ended');assert.equal(f.steers.length,1);
+});
+test('queued supplements merge in place and preserve identity and consumption after user editing',async t=>{
+ const f=await supplementFixture(t,true),original=[...f.b.queuedItems.values()][0];
+ f.b.queuedItems.set('other',{id:'other',query:'unrelated'});f.b.queuedQueries.push('unrelated');
+ const result=await f.access.supplement(f.id,'update-001','New criterion');
+ assert.equal(result.mode,'queue');assert.equal(f.edits.length,1);assert.equal(f.steers.length,0);
+ assert.equal([...f.b.queuedItems.keys()][0],original.id);assert.equal(original.revision,1);
+ assert.match(original.query,/Original task/);assert.match(original.query,/New criterion/);
+ assert.equal(f.b.queuedQueries[0],original.query);assert.equal(f.b.queuedQueries[1],'unrelated');
+ await f.access.supplement(f.id,'update-002','Second criterion');assert.equal(original.revision,2);
+ f.routeEvent(f.b,{name:'agent:queued-submit',payload:{queueId:original.id,query:'User replaced the content'}});
+ assert.equal(f.tasks.get(f.id).state,'running');
+ assert.equal((await f.access.supplement(f.id,'update-001')).state,'modified');
+ assert.equal((await f.access.supplement(f.id,'update-002')).state,'modified');
+});
+test('queued supplement arrives in the original task without another model turn',async t=>{
+ const f=await supplementFixture(t,true);
+ await f.access.supplement(f.id,'update-001','New criterion');
+ const item=[...f.b.queuedItems.values()][0];
+ f.routeEvent(f.b,{name:'agent:queued-submit',payload:{queueId:item.id,query:item.query}});
+ assert.equal((await f.access.supplement(f.id,'update-001')).state,'consumed');assert(f.tasks.isActive(f.id));
+ f.routeEvent(f.b,{name:'agent:queued-done',payload:{}});
+ assert.equal(f.tasks.get(f.id).state,'completed');
+});
+test('supplement authorization is source-bound and rechecked after context locking',async t=>{
+ const f=await supplementFixture(t);
+ await assert.rejects(f.b.bridge.opts.conversationAccess.supplement(f.id,'update-001','No'),/Only the task sender/);
+ const pending=f.access.supplement(f.id,'update-001','No');
+ f.projects.update({action:'members',id:f.project.id,remove:[f.b.id]},()=>true);
+ await assert.rejects(pending,/outside this project|unavailable/i);assert.equal(f.steers.length,0);
+});
+test('aborted, invalid and unavailable supplements never reach the bridge',async t=>{
+ const f=await supplementFixture(t),controller=new AbortController();controller.abort();
+ await assert.rejects(f.access.supplement(f.id,'update-001','No',controller.signal));
+ for(const [key,msg] of [['short','x'],['update-001',''],['update-001','x'.repeat(8001)]])await assert.rejects(f.access.supplement(f.id,key,msg));
+ f.b._hostOperation=true;await assert.rejects(f.access.supplement(f.id,'update-001','No'),/unavailable/);delete f.b._hostOperation;
+ assert.equal(f.steers.length,0);assert.equal(f.tasks.get(f.id).supplements,undefined);
+});
+test('strict steering refusal never falls back to a new queued task',async t=>{
+ const f=await supplementFixture(t);f.b.bridge.steer=()=>false;
+ assert.equal((await f.access.supplement(f.id,'update-001','No')).state,'rejected');assert.equal(f.b.queuedItems.size,0);assert.equal(f.b.queuedQueries.length,0);
+ f.b.bridge.steer=()=>{throw Error('Must not retry');};
+ assert.equal((await f.access.supplement(f.id,'update-001','No')).state,'rejected');
+});
+test('refused queued update restores the original task query and leaves the queue unchanged',async t=>{
+ const f=await supplementFixture(t,true),query=f.tasks.get(f.id).query;f.b.bridge.updateQueued=()=>null;
+ assert.equal((await f.access.supplement(f.id,'update-001','No')).state,'rejected');
+ assert.equal(f.tasks.get(f.id).query,query);assert.equal(f.b.queuedQueries[0],query);
+});
+test('withdrawal and cancellation settle supplement receipts without completing the active task',async t=>{
+ const f=await supplementFixture(t);await f.access.supplement(f.id,'update-001','No');const u=f.steers[0];
+ f.routeEvent(f.b,{name:'agent:queued-done',payload:{queueId:u.queueId,query:u.text,dropped:true}});
+ assert.equal((await f.access.supplement(f.id,'update-001')).state,'dropped');assert.equal(f.tasks.get(f.id).state,'running');
+ await f.access.supplement(f.id,'update-002','No again');f.tasks.finish(f.id,'cancelled');
+ assert.equal((await f.access.supplement(f.id,'update-002')).state,'dropped');
+});
+test('receipt persistence failure prevents delivery; restart does not replay pending supplements',async t=>{
+ const f=await supplementFixture(t),save=f.tasks.save;
+ f.tasks.save=()=>{throw Error('disk full');};await assert.rejects(f.access.supplement(f.id,'update-001','No'),/disk full/);
+ assert.equal(f.steers.length,0);assert.equal(f.tasks.get(f.id).supplements,undefined);f.tasks.save=save;
+ await f.access.supplement(f.id,'update-001','No');
+ const reload=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+ assert.equal(reload.supplementReceipt(f.id,'update-001').state,'interrupted');assert.equal(reload.get(f.id).state,'interrupted');
+ assert.equal(f.steers.length,1);
+});
+
+test('uncertain dispatch never retries automatically and can later acknowledge consumption',async t=>{
+ const f=await supplementFixture(t);let attempt;
+ f.b.bridge.steer=(text,queueId)=>{attempt={text,queueId};throw Error('Transport result unknown');};
+ assert.equal((await f.access.supplement(f.id,'update-001','Check')).state,'uncertain');
+ f.b.bridge.steer=()=>{throw Error('A retry must not send');};
+ assert.equal((await f.access.supplement(f.id,'update-001','Check')).state,'uncertain');
+ f.routeEvent(f.b,{name:'agent:steer-submit',payload:{queueId:attempt.queueId,query:attempt.text}});
+ assert.equal((await f.access.supplement(f.id,'update-001')).state,'consumed');
+});
+test('supplement limits are enforced before bridge delivery',async t=>{
+ const f=await supplementFixture(t);
+ for(let i=0;i<32;i++)await f.access.supplement(f.id,'update-'+String(i).padStart(3,'0'),'Check');
+ await assert.rejects(f.access.supplement(f.id,'update-033','Check'),/limit/);assert.equal(f.steers.length,32);
+ const q=await supplementFixture(t,true);
+ for(let i=0;i<7;i++)await q.access.supplement(q.id,'update-'+String(i).padStart(3,'0'),'x'.repeat(8000));
+ await assert.rejects(q.access.supplement(q.id,'update-008','x'.repeat(8000)),/64000/);assert.equal(q.edits.length,7);
+});
+test('synchronous consumption does not recreate the pending UI entry',async t=>{
+ const f=await supplementFixture(t);f.b.bridge.steer=(text,queueId)=>{
+  f.routeEvent(f.b,{name:'agent:steer-submit',payload:{query:text,queueId}});return true;
+ };
+ assert.equal((await f.access.supplement(f.id,'update-001','Check')).state,'consumed');
+ assert.equal(f.b.queuedItems.size,0);assert.equal(f.b.queuedQueries.length,0);
+});
+test('manual edits to a supplemental message are reported separately from exact consumption',async t=>{
+ const f=await supplementFixture(t);await f.access.supplement(f.id,'update-001','Original correction');
+ f.routeEvent(f.b,{name:'agent:steer-submit',payload:{query:'A user edited correction',queueId:f.steers[0].queueId}});
+ assert.equal((await f.access.supplement(f.id,'update-001')).state,'modified');
 });

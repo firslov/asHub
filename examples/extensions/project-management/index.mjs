@@ -16,8 +16,8 @@ export default function activate(ctx) {
       try {
         execution?.signal?.throwIfAborted();
         const result = await run(args, execution?.signal);
-        return { content: JSON.stringify(result), exitCode: result?.status === 'failed' || result?.status === 'interrupted' || result?.status === 'denied' ? 1 : 0,
-          isError: ['failed', 'interrupted', 'denied'].includes(result?.status) };
+        return { content: JSON.stringify(result), exitCode: ['failed', 'interrupted', 'denied'].includes(result?.status) || ['rejected', 'dropped', 'interrupted', 'uncertain'].includes(result?.state) ? 1 : 0,
+          isError: ['failed', 'interrupted', 'denied'].includes(result?.status) || ['rejected', 'dropped', 'interrupted', 'uncertain'].includes(result?.state) };
       } catch (error) { return { content: String(error), exitCode: 1, isError: true }; }
     },
   });
@@ -69,6 +69,19 @@ export default function activate(ctx) {
 项目成员使用项目根目录；外部已有对话原目录不变。成员职责作为对话说明保存，不授予新权限。创建不会启动任务。用户授权开展工作后，可通过现有 conversation_list/read/send/task 与同项目成员协作；不要擅自移动当前对话到其他项目。
 已有对话的修改使用 project_management_update_conversation；移出项目、归档、永久删除分别使用 detach/archive/delete_conversation 工具。先查询 catalog 中 conversations 的真实 ID 和当前配置。所有变更必须由用户逐次确认；不能以对话中的要求替代授权卡片。不得更改忙碌对话，不得归档或删除发起操作的当前对话。工作目录和职责说明不在本版修改范围。
 工具返回 completed 才表示操作完成；failed/interrupted 可能已部分生效，必须报告并核查，不得盲目重试。永久删除不可撤销；用户只要求移出项目时不得删除或归档。`);
+  if (ctx.list().includes('ashub:collaboration:supplement')) {
+    register('project_management_supplement', '向自己派发的已有任务补充约束或纠正方向，不是派发新任务。排队任务在原位置追加；运行任务在下一次模型请求前接收；已结束任务不会重启。同一 requestKey 重试必须保持相同内容。仅用于用户已授权的工作，不重复催问。', {
+      id: { type: 'string', description: 'Original taskId returned by conversation_send, not a conversation ID' },
+      requestKey, message: { type: 'string', minLength: 1, maxLength: 8000 },
+    }, ['id', 'requestKey', 'message'], (args, signal) => ctx.call('ashub:collaboration:supplement', { ...args, signal }));
+    register('project_management_supplement_status', '查询任务补充的投递回执，不发送消息、不唤醒模型。consumed 仅表示已送入模型上下文，不表示已完成要求；modified 表示用户编辑了待发送内容；dropped/rejected/interrupted/uncertain 表示未确认送达，不自动重发。', {
+      id: { type: 'string', description: 'Original taskId' }, requestKey,
+    }, ['id', 'requestKey'], (args, signal) => ctx.call('ashub:collaboration:supplement', { id: args.id, requestKey: args.requestKey, signal }), true);
+    ctx.agent.registerInstruction('project-management-supplements', `项目协作消息分类：独立新任务仍用 conversation_send，忙碌成员按顺序排队。只有修正当前任务方向、补齐关键材料或更新约束才用 project_management_supplement，必须关联自己原先派发的 taskId；不要把无关新工作伪装成补充。
+一次整理完整的必要变更再发送，不逐句插队，不发送“继续”“进度如何”等重复催问；补充应写明变更与仍然有效的要求，不能扩大用户授权。请求使用稳定且唯一的 requestKey；网络或工具错误后先查询 supplement_status，重试同一内容保持原 key，不能换 key 绕过去重。
+pending 只表示等待送入；consumed 只表示进入模型上下文，不证明理解或完成；modified 表示用户编辑过内容，需要核查；task_ended 表示任务已结束，先读取成果，再根据用户需求决定是否新建复核任务。rejected/dropped/interrupted/uncertain 不自动另起任务重发。
+成员收到补充后继续同一个 Task，完成前重新提交 conversation_deliver。协调者用 conversation_wait 检查任务最终状态及新交付，不以补充回执代替成果验收。成员若被关键问题阻塞，应将具体问题和可选方案写入 unresolved 并交付当前成果、结束当前任务；协调者收到后处理，不让双方互相排队等待。后续有依赖的工作只在所需成果经过核查后派发；普通进度不另发消息。`);
+  }
   if (ctx.list().includes('ashub:collaboration:wait') && ctx.list().includes('ashub:collaboration:deliver')) {
     ctx.agent.registerInstruction('project-management-delivery', `项目协作交付约定：在用户授权范围内分派任务时，明确每位成员的职责、文件写入范围、验收方式和交付物，不复制整段会话历史。独立任务可以并行开展；同目录写入仍需分工。
 协调者用 conversation_wait 一次等待多个 taskId，收到一个结果即可安排有依赖的后续工作；完整使用返回的 cursors 继续等待，避免反复读取同一结果；hasMore 为真时用同一组 cursors 和 waitMs:0 继续读取其余交付。timeout 只表示本次等待结束，不需要向成员发催问消息。settled 表示所关注任务均已结束且结果已读取，停止等待。

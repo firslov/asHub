@@ -36,7 +36,9 @@ Factories must register cleanup before awaiting resource creation, honor the abo
 
 Bundled executable UI loaders are selected in source code; server metadata cannot choose module URLs. Installed UI uses a bounded declarative schema: plain text, status, lists, forms and the `composer.insert` action. Configuration forms bind to the installed plugin identity and declared namespace, preserve unknown existing keys, validate values and use revision-checked writes. A conflict preserves the draft until the user reloads. Composer insertion does not send a message or approve an operation.
 
-The host exposes versioned snapshots and SSE invalidations. Clients refetch after reconnect or epoch changes; events are notifications, not a durable log. Existing endpoints remain available to old clients. Desktop feature menus use the shared registry. The remote gateway retains its narrower permissions and does not forward the desktop catalog, installer or plugin configuration APIs. Shared pure conversation presentation rules cover tool grouping and token/cache metrics; remote transport and mobile layout remain separate adapters.
+The host exposes versioned snapshots and SSE invalidations. Clients refetch after reconnect or epoch changes; events are notifications, not a durable log. Existing endpoints remain available to old clients. Desktop feature menus use the shared registry. The remote gateway retains its narrower permissions and does not forward the desktop catalog, installer or plugin configuration APIs. Shared pure conversation rules cover diagnostic outcomes, turn/activity lifecycles, tool labels and token/cache metrics; remote transport and mobile layout remain separate adapters. Full and lightweight replay use common event fixtures, and diagnostic previews preserve identity and result semantics. See [conversation event contracts](conversation-events.md).
+
+Replay persistence uses one coalescing writer per session. Unchanged-prefix growth is incremental; branch changes and edited frames use atomic snapshots. Byte/hash checkpoints prevent uncommitted append tails from appearing after restart. SSE connections own bounded ordered writers with backpressure and batched replay. These changes preserve the existing tree and replay formats; see [replay storage](replay-storage.md).
 
 ## Compatibility and rollout
 
@@ -48,3 +50,5 @@ The host exposes versioned snapshots and SSE invalidations. Clients refetch afte
 - Server website sources are maintained separately and are not included in the application repository or this delivery's deployment.
 
 See [host API](plugin-host-api.md) and [archive installation](plugin-installation.md) for contracts and examples. `npm run test:architecture` and `npm run test:architecture:ui` verify the new boundaries alongside the existing regression suites.
+
+Release jobs require the shared core, kernel and platform checks against one source commit; builds use the resulting immutable version commit. The remote site has a separate candidate/released-desktop compatibility check. See [release validation](release-validation.md).

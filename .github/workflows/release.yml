@@ -7,42 +7,102 @@ on:
         description: 'Version number (e.g. 0.19.9)'
         required: true
         type: string
-        default: '0.19.12'
+      source_sha:
+        description: 'Optional exact source commit (used by tag releases)'
+        required: false
+        type: string
+
+concurrency:
+  group: ashub-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  windows-compat:
-    uses: ./.github/workflows/windows-compat.yml
-
-  tag:
-    needs: windows-compat
+  prepare:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ inputs.version }}
+      source: ${{ steps.source.outputs.sha }}
     steps:
+      - name: Validate source input
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          if [ -n "$SOURCE_SHA" ] && ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_sha must be an exact commit SHA"
+            exit 1
+          fi
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-      - run: |
-          # Commit as the workflow trigger (repo owner), not the GitHub bot,
-          # so automated version bumps don't add a bot entry to contributors.
-          git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor }}@users.noreply.github.com"
-      - run: |
-          CUR=$(node -p "require('./package.json').version")
-          if [ "$CUR" != "${{ inputs.version }}" ]; then
-            npm version ${{ inputs.version }} --no-git-tag-version
-            git add package.json package-lock.json
-            git commit -m "chore: bump version to ${{ inputs.version }}"
+      - name: Validate version
+        env:
+          ASHUB_RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/release-version.cjs --check
+      - id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  core-checks:
+    needs: prepare
+    uses: ./.github/workflows/core-checks.yml
+    with:
+      ref: ${{ needs.prepare.outputs.source }}
+      version: ${{ inputs.version }}
+  kernel-compat:
+    needs: prepare
+    uses: ./.github/workflows/kernel-compat.yml
+    with:
+      ref: ${{ needs.prepare.outputs.source }}
+      version: ${{ inputs.version }}
+  windows-compat:
+    needs: prepare
+    uses: ./.github/workflows/windows-compat.yml
+    with:
+      ref: ${{ needs.prepare.outputs.source }}
+      version: ${{ inputs.version }}
+
+  tag:
+    needs: [prepare, core-checks, kernel-compat, windows-compat]
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.source }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Prepare the validated version metadata
+        env:
+          ASHUB_RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/release-version.cjs
+      - name: Commit version metadata and tag the validated source
+        id: commit
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_ACTOR: ${{ github.actor }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          git config user.name "$RELEASE_ACTOR"
+          git config user.email "$RELEASE_ACTOR@users.noreply.github.com"
+          git add package.json package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: bump version to $RELEASE_VERSION"
           fi
-      - run: |
-          git tag -d v${{ inputs.version }} 2>/dev/null || true
-          git push origin :refs/tags/v${{ inputs.version }} 2>/dev/null || true
-          git tag v${{ inputs.version }}
-          git push origin main --tags
+          # Refuse a non-fast-forward main update if another change landed
+          # during validation. Never merge untested source into this release.
+          if [ "$DISPATCH_REF" = refs/heads/main ] && [ -z "$SOURCE_SHA" ]; then
+            git push origin HEAD:refs/heads/main
+          fi
+          git tag -f "v$RELEASE_VERSION"
+          git push --force origin "refs/tags/v$RELEASE_VERSION"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
     needs: tag
@@ -63,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.version }}
+          ref: ${{ needs.tag.outputs.commit }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -84,7 +144,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [build, tag]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -93,22 +153,34 @@ jobs:
           path: release
           merge-multiple: true
       - run: ls -la release/
+      - name: Verify the tag still identifies the built commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          EXPECTED_COMMIT: ${{ needs.tag.outputs.commit }}
+        run: |
+          actual=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$RELEASE_VERSION" --jq .object.sha)
+          if [ "$actual" != "$EXPECTED_COMMIT" ]; then
+            echo "::error::Release tag changed after validation; refusing to publish mismatched artifacts"
+            exit 1
+          fi
       # Re-run safety: delete an existing release for this tag so
       # action-gh-release can recreate it (a fresh tag was pushed above).
       - name: Remove existing release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           # --repo is required: this job has no checkout, and gh otherwise
           # fails with "not a git repository" — which the 2>&1 on the old
           # view call swallowed, so the cleanup silently never ran and a
           # re-release kept the previous assets.  Leaving stderr alone means
           # a real failure (auth, rate limit) reaches the log now.
-          if gh release view "v${{ inputs.version }}" --repo "$GITHUB_REPOSITORY" >/dev/null; then
-            gh release delete "v${{ inputs.version }}" --yes --repo "$GITHUB_REPOSITORY"
-            echo "removed existing release v${{ inputs.version }}"
+          if gh release view "v$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null; then
+            gh release delete "v$RELEASE_VERSION" --yes --repo "$GITHUB_REPOSITORY"
+            echo "removed existing release v$RELEASE_VERSION"
           else
-            echo "no existing release for v${{ inputs.version }}"
+            echo "no existing release for v$RELEASE_VERSION"
           fi
       - uses: softprops/action-gh-release@v2
         with:

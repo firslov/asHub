@@ -1,3 +1,4 @@
+import { committedReplay } from '../history/replay-writer.js';
 import { createHistoryReader } from "../history/history-reader.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -41,10 +42,13 @@ export function installLazySessionRestore(
       if (session._needsRestore) {
         try {
           let loadedReplay = false;
+          let replayBytes: Buffer | undefined;
+          const decodeReplay = (raw: string) => raw.split("\n\n").filter(l => l.trim()).map(l => l + "\n\n").filter(f => !isDroppedRestoreFrame(f));
           // Load replay file
           try {
             const replayPath = path.join(SESSIONS_DIR, `${id}.replay.jsonl`);
-            const replayRaw = await Promise.race([fs.promises.readFile(replayPath, "utf-8"), cancelledRestore]);
+            replayBytes = await Promise.race([fs.promises.readFile(replayPath), cancelledRestore]);
+            const replayRaw = replayBytes.toString("utf8");
             const replayFrames = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n")
               // Drop transient UI frames and legacy thinking-chunk frames
               // (no longer persisted; they only inflate the frame count).
@@ -102,6 +106,14 @@ export function installLazySessionRestore(
               raw = await Promise.race([fs.promises.readFile(checkpoint, "utf-8"), cancelledRestore]);
               const saved = JSON.parse(raw);
               if (!saved || typeof saved.leaf !== "string") throw new SyntaxError("invalid replay checkpoint");
+              if (replayBytes && (saved.bytes !== undefined || saved.sha256 !== undefined)) {
+                const committed = committedReplay(replayBytes, saved);
+                if (Buffer.byteLength(committed) !== replayBytes.length) {
+                  session.replay = decodeReplay(committed);
+                  loadedReplay = session.replay.some(f => !["session:title", "agent:info"].includes(parseFrameName(f) ?? ""));
+                  replayNeedsCheckpoint = true;
+                }
+              }
               if (saved.leaf !== session.store.getActiveLeaf()) {
                 loadedReplay = false;
                 replayNeedsCheckpoint = true;

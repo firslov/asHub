@@ -1,7 +1,7 @@
 import { t } from "../i18n.js";
 import "../conversation-presentation.js";
 
-const { toolActivityKey, activityTimestamp, renderActivityTime } = globalThis.AsHubConversationPresentation;
+const { toolActivityKey, activityTimestamp, renderActivityTime, turnLifecycle, activityState } = globalThis.AsHubConversationPresentation;
 
 // Presentation only: every original node, result and event listener is retained.
 // Explicit lifecycle hooks avoid observing or rescanning streaming log text.
@@ -39,12 +39,9 @@ function refresh(record) {
   const delegated = body.querySelector(".subagent-spinner");
   const thinking = Array.from(body.querySelectorAll(".thinking-block"))
     .some((block) => block.dataset.activityDone !== "1");
-  const running = !record.finished
-    ? !record.sealed || pending.length > 0 || thinking || !!delegated
-    : record.finished === "done" && !!delegated;
-  // Later approvals must not reopen completed phases or replace their timestamps.
-  const waiting = record.waiting && running;
-  const nextState = waiting ? "waiting" : running ? "running" : "settled";
+  const nextState = activityState({ finished: record.finished, sealed: record.sealed,
+    pending: pending.length, thinking, delegated: delegated ? 1 : 0, waiting: record.waiting });
+  const running = nextState !== 'settled', waiting = nextState === 'waiting';
   if (nextState !== 'settled') record.settledAt = null;
   else if (box.dataset.state !== 'settled') {
     // A persisted response segment can arrive after a later parallel result.
@@ -164,7 +161,8 @@ export function prepareActivityNode(session, node, target) {
 export function activityEvent(session, name) {
   const state = sessions.get(session);
   if (!state) return;
-  if (name === "agent:processing-start") {
+  const lifecycle = turnLifecycle(name);
+  if (lifecycle?.started) {
     state.current = null;
     state.turn.clear();
     state.waiting = false;
@@ -178,14 +176,11 @@ export function activityEvent(session, name) {
     for (const record of state.turn) { record.waiting = state.waiting; refresh(record); }
     return;
   }
-  const finished = { "agent:processing-done": "done", "agent:cancelled": "stopped", "agent:error": "error" }[name];
-  if (!finished) return;
+  if (!lifecycle) return;
   for (const record of state.turn) {
     // Cleanup emits processing-done after cancellation/errors as well.
     // It ends the turn, but must not overwrite its terminal outcome.
-    if (finished !== "done" || !["stopped", "error"].includes(record.finished)) {
-      record.finished = finished;
-    }
+    record.finished = turnLifecycle(name, record.finished).outcome;
     record.waiting = false;
     record.requestLabel = null;
     refresh(record);

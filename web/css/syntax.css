@@ -1,6 +1,4 @@
-/* Softened Gruvbox syntax colors share the UI palette, so existing code blocks switch
-   immediately without re-highlighting or loading a second stylesheet.
-   Palette source: https://github.com/morhetz/gruvbox */
+/* Syntax follows semantic theme tokens in both themes without re-highlighting. */
 pre code.hljs { display: block; overflow-x: auto; padding: 1em; }
 code.hljs { padding: 3px 5px; }
 .hljs { color: var(--text); background: var(--bg2); }

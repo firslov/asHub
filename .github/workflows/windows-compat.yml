@@ -4,6 +4,13 @@ on:
     branches: [main]
   workflow_dispatch:
   workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ''
+      version:
+        type: string
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -12,10 +19,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
+      - name: Apply release version for validation
+        if: inputs.version != ''
+        env:
+          ASHUB_RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/release-version.cjs
       - run: npm ci
       - run: npm run build
       - run: node --test tests/kernel-patch.cjs tests/codex-browser.mjs

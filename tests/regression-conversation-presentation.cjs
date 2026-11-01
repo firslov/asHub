@@ -192,3 +192,28 @@ for (const client of ['desktop', 'remote']) test(`${client} activity times use o
   const node={}; renderActivityTime(node,value); assert.equal(node.hidden,false); assert.equal(node.dateTime,value.iso); assert(node.title.includes('2026-10-30'));
   renderActivityTime(node,null); assert.equal(node.hidden,true); assert.equal(node.textContent,'');
 });
+
+for (const client of ['desktop', 'remote']) test(`${client} common event semantics preserve terminal outcomes and child lifetimes`, clientOptions(client), () => {
+  const file = client === 'desktop' ? 'web/js/conversation-presentation.js' : 'remote/public/conversation-presentation.js';
+  const { diagnosticState, turnLifecycle, activityState } = rules(file).AsHubConversationPresentation;
+  for (const c of require('./fixtures/conversation-events.cjs')) {
+    const payload = Object.freeze({ ...c.payload });
+    assert.equal(diagnosticState(payload), c.outcome, c.name);
+  }
+  assert.equal(diagnosticState(null), 'pending');
+  for (const terminal of ['error', 'stopped']) {
+    const event = terminal === 'error' ? 'agent:error' : 'agent:cancelled';
+    const first = turnLifecycle(event, '');
+    assert.equal(first.outcome, terminal);
+    assert.equal(turnLifecycle('agent:processing-done', first.outcome).outcome, terminal);
+    assert.equal(turnLifecycle('agent:processing-start', terminal).outcome, '');
+    assert.equal(activityState({ finished: terminal, delegated: 1, pending: 1, waiting: true }), 'settled');
+  }
+  assert.equal(turnLifecycle('subagent:done', 'error'), null, 'child results cannot finish the main turn');
+  assert.equal(turnLifecycle('permission:resolved', 'done'), null, 'approval resolution is not completion');
+  assert.equal(activityState({ finished: 'done', delegated: 1 }), 'running');
+  assert.equal(activityState({ finished: 'done', delegated: 1, waiting: true }), 'waiting');
+  assert.equal(activityState({ finished: 'done', pending: 1, thinking: true, waiting: true }), 'settled');
+  assert.equal(activityState({ sealed: true }), 'settled');
+  assert.equal(activityState({ sealed: true, pending: 1 }), 'running');
+});

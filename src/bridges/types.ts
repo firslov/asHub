@@ -16,6 +16,7 @@ export interface BusEvent {
 export type SessionKind = "agent" | "terminal" | "ash-terminal";
 
 export interface ConversationAccess {
+  supplement?(id: string, requestKey: string, message?: string, signal?: AbortSignal): Promise<unknown>;
   waitTasks(targets: import("../collaboration.js").TaskWatch[], waitMs?: number, signal?: AbortSignal): Promise<unknown>;
   deliver(id: string, delivery: import("../collaboration.js").TaskDelivery, signal?: AbortSignal): Promise<unknown>;
   task(id: string, offset?: number, waitMs?: number, signal?: AbortSignal): Promise<unknown>;
@@ -97,6 +98,9 @@ export interface Bridge {
 
   /** Submit a prompt; resolves at end of turn. */
   submit(text: string, queueId?: string, delivery?: "queue" | "steer"): Promise<{ stopReason: string }>;
+
+  /** Strict current-turn steering: never starts or queues a new turn. */
+  steer?(text: string, queueId: string): boolean;
 
   /** Atomically remove a still-pending message; never cancels the running turn. */
   withdrawQueued?(queueId: string): boolean;

@@ -50,6 +50,65 @@ await check('AB01 lifecycle events identify their source session', async () => {
   assert(events.length === 4 && events.every(e => e.detail?.sessionId === 'bbbbbb'), 'lifecycle event lost session identity');
 });
 
+// Completion cleanup follows canceled/failed turns too. Exercise the actual
+// handlers and notification permission/visibility gate, rather than the DOM label.
+function notificationFixture() {
+  const u = ui(), notifications = [], noop = () => {};
+  u.doc.hidden = true;
+  u.e.context.localStorage.setItem = noop;
+  u.e.context.localStorage.getItem = key => key === 'ash.notify' ? '1' : null;
+  class Notification {
+    static permission = 'granted';
+    constructor(title, options) { notifications.push({ title, body: options.body }); }
+  }
+  Object.assign(u.e.context, { Notification,
+    CustomEvent: class { constructor(type, opts) { this.type = type; this.detail = opts?.detail; } },
+    activeSession: u.active, t: x => x, sessionLabel: s => s.id,
+    classifyError: () => null, renderErrorCard: () => new El(),
+  });
+  for (const name of ['hideUsage', 'setBusy', 'setSessionStatus', 'hideThinking',
+    'sweepOrphanThinking', 'finalizeThinking', 'finalizeLiveOutput', 'resetCompletedTools',
+    'startNewSegment', 'showThinking', 'closeReply', 'renderUsage', 'settleTodoBlock',
+    'refreshGitBranch', 'cancelReply', 'append']) u.e.context[name] = noop;
+  u.e.context.notifyEnabled = variable('web/js/sse.js', 'notifyEnabled', u.e.context);
+  u.e.context.sendSystemNotification = variable('web/js/sse.js', 'sendSystemNotification', u.e.context);
+  const session = id => ({ id, state: { replaying: false }, scheduleReplayFlush: noop });
+  return { ...u, notifications, session, send: (s, name) => method('web/js/sse.js', name, u.e.context).call(s, { message: 'Interrupted' }) };
+}
+for (const terminal of ['agent:cancelled', 'agent:error']) {
+  await check('AB01 ' + terminal + ' cleanup must not announce a completed reply', () => {
+    const x = notificationFixture(), s = x.session('background');
+    x.send(s, 'agent:processing-start'); x.send(s, terminal); x.send(s, 'agent:processing-done');
+    assert(x.notifications.length === 0, 'terminal cleanup announced reply completion');
+    x.send(s, 'agent:processing-start'); x.send(s, 'agent:processing-done');
+    assert(x.notifications.length === 1 && x.notifications[0].title === 'notify.done.title', 'next successful turn lost its completion notification');
+  });
+}
+await check('AB01 notification outcome is scoped to the originating conversation', () => {
+  const x = notificationFixture(), stopped = x.session('stopped'), completed = x.session('completed');
+  x.send(stopped, 'agent:processing-start'); x.send(stopped, 'agent:cancelled');
+  x.send(completed, 'agent:processing-start'); x.send(completed, 'agent:processing-done');
+  x.send(stopped, 'agent:processing-done');
+  assert(x.notifications.length === 1 && x.notifications[0].body === 'completed', 'one session suppressed or impersonated another completion');
+});
+await check('AB01 replayed completion remains silent and live work can notify afterwards', () => {
+  const x = notificationFixture(), s = x.session('replayed'); s.state.replaying = true;
+  x.send(s, 'agent:processing-start'); x.send(s, 'agent:error'); x.send(s, 'agent:processing-done');
+  x.send(s, 'agent:processing-start'); x.send(s, 'agent:processing-done');
+  assert(x.notifications.length === 0, 'historical completion notified');
+  s.state.replaying = false;
+  x.send(s, 'agent:processing-start'); x.send(s, 'agent:processing-done');
+  assert(x.notifications.length === 1, 'live completion remained suppressed after replay');
+});
+for (const gate of ['foreground', 'disabled', 'denied']) await check('AB01 notification gate remains effective: ' + gate, () => {
+  const x = notificationFixture(), s = x.session('background');
+  if (gate === 'foreground') x.doc.hidden = false;
+  if (gate === 'disabled') x.e.context.localStorage.getItem = () => '0';
+  if (gate === 'denied') x.e.context.Notification.permission = 'denied';
+  x.send(s, 'agent:processing-start'); x.send(s, 'agent:processing-done');
+  assert(x.notifications.length === 0, 'notification bypassed existing user preference or visibility');
+});
+
 await check('AB01 active completion refreshes the active directory', async () => {
   const u = ui(); let opts, reads = 0, closes = 0;
   u.modules['./autocomplete.js'] = { attachAutocomplete: o => { opts = o; return { close: () => closes++ }; } };

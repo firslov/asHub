@@ -3,7 +3,7 @@ import path from 'node:path';
 import { satisfies, valid, validRange } from 'semver';
 
 export const HOST_PLUGIN_API_VERSION = '1.0.0';
-export const HOST_PLUGIN_CAPABILITIES = ['session-extensions', 'application-lifecycle'] as const;
+export const HOST_PLUGIN_CAPABILITIES = ['session-extensions', 'application-lifecycle', 'plugin-resources', 'authorized-messages'] as const;
 /** Match the client's JSON.stringify(ui).length limit (UTF-16 code units, not bytes). */
 export const MAX_PLUGIN_UI_JSON_CHARS = 262144;
 export const PLUGIN_ENTRY_FILES = ['index.js', 'index.mjs', 'index.ts', 'index.tsx', 'index.mts'];
@@ -62,8 +62,9 @@ export interface NormalizedPluginManifest extends ManifestBase {
   configSchema?: Record<string, PluginConfigSchema>;
   configNamespaces: string[]; ui?: PluginDeclarativeUI;
 }
-export interface PluginDeclarativeUI { version: 1; panels: Array<{ id: string; title: string; components: PluginUIComponent[] }> }
+export interface PluginDeclarativeUI { version: 1; panels: Array<{ id: string; title: string; icon?: 'clock' | 'panel'; components: PluginUIComponent[] }> }
 export type PluginUIComponent =
+  | { type: 'resource'; id: string }
   | { type: 'text'; text: string }
   | { type: 'status'; text: string; tone?: 'neutral' | 'success' | 'warning' }
   | { type: 'list'; items: string[] }
@@ -85,12 +86,13 @@ function validateUI(raw: unknown, namespaces: string[], schemas?: Record<string,
   if (JSON.stringify(raw).length > MAX_PLUGIN_UI_JSON_CHARS) throw Error(`Declarative UI exceeds ${MAX_PLUGIN_UI_JSON_CHARS} JSON characters`);
   keys(raw, ['version', 'panels'], 'UI field'); const panels = new Set<string>();
   for (const panel of raw.panels) {
-    if (!object(panel)) throw Error('Invalid UI panel'); keys(panel, ['id', 'title', 'components'], 'panel field'); uiId(panel.id); uiText(panel.title, 200);
+    if (!object(panel)) throw Error('Invalid UI panel'); keys(panel, ['id', 'title', 'icon', 'components'], 'panel field'); if (panel.icon !== undefined && !['clock','panel'].includes(String(panel.icon))) throw Error('Invalid panel icon'); uiId(panel.id); uiText(panel.title, 200);
     if (panels.has(panel.id)) throw Error('Duplicate UI panel'); panels.add(panel.id);
     if (!Array.isArray(panel.components) || panel.components.length > 32) throw Error('Invalid UI components'); const forms = new Set<string>();
     for (const c of panel.components) {
       if (!object(c)) throw Error('Invalid UI component');
-      if (c.type === 'text' || c.type === 'status') {
+      if (c.type === 'resource') { keys(c, ['type', 'id'], 'resource field'); uiId(c.id); }
+      else if (c.type === 'text' || c.type === 'status') {
         keys(c, c.type === 'text' ? ['type', 'text'] : ['type', 'text', 'tone'], 'component field'); uiText(c.text, 8000, true);
         if (c.tone !== undefined && !['neutral', 'success', 'warning'].includes(c.tone)) throw Error('Invalid status tone');
       } else if (c.type === 'list') {

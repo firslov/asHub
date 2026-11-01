@@ -1,4 +1,4 @@
-/* Gruvbox Light / Dark: one component language, two surface palettes.
+/* Ivory / Graphite: warm stone, charcoal and a restrained gold inlay.
    Geometry and visibility preferences remain owned by their data-ui rules. */
 /* Continuous chrome surrounds the reading canvas without a ruled corner. */
 .app { background: var(--bg2); }
@@ -9,29 +9,42 @@
 .main {
   border-top-left-radius: var(--radius-xl);
   border-top-right-radius: var(--radius-xl);
+  box-shadow: 0 -1px 0 var(--edge-highlight), 0 0 24px rgb(0 0 0 / 2%);
 }
 .title-brand .brand-wordmark { color: var(--text-dim); opacity: 1; }
 .title-bar .session-tab {
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   color: var(--text-mid);
 }
 .title-bar .session-tab.active {
   background: var(--bg-elevated);
   color: var(--text);
-  border-color: var(--border);
-  box-shadow: var(--shadow-sm);
+  border-color: var(--border-light);
+  font-weight: 500;
+  box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-control);
 }
 .title-bar .session-tab:hover { background: var(--bg3); }
 .title-bar .session-tab.active:hover { background: var(--bg-elevated); }
+.sidebar-head { border-bottom-color: transparent; }
 .sidebar { background: var(--bg2); border-right: 0; }
 .sidebar::after { display: none; }
-.sidebar-new-btn { height: 36px; border: 0; color: var(--text-dim); background: transparent; border-radius: var(--radius-sm); justify-content: flex-start; }
-.sidebar-new-btn:hover { background: var(--accent-glow); }
+.sidebar-new-btn {
+  height: 36px; border: 1px solid var(--border-light);
+  color: var(--text); background: var(--bg-elevated);
+  border-radius: var(--radius-sm); justify-content: flex-start;
+  font-weight: 500;
+  box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-control);
+}
+.sidebar-new-btn:hover { background: var(--surface-selected); border-color: var(--accent-border); }
+.sidebar-new-btn:active { box-shadow: inset 0 1px 2px var(--border-light); }
 
 .toolbar { background: var(--bg2); border-left: 0; }
 .toolbar .toolbar-btn { border-radius: var(--radius-md); color: var(--text-mid); }
-.toolbar .toolbar-btn:hover { background: var(--bg3); color: var(--text); }
-.toolbar .toolbar-btn.active { background: var(--accent-soft); color: var(--accent-dim); }
+.toolbar .toolbar-btn:hover { background: var(--bg-elevated); color: var(--text); }
+.toolbar .toolbar-btn.active {
+  background: var(--surface-selected); color: var(--accent-dim);
+  box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-control);
+}
 .toolbar .toolbar-btn.active::before { display: none; }
 
 /* Quiet reading canvas. User text and generated output have distinct surfaces. */
@@ -40,51 +53,62 @@
 .live-wrap .terminal::before { display: none; }
 .live-wrap .agent-box {
   border-left-width: 1px;
-  border-color: var(--border);
+  border-color: var(--border-light);
   border-radius: var(--radius-lg);
   box-shadow: none;
 }
 .live-wrap .agent-box:hover { transform: none; box-shadow: none; border-color: var(--border-mid); }
 .live-wrap[data-ui-message-gradient="false"] .agent-box {
-  background: var(--ui-message-bg-color, var(--bg2));
+  background: var(--ui-message-bg-color, var(--surface-message));
 }
 .live-wrap .agent-reply h1,
 .live-wrap .agent-reply h2,
-.live-wrap .agent-reply h3 { letter-spacing: -0.025em; color: var(--text); }
+.live-wrap .agent-reply h3 { letter-spacing: -0.01em; color: var(--text); }
+:lang(zh) .live-wrap .agent-reply :is(h1, h2, h3, h4) { letter-spacing: 0; }
 .live-wrap .agent-reply pre,
 [data-theme="dark"] .live-wrap .agent-reply pre {
-  background: var(--bg2);
-  border-color: var(--border);
+  background: var(--surface-code);
+  border-color: transparent;
   border-radius: var(--radius-md);
   box-shadow: none;
 }
 .live-wrap .agent-reply blockquote { border-left-color: var(--accent-border); background: var(--accent-glow); }
 
-/* Composer uses the brightest surface, anchored by a thin, clear edge. */
+/* One raised input surface; the surrounding reading canvas remains flat. */
 .live-input {
-  border-color: var(--border-mid);
+  border-color: var(--border);
   border-radius: 20px;
   background: var(--bg-elevated);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.025), var(--shadow-md);
+  box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-composer);
 }
-.live-input:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-sm); }
+.live-input:focus-within { border-color: var(--accent); box-shadow: inset 0 1px 0 var(--edge-highlight), 0 0 0 2px var(--accent-glow), var(--shadow-composer); }
 .live-input .send-btn { border-radius: var(--radius-md); box-shadow: none; }
+.live-input .send-btn:not(:disabled):not(.busy) {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%), inset 0 -1px 0 rgb(0 0 0 / 10%), var(--shadow-control);
+}
+.live-input .send-btn:not(:disabled):not(.busy):active { box-shadow: inset 0 1px 2px rgb(0 0 0 / 12%); }
 .live-wrap .usage-strip { color: var(--text-mid); }
 .live-wrap .usage-chip { color: var(--text-mid); }
 .composer-help { color: var(--text-faint); }
 
 /* The same surfaces, edges and type hierarchy across every inspector. */
-.p-drawer { background: var(--bg); border-color: var(--border-mid); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); }
-.p-head { min-height: 80px; background: var(--bg-elevated); border-bottom-color: var(--border); }
-.p-title { font-size: var(--fs-xl); font-weight: 600; letter-spacing: -0.02em; }
+.p-drawer { background: var(--bg-elevated); border-color: var(--border); border-radius: var(--radius-xl); box-shadow: 0 1px 0 var(--edge-highlight) inset, var(--shadow-panel-lg); }
+.p-head { min-height: 76px; background: transparent; border-bottom-color: var(--border-light); }
+.p-title { font-size: var(--fs-xl); font-weight: 600; letter-spacing: -0.01em; }
+:lang(zh) .p-title { letter-spacing: 0; }
 .p-meta { color: var(--text-mid); }
+.p-heading .p-meta { font-family: var(--font-sans); line-height: 1.5; letter-spacing: 0; }
 .p-icon-btn { border-radius: var(--radius-sm); }
-.p-input, .p-select { background: var(--bg-elevated); border-color: var(--border-mid); border-radius: var(--radius-sm); }
+.p-input, .p-select { background: var(--surface-field); border-color: var(--border); border-radius: var(--radius-sm); box-shadow: inset 0 1px 2px rgb(0 0 0 / 2%); }
+.p-input:focus, .p-select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 .p-seg { background: var(--bg2); border-color: var(--border); }
-.p-seg-item.active { color: var(--accent-dim); }
+.p-seg-item.active { color: var(--accent-dim); box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-control); }
 .p-card { background: var(--bg-elevated); border-color: var(--border); border-radius: var(--radius-md); box-shadow: none; }
-.p-btn-primary { background: var(--accent); color: var(--on-accent); }
+.p-btn:not(:disabled) { background: var(--bg-elevated); box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-control); }
+.p-btn-primary { background: var(--accent); color: var(--on-accent); box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%), var(--shadow-control); }
+.p-btn-primary:disabled { box-shadow: none; }
 .p-btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.p-btn:active:not(:disabled), .p-btn-primary:active:not(:disabled) { box-shadow: inset 0 1px 2px rgb(0 0 0 / 10%); }
 .p-section { color: var(--text-dim); letter-spacing: 0; }
 .p-row:hover { background: var(--bg2); }
 .p-row.active, .p-row.selected { background: var(--accent-soft); }
@@ -92,12 +116,45 @@
 
 /* A compact, monochrome brand mark gives the empty state room to breathe. */
 [data-theme] .stream-empty-logo,
-[data-theme] .no-session-empty .stream-empty-logo { color: var(--text-dim); --brand-metal: var(--accent); }
-[data-theme] .welcome-title { color: var(--text); font-weight: 450; letter-spacing: -0.04em; }
+[data-theme] .no-session-empty .stream-empty-logo { color: var(--text-dim); --brand-metal: var(--brand-inlay); }
+[data-theme] .welcome-title { color: var(--text); font-family: var(--font-serif); font-weight: 600; letter-spacing: -0.025em; line-height: 1.45; }
 .welcome-description { color: var(--text-mid); }
-[data-theme] .hint-chip { background: var(--bg-elevated); border-color: var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
-[data-theme] .hint-chip:hover { color: var(--accent-dim); border-color: var(--accent-border); background: var(--accent-glow); transform: translateY(-1px); }
+[data-theme] .hint-chip { background: var(--bg-elevated); border-color: var(--border); border-radius: var(--radius-md); box-shadow: none; }
+[data-theme] .hint-chip:hover { color: var(--accent-dim); border-color: var(--accent-border); background: var(--accent-glow); transform: none; }
 .os-win32 .win-title-bar { background: var(--bg2); border-bottom: 0; }
+
+/* Consistent small surfaces: menus float; rows and status do not. */
+.model-dropdown, .autocomplete, .sidebar-view-menu {
+  border-color: var(--border);
+  box-shadow: 0 1px 0 var(--edge-highlight) inset, var(--shadow-panel-lg);
+}
+.sidebar .session-list > li,
+.sidebar .terminal-list > li,
+.sidebar .archive-list > li { margin-inline: 0; border-radius: var(--radius-sm); }
+.sidebar .session-list > li + li,
+.sidebar .terminal-list > li + li,
+.sidebar .archive-list > li + li { margin-top: 2px; }
+.sidebar .session-cwd { font-variant-numeric: tabular-nums; }
+.sidebar :is(.session-title, .side-title) { color: var(--text); }
+.sidebar :is(.session-list, .terminal-list, .workspace-children) li.current {
+  background: var(--surface-selected);
+  box-shadow: inset 0 1px 0 var(--edge-highlight), inset 0 0 0 1px var(--border-light);
+}
+.sidebar li.current :is(.session-title, .side-title) { font-weight: 600; color: var(--accent-dim); }
+.live-wrap .agent-reply table { border-color: var(--border-light); }
+.live-wrap .agent-reply th { background: var(--surface-code); color: var(--text-dim); }
+.live-wrap .agent-reply :not(pre) > code {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border-color: transparent;
+}
+.live-wrap .agent-reply a { text-decoration-thickness: 1px; text-underline-offset: 3px; }
+/* Visible keyboard focus is an intentional gold line, not a diffuse glow. */
+.p-icon-btn:focus-visible, .toolbar-btn:focus-visible,
+.sidebar-view-select:focus-visible, .sidebar-view-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+dialog.artifact-preview { font-family: var(--font-sans); box-shadow: var(--shadow-lg); }
 
 @media (max-width: 700px) {
   .p-drawer { border-radius: var(--radius-lg); }

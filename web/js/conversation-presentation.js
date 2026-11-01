@@ -1,5 +1,37 @@
-/* Shared verbatim with remote/public/conversation-presentation.js. Presentation helpers only; no session or transport state. */
+/* Shared verbatim with remote/public/conversation-presentation.js. Pure presentation and lifecycle rules; callers own session and transport state. */
 (() => {
+  // Event schema v1: completion means execution ended, not that the user's
+  // overall task succeeded. A failed child/tool attempt never changes the
+  // main turn's outcome. Legacy providers may express failure in any of
+  // these fields; lightweight replay must retain them.
+  function diagnosticState(result) {
+    if (!result || typeof result !== 'object') return 'pending';
+    if (result.success === false || result.isError === true || result.error
+      || (Number.isFinite(result.exitCode) && result.exitCode !== 0)) return 'failed';
+    if (result.degraded === 'budget' || result.degraded === 'iterations') return 'partial';
+    return 'ended';
+  }
+
+  // Cleanup can emit processing-done after an error or cancellation. The
+  // terminal outcome is sticky until an explicit new processing-start.
+  function turnLifecycle(name, previous = '') {
+    if (name === 'agent:processing-start') return { started: true, outcome: '' };
+    if (name === 'agent:error') return { started: false, outcome: 'error' };
+    if (name === 'agent:cancelled') return { started: false, outcome: 'stopped' };
+    if (name === 'agent:processing-done') return { started: false,
+      outcome: previous === 'error' || previous === 'stopped' ? previous : 'done' };
+    return null;
+  }
+
+  // Async collaborators may outlive a normally completed main turn. A
+  // stopped/failed turn never resumes its indicator because of late events.
+  function activityState({ finished = '', sealed = false, pending = 0,
+    thinking = false, delegated = 0, waiting = false } = {}) {
+    const running = !finished ? !sealed || pending > 0 || thinking || delegated > 0
+      : finished === 'done' && delegated > 0;
+    return running ? waiting ? 'waiting' : 'running' : 'settled';
+  }
+
   // Branch reconstruction timestamps describe the rebuild, not the original work.
   function activityTimestamp(meta) {
     if (!meta || /^hub:.*:branch:\d+$/.test(meta.id || '')) return null;
@@ -111,5 +143,5 @@
   }
 
   // A classic script on remote and a side-effect ESM import on desktop.
-  globalThis.AsHubConversationPresentation = Object.freeze({ activityTimestamp, renderActivityTime, toolActivityKey, usageMetrics, toolDisplayName, thinkingPreview, renderThinkingContent });
+  globalThis.AsHubConversationPresentation = Object.freeze({ eventVersion: 1, diagnosticState, turnLifecycle, activityState, activityTimestamp, renderActivityTime, toolActivityKey, usageMetrics, toolDisplayName, thinkingPreview, renderThinkingContent });
 })();

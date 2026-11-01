@@ -1,33 +1,33 @@
-# Build macOS (ARM64) + Windows (x64) + Linux (x64) releases
-# Triggered on version tags (v*) and manually via workflow_dispatch.
-#
-# All three platforms build in parallel. After all succeed, a release job
-# downloads all artifacts and creates a single GitHub Release — avoiding
-# the race condition caused by parallel "Create Release" steps competing
-# for the same tag.
-#
-# Output:
-#   - macOS: .dmg + .zip
-#   - Windows: .exe (NSIS installer)
-#   - Linux: .AppImage
-
-name: Build and Release
+name: Build verified artifacts
 
 on:
-  # workflow_dispatch only.  release.yml creates and pushes the version tag as
-  # part of its own flow, so a tag trigger here would start a second release
-  # job for the same tag and race it for the same GitHub Release assets.
+  # Artifact-only entry point. All publication is owned by release.yml.
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  core-checks:
+    uses: ./.github/workflows/core-checks.yml
+    with:
+      ref: ${{ github.sha }}
+  kernel-compat:
+    uses: ./.github/workflows/kernel-compat.yml
+    with:
+      ref: ${{ github.sha }}
+  windows-compat:
+    uses: ./.github/workflows/windows-compat.yml
+    with:
+      ref: ${{ github.sha }}
   build-mac:
+    needs: [core-checks, kernel-compat, windows-compat]
     runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup project Node.js
         uses: actions/setup-node@v4
@@ -45,17 +45,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
-
-      - name: Sync version from git tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          node -e "
-            const fs = require('fs');
-            const version = '${{ github.ref_name }}'.replace(/^v/, '');
-            const pkg = JSON.parse(fs.readFileSync('package.json','utf-8'));
-            pkg.version = version;
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
 
       - name: TypeScript build
         run: npm run build
@@ -86,10 +75,13 @@ jobs:
           if-no-files-found: error
 
   build-win:
+    needs: [core-checks, kernel-compat, windows-compat]
     runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup project Node.js
         uses: actions/setup-node@v4
@@ -107,17 +99,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
-
-      - name: Sync version from git tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          node -e "
-            const fs = require('fs');
-            const version = '${{ github.ref_name }}'.replace(/^v/, '');
-            const pkg = JSON.parse(fs.readFileSync('package.json','utf-8'));
-            pkg.version = version;
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
 
       - name: TypeScript build
         run: npm run build
@@ -138,10 +119,13 @@ jobs:
           if-no-files-found: error
 
   build-linux:
+    needs: [core-checks, kernel-compat, windows-compat]
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup project Node.js
         uses: actions/setup-node@v4
@@ -164,17 +148,6 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Sync version from git tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          node -e "
-            const fs = require('fs');
-            const version = '${{ github.ref_name }}'.replace(/^v/, '');
-            const pkg = JSON.parse(fs.readFileSync('package.json','utf-8'));
-            pkg.version = version;
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-
       - name: TypeScript build
         run: npm run build
 
@@ -192,130 +165,3 @@ jobs:
             release/*.blockmap
             release/latest-linux.yml
           if-no-files-found: error
-
-  release:
-    needs: [build-mac, build-win, build-linux]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: asHub-mac-${{ github.sha }}
-          path: release/
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: asHub-win-x64-${{ github.sha }}
-          path: release/
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: asHub-linux-x64-${{ github.sha }}
-          path: release/
-
-      - name: List release assets
-        run: ls -la release/
-
-      - name: Create GitHub Release
-        run: |
-          set -euo pipefail
-          TOKEN="${{ github.token }}"
-          REPO="${{ github.repository }}"
-          TAG="${{ github.ref_name }}"
-
-          # ── helpers ──────────────────────────────────────────────
-          api_call() {
-            local method="$1" path="$2" data="${3:-}"
-            local extra_args=()
-            [ -n "$data" ] && extra_args=(-d "$data")
-            curl -s -w "\n%{http_code}" \
-              -X "$method" \
-              -H "Authorization: Bearer $TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "${extra_args[@]}" \
-              "https://api.github.com/repos/$REPO/$path"
-          }
-
-          retry_with_backoff() {
-            local max_attempts=5 delay=10 attempt=1
-            local resp http_code body
-            while [ $attempt -le $max_attempts ]; do
-              resp=$(api_call "$1" "$2" "$3")
-              http_code=$(echo "$resp" | tail -1)
-              body=$(echo "$resp" | sed '$d')
-              if [ "$http_code" = "201" ] || [ "$http_code" = "200" ] || [ "$http_code" = "204" ]; then
-                echo "$body"
-                return 0
-              fi
-              if [ "$http_code" = "403" ] && echo "$body" | grep -q "rate limit"; then
-                echo "Rate limited (attempt $attempt/$max_attempts). Waiting ${delay}s…"
-                sleep "$delay"
-                delay=$((delay * 2))
-                attempt=$((attempt + 1))
-              else
-                echo "Create release: HTTP $http_code" >&2
-                echo "Error response: $body" >&2
-                return 1
-              fi
-            done
-            echo "Still rate limited after $max_attempts attempts" >&2
-            return 1
-          }
-
-          # ── check rate limit ────────────────────────────────────
-          echo "=== Rate limit status ==="
-          curl -sI -H "Authorization: Bearer $TOKEN" \
-            "https://api.github.com/repos/$REPO" 2>/dev/null | \
-            grep -i '^x-ratelimit-' || true
-
-          echo "=== Release assets ==="
-          ls -la release/
-
-          echo "=== Creating release for tag: $TAG ==="
-          BODY=$(retry_with_backoff POST "releases" \
-            "{\"tag_name\":\"$TAG\",\"generate_release_notes\":true}") || exit 1
-
-          # Get the upload URL
-          UPLOAD_URL=$(echo "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['upload_url'].replace('{?name,label}',''))")
-
-          # Upload each asset (with retry + backoff)
-          for f in \
-            release/*.dmg release/*.zip release/*.exe release/*.AppImage \
-            release/*.blockmap \
-            release/latest-mac.yml release/latest.yml release/latest-linux.yml; do
-            [ -f "$f" ] || continue
-            name=$(basename "$f")
-            enc_name=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$name")
-            echo "Uploading: $name"
-            uploaded=0
-            delay=10
-            for attempt in $(seq 1 5); do
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-                -X POST \
-                -H "Authorization: Bearer $TOKEN" \
-                -H "Content-Type: application/octet-stream" \
-                "$UPLOAD_URL?name=$enc_name" \
-                --data-binary "@$f")
-              if [ "$HTTP_CODE" = "201" ]; then
-                echo "  ✓ $name"
-                uploaded=1
-                break
-              elif [ "$HTTP_CODE" = "403" ]; then
-                echo "  Rate limited uploading $name (attempt $attempt/5), waiting ${delay}s…"
-                sleep "$delay"
-                delay=$((delay * 2))
-              else
-                echo "  ✗ $name (HTTP $HTTP_CODE)"
-                break
-              fi
-            done
-            [ "$uploaded" = "1" ] || { echo "  ✗ Failed to upload $name"; exit 1; }
-          done
-
-          echo "=== Release created successfully ==="

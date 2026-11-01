@@ -7,7 +7,7 @@ name: Release on tag
 #
 # Rather than duplicating the pipeline here (two release jobs racing for the
 # same GitHub Release is what the tag trigger used to cause), this workflow
-# forwards the tag to release.yml with the version parsed out of it.
+# forwards the exact source commit and version to release.yml.
 #
 # Needs the workflow token to be allowed to dispatch workflows:
 #   Settings -> Actions -> General -> Workflow permissions.
@@ -40,8 +40,9 @@ jobs:
             echo "::error::tag ${GITHUB_REF_NAME} is not vX.Y.Z — refusing to guess a version"
             exit 1
           fi
-          echo "tag ${GITHUB_REF_NAME} -> dispatching release.yml for version ${version}"
-          if ! gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f "version=${version}"; then
+          source_sha=$(git rev-parse HEAD)
+          echo "tag ${GITHUB_REF_NAME} -> dispatching release.yml for version ${version} at ${source_sha}"
+          if ! gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f "version=${version}" -f "source_sha=${source_sha}"; then
             echo "::error::could not dispatch release.yml. Run it manually: Actions -> Release -> Run workflow, version=${version}"
             exit 1
           fi

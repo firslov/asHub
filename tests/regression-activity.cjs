@@ -442,5 +442,23 @@ async function runSwarmTool(x,items,entries){
   assert(a.closest('.execution-activity').querySelector('.execution-activity-time').dateTime===new Date(ts+5000).toISOString());
   assert(b.closest('.execution-activity').querySelector('.execution-activity-time').dateTime===new Date(ts+4000).toISOString());
  });
+ for(const c of require('./fixtures/conversation-events.cjs')) await check('Desktop child result contract: '+c.name,()=>{
+  const x=completionFixture(),launched=x.launch('call');
+  launched.block._saId='child';x.session._saBlocksBySaId=new Map([['child',launched.block]]);
+  Object.assign(x.e.context,{fmtNum:String});
+  sseHandler(x,'subagent:done').call(x.session,{subagentId:'child',...c.payload});
+  assert(launched.icon.textContent===(c.outcome==='failed'?'✗':c.outcome==='partial'?'◐':'✓'));
+  assert(launched.block.classList.contains('subagent-failed')===(c.outcome==='failed'));
+  x.finish();assert(x.box().dataset.attention==='false','a child result must not fail the main turn');
+ });
+ for(const c of require('./fixtures/conversation-events.cjs').filter(c=>c.outcome!=='partial')) await check('Desktop tool result contract: '+c.name,()=>{
+  const x=fixture(),row=x.tool('bash');
+  x.session.streamEl.querySelector=()=>row;
+  Object.assign(x.e.context,{saIdFromToolId:()=>'',refreshActivity:x.activity.refreshActivity,
+   refreshToolSummaries:x.groups.refreshToolSummaries,absorbAsToolBody:()=>true,maybeScroll(){},CSS:{escape:x=>x}});
+  sseHandler(x,'agent:tool-completed').call(x.session,{toolCallId:'call',...c.payload});
+  assert(row.classList.contains(c.outcome==='failed'?'err':'ok'));
+  assert(!row.textContent.includes('exit undefined'));
+ });
  console.log(JSON.stringify({checks:results.length,passed:results.filter(x=>x.passed).length,failed:results.filter(x=>!x.passed).length}));
 })();

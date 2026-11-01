@@ -1,7 +1,7 @@
 /* Default conversation view: one calm disclosure per consecutive work phase.
    Replies, task plans, approvals and explicit shell commands stay outside.
    Process disclosures are text rows, never another card around their children. */
-.execution-activity { margin: 12px 0 18px; color: var(--text-mid); }
+.execution-activity { margin: 12px 0 10px; color: var(--text-mid); }
 .execution-activity-head {
   display: flex; align-items: center; flex-wrap: wrap; gap: 7px 10px;
   width: fit-content; max-width: 100%; min-height: 36px;

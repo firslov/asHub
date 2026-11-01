@@ -1,3 +1,4 @@
+import { supplementTask } from "./conversation-updates.js";
 import { randomUUID } from "node:crypto";
 import { CollaborationTasks } from "../collaboration.js";
 import type { ConversationAccess } from "../bridges/types.js";
@@ -10,6 +11,7 @@ export interface ConversationRuntime {
   projects: ProjectStore;
   tasks?: CollaborationTasks;
   tasksDirectory: string;
+  publishQueue?(session: Session, name: string, payload: unknown): void;
   withContextLock<T>(session: Session, fn: () => Promise<T>): Promise<T>;
   submitQuery(session: Session, query: string, images?: undefined, parent?: undefined, beforeSubmit?: () => void, taskId?: string): Promise<Record<string, unknown>>;
 }
@@ -40,6 +42,17 @@ export function createConversationAccess(sourceId: string, runtime: Conversation
     if (!p?.sessionIds.includes(task.sourceId) || !p.sessionIds.includes(task.recipientId)) throw new Error("Task outside this project");
   };
   return {
+    async supplement(id, requestKey, message, signal) {
+      signal?.throwIfAborted(); checkTask(id);
+      const task = registry().get(id);
+      if (task.sourceId !== sourceId) throw new Error("Only the task sender can supplement it");
+      const s = target(task.recipientId);
+      return withContextLock(s, async () => {
+        signal?.throwIfAborted(); checkTask(id);
+        if (target(task.recipientId) !== s) throw new Error("Conversation changed");
+        return supplementTask(s, registry(), id, requestKey, message, runtime.publishQueue);
+      });
+    },
     async waitTasks(targets, waitMs = 120000, signal) {
       // The store validates and copies the same IDs before installing listeners.
       const watched = Array.isArray(targets) ? targets.map(t => t && ({ id: t.id, afterRevision: t.afterRevision, afterState: t.afterState })) : targets;

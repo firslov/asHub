@@ -207,7 +207,7 @@
 }
 
 .toolbar-btn:active {
-  transform: scale(0.92);
+  transform: scale(0.97);
   box-shadow: none;
 }
 
@@ -645,12 +645,13 @@
 /* Workspace chrome: quiet surfaces, readable navigation, a clear starting point. */
 .app { height: 100dvh; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); }
 .title-bar { background: var(--bg); }
-/* Original vector wordmark; compact and independent of installed fonts. */
+/* Editorial wordmark: italic lead-in, architectural serif capitals. */
 .title-brand {
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  padding-right: 4px;
+  padding-right: 0;
+  margin-right: 6px;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 1.125rem;
@@ -664,15 +665,15 @@
 
 .main::before { display: none; }
 .title-bar .session-tabs,
-[data-theme="dark"] .title-bar .session-tabs { background: transparent; border-radius: 0; gap: 6px; }
-.session-tab { padding: 0.35rem 0.8rem; border-radius: var(--radius-sm); }
+[data-theme="dark"] .title-bar .session-tabs { background: transparent; border-radius: 0; gap: 4px; }
+.session-tab { padding: 0.35rem 0.8rem; min-height: 34px; border-radius: var(--radius-sm); }
 .session-tab.active { background: var(--bg2); border-color: var(--border-light); box-shadow: none; }
-.toolbar { background: var(--bg); gap: 6px; }
+.toolbar { background: var(--bg); gap: 5px; }
 .toolbar-btn { width: 36px; height: 36px; border-radius: var(--radius-md); flex-shrink: 0; }
 .toolbar-btn svg { width: 18px; height: 18px; }
 .toolbar-btn.active { background: var(--accent-glow); color: var(--accent); }
 .toolbar-btn.active::before { left: -8px; }
-.toolbar > :first-child { margin-top: 12px; }
+.toolbar > :first-child { margin-top: 10px; }
 .toolbar > .toolbar-sep { margin-top: auto; }
 .toolbar > :last-child { margin-bottom: 8px; }
 .sidebar-backdrop { display: none; }
@@ -688,10 +689,10 @@
 .stream-empty { position: relative; min-height: 100%; }
 .stream-empty-mini { margin: 0 0 22px; gap: 0; }
 .stream-empty-mini .stream-empty-logo { opacity: 1; }
-.stream-empty-mini .stream-empty-logo svg { width: 64px; height: 64px; }
-.stream-empty-logo, .page-loader-logo { color: var(--text-dim); --brand-metal: var(--accent); }
+.stream-empty-mini .stream-empty-logo svg { display: block; width: 88px; height: 88px; }
+.stream-empty-logo, .page-loader-logo { color: var(--text-dim); --brand-metal: var(--brand-inlay); }
 [data-theme="dark"] .stream-empty-logo,
-[data-theme="dark"] .page-loader-logo { --brand-metal: var(--accent); }
+[data-theme="dark"] .page-loader-logo { --brand-metal: var(--brand-inlay); }
 .stream-empty-line, .stream-empty-logo::before, .stream-empty-logo::after { display: none; }
 .logo-cursor { animation: none; }
 .welcome-title {
@@ -703,9 +704,9 @@
   line-height: 1.35;
   text-wrap: balance;
 }
-.welcome-description { max-width: 32rem; margin-top: 14px; color: var(--text-mid); font-size: var(--fs-lg); line-height: 1.8; text-wrap: balance; }
+.welcome-description { max-width: 30rem; margin-top: 12px; color: var(--text-mid); font-size: var(--fs-md); line-height: 1.8; text-wrap: balance; }
 .stream-empty-prompt { margin-top: 26px; padding: 9px 18px; color: var(--text-dim); font-size: var(--fs-md); }
-.stream-empty-hints, .stream-empty-templates { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 28px; max-width: 38rem; }
+.stream-empty-hints, .stream-empty-templates { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 24px; max-width: 38rem; }
 .stream-empty-hints .hint-label { flex: 0 0 100%; margin-bottom: 2px; color: var(--text-faint); font-family: var(--font-sans); letter-spacing: 0; text-transform: none; }
 .hint-chip, .stream-empty-prompt.template { min-height: 40px; padding: 10px 16px; margin: 0; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; font-family: var(--font-sans); font-size: var(--fs-sm); color: var(--text-dim); }
 .hint-chip:hover, .stream-empty-prompt.template:hover { background: var(--bg2); border-color: var(--accent-border); color: var(--text); transform: none; }
@@ -751,18 +752,26 @@
 }
 
 /* Shared brand lettering: title bar stays typographic, with no extra icon. */
-.brand-wordmark { display: block; width: 68px; height: 18px; flex-shrink: 0; }
-.win-title-bar-drag .brand-wordmark { width: 53px; height: 14px; }
+.brand-wordmark { display: block; width: 78px; height: 39px; flex-shrink: 0; overflow: visible; }
+.win-title-bar-drag .brand-wordmark { width: 64px; height: 32px; }
+.os-win32 .title-brand { display: none; }
+/* The native traffic lights end at ~72px; leave a quiet 32px gap. */
+[data-native-titlebar="mac"] .title-bar { padding-left: 104px; }
+@media (max-width: 700px) {
+  .title-brand { margin-right: 0; }
+  .title-brand .brand-wordmark { width: 64px; height: 32px; }
+}
 
 /* Quiet, consistently sized tab actions: edit · connection · close. */
 .title-bar .session-tab { gap: .3rem; padding-inline: .7rem .4rem; }
-.title-bar .session-tab-label { flex: 1; }
+.title-bar .session-tab-label { flex: 1; line-height: 1.4; }
 .title-bar .session-tab-close, .session-tab-action {
   position: static; transform: none; flex: 0 0 20px; width: 20px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
-  padding: 0; border-radius: 5px; color: var(--text-dim);
-  opacity: .6; -webkit-app-region: no-drag;
+  padding: 0; border-radius: 5px; color: var(--text-faint);
+  opacity: 1; -webkit-app-region: no-drag;
 }
-.session-tab-action:hover, .session-tab-action:focus-visible { opacity: 1; color: var(--text); background: var(--bg3); outline: none; }
+.session-tab-action:hover, .session-tab-action:focus-visible { opacity: 1; color: var(--text); background: var(--bg3); }
+.session-tab-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .session-tab-proxy[data-enabled="true"] { color: var(--accent); opacity: .85; }
 .session-tab-action svg { pointer-events: none; }

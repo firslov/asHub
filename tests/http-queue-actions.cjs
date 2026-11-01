@@ -49,6 +49,18 @@ const assert=require('node:assert/strict'),{once}=require('node:events');
   await api(`/${id}/queue/withdraw`,{id:c.queueId,requestId:'queue-actions-delete-01'});assert.equal((await api(`/${id}/queue`)).length,0);
   assert.equal((await call(`/${id}/queue/update`,{...update,id:c.queueId,requestId:'queue-actions-gone-01'})).status,409);
   assert.equal((await fetch(base+`/${id}/queue/update`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(update)})).status,401);
+  const recipient=b,{instanceId:sourceId}=await api('/sessions',{cwd:e.dir}),access=b.opts.conversationAccess;b=recipient;
+  await api('/api/projects',{action:'create',name:'Supplement test',cwd:e.dir,add:[sourceId,id]});
+  const task=await access.send(id,'Independent assignment');
+  const receipt=await access.supplement(task.taskId,'update-001','Use corrected criteria');assert.equal(receipt.mode,'queue');
+  const pending=(await api(`/${id}/queue`))[0];assert.equal(pending.revision,1);assert.match(pending.query,/corrected criteria/);
+  const blocked=await call(`/${id}/queue/update`,{id:pending.id,revision:1,action:'promote',requestId:'task-promote-001'});
+  assert.equal(blocked.status,409);assert.match(await blocked.text(),/task supplement/);
+  assert.equal((await access.task(task.taskId)).state,'queued');
+  await api(`/${id}/queue/update`,{id:pending.id,revision:1,action:'edit',query:'User revised assignment',requestId:'task-queue-edit-001'});
+  await api(`/${id}/queue/withdraw`,{id:pending.id,requestId:'task-withdraw-001'});
+  assert.equal((await access.task(task.taskId)).state,'cancelled');
+  assert.equal((await access.supplement(task.taskId,'update-001')).state,'dropped');
   b.pendingTurn.resolve({stopReason:'end_turn'});b.pendingTurn=null;
   console.log('PASS queue HTTP: stable position, preserved images, revisions, idempotency, promotion, consumed/withdrawn races and authentication');
  }finally{await hub.shutdown();fs.rmSync(e.dir,{recursive:true,force:true});}

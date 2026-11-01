@@ -16,6 +16,7 @@ export interface InstalledApplicationContext extends ApplicationExtensionContext
  * namespaces as session plugins. No executable module is imported during discovery. */
 export function installedApplicationDefinitions(settingsFile: string, options: {
   services?: Readonly<Record<string, unknown>>;
+  bindServices?(pluginId: string, context: ApplicationExtensionContext): Readonly<Record<string, unknown>>;
 } = {}): ApplicationExtensionDefinition[] {
   const entries = pluginCatalog(settingsFile);
   const selected = entries.filter(entry => entry.applicationSpecifier || entry.manifest?.ui);
@@ -42,7 +43,7 @@ export function installedApplicationDefinitions(settingsFile: string, options: {
         if (typeof activate !== 'function') throw new Error('Missing application activate(ctx) export');
         const settings = readPluginSettings(settingsFile);
         const pluginContext: InstalledApplicationContext = Object.freeze({
-          ...context, pluginId: entry.id, services: Object.freeze({ ...options.services }),
+          ...context, pluginId: entry.id, services: Object.freeze({ ...options.services, ...options.bindServices?.(entry.id, context) }),
           getExtensionSettings<T extends Record<string, unknown>>(namespace: string, defaults: T): T {
             if (context.signal.aborted) throw new Error('Extension activation has ended');
             if (!manifest.configNamespaces.includes(namespace)) throw new Error('Plugin settings namespace was not declared');

@@ -30,7 +30,8 @@ const {once}=require('node:events');
   }
   const meta = await fetch(endpoint('out/changes.md'), {headers, method:'HEAD'});
   const version = meta.headers.get('x-artifact-version'); assert.match(version, /^[a-f0-9]{64}$/);
-  assert.equal(await hub.resolveArtifact(id, 'out/changes.md'), fs.realpathSync(path.join(cwd,'out/changes.md')));
+  // Match the OS-native canonical path: Windows TEMP may use an 8.3 alias.
+  assert.equal(await hub.resolveArtifact(id, 'out/changes.md'), await fs.promises.realpath(path.join(cwd,'out/changes.md')));
   await assert.rejects(hub.resolveArtifact('deadbeef','out/changes.md'));
   await assert.rejects(hub.resolveArtifact(id,'../secret.txt'));
   const revisionURL = endpoint('out/changes.md') + '&version=' + version;

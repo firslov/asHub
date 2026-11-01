@@ -3,6 +3,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { summarizeMessage } from "./summarize.js";
+import { messageEntries, renderMemory, validateCheckpointMemory, fallbackMemory, type ContextCheckpoint } from "./context-memory.js";
 
 export interface ToolCall {
   id?: string;
@@ -15,6 +16,7 @@ export interface AgentMessage {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  meta?: Record<string, unknown>;
 }
 
 export interface SessionHeaderEntry {
@@ -41,6 +43,7 @@ export interface CompactionEntry {
   timestamp: number;
   firstKeptId: string;
   tokensBefore: number;
+  checkpoint?: ContextCheckpoint;
 }
 
 export type SessionEntry = SessionHeaderEntry | MessageEntry | CompactionEntry;
@@ -127,6 +130,7 @@ export class SessionStore {
   private writes = new Set<Promise<unknown>>();
   private appendQueue: Promise<unknown> = Promise.resolve();
   private writeFailed = false;
+  private revision = 0;
 
   /** Refuse new writes immediately, then drain already-started appends. */
   async seal(): Promise<void> {
@@ -181,6 +185,7 @@ export class SessionStore {
     this.persistLeaf();
   }
 
+  getRevision(): number { return this.revision; }
   getActiveLeaf(): string { return this.activeLeaf; }
   setActiveLeaf(id: string): void {
     this.assertWritable();
@@ -195,6 +200,7 @@ export class SessionStore {
       throw err;
     }
     this.activeLeaf = id;
+    this.revision++;
     this.persistLeaf();
   }
   getRootId(): string { return this.rootId; }
@@ -266,15 +272,21 @@ export class SessionStore {
     await this.appendDurably(lines.join("\n") + "\n");
     for (const e of staged) this.entries.set(e.id, e);
     this.activeLeaf = parent;
+    this.revision++;
     this.persistLeaf();
     return newIds;
   }
 
-  appendCompaction(firstKeptId: string, tokensBefore: number = 0): Promise<string> {
-    return this.enqueue(() => this.appendCompactionImpl(firstKeptId, tokensBefore));
+  appendCompaction(firstKeptId: string, tokensBefore: number = 0, checkpoint?: ContextCheckpoint, expectedRevision?: number): Promise<string> {
+    return this.enqueue(() => {
+      if (expectedRevision !== undefined && this.revision !== expectedRevision) throw new Error("stale compaction snapshot");
+      return this.appendCompactionImpl(firstKeptId, tokensBefore, checkpoint);
+    });
   }
-  private async appendCompactionImpl(firstKeptId: string, tokensBefore: number): Promise<string> {
-    if (!this.entries.has(firstKeptId)) throw new Error(`firstKeptId unknown: ${firstKeptId}`);
+  private async appendCompactionImpl(firstKeptId: string, tokensBefore: number, checkpoint?: ContextCheckpoint): Promise<string> {
+    const branch = this.getBranch();
+    if (!branch.some(e => e.type === "message" && e.id === firstKeptId)) throw new Error(`firstKeptId not in active branch: ${firstKeptId}`);
+    if (checkpoint && checkpoint.sourceLeaf !== this.activeLeaf) throw new Error("stale checkpoint source");
     this.flushHeader();
     let id = newEntryId();
     while (this.entries.has(id)) id = newEntryId();
@@ -285,11 +297,13 @@ export class SessionStore {
       timestamp: Date.now(),
       firstKeptId,
       tokensBefore,
+      ...(checkpoint ? { checkpoint: JSON.parse(JSON.stringify(checkpoint)) as ContextCheckpoint } : {}),
     };
     // Persist first; commit to memory only after the write succeeds.
     await this.appendDurably(JSON.stringify(e) + "\n" + JSON.stringify({ type: "leaf", leafId: e.id }) + "\n");
     this.entries.set(e.id, e);
     this.activeLeaf = e.id;
+    this.revision++;
     this.persistLeaf();
     return e.id;
   }
@@ -306,6 +320,32 @@ export class SessionStore {
       cur = e.parentId;
     }
     return out.reverse();
+  }
+
+  /** Source visibility follows the active branch. A retained synthetic checkpoint
+   * may carry its evicted sources across a context-drop branch rewrite; it never
+   * admits the dropped recent tail or unrelated branches. */
+  getHistoryEntries(leafId: string = this.activeLeaf): MessageEntry[] {
+    return this.expandHistorySources(this.getBranch(leafId));
+  }
+  private expandHistorySources(branch: SessionEntry[]): MessageEntry[] {
+    const out: MessageEntry[] = [], seenMessages = new Set<string>(), seenCheckpoints = new Set<string>();
+    const stack = [...branch].reverse();
+    while (stack.length) {
+      const e = stack.pop()!;
+      if (e.type !== "message") continue;
+      const checkpointId = e.message.meta?.ashubCheckpoint;
+      const checkpoint = typeof checkpointId === "string" ? this.entries.get(checkpointId) : undefined;
+      if (checkpoint?.type === "compaction") {
+        if (seenCheckpoints.has(checkpoint.id)) continue;
+        seenCheckpoints.add(checkpoint.id);
+        const source = this.getBranch(checkpoint.parentId);
+        const end = source.findIndex(entry => entry.id === checkpoint.firstKeptId);
+        if (end >= 0) { stack.push(...source.slice(0, end).reverse()); continue; }
+      }
+      if (!seenMessages.has(e.id)) { seenMessages.add(e.id); out.push(e); }
+    }
+    return messageEntries(out);
   }
 
   buildMessages(leafId: string = this.activeLeaf): AgentMessage[] {
@@ -325,8 +365,13 @@ export class SessionStore {
       const c = branch[compactionIdx] as CompactionEntry;
       const firstKeptIdx = branch.findIndex((e) => e.id === c.firstKeptId);
       startIdx = firstKeptIdx >= 0 ? firstKeptIdx : 0;
-      const summary = renderEvictedSummary(branch, startIdx);
-      messages.push({ role: "user", content: summary });
+      const sources = this.expandHistorySources(branch.slice(0, startIdx));
+      const checkpoint = c.checkpoint;
+      // Old journals stay readable. Invalid generated notes never become input.
+      const memory = validateCheckpointMemory(checkpoint, new Set(sources.map(e => e.id)));
+      const summary = memory ? renderMemory(sources, memory, checkpoint!.mode)
+        : checkpoint ? renderMemory(sources, fallbackMemory(sources), "fallback") : renderEvictedSummary(branch, startIdx);
+      messages.push({ role: "user", content: summary, ...(checkpoint ? { meta: { ashubCheckpoint: c.id } } : {}) });
       entryIds.push(null);
     }
     for (let i = startIdx; i < branch.length; i++) {

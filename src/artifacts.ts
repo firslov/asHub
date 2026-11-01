@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -22,7 +23,7 @@ export async function openArtifact(cwd: string, requested: string) {
   try {
     const stat = await file.stat();
     if (!stat.isFile()) throw fail(404, "File not found");
-    return { file, stat, candidate };
+    return { file, stat, candidate, resolved };
   } catch (e) { await file.close(); throw e; }
 }
 
@@ -33,11 +34,15 @@ export async function serveArtifact(req: IncomingMessage, res: ServerResponse, c
     const opened = await openArtifact(cwd, requested);
     file = opened.file;
     const { stat, candidate } = opened;
+    const version = createHash('sha256').update(JSON.stringify([stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs])).digest('hex');
+    const expected = new URL(req.url || '/', 'http://localhost').searchParams.get('version');
+    if (expected !== null && expected !== version) { res.writeHead(409); res.end('File changed'); return; }
     const name = encodeURIComponent(path.basename(candidate)).replace(/['()*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
     res.writeHead(200, {
       "Content-Type": "application/octet-stream",
       "Content-Disposition": `attachment; filename="download"; filename*=UTF-8''${name}`,
       "Content-Length": stat.size,
+      "X-Artifact-Version": version,
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "sandbox",

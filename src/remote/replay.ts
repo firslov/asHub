@@ -5,13 +5,13 @@ const diagnostic = (name: string) => name.startsWith('agent:tool-') || name.star
 function dataOf(frame: string): any {
   try { return JSON.parse(frame.match(/^data: (.+)$/m)?.[1] ?? 'null'); } catch { return null; }
 }
-/** Select whole turns; never begin halfway through tool calls or approvals. */
+/** Select whole tasks; commands and steering continue the current lifecycle. */
 export function mobileReplayStart(frames: string[], turns = 12): number {
   let found = 0;
   for (let i = frames.length - 1; i >= 0; i--) {
     if (!frames[i]!.includes('"agent:query"')) continue;
     const data = dataOf(frames[i]!);
-    if (data?.meta?.name === 'agent:query' && !data.payload?.command && ++found === turns) return i;
+    if (data?.meta?.name === 'agent:query' && !data.payload?.command && !data.payload?.steering && ++found === turns) return i;
   }
   return 0;
 }

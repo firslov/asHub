@@ -64,6 +64,7 @@
   </script>
   <link rel="stylesheet" href="/vendor/fonts/fonts.css" />
   <link rel="stylesheet" href="/css/styles.css" />
+  <link rel="stylesheet" href="/css/file-preview.css" />
   <link rel="stylesheet" href="/css/live.css" />
   <link rel="stylesheet" href="/css/toast.css" />
   <link rel="stylesheet" href="/css/updater.css" />
@@ -260,7 +261,7 @@
                 <polyline points="4 6 7 9 10 6"/>
               </svg>
             </button>
-            <div class="composer-help" id="composer-help"><span data-i18n="composer.shortcuts"></span><span class="composer-keyboard" data-i18n="composer.keyboard"></span></div>
+            <div class="composer-help" id="composer-help"><button type="button" id="delivery-mode" class="delivery-mode" hidden></button><span data-i18n="composer.shortcuts"></span><span class="composer-keyboard" data-i18n="composer.keyboard"></span></div>
             <ul class="autocomplete" id="autocomplete" hidden></ul>
           </form>
         </div>
@@ -845,6 +846,8 @@
   </div>
 
   <script src="/js/conversation-scrollbar.js" defer></script>
+  <script src="/js/file-preview.js"></script>
+  <script src="/js/file-preview-renderers.js"></script>
   <script type="module" src="/js/client.js"></script>
   <script type="module" src="/js/export.js"></script>
 </body>

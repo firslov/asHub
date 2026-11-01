@@ -231,7 +231,7 @@ function delayedCodexBridge() {
   Object.assign(b,{
     closed:false,initPromise:Promise.resolve(),backendRegistered:true,queryQueue:[],queuedIds:[],
     codexHost:{sync(){started();return pending;},close(){}},
-    _subagents:new Map(),pendingPermissions:new Map(),permissionSessionApproved:new Set(),shellExchanges:[],
+    _subagents:new Map(),compactionControllers:new Set(),pendingPermissions:new Map(),permissionSessionApproved:new Set(),shellExchanges:[],
     core:{kill(){},handlers:{call(){return []; }},bus:{emit(name){
       emitted.push(name);
       if(name==='agent:submit') {

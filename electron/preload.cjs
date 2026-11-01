@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onBackgroundSettings: (cb) => onChannel('desktop:background:changed', cb),
   onOpenMobileAccess: (cb) => onChannel('desktop:open-mobile', cb),
   notifyDesktopReady: () => ipcRenderer.send('desktop:ready'),
+  fileAction: (request) => ipcRenderer.invoke("desktop:file", request),
   pickDirectory: () => ipcRenderer.invoke("pick-directory"),
   checkForUpdate: () => ipcRenderer.invoke("check-for-update"),
   startUpdateDownload: () => ipcRenderer.invoke("start-update-download"),

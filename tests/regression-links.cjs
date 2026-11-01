@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { env } = require('./harness.cjs');
 const tick = () => new Promise(r => setImmediate(r));
 
-function setup(response = {ok:true,headers:{get:()=> 'attachment; filename="download"'}}) {
+function setup(response = {ok:true,headers:{get:()=> 'attachment; filename="download"'}}, preview) {
   let click;
   const saved=[], requests=[], notices=[], external=[];
   const origin='http://127.0.0.1:7878';
@@ -18,8 +18,8 @@ function setup(response = {ok:true,headers:{get:()=> 'attachment; filename="down
       saved.push({href:a.href,download:a.download,target:a.target});
     }};return a;
   }};
-  const e=env({modules:{'./toast.js':{toast:m=>notices.push(m)},'./i18n.js':{t:k=>k}},globals:{
-    document,location:{origin,href:origin+'/aaaaaa/'},window:{electronAPI:{openExternal:async href=>external.push(href)}},
+  const e=env({modules:{'./toast.js':{toast:m=>notices.push(m)},'./i18n.js':{t:k=>k,lang:{peek:()=> 'zh'}}},globals:{
+    AsHubFilePreview:preview,document,location:{origin,href:origin+'/aaaaaa/'},window:{electronAPI:{openExternal:async href=>external.push(href)}},
     fetch:async(url,opts)=>{requests.push({url,opts});return typeof response==='function'?response():response;},
   }});
   const mod=e.load('web/js/links.js');
@@ -82,4 +82,16 @@ test('parent-relative artifact paths reach containment checks instead of escapin
   }
   assert.equal(s.saved.length,0);assert.equal(s.notices.length,3);
   for(const href of ['../aaaaaa/','../aaaaaa/index.html','?view=chat']) assert.equal(s.click(href,'bbbbbb').defaultPrevented,false);
+});
+
+
+test('file links open the shared preview with the owning conversation and preserve external navigation',async()=>{
+ const previews=[];const s=setup(undefined,{open:options=>previews.push(options)});
+ s.click('results/report%20one.pdf','bbbbbb');await tick();
+ assert.equal(previews.length,1);assert.equal(previews[0].name,'report one.pdf');assert.equal(previews[0].lang,'zh');
+ assert.equal(typeof previews[0].openExternal,'function');
+ await previews[0].openExternal('https://example.com/reference');
+ assert.deepEqual(s.external.splice(0),['https://example.com/reference']);
+ assert.equal(new URL(previews[0].url).pathname,'/bbbbbb/artifacts');assert.equal(s.saved.length,0);assert.equal(s.requests.length,0);
+ s.click('https://example.com/document.pdf');await tick();assert.equal(s.external.length,1);assert.equal(previews.length,1);
 });

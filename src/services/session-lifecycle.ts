@@ -1,3 +1,4 @@
+import { createHistoryReader } from "../history/history-reader.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -90,7 +91,7 @@ async function initializeSession(
   try {
     if (typeof setup?.proxyEnabled === "boolean") writeNetworkPolicy(setup.proxyEnabled, id);
     bridge = isRestored && isAgent ? null as unknown as Bridge
-      : opts.makeBridge({ sessionId: id, cwd, kind, initialMessages, compactionStrategy, ...setup, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id) });
+      : opts.makeBridge({ sessionId: id, cwd, kind, initialMessages, compactionStrategy, historyAccess: isAgent ? createHistoryReader(() => session?.store ?? null) : undefined, ...setup, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id) });
   } catch (error) {
     if (typeof setup?.proxyEnabled === "boolean") { try { writeNetworkPolicy(null, id); } catch {} }
     await store?.seal();

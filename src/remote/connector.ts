@@ -296,7 +296,7 @@ export class RemoteConnector {
   private async executeRequest(op: string, args: any): Promise<any> {
     if (!this.config || this.config.enabled === false || this.stopped) throw error('移动访问已关闭', 403);
     const epoch = this.generation;
-    if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, thinking: true, queue: true };
+    if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, thinking: true, queue: true, steering: true, queueActions: true };
     if (op === 'project-groups') return this.groups(epoch);
     if (op === 'project-tasks') return this.projectTasks(args, epoch);
     if (op === 'sessions') { const result = await this.sessions(); this.current(epoch); return result; }
@@ -318,6 +318,10 @@ export class RemoteConnector {
     if (epoch !== this.generation || this.stopped) throw error('移动访问授权已变更，请重新确认', 403);
     if (op === 'artifact') return this.artifact(args, session, epoch);
     if (op === 'queue') return this.local(`/${session.instanceId}/queue`);
+    if (op === 'queue-update') {
+      if (typeof args.id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(args.id)) throw error('排队消息 ID 无效');
+      return this.local(`/${session.instanceId}/queue/update`, { id: args.id, requestId: args.requestId, revision: args.revision, action: args.action, query: args.query });
+    }
     if (op === 'queue-withdraw') {
       if (typeof args.id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(args.id)) throw error('排队消息 ID 无效');
       return this.local(`/${session.instanceId}/queue/withdraw`, { id: args.id, requestId: args.requestId });
@@ -365,7 +369,9 @@ export class RemoteConnector {
       if (!Array.isArray(images) || images.length > 4 || images.some((x: any) => !x || !/^image\/(png|jpeg|webp|gif)$/.test(x.mimeType) || (x.id !== undefined
         ? typeof x.id !== 'string' || !new RegExp(`^${session.instanceId}_img_[a-z0-9]+_[a-z0-9]+$`).test(x.id)
         : typeof x.data !== 'string' || x.data.length > 4 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(x.data)))) throw error('图片格式或大小无效');
-      return this.once(args.requestId, 'submit', { session: session.instanceId, query, images }, () => this.local(`/${session.instanceId}/submit`, { query, images }, true));
+      if (args.delivery !== undefined && args.delivery !== 'queue' && args.delivery !== 'steer') throw error('发送方式无效');
+      const delivery = args.delivery === undefined ? {} : {delivery: args.delivery};
+      return this.once(args.requestId, 'submit', { session: session.instanceId, query, images, ...delivery }, () => this.local(`/${session.instanceId}/submit`, { query, images, ...delivery }, true));
     } finally {
       const remaining = (this.validating.get(key) || 1) - 1;
       if (remaining) this.validating.set(key, remaining); else this.validating.delete(key);

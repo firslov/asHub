@@ -750,3 +750,50 @@
 .queue-edit { display:block; margin-top:10px; padding:3px 0; border:0; background:none; color:var(--text-faint); font:inherit; font-size:var(--fs-xs); cursor:pointer; }
 .queue-edit:hover { color:var(--accent-dim); }
 .queue-edit:disabled { opacity:.5; cursor:wait; }
+
+/* Follow-up intent stays quiet and only appears during active work. */
+.composer-help .delivery-mode{border:0;background:transparent;color:var(--text-muted);font:inherit;font-size:var(--fs-xs);padding:0;cursor:pointer;white-space:nowrap}
+.composer-help .delivery-mode:hover{color:var(--accent)}
+.composer-help .delivery-mode:focus-visible{outline:1px solid var(--accent);outline-offset:3px;border-radius:3px}
+.queue-status{display:block;margin-top:8px;color:var(--text-muted);font-size:var(--fs-xs)}
+
+/* One quiet queue surface. Keep identity-bearing bubbles as direct stream
+   children so replay, streaming insertion and turn navigation retain their order. */
+.turn-sep:has(+ .agent-box.pending) { display:none; }
+.live-wrap .agent-box.pending {
+  display:grid; grid-template-columns:minmax(0, 1fr) auto; column-gap:16px; row-gap:2px;
+  margin:0; padding:10px 14px; border:0; border-radius:0; box-shadow:none; animation:none;
+  background:color-mix(in srgb, var(--text) 3%, transparent);
+}
+.live-wrap .agent-box.pending:not(.agent-box.pending ~ .agent-box.pending) { margin-top:16px; border-radius:12px 12px 0 0; padding-top:12px; }
+.live-wrap .agent-box.pending:not(.agent-box.pending ~ .agent-box.pending)::before {
+  content:attr(data-queue-heading); grid-column:1 / -1; margin-bottom:8px;
+  font-size:var(--fs-xs); color:var(--text-muted); letter-spacing:.02em;
+}
+.live-wrap .agent-box.pending:not(:has(~ .agent-box.pending)) { border-radius:0 0 12px 12px; padding-bottom:12px; margin-bottom:12px; }
+.live-wrap .agent-box.pending:not(.agent-box.pending ~ .agent-box.pending):not(:has(~ .agent-box.pending)) { border-radius:12px; }
+.live-wrap .agent-box.pending ~ .agent-box.pending { border-top:1px solid color-mix(in srgb, var(--text) 6%, transparent); }
+.live-wrap .agent-box.pending .agent-box-head, .live-wrap .agent-box.pending .msg-time, .live-wrap .agent-box.pending .msg-actions { display:none; }
+.live-wrap .agent-box.pending .q-text { grid-column:1; grid-row:2; padding:0; margin:0; font-size:var(--fs-sm); line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.live-wrap .agent-box.pending .agent-box-img { display:none; }
+.live-wrap .agent-box.pending .queue-status { grid-column:1; grid-row:3; font-size:11px; line-height:1.4; margin:0; color:var(--text-faint); }
+.live-wrap .agent-box.pending .queue-actions { grid-column:2; grid-row:2 / 4; display:flex; align-self:center; gap:2px; }
+.queue-action { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; padding:0; border:0; border-radius:7px; background:transparent; color:var(--text-muted); cursor:pointer; }
+.queue-action:hover:not(:disabled) { background:color-mix(in srgb, var(--text) 7%, transparent); color:var(--text); }
+.queue-action:focus-visible, .queue-editor button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.queue-action:disabled { opacity:.32; cursor:default; }
+.queue-editor, .queue-error { grid-column:1 / -1; }
+.queue-editor { margin:6px 0 0; }
+.queue-editing .q-text { display:none !important; }
+.queue-editor textarea { width:100%; box-sizing:border-box; resize:vertical; min-height:72px; max-height:240px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); padding:10px; font:inherit; font-size:var(--fs-sm); line-height:1.5; outline:none; }
+.queue-editor textarea:focus { border-color:var(--accent); }
+.queue-editor-actions { display:flex; align-items:center; gap:12px; padding-top:6px; font-size:var(--fs-xs); }
+.queue-editor-actions span { flex:1; color:var(--text-faint); }
+.queue-editor button { border:0; background:none; color:var(--text-muted); padding:5px 2px; font:inherit; cursor:pointer; }
+.queue-editor button[type=submit] { color:var(--accent); }
+.queue-error { font-size:var(--fs-xs); color:var(--text-muted); padding-top:6px; }
+@media(max-width:600px) { .queue-action { width:34px; height:34px; } .live-wrap .agent-box.pending { column-gap:8px; } }
+.live-wrap .agent-box.pending .queue-editor, .live-wrap .agent-box.pending .queue-error { grid-row:auto; }
+
+.live-wrap .agent-box.pending::before { grid-row:1; position:static; inset:auto; width:auto; height:auto; background:none; transform:none; border-radius:0; opacity:1; }
+.live-wrap .agent-box.pending:hover { transform:none; box-shadow:none; }

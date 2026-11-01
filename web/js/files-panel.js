@@ -1,3 +1,4 @@
+import { previewArtifact } from "./links.js";
 import { formatFileMention } from "./file-mention.js";
 import { currentSessionId } from "./state.js";
 import { t } from "./i18n.js";
@@ -85,6 +86,19 @@ const makeEntryEl = (f, basePath) => {
   el.appendChild(icon);
   el.appendChild(name);
   el.appendChild(kb);
+  if (f.kind !== 'dir') {
+    const preview = document.createElement('button');
+    preview.type = 'button'; preview.className = 'files-preview-button'; preview.textContent = t('files.preview');
+    preview.title = `${t('files.preview')}: ${f.name}`;
+    const owner = currentSessionId();
+    preview.addEventListener('dblclick', event => event.stopPropagation());
+    preview.addEventListener('click', event => {
+      event.stopPropagation();
+      const url = new URL(`/${owner}/artifacts`, location.origin); url.searchParams.set('path', el.dataset.path);
+      void previewArtifact(url);
+    });
+    el.append(preview);
+  }
   el.title = t("files.dblclick.hint", { name: "@" + el.dataset.path });
 
   el.addEventListener("dblclick", () => {

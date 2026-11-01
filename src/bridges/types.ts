@@ -45,6 +45,7 @@ export interface BridgeOpts {
   restoreBackend?: string;
   /** Optional compaction strategy that intercepts conversation:compact. */
   compactionStrategy?: CompactionStrategyHook;
+  historyAccess?: import("../history/history-reader.js").HistoryAccess;
 }
 
 export type CompactionStrategyHook = (
@@ -52,6 +53,12 @@ export type CompactionStrategyHook = (
     getMessages(): unknown[];
     replaceMessages(msgs: unknown[]): void;
     estimatePromptTokens(): number;
+    failClosed?(): void;
+    diagnostic?(event: import("../history/compaction-diagnostics.js").CompactionDiagnostic): void;
+    contextWindow?(): number;
+    contextKey?(): string;
+    signal?: AbortSignal;
+    summarize?(messages: Array<{ role: string; content: string }>): Promise<string>;
   },
   opts: unknown,
   next: (opts: unknown) => unknown,
@@ -76,6 +83,7 @@ export interface Bridge {
   readonly kind?: SessionKind;
   /** Explicitly supports returning queued and emitting queued-submit/done. */
   readonly supportsQueue?: boolean;
+  readonly supportsSteering?: boolean;
   readonly supportsCwdChange?: boolean;
   /** Opt-in restriction; initialized bridges are writable by default. */
   readonly readOnlyContext?: boolean;
@@ -88,10 +96,12 @@ export interface Bridge {
   getRestoreState?(): Record<string, unknown> | undefined;
 
   /** Submit a prompt; resolves at end of turn. */
-  submit(text: string, queueId?: string): Promise<{ stopReason: string }>;
+  submit(text: string, queueId?: string, delivery?: "queue" | "steer"): Promise<{ stopReason: string }>;
 
   /** Atomically remove a still-pending message; never cancels the running turn. */
   withdrawQueued?(queueId: string): boolean;
+  /** Synchronous, identity-preserving mutation before a pending message is consumed. */
+  updateQueued?(queueId: string, query?: string, promote?: boolean): "queue" | "steer" | null;
 
   /** Best-effort cancel of the current turn. */
   cancel(): void;

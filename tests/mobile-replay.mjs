@@ -34,3 +34,18 @@ test('large collaborator records preserve identifiers used to pair start and com
     assert(raw.includes('🟡'.repeat(4000)),'stored source remains untouched');
   }
 });
+
+test('mobile preview counts tasks rather than mid-task follow-ups',()=>{
+ const frames=[];const starts=[];
+ for(let turn=0;turn<14;turn++){
+  starts.push(frames.length);
+  frames.push(frame('agent:query',{query:`task ${turn}`}),frame('agent:processing-start',{}),
+   frame('agent:todo',{todos:[{title:`plan ${turn}`,status:'in_progress'}]}),
+   frame('subagent:started',{subagentId:`child-${turn}`,task:'Review'}));
+  for(let i=0;i<15;i++)frames.push(frame('agent:query',{query:`detail ${i}`,steering:true}),frame('agent:response-segment',{text:'continued'}));
+  if(turn<13)frames.push(frame('agent:processing-done',{}));
+ }
+ assert.equal(mobileReplayStart(frames),starts[2],'the last 12 tasks must include their initial plans and lifecycle');
+ assert.equal(mobileReplayStart(frames,1),starts[13],'an active task must not begin at a follow-up');
+ const active=frames.slice(starts[13]);assert.equal(mobileReplayStart(active),0);
+});

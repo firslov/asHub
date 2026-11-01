@@ -28,6 +28,15 @@ const {once}=require('node:events');
       assert.equal(res.headers.get('cache-control'),'no-store');
     }
   }
+  const meta = await fetch(endpoint('out/changes.md'), {headers, method:'HEAD'});
+  const version = meta.headers.get('x-artifact-version'); assert.match(version, /^[a-f0-9]{64}$/);
+  assert.equal(await hub.resolveArtifact(id, 'out/changes.md'), fs.realpathSync(path.join(cwd,'out/changes.md')));
+  await assert.rejects(hub.resolveArtifact('deadbeef','out/changes.md'));
+  await assert.rejects(hub.resolveArtifact(id,'../secret.txt'));
+  const revisionURL = endpoint('out/changes.md') + '&version=' + version;
+  assert.equal((await fetch(revisionURL,{headers})).status,200);
+  fs.writeFileSync(path.join(cwd,'out/changes.md'),'updated and longer content');
+  assert.equal((await fetch(revisionURL,{headers})).status,409,'stale preview must not read a replacement file');
   assert.equal((await fetch(endpoint('out/changes.md'))).status,401);
   assert.equal((await fetch(endpoint('missing.docx'),{headers})).status,404);
   assert.equal((await fetch(endpoint('out'),{headers})).status,404);

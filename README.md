@@ -11,41 +11,41 @@ asHub is an open-source desktop workspace powered by [agent-sh](https://github.c
 
 Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The desktop app and local browser view share the same client. Connect your own model provider with API credentials or supported Codex sign-in; provider billing and plan limits apply.
 
-![asHub workspace with session tabs, project analysis and a formatted table](website/assets/showcase-workspace-0206-en.jpg)
+![asHub workspace with session tabs, project analysis and a formatted table](website/assets/showcase-workspace-0211-en.jpg)
 
-*Main screenshot: v0.20.6, English interface, with an isolated demo project and illustrative conversations. The detail screenshots below are from v0.20.2. No personal conversations or API credentials are included.*
+*Current interface with isolated demo data. English main screenshot; no personal conversations or credentials.*
 
 ## Highlights
 
-**New in v0.20.8:** a dedicated plugin panel, opt-in background mode, and conversation creation and deletion directly within projects.
+**New in v0.21.1:** a refreshed workspace and app identity, more reliable history and live updates, and plugin support for authorized scheduled conversation tasks.
 
 | Capability | Experience |
 | --- | --- |
 | Sessions & projects | Create and delete conversations within projects; sort sessions by recent activity, search, pin, archive and restore history |
-| Conversation collaboration | Send tasks within a project, follow receipts and read results; optional Git worktrees keep file changes separate |
+| Conversation collaboration | Send tasks, follow receipts and supplement existing work without creating duplicate tasks; optional Git worktrees isolate changes |
 | Readable execution | Replies and progress first; thinking and tool output stay in expandable details |
 | Tasks & subagents | Task progress and five specialists: plan, explore, review, research and implement; configurable models and budgets |
 | Models & context | Codex sign-in, model search and native thinking levels; inspect context and reported cache usage |
 | Reviewable actions | Permission prompts, change previews, session-wide approval and background notifications |
 | Project tools | PTY terminals, file browsing, image input and a skills marketplace |
-| Plugins | A dedicated panel for built-in status, local extension toggles and configuration |
+| Plugins | Import trusted plugin ZIPs, review setup, and manage extensions and configuration |
 | Background mode | Keep tasks and remote access running when windows close; reopen or quit from the tray |
 | Proxy controls | Choose a global proxy default and override it per conversation |
 | Persistent work | Saved conversations, branches, rewind, Markdown export and downloadable workspace results |
-| A consistent interface | Gruvbox light and dark themes; English and Chinese; display scaling and a collapsible status bar |
+| A consistent interface | Warm light and graphite dark themes; English and Chinese; display scaling and a collapsible status bar |
 | Mobile access · preview | Continue authorized desktop conversations from a phone; shared history, streaming replies and one-time approvals |
 
 <details>
-<summary>Execution detail: tasks, code changes and tool output</summary>
+<summary>Dark workspace</summary>
 
-![Task progress, code diff and tool output in dark mode](website/assets/showcase-workflow.png)
+![Project collaboration in dark mode](website/assets/showcase-dark-0211.jpg)
 
 </details>
 
 <details>
 <summary>Project files</summary>
 
-![Conversation and project file drawer side by side](website/assets/showcase-files.png)
+![Conversation and project file drawer side by side](website/assets/showcase-files-0211.jpg)
 
 </details>
 
@@ -105,7 +105,9 @@ Project views, task receipts, result downloads and thinking controls require des
 
 ## Plugins
 
-Open **Plugins** in the right toolbar to inspect built-in components, enable or disable local extensions, and edit their configuration. Place trusted extensions in `~/.agent-sh/extensions/` or add their paths to `settings.extensions`. Changes apply when a conversation kernel next starts; finish active tasks and restart asHub to update existing conversations.
+Open **Plugins** in the right toolbar to import a trusted plugin ZIP, review its setup and manage configuration. Optional features use the same menus and design as the app. Some kernel extensions take effect when a conversation next starts.
+
+The [scheduled-tasks plugin](examples/extensions/scheduled-tasks) requires **v0.21.1+**. After explicit approval, it delivers a message to an existing conversation once or on a recurring schedule. Keep asHub running and the computer awake; tool permissions still apply. [Project management](examples/extensions/project-management) adds approved conversation setup and collaboration tools. These plugins are optional, not enabled by default.
 
 ## Run from source
 
@@ -208,6 +210,7 @@ examples/extensions/  Example extensions
 
 | Command | Purpose |
 | --- | --- |
+| `npm run check:core` | Build, typecheck and run the core regression suites |
 | `npm run build` | Compile backend TypeScript into `dist/` |
 | `npm run typecheck` | Backend type checking |
 | `npm run typecheck:web` | Frontend project checking |

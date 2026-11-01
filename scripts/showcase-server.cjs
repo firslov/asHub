@@ -48,7 +48,7 @@ class Demo extends Bridge {
   b.messages=[{role:'user',content:query},{role:'assistant',content:replies[i]}];
   for(const [name,payload]of [['agent:query',{query}],['agent:processing-start',{}],['agent:response-segment',{text:replies[i]}],['agent:response-done',{}],['agent:processing-done',{}],['agent:usage',{prompt_tokens:12400,total_tokens:13200,prompt_cache_hit_tokens:11408,prompt_cache_miss_tokens:992,cache_reported:true}]])b.emit('event',{name,payload});
  }
- await api('/api/projects',{action:'create',name:zh?'Atlas 产品发布':'Atlas launch',add:ids});
+ await api('/api/projects',{action:'create',cwd,name:zh?'Atlas 产品发布':'Atlas launch',add:ids});
  console.log(JSON.stringify({language:zh?'zh':'en',url:base+'/'+ids[0]+'/',ids}));
  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{await app.shutdown();process.exit(0);});
 })().catch(err=>{console.error(err);process.exit(1);});

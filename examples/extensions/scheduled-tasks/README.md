@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-需要包含 `plugin-resources` 与 `authorized-messages` 能力的新版 asHub 本地构建。**现有 0.21.0 正式安装包尚不具备这两个接口**；请先构建并启动本次修改后的 asHub，再从「插件」菜单导入 `ashub-scheduled-tasks-0.1.1.zip`。旧宿主会拒绝安装，不会降级绕过授权。
+需要 **asHub 0.21.1 或更新版本**，宿主须提供 `plugin-resources` 与 `authorized-messages` 能力。从「插件」菜单导入 `ashub-scheduled-tasks-0.1.1.zip`。0.21.0 及更早版本缺少所需接口，会拒绝安装，不会降级绕过授权。
 
 启用后，右侧出现时钟按钮：
 

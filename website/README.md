@@ -6,14 +6,14 @@ The public site at https://ashub.aihao.world uses the same visual identity as th
 
 - `index.html`: static preview, with working GitHub Releases download fallbacks
 - `download.html`: the same page, used by the production mirror renderer
-- `assets/site-20261024.css` / `assets/site-20261008.js`: layout and progressive enhancements
-- `assets/showcase-workspace-0206-{en,zh}.jpg`: v0.20.6 main UI in English and Chinese
-- `assets/showcase-*.png`: earlier v0.20.2 detail captures; all screenshots use isolated, illustrative demo data
-- `assets/brand-20261008.svg`: the application icon from `web/assets/brand/icon.svg`
+- `assets/site-20261102.css` / `assets/site-20261008.js`: layout and progressive enhancements
+- `assets/showcase-workspace-0211-{en,zh}.jpg`: v0.21.1 main UI in English and Chinese
+- `assets/showcase-{dark,files}-0211.jpg`: current detail captures with isolated demo data
+- `assets/brand-20261102.svg`: the application icon from `web/assets/brand/icon.svg`
 
 Keep `index.html` and `download.html` identical. Use a new asset filename when replacing a cached production resource.
 
-The v0.20.8 overview covers opt-in background mode, dedicated plugin management and project conversation actions. Download versions come from the live release payload, independently of the overview.
+The v0.21.1 overview covers optional scheduled tasks, task supplements, reliable history and the refreshed workspace. Download versions come from the live release payload, independently of the overview.
 
 Basic mobile access requires v0.20.5 or later. Project collaboration and thinking controls require v0.20.6 with the updated gateway. The phone graphic is a labeled HTML/CSS usage illustration, not a screenshot or a claim about real task results.
 

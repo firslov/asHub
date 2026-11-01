@@ -59,7 +59,25 @@ app.whenReady().then(async () => {
     await wait(`!!document.querySelector('.extension-menu')`);
     await js(`document.querySelector('.extension-menu').click()`);
     await wait(`document.querySelector('.extension-panel input')?.value === 'Verified'`);
-    for (const width of [390, 320]) { win.setContentSize(width, 850); await new Promise(r => setTimeout(r, 80)); assert.equal(await js(`(()=>{const p=document.querySelector('.extension-panel'),r=p.getBoundingClientRect();return r.left>=-1&&r.right<=innerWidth+1&&p.scrollWidth<=p.clientWidth+1})()`), true, 'panel overflow at ' + width); }
+    for (const width of [390, 320]) {
+      win.setContentSize(width, 850);
+      // Native resize and Chromium layout are asynchronous on CI. Do not sample
+      // a fixed 80ms into the resize or the panel's entrance animation.
+      await wait(`innerWidth === ${width}`);
+      const layout = await js(`(async () => {
+        await document.fonts.ready;
+        const p = document.querySelector('.extension-panel');
+        await Promise.all(p.getAnimations({subtree:true}).map(a => a.finished.catch(() => {})));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const r = p.getBoundingClientRect();
+        return { viewport:innerWidth, left:r.left, right:r.right, scrollWidth:p.scrollWidth, clientWidth:p.clientWidth,
+          overflowing:[...p.querySelectorAll('*')].filter(el => el.scrollWidth > el.clientWidth + 1)
+            .map(el => ({tag:el.tagName, className:el.className, scrollWidth:el.scrollWidth, clientWidth:el.clientWidth})) };
+      })()`);
+      assert.equal(layout.viewport, width);
+      assert(layout.left >= -1 && layout.right <= width + 1 && layout.scrollWidth <= layout.clientWidth + 1,
+        'panel overflow at ' + width + ': ' + JSON.stringify(layout));
+    }
     console.log('PASS real installed UI: ZIP confirmation, host discovery, full app mount, durable form save, draft-only action, disable/reenable and 320/390px layout');
   } catch (error) { console.error(error); process.exitCode = 1; }
   finally { win?.destroy(); await hub?.shutdown(); clearTimeout(watchdog); app.exit(process.exitCode || 0); }

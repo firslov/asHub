@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Keep the existing kernel pin; apply only the reviewed Windows login fix.
+// agent-sh 0.16.1 still needs the Windows login and steering compatibility fixes.
 const fs = require('node:fs');
 const path = require('node:path');
 const patch = require('./patches/codex-windows-login.json');
@@ -21,5 +21,6 @@ function apply(root = path.resolve(__dirname, '../node_modules/agent-sh')) {
 module.exports = { apply };
 if (require.main === module) {
   const count = apply();
+  require('./patch-steering.cjs').apply();
   console.log(`Codex Windows login patch: ${count ? 'applied' : 'verified'}`);
 }

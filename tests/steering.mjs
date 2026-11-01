@@ -1,0 +1,92 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import http from 'node:http';
+import {once} from 'node:events';
+const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
+async function until(fn) { for(let i=0;i<1000;i++){if(fn())return;await new Promise(r=>setTimeout(r,10));}throw Error('Timed out waiting for fixture'); }
+test('real kernel steers at model/tool boundaries, keeps IDs, images and queue semantics', {timeout:45000}, async()=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'ashub-steering-'));
+ process.env.AGENT_SH_HOME=dir;process.env.HISTFILE=path.join(dir,'history');
+ for(const k of Object.keys(process.env))if(/(?:API_KEY|AUTH_TOKEN|ACCESS_TOKEN)$/.test(k))delete process.env[k];
+ const requests=[], events=[];let handle;
+ const server=http.createServer(async(req,res)=>{try{let body='';for await(const part of req)body+=part;const data=JSON.parse(body);requests.push(data);await handle(data,res);}catch(e){res.destroy(e);}});
+ let bridge;
+ const respond=(res,delta)=>{
+  res.writeHead(200,{'content-type':'text/event-stream'});
+  res.write('data: '+JSON.stringify({id:'test',choices:[{index:0,delta,finish_reason:null}]})+'\n\n');
+  res.end('data: '+JSON.stringify({id:'test',choices:[{index:0,delta:{},finish_reason:delta.tool_calls?'tool_calls':'stop'}],usage:{prompt_tokens:10,completion_tokens:2,total_tokens:12}})+'\n\ndata: [DONE]\n\n');
+ };
+ const originalFetch=globalThis.fetch;
+ try{
+  server.listen(0,'127.0.0.1');await once(server,'listening');const origin=`http://127.0.0.1:${server.address().port}`;
+  globalThis.fetch=(input,init)=>{const u=new URL(typeof input==='string'||input instanceof URL?input:input.url);if(u.origin!==origin)throw Error('Only fixture network allowed');return originalFetch(input,init);};
+  await fs.writeFile(path.join(dir,'settings.json'),JSON.stringify({startupBanner:false,disabledBuiltins:['rolling-history','codex-provider'],defaultProvider:'fixture',providers:{fixture:{apiKey:'fake',baseURL:origin+'/v1',defaultModel:'fixture-model',models:[{id:'fixture-model',modalities:['text','image']}],contextWindow:32000}}}));
+  const {AshBridge}=await import('../dist/bridges/ash.js');
+  bridge=new AshBridge({cwd:dir,provider:'fixture',model:'fixture-model'});bridge.onEvent(e=>events.push(e));await bridge.ready();
+  const responseGate=deferred(),toolGate=deferred();let toolStarted=false,toolRuns=0;
+  bridge.extCtx.agent.registerTool({name:'steer_probe',description:'Fixture',input_schema:{type:'object',properties:{}},execute:async()=>{toolStarted=true;toolRuns++;await toolGate.promise;return {content:'tool-result'};}});
+  handle=async(data,res)=>{if(requests.length===1){await responseGate.promise;respond(res,{content:'First phase.',tool_calls:[{index:0,id:'probe-1',type:'function',function:{name:'steer_probe',arguments:'{}'}}]});}else respond(res,{content:'Continued.'});};
+  const active=bridge.submit('Initial work');await until(()=>requests.length===1);
+  assert.equal((await bridge.submit('Later task','later','queue')).stopReason,'queued');
+  assert.equal((await bridge.submit('same','s1','steer')).stopReason,'steering');
+  assert.equal((await bridge.submit('same','s2','steer')).stopReason,'steering');
+  assert.equal(bridge.withdrawQueued('s1'),true);assert.equal(bridge.withdrawQueued('s1'),false);
+  responseGate.resolve();await until(()=>toolStarted);
+  assert.equal(requests.length,1,'steering must not cancel the model request or bypass a running tool');
+  const image='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=';
+  await bridge.submit(JSON.stringify({query:'See image',images:[{data:image,mimeType:'image/png'}]}),'image','steer');
+  toolGate.resolve();await active;await until(()=>events.some(e=>e.name==='agent:queued-done'&&!e.payload.dropped));
+  assert.equal(toolRuns,1);assert.equal(requests.length,3,'initial, one continuation for pending steers, then queued task');
+  assert.deepEqual(events.filter(e=>e.name==='agent:steer-submit').map(e=>e.payload.queueId),['s2','image']);
+  assert.equal(bridge.withdrawQueued('s2'),false,'consumed input cannot be withdrawn');
+  const second=requests[1].messages;
+  assert.equal(second.filter(m=>m.role==='user'&&JSON.stringify(m.content).includes('same')).length,1);
+  assert(second.findIndex(m=>m.role==='tool')<second.findIndex(m=>m.role==='user'&&JSON.stringify(m.content).includes('same')));
+  assert(JSON.stringify(second).includes(image));assert(!JSON.stringify(second).includes('Later task'));
+  assert.deepEqual(requests[0].messages[0],second[0],'stable system prefix');assert.deepEqual(requests[0].tools,requests[1].tools,'stable tools');
+  const snapshot=await bridge.snapshot();assert.equal(snapshot.messages.filter(m=>m.role==='user'&&JSON.stringify(m.content).includes('same')).length,1);
+  // A text-only final answer must also yield to a pending follow-up.
+  const textGate=deferred(),textStart=requests.length;
+  handle=async(data,res)=>{if(requests.length===textStart+1)await textGate.promise;respond(res,{content:'Text response'});};
+  const textTurn=bridge.submit('Text-only work');await until(()=>requests.length===textStart+1);
+  await bridge.submit('One more detail','text-steer','steer');textGate.resolve();await textTurn;
+  assert.equal(requests.length,textStart+2);
+  assert(events.some(e=>e.name==='agent:steer-submit'&&e.payload.queueId==='text-steer'));
+  assert(JSON.stringify(requests.at(-1).messages).includes('One more detail'));
+  // Mutations retain identity, original order and attachments in both queues.
+  const editGate=deferred(),editStart=requests.length;
+  handle=async(data,res)=>{if(requests.length===editStart+1)await editGate.promise;respond(res,{content:'Mutation response'});};
+  const editTurn=bridge.submit('Edit fixture');await until(()=>requests.length===editStart+1);
+  await bridge.submit(JSON.stringify({query:'original queue',images:[{data:image,mimeType:'image/png'}]}),'edit-queue','queue');
+  await bridge.submit('last task','last-task','queue');
+  await bridge.submit('original steer','edit-steer','steer');
+  await bridge.submit('next steer','next-steer','steer');
+  assert.equal(bridge.updateQueued('edit-steer','edited steer'), 'steer');
+  assert.equal(bridge.updateQueued('edit-queue','edited queue'), 'queue');
+  assert.deepEqual(bridge.queuedIds,['edit-queue','last-task']);
+  assert.equal(bridge.updateQueued('edit-queue',undefined,true),'steer');
+  assert.equal(bridge.updateQueued('edit-queue',undefined,true),'steer','repeat promotion must not duplicate a message');
+  assert.deepEqual(bridge.queuedIds,['last-task']);
+  const eventStart=events.length;
+  editGate.resolve();await editTurn;await until(()=>requests.length===editStart+3 && !bridge.isProcessing());
+  assert.deepEqual(events.slice(eventStart).filter(e=>e.name==='agent:steer-submit').map(e=>e.payload.queueId),['edit-steer','next-steer','edit-queue']);
+  const edited=requests[editStart+1].messages;
+  assert(!JSON.stringify(edited).includes('original queue'));assert(!JSON.stringify(edited).includes('original steer'));
+  assert(JSON.stringify(edited).includes(image),'editing and promotion retain image data');
+  assert.equal(edited.filter(m=>m.role==='user'&&JSON.stringify(m.content).includes('edited queue')).length,1);
+  assert(!JSON.stringify(edited).includes('last task'));assert(JSON.stringify(requests[editStart+2].messages).includes('last task'));
+  assert.equal(bridge.updateQueued('edit-queue','too late'),null);
+  // Pending steers are explicitly dropped on cancellation and never leak into the next task.
+  let cancelledRes;const before=requests.length;
+  handle=async(data,res)=>{cancelledRes=res;};
+  const cancelled=bridge.submit('Cancel fixture');await until(()=>requests.length===before+1);
+  await bridge.submit('must not leak','drop','steer');bridge.cancel();await cancelled;
+  await until(()=>events.some(e=>e.name==='agent:queued-done'&&e.payload.queueId==='drop'&&e.payload.dropped));
+  assert.equal(bridge.steering.size,0);cancelledRes.destroy();
+  handle=async(data,res)=>respond(res,{content:'After cancel'});
+  await bridge.submit('After cancel');assert(!JSON.stringify(requests.at(-1).messages).includes('must not leak'));
+ }finally{bridge?.close();globalThis.fetch=originalFetch;server.closeAllConnections();await new Promise(r=>server.close(r));await fs.rm(dir,{recursive:true,force:true});}
+});

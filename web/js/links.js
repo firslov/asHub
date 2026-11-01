@@ -1,5 +1,5 @@
 import { toast } from "./toast.js";
-import { t } from "./i18n.js";
+import { t, lang } from "./i18n.js";
 
 const downloads = new WeakSet();
 const pending = new WeakSet();
@@ -26,6 +26,14 @@ export function artifactLink(href, base) {
   const result = new URL('/' + match[1] + '/artifacts', location.origin);
   result.searchParams.set('path', decodeURIComponent(match[2]));
   return result;
+}
+
+export function previewArtifact(url) {
+  const requested = url.searchParams.get('path') || '';
+  const session = url.pathname.split('/')[1];
+  return globalThis.AsHubFilePreview.open({url:url.href, name:requested.split(/[\\/]/).pop() || 'File', lang:lang.peek(), pdfBase:'/vendor/pdfjs/',
+    openExternal:window.electronAPI?.openExternal ? href => window.electronAPI.openExternal(href) : undefined,
+    nativeAction:window.electronAPI?.fileAction ? action => window.electronAPI.fileAction({session, path:requested, action}) : undefined});
 }
 
 async function downloadArtifact(a, url) {
@@ -56,7 +64,7 @@ document.addEventListener("click", (ev) => {
     const sid = a.closest('session-view')?.getAttribute('session-id');
     const base = sid ? location.origin + '/' + sid + '/' : location.href;
     const file = artifactLink(href, base);
-    if (file) { ev.preventDefault(); void downloadArtifact(a, file); return; }
+    if (file) { ev.preventDefault(); void (globalThis.AsHubFilePreview ? previewArtifact(file) : downloadArtifact(a, file)); return; }
     const u = new URL(href, base);
     isExternal = u.origin !== location.origin;
   } catch {

@@ -1,6 +1,9 @@
 import { withNetworkSession } from "../network-policy.js";
 import { ExplicitApprovals } from "../host-operations.js";
 import { conversationTools } from "../conversation-tools.js";
+import { logCompaction } from "../history/compaction-diagnostics.js";
+import { historyTool } from "../history/history-reader.js";
+import { generateSummary, type SummaryClient } from "../history/summary-client.js";
 /**
  * AshBridge — runs agent-sh's kernel in-process and forwards bus events.
  *
@@ -15,7 +18,7 @@ import { conversationTools } from "../conversation-tools.js";
 import { clipHeadTail, unicodeSlice, guardLlmUnicode } from "../unicode.js";
 import { guardImageContext } from "../image-context.js";
 import { RequestMonitor } from "../request-diagnostics.js";
-import { SessionThinking, reasoningProfile, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
+import { SessionThinking, reasoningProfile, nativeReasoningParams, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
 import { configureDeepSeek } from "../providers/deepseek.js";
 import { guardCodexRetries } from "../providers/codex-retry.js";
 import { EventEmitter } from "node:events";
@@ -311,6 +314,8 @@ function renderTodos(todos: TodoItem[]): string {
 
 export class AshBridge extends EventEmitter implements Bridge {
   readonly supportsQueue = true;
+  readonly supportsSteering = true;
+  private steering = new Map<string, string>();
   readonly supportsCwdChange = true;
   private core: AgentShellCore | null = null;
   private requests?: RequestMonitor;
@@ -368,6 +373,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   readonly backendId = "ash";
   readonly readOnlyContext = false;
   private thinking?: SessionThinking;
+  private compactionControllers = new Set<AbortController>();
 
   constructor(opts: BridgeOpts) {
     super();
@@ -469,6 +475,9 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
       const agent = (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent;
       for (const tool of conversationTools(this.opts.conversationAccess)) agent.registerTool(tool);
+    }
+    if (this.opts.historyAccess && this.opts.kind !== "ash-terminal") {
+      (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool(historyTool(this.opts.historyAccess));
     }
     const instructions = this.opts.instructions ?? this.opts.restoreState?.conversationInstructions;
     if (typeof instructions === "string" && instructions) {
@@ -1724,7 +1733,30 @@ export class AshBridge extends EventEmitter implements Bridge {
         estimatePromptTokens: () => (core.handlers.call("conversation:estimate-prompt-tokens") as number) ?? 0,
       };
       core.handlers.advise("conversation:compact", async (next: (o: unknown) => unknown, opts: unknown) => {
-        return await strategy(helpers, opts, next);
+        const controller = new AbortController();
+        this.compactionControllers.add(controller);
+        const onCancel = () => controller.abort();
+        core.bus.on("agent:cancel-request", onCancel);
+        const model = () => core.handlers.call("agent:get-model") as { model?: string; provider?: string; contextWindow?: number };
+        try {
+          if (this.closed) controller.abort();
+          return await strategy({ ...helpers, signal: controller.signal,
+            failClosed: () => this.close(),
+            diagnostic: event => logCompaction(path.join(CONFIG_DIR, "logs"), sessionId, event),
+            contextWindow: () => model()?.contextWindow ?? 60000,
+            contextKey: () => JSON.stringify(model()),
+            summarize: async messages => {
+              const active = model();
+              const endpoint = core.handlers.call("agent:resolve-endpoint", { provider: active.provider, id: active.model }) as { buildRequestHeaders?: (p: { sessionId?: string }) => Record<string, string> } | undefined;
+              const profile = active.model && active.provider ? reasoningProfile({ id: active.model, provider: active.provider }) : null;
+              const params = profile?.levels.includes("low") ? nativeReasoningParams(profile, "low") : {};
+              return generateSummary(core.handlers.call("llm:get-client") as SummaryClient, messages, controller.signal, {
+                model: active.model, params,
+                headers: endpoint?.buildRequestHeaders?.({ sessionId: `${this.opts.sessionId ?? "ashub"}:compact` }),
+              });
+            },
+          }, opts, next);
+        } finally { core.bus.off("agent:cancel-request", onCancel); this.compactionControllers.delete(controller); }
       });
     }
 
@@ -1919,6 +1951,20 @@ export class AshBridge extends EventEmitter implements Bridge {
     // must reject so the UI doesn't spin forever (e.g. missing API key).
     onAny("agent:register-backend", () => { this.backendRegistered = true; });
 
+    onAny("agent:steer-consumed", (payload) => {
+      const {id} = payload as {id?: string};
+      if (!id || !this.steering.has(id)) return;
+      const text = this.steering.get(id)!; this.steering.delete(id);
+      this.emit("event", {name: "agent:steer-submit", payload: {...this.parseSubmission(text), queueId: id}} satisfies BusEvent);
+    });
+    onAny("agent:steer-dropped", (payload) => {
+      for (const id of (payload as {ids?: string[]}).ids ?? []) {
+        if (!this.steering.has(id)) continue;
+        const text = this.steering.get(id)!; this.steering.delete(id);
+        this.emit("event", {name: "agent:queued-done", payload: {query: this.parseSubmission(text).query, queueId: id, dropped: true}} satisfies BusEvent);
+      }
+    });
+
     // Turn boundaries — consumed internally to resolve submit() promises;
     // NOT forwarded as BusEvents. The hub synthesizes its own
     // processing-start/done frames around submit() so the start/done pair
@@ -2043,8 +2089,14 @@ export class AshBridge extends EventEmitter implements Bridge {
     return !!this.pendingTurn || this.queryQueue.length > 0;
   }
 
-  async submit(text: string, queueId?: string): Promise<{ stopReason: string }> {
+  async submit(text: string, queueId?: string, delivery: "queue" | "steer" = "queue"): Promise<{ stopReason: string }> {
     this.assertOpen();
+    if (delivery === "steer" && queueId && this.pendingTurn && !this.preparingTurn && this.core) {
+      this.steering.set(queueId, text);
+      const {query, images} = this.parseSubmission(text);
+      this.core.bus.emit("agent:steer", {text: query, images, id: queueId});
+      return {stopReason: "steering"};
+    }
     if (this.pendingTurn || this.queryQueue.length > 0) {
       this.queryQueue.push(text);
       this.queuedIds.push(queueId);
@@ -2099,7 +2151,33 @@ export class AshBridge extends EventEmitter implements Bridge {
     return { query, images };
   }
 
+  updateQueued(queueId: string, query?: string, promote = false): "queue" | "steer" | null {
+    if (this.closed) return null;
+    const steering = this.steering.has(queueId);
+    const index = this.queuedIds.indexOf(queueId);
+    if (!steering && index < 0) return null;
+    // Promotion never cancels a request or runs a new task during preparation.
+    if ((steering || promote) && (!this.core || !this.pendingTurn || this.preparingTurn)) return null;
+    const original = steering ? this.steering.get(queueId)! : this.queryQueue[index]!;
+    const parsed = this.parseSubmission(original);
+    const text = query === undefined ? original : JSON.stringify({ query, images: parsed.images ?? [] });
+    if (steering || promote) {
+      if (!steering) { this.queryQueue.splice(index, 1); this.queuedIds.splice(index, 1); }
+      this.steering.set(queueId, text);
+      const updated = this.parseSubmission(text);
+      // The kernel replaces an existing ID in place, retaining steering FIFO order.
+      this.core!.bus.emit("agent:steer", { id: queueId, text: updated.query, images: updated.images });
+      return "steer";
+    }
+    this.queryQueue[index] = text;
+    return "queue";
+  }
+
   withdrawQueued(queueId: string): boolean {
+    if (!this.closed && this.steering?.has(queueId) && this.core) {
+      this.core.bus.emit("agent:steer-cancel", {id: queueId});
+      return !this.steering.has(queueId);
+    }
     const index = this.queuedIds.indexOf(queueId);
     if (this.closed || index < 0) return false;
     const [text] = this.queryQueue.splice(index, 1);
@@ -2558,6 +2636,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   private releaseResources(): void {
+    for (const controller of this.compactionControllers) controller.abort();
     this.explicitApprovals?.cancel();
     this.requests?.end();
     const preparing = this.preparingTurn;

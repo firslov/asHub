@@ -62,7 +62,7 @@ export const renderUsage = (session) => {
   usageEl.classList.toggle("hot", pct >= 70);
 };
 
-export const renderTurnSep = (session, ts) => {
+export const renderTurnSep = (session, ts, beforeNode = null) => {
   const sep = document.createElement("div");
   sep.className = "turn-sep";
   const date = ts ? new Date(ts) : new Date();
@@ -82,6 +82,9 @@ export const renderTurnSep = (session, ts) => {
     `<span class="turn-time">${dateLabel}${timeStr}</span>` +
     `<span class="turn-line"></span>`;
   append(session, sep);
+  // Explicit ownership prevents the pending-message anchor from separating
+  // a consumed user message from its timestamp. Both may live in a fragment.
+  if (beforeNode) beforeNode.before(sep);
   return sep;
 };
 

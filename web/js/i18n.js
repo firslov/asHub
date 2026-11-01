@@ -4,6 +4,13 @@ const LS_LANG = "ash.lang";
 
 const translations = {
   en: {
+    "delivery.steer": "Add to current task",
+    "delivery.queue": "Queue for later",
+    "delivery.steer.hint": "Apply after the current model call and tools finish · Click to queue instead",
+    "delivery.queue.hint": "Wait until the current task finishes · Click to add to current task",
+    "delivery.pending": "Waiting to join current task",
+    "delivery.queued": "Queued",
+
     "background.title": "Background activity",
     "background.enabled": "Keep running when the window closes",
     "background.hint": "Use the tray icon to reopen or quit · Conversations and remote access stay available",
@@ -117,6 +124,7 @@ const translations = {
     "network.failed": "Could not save network setting",
     "network.rename": "Edit title",
 
+    "files.preview": "Preview",
     "files.downloadFailed": "File unavailable. It may have moved, or be outside this conversation’s working directory.",
     "sidebar.view.switch": "Switch sidebar view",
     "projects.title": "Projects",
@@ -128,8 +136,15 @@ const translations = {
     "projects.model": "Model",
     "projects.defaultModel": "Use default model",
     "projects.searchModel": "Search models",
-    "queue.edit": "Withdraw and edit",
-    "queue.failed": "Could not withdraw the message; it may have started",
+    "queue.edit": "Edit",
+    "queue.withdraw": "Withdraw",
+    "queue.promote": "Use at the next model step",
+    "queue.promoted": "Already waiting for the next model step",
+    "queue.heading": "Pending messages",
+    "queue.images": "{n} image(s)",
+    "queue.position": "Queue position and attachments stay unchanged",
+    "queue.changed": "The message changed or has started. Check the queue before trying again",
+    "queue.failed": "Could not update the queue. Please try again",
 
     "projects.openCreatedChat": "Open created conversation",
     "projects.createdWithError": "The conversation was created, but setup did not finish. Open it to review; no duplicate will be created.",
@@ -601,6 +616,13 @@ const translations = {
   },
 
   zh: {
+    "delivery.steer": "中途补充",
+    "delivery.queue": "排队发送",
+    "delivery.steer.hint": "当前思考和工具调用结束后接入 · 点击切换为排队发送",
+    "delivery.queue.hint": "当前任务结束后再处理 · 点击切换为中途补充",
+    "delivery.pending": "等待接入当前任务",
+    "delivery.queued": "排队中",
+
     "background.title": "后台运行",
     "background.enabled": "关闭窗口后继续运行",
     "background.hint": "从状态栏重新打开或退出 · 保留对话任务与远控连接",
@@ -714,6 +736,7 @@ const translations = {
     "network.failed": "网络设置保存失败",
     "network.rename": "编辑标题",
 
+    "files.preview": "预览",
     "files.downloadFailed": "文件暂时无法下载，可能已移动或不在此对话的工作目录内",
     "sidebar.view.switch": "切换侧栏视图",
     "projects.title": "项目",
@@ -725,8 +748,15 @@ const translations = {
     "projects.model": "模型",
     "projects.defaultModel": "使用默认模型",
     "projects.searchModel": "搜索模型",
-    "queue.edit": "撤回编辑",
-    "queue.failed": "未能撤回，消息可能已开始处理",
+    "queue.edit": "编辑",
+    "queue.withdraw": "撤回",
+    "queue.promote": "插队 · 下一次模型请求前接入",
+    "queue.promoted": "已插队，等待接入",
+    "queue.heading": "待处理消息",
+    "queue.images": "{n} 张图片",
+    "queue.position": "保留原位置和附件",
+    "queue.changed": "消息已变更或开始处理，请核对队列后重试",
+    "queue.failed": "队列操作未完成，请重试",
 
     "projects.openCreatedChat": "打开已创建的对话",
     "projects.createdWithError": "对话已创建，但后续设置未完成。可打开查看，无需重复创建。",

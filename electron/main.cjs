@@ -64,6 +64,8 @@ const HUB_PORT = 7878;
 const { createBackgroundController, isTrustedDesktopEvent } = require('./background.cjs');
 let background = null;
 let remoteStatusRef = () => ({});
+let resolveArtifactRef = async () => { throw Error('Application is not ready'); };
+const { performFileAction } = require('./files.cjs');
 const desktopReady = new WeakSet();
 const pendingMobile = new WeakSet();
 function showMainWindow() {
@@ -412,6 +414,7 @@ function setupAutoUpdater() {
 
 function setupIPC() {
   const trustedDesktop = event => isTrustedDesktopEvent(event, BrowserWindow, `http://127.0.0.1:${HUB_PORT}`);
+  ipcMain.handle('desktop:file', (event, request) => performFileAction({trusted:trustedDesktop, resolve:resolveArtifactRef, shell}, event, request));
   ipcMain.handle('desktop:background:get', event => {
     if (!trustedDesktop(event)) throw new Error('Untrusted desktop sender');
     return background.snapshot();
@@ -747,6 +750,7 @@ async function startServer() {
       server = recovered.server;
       shutdownHubRef = recovered.shutdown;
       remoteStatusRef = recovered.remoteStatus;
+      resolveArtifactRef = recovered.resolveArtifact;
       shutdownPromise = null;
       _shuttingDown = false;
       server.on("error", err => dialog.showErrorBox("Server Error", String(err)));
@@ -757,6 +761,7 @@ async function startServer() {
     server = hub.server;
     shutdownHubRef = hub.shutdown;
     remoteStatusRef = hub.remoteStatus;
+    resolveArtifactRef = hub.resolveArtifact;
   } catch (err) {
     console.error("[electron] failed to start hub:", err);
     dialog.showErrorBox(

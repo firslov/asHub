@@ -5,7 +5,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-787868.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-22-787868.svg)](.nvmrc)
-[![agent-sh](https://img.shields.io/badge/agent--sh-0.16.0-a58b5d.svg)](https://github.com/guanyilun/agent-sh/releases/tag/v0.16.0)
+[![agent-sh](https://img.shields.io/badge/agent--sh-0.16.1-a58b5d.svg)](https://github.com/guanyilun/agent-sh/releases/tag/v0.16.1)
 
 asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌面 AI Agent 工作台。把多会话、模型选择、子代理、终端和文件放在同一个界面，既能专注阅读结果，也能展开审阅完整执行过程。
 
@@ -109,7 +109,7 @@ chmod +x ./asHub-*.AppImage
 
 ## 从源码运行
 
-项目固定使用 **Node.js 22.23.3**（最低 **22.12.0**），内核基于 **agent-sh 0.16.0**，暂时固定到包含 [Codex 流式超时修复](https://github.com/guanyilun/agent-sh/pull/281) 的 Git 提交，待上游发布后切回正式版本。使用 nvm 时：
+项目固定使用 **Node.js 22.23.3**（最低 **22.12.0**）和官方 **agent-sh 0.16.1**，自动应用 Windows Codex 登录与排队消息兼容补丁。使用 nvm 时：
 
 ```sh
 git clone https://github.com/firslov/asHub.git

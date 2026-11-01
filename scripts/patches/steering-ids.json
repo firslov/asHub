@@ -1,0 +1,70 @@
+{
+  "files": [
+    {
+      "path": "src/agent/agent-loop.ts",
+      "hunks": [
+        {
+          "before": "  private boundPipeListeners: Array<{ event: string; fn: (...args: any[]) => any; async: boolean }> = [];\n  private lastProjectSkillNames = new Set<string>();\n  private steerQueue: Array<{ text: string; images?: ImageContent[] }> = [];\n\n  // ── Session telemetry: per-session behavioral counters ──\n",
+          "after": "  private boundPipeListeners: Array<{ event: string; fn: (...args: any[]) => any; async: boolean }> = [];\n  private lastProjectSkillNames = new Set<string>();\n  private steerQueue: Array<{ text: string; images?: ImageContent[]; id?: string }> = [];\n\n  // ── Session telemetry: per-session behavioral counters ──\n"
+        },
+        {
+          "before": "      this.abortController?.abort(e.silent ? \"silent\" : undefined);\n    });\n    on(\"agent:steer\", ({ text, images }) => {\n      if (!this.abortController) {\n        this.handleQuery(text, images).catch(() => {});\n        return;\n      }\n      this.steerQueue.push({ text, images });\n      this.bus.emit(\"agent:steer-queued\", { text, depth: this.steerQueue.length });\n    });\n    on(\"agent:steer-cancel\", () => {\n      const last = this.steerQueue.pop();\n      if (last) this.bus.emit(\"agent:steer-dropped\", { texts: [last.text], reason: \"cancelled\" });\n    });\n    on(\"agent:append-user-message\", ({ text }) => {\n",
+          "after": "      this.abortController?.abort(e.silent ? \"silent\" : undefined);\n    });\n    on(\"agent:steer\", ({ text, images, id }) => {\n      if (!this.abortController) {\n        this.handleQuery(text, images).catch(() => {});\n        return;\n      }\n      const existing = id === undefined ? -1 : this.steerQueue.findIndex(m => m.id === id);\n      if (existing < 0) this.steerQueue.push({ text, images, id });\n      else this.steerQueue[existing] = { text, images, id };\n      this.bus.emit(\"agent:steer-queued\", { text, id, depth: this.steerQueue.length });\n    });\n    on(\"agent:steer-cancel\", ({ id }) => {\n      const index = id === undefined ? this.steerQueue.length - 1 : this.steerQueue.findIndex(m => m.id === id);\n      const last = index < 0 ? undefined : this.steerQueue.splice(index, 1)[0];\n      if (last) this.bus.emit(\"agent:steer-dropped\", { texts: [last.text], ids: [last.id], reason: \"cancelled\" });\n    });\n    on(\"agent:append-user-message\", ({ text }) => {\n",
+          "previous": "      this.abortController?.abort(e.silent ? \"silent\" : undefined);\n    });\n    on(\"agent:steer\", ({ text, images, id }) => {\n      if (!this.abortController) {\n        this.handleQuery(text, images).catch(() => {});\n        return;\n      }\n      this.steerQueue.push({ text, images, id });\n      this.bus.emit(\"agent:steer-queued\", { text, id, depth: this.steerQueue.length });\n    });\n    on(\"agent:steer-cancel\", ({ id }) => {\n      const index = id === undefined ? this.steerQueue.length - 1 : this.steerQueue.findIndex(m => m.id === id);\n      const last = index < 0 ? undefined : this.steerQueue.splice(index, 1)[0];\n      if (last) this.bus.emit(\"agent:steer-dropped\", { texts: [last.text], ids: [last.id], reason: \"cancelled\" });\n    });\n    on(\"agent:append-user-message\", ({ text }) => {\n"
+        },
+        {
+          "before": "      if (this.steerQueue.length > 0) {\n        const texts = this.steerQueue.map((m) => m.text);\n        this.steerQueue = [];\n        this.bus.emit(\"agent:steer-dropped\", { texts, reason: \"aborted\" });\n      }\n\n",
+          "after": "      if (this.steerQueue.length > 0) {\n        const texts = this.steerQueue.map((m) => m.text);\n        const ids = this.steerQueue.map((m) => m.id);\n        this.steerQueue = [];\n        this.bus.emit(\"agent:steer-dropped\", { texts, ids, reason: \"aborted\" });\n      }\n\n"
+        },
+        {
+          "before": "    this.steerQueue = [];\n    for (let i = 0; i < queued.length; i++) {\n      const { text, images } = queued[i]!;\n      let steerImages = images?.length ? images : undefined;\n      if (steerImages && !this.activeModel.modalities?.includes(\"image\")) {\n",
+          "after": "    this.steerQueue = [];\n    for (let i = 0; i < queued.length; i++) {\n      const { text, images, id } = queued[i]!;\n      let steerImages = images?.length ? images : undefined;\n      if (steerImages && !this.activeModel.modalities?.includes(\"image\")) {\n"
+        },
+        {
+          "before": "      this.bus.emit(\"agent:query\", { query: text });\n      this.bus.emit(\"conversation:message-appended\", { role: \"user\", content: text });\n      this.bus.emit(\"agent:steer-consumed\", { text, depth: queued.length - i - 1 });\n    }\n  }\n",
+          "after": "      this.bus.emit(\"agent:query\", { query: text });\n      this.bus.emit(\"conversation:message-appended\", { role: \"user\", content: text });\n      this.bus.emit(\"agent:steer-consumed\", { text, id, depth: queued.length - i - 1 });\n    }\n  }\n"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/agent-loop.js",
+      "hunks": [
+        {
+          "before": "            this.abortController?.abort(e.silent ? \"silent\" : undefined);\n        });\n        on(\"agent:steer\", ({ text, images }) => {\n            if (!this.abortController) {\n                this.handleQuery(text, images).catch(() => { });\n                return;\n            }\n            this.steerQueue.push({ text, images });\n            this.bus.emit(\"agent:steer-queued\", { text, depth: this.steerQueue.length });\n        });\n        on(\"agent:steer-cancel\", () => {\n            const last = this.steerQueue.pop();\n            if (last)\n                this.bus.emit(\"agent:steer-dropped\", { texts: [last.text], reason: \"cancelled\" });\n        });\n        on(\"agent:append-user-message\", ({ text }) => {\n",
+          "after": "            this.abortController?.abort(e.silent ? \"silent\" : undefined);\n        });\n        on(\"agent:steer\", ({ text, images, id }) => {\n            if (!this.abortController) {\n                this.handleQuery(text, images).catch(() => { });\n                return;\n            }\n            const existing = id === undefined ? -1 : this.steerQueue.findIndex(m => m.id === id);\n            if (existing < 0) this.steerQueue.push({ text, images, id });\n            else this.steerQueue[existing] = { text, images, id };\n            this.bus.emit(\"agent:steer-queued\", { text, id, depth: this.steerQueue.length });\n        });\n        on(\"agent:steer-cancel\", ({ id }) => {\n            const index = id === undefined ? this.steerQueue.length - 1 : this.steerQueue.findIndex(m => m.id === id);\n            const last = index < 0 ? undefined : this.steerQueue.splice(index, 1)[0];\n            if (last)\n                this.bus.emit(\"agent:steer-dropped\", { texts: [last.text], ids: [last.id], reason: \"cancelled\" });\n        });\n        on(\"agent:append-user-message\", ({ text }) => {\n",
+          "previous": "            this.abortController?.abort(e.silent ? \"silent\" : undefined);\n        });\n        on(\"agent:steer\", ({ text, images, id }) => {\n            if (!this.abortController) {\n                this.handleQuery(text, images).catch(() => { });\n                return;\n            }\n            this.steerQueue.push({ text, images, id });\n            this.bus.emit(\"agent:steer-queued\", { text, id, depth: this.steerQueue.length });\n        });\n        on(\"agent:steer-cancel\", ({ id }) => {\n            const index = id === undefined ? this.steerQueue.length - 1 : this.steerQueue.findIndex(m => m.id === id);\n            const last = index < 0 ? undefined : this.steerQueue.splice(index, 1)[0];\n            if (last)\n                this.bus.emit(\"agent:steer-dropped\", { texts: [last.text], ids: [last.id], reason: \"cancelled\" });\n        });\n        on(\"agent:append-user-message\", ({ text }) => {\n"
+        },
+        {
+          "before": "            if (this.steerQueue.length > 0) {\n                const texts = this.steerQueue.map((m) => m.text);\n                this.steerQueue = [];\n                this.bus.emit(\"agent:steer-dropped\", { texts, reason: \"aborted\" });\n            }\n            if (signal.aborted && signal.reason !== \"silent\") {\n",
+          "after": "            if (this.steerQueue.length > 0) {\n                const texts = this.steerQueue.map((m) => m.text);\n                const ids = this.steerQueue.map((m) => m.id);\n                this.steerQueue = [];\n                this.bus.emit(\"agent:steer-dropped\", { texts, ids, reason: \"aborted\" });\n            }\n            if (signal.aborted && signal.reason !== \"silent\") {\n"
+        },
+        {
+          "before": "        this.steerQueue = [];\n        for (let i = 0; i < queued.length; i++) {\n            const { text, images } = queued[i];\n            let steerImages = images?.length ? images : undefined;\n            if (steerImages && !this.activeModel.modalities?.includes(\"image\")) {\n",
+          "after": "        this.steerQueue = [];\n        for (let i = 0; i < queued.length; i++) {\n            const { text, images, id } = queued[i];\n            let steerImages = images?.length ? images : undefined;\n            if (steerImages && !this.activeModel.modalities?.includes(\"image\")) {\n"
+        },
+        {
+          "before": "            this.bus.emit(\"agent:query\", { query: text });\n            this.bus.emit(\"conversation:message-appended\", { role: \"user\", content: text });\n            this.bus.emit(\"agent:steer-consumed\", { text, depth: queued.length - i - 1 });\n        }\n    }\n",
+          "after": "            this.bus.emit(\"agent:query\", { query: text });\n            this.bus.emit(\"conversation:message-appended\", { role: \"user\", content: text });\n            this.bus.emit(\"agent:steer-consumed\", { text, id, depth: queued.length - i - 1 });\n        }\n    }\n"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/events.ts",
+      "hunks": [
+        {
+          "before": "    \"agent:steer\": { text: string; images?: ImageContent[] };\n    \"agent:steer-cancel\": Record<string, never>;\n    \"agent:steer-queued\": { text: string; depth: number };\n    \"agent:steer-consumed\": { text: string; depth: number };\n    \"agent:steer-dropped\": { texts: string[]; reason: \"cancelled\" | \"aborted\" };\n",
+          "after": "    \"agent:steer\": { id?: string; text: string; images?: ImageContent[] };\n    \"agent:steer-cancel\": { id?: string };\n    \"agent:steer-queued\": { id?: string; text: string; depth: number };\n    \"agent:steer-consumed\": { id?: string; text: string; depth: number };\n    \"agent:steer-dropped\": { ids?: Array<string | undefined>; texts: string[]; reason: \"cancelled\" | \"aborted\" };\n"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/events.d.ts",
+      "hunks": [
+        {
+          "before": "    \"agent:steer\": {\n            text: string;\n            images?: ImageContent[];\n        };\n        \"agent:steer-cancel\": Record<string, never>;\n        \"agent:steer-queued\": {\n            text: string;\n            depth: number;\n        };\n        \"agent:steer-consumed\": {\n            text: string;\n            depth: number;\n        };\n        \"agent:steer-dropped\": {\n            texts: string[];\n            reason: \"cancelled\" | \"aborted\";\n        };\n    ",
+          "after": "    \"agent:steer\": {\n            text: string;\n        id?: string;\n            images?: ImageContent[];\n        };\n        \"agent:steer-cancel\": { id?: string };\n        \"agent:steer-queued\": {\n            text: string;\n        id?: string;\n            depth: number;\n        };\n        \"agent:steer-consumed\": {\n            text: string;\n        id?: string;\n            depth: number;\n        };\n        \"agent:steer-dropped\": {\n            texts: string[];\n        ids?: Array<string | undefined>;\n            reason: \"cancelled\" | \"aborted\";\n        };\n    "
+        }
+      ]
+    }
+  ]
+}

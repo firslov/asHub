@@ -147,7 +147,7 @@ for (const change of ['disable', 'rebind']) {
     t.after(() => { connector.close(); fs.rmSync(dir, { recursive: true, force: true }); });
     const effects = [];
     t.mock.method(globalThis, 'fetch', async (url) => { effects.push(String(url)); return new Response('{}', { headers: { 'content-type': 'image/png' } }); });
-    for (const op of ['cancel', 'permission', 'model', 'thinking', 'set-thinking', 'image', 'queue', 'queue-withdraw']) {
+    for (const op of ['cancel', 'permission', 'model', 'thinking', 'set-thinking', 'image', 'queue', 'queue-withdraw', 'queue-update']) {
       connector.config = { ...config }; connector.stopped = false;
       let release;
       connector.local = async route => {
@@ -271,4 +271,30 @@ test('queue editing is scoped to authorized sessions and uploaded image referenc
  assert.equal(effects.length,2,'foreign image must not be submitted');
  await connector.execute('submit',{session:'abcdef',requestId:'submit-owned-image',query:'test',images:[{id:'abcdef_img_a_b',mimeType:'image/png'}]});
  await waitFor(()=>effects.length===3);assert.equal(effects[2].body.images[0].id,'abcdef_img_a_b');
+});
+
+test('remote delivery mode is validated, forwarded and part of retry identity',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-steer-connector-')),effects=[];
+ const local=http.createServer(async(req,res)=>{if(req.url==='/sessions'){res.end(JSON.stringify([{instanceId:'abcdef',kind:'agent',cwd:dir}]));return;}let body='';for await(const chunk of req)body+=chunk;effects.push(JSON.parse(body));res.end('{"ok":true}');});
+ local.listen(0,'127.0.0.1');await once(local,'listening');
+ const c=new RemoteConnector({gateway:'http://127.0.0.1/mobile/',dataDir:dir});c.config={deviceId:'desktop',deviceToken:'test',username:'alice',deviceName:'Test',roots:[fs.realpathSync(dir)]};c.localUrl=`http://127.0.0.1:${local.address().port}`;
+ t.after(async()=>{c.close();local.closeAllConnections();await new Promise(r=>local.close(r));fs.rmSync(dir,{recursive:true,force:true});});
+ const args={session:'abcdef',query:'Correction',requestId:'steering-request-001',delivery:'steer'};
+ await c.execute('submit',args);await waitFor(async()=>(await c.execute('request-status',{requestId:args.requestId})).state==='done');
+ await c.execute('submit',args);assert.equal(effects.length,1);assert.equal(effects[0].delivery,'steer');
+ await assert.rejects(c.execute('submit',{...args,delivery:'queue'}),e=>e.status===409);
+ await assert.rejects(c.execute('submit',{...args,requestId:'steering-request-002',delivery:'interrupt'}));assert.equal(effects.length,1);
+});
+
+test('queue mutations forward revision and identity only for authorized sessions',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-queue-update-')),effects=[];
+ const connector=new RemoteConnector({dataDir:dir});t.after(()=>{connector.close();fs.rmSync(dir,{recursive:true,force:true});});
+ connector.config={deviceId:'desktop',deviceToken:'secret',username:'alice',roots:[fs.realpathSync(dir)],deviceName:'Desktop'};connector.stopped=false;
+ connector.local=async(route,body)=>{if(route==='/sessions')return[{instanceId:'abcdef',kind:'agent',cwd:dir}];effects.push({route,body});return {};};
+ assert.equal((await connector.execute('capabilities',{})).queueActions,true);
+ const args={session:'abcdef',id:'queued-message-0001',requestId:'edit-request-000001',revision:3,action:'edit',query:'new text'};
+ await connector.execute('queue-update',args);
+ assert.deepEqual(effects,[{route:'/abcdef/queue/update',body:{id:args.id,requestId:args.requestId,revision:3,action:'edit',query:'new text'}}]);
+ await assert.rejects(connector.execute('queue-update',{...args,session:'cccccc'}),e=>e.status===403||e.status===404);
+ assert.equal(effects.length,1);
 });

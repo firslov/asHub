@@ -1,3 +1,4 @@
+import { createHistoryReader } from "../history/history-reader.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -177,7 +178,7 @@ export function installLazySessionRestore(
       checkRestore();
       const storeRef = session.store;
       const msgs = storeRef ? storeRef.buildMessages() : undefined;
-      const b = opts.makeBridge({ sessionId: id, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id), cwd: session.cwd, kind: session.kind, initialMessages: msgs, model: session.model, provider: session.provider, compactionStrategy, isRestored: true, restoreState: session.backendState, restoreBackend: session.backendId });
+      const b = opts.makeBridge({ sessionId: id, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id), cwd: session.cwd, kind: session.kind, initialMessages: msgs, model: session.model, provider: session.provider, compactionStrategy, historyAccess: createHistoryReader(() => session.store ?? null), isRestored: true, restoreState: session.backendState, restoreBackend: session.backendId });
       if (session.backendId && b.backendId && session.backendId !== b.backendId) {
         b.close();
         throw new Error("This session belongs to another backend; restart with its original backend.");

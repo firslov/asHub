@@ -1,0 +1,32 @@
+name: Kernel compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck:web
+      - run: npm run test:kernel
+      - run: npm run test:steering
+      - run: npm run test:compaction
+      - run: node --test tests/kernel-patch.cjs tests/codex-browser.mjs tests/regression-dependencies.cjs

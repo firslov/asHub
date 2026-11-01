@@ -15,6 +15,14 @@ import { effect } from "../vendor/signals-core.js";
 const form = document.getElementById("form");
 const input = document.getElementById("query");
 const sendBtn = document.getElementById("send-btn");
+const deliveryButton = document.getElementById("delivery-mode");
+let deliveryMode = "steer";
+try { if (localStorage.getItem("ash.delivery-mode") === "queue") deliveryMode = "queue"; } catch {}
+deliveryButton?.addEventListener("click", () => {
+  deliveryMode = deliveryMode === "steer" ? "queue" : "steer";
+  try { localStorage.setItem("ash.delivery-mode", deliveryMode); } catch {}
+  updateSendBtn();
+});
 const imagePreviews = document.getElementById("image-previews");
 const visionIndicator = document.getElementById("vision-indicator");
 
@@ -46,13 +54,19 @@ const updateSendBtn = () => {
   const session = activeSession.peek();
   const busy = !!session?.state?.isProcessing;
   const hasText = !!input?.value.trim() || attachedImages.length > 0;
-  sendBtn.classList.toggle("busy", busy);
+  sendBtn.classList.toggle("busy", busy && !hasText);
+  if (deliveryButton) {
+    deliveryButton.hidden = !busy || /^[!/]/.test(input?.value.trim() || '');
+    deliveryButton.textContent = t('delivery.' + deliveryMode);
+    deliveryButton.title = t('delivery.' + deliveryMode + '.hint');
+    deliveryButton.setAttribute('aria-label', deliveryButton.title);
+  }
   sendBtn.disabled = busy ? false : (!session || !hasText);
-  sendBtn.title = busy ? t("interrupt") : t("send");
+  sendBtn.title = busy && !hasText ? t("interrupt") : t("send");
 };
 
 sendBtn?.addEventListener("click", (ev) => {
-  // While a turn is running the button acts as cancel — don't submit.
+  // While running with no draft, the button acts as cancel.
   if (sendBtn.classList.contains("busy")) {
     ev.preventDefault();
     cancelTurn();
@@ -480,12 +494,14 @@ const doSubmit = async (query) => {
     appendAfterPending(sv, optimisticSep);
     optimisticBox = createUserBox(query, attachedImages.length > 0 ? attachedImages : null);
     optimisticBox.classList.add("pending");
+    optimisticBox.dataset.queueHeading = t("queue.heading");
     optimisticBox.dataset.queued = query;
     appendAfterPending(sv, optimisticBox);
   }
   // The input stays enabled so keystrokes during slow submits aren't
   // swallowed; sv.state.isSubmitting above guards against double submits.
   const sid = sv.id;
+  const delivery = sv.state.isProcessing ? deliveryMode : undefined;
   const sentImages = attachedImages.slice();
   const draft = attachedImages;
   try {
@@ -512,7 +528,7 @@ const doSubmit = async (query) => {
       } catch {
         // Fallback: use base64 directly if upload fails
       }
-      const body = JSON.stringify({ query, images: imageRefs });
+      const body = JSON.stringify({ query, images: imageRefs, delivery });
       await assertSubmitOk(await fetch(`/${sid}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -524,7 +540,7 @@ const doSubmit = async (query) => {
       await assertSubmitOk(await fetch(`/${sid}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, delivery }),
       }));
     }
   } catch (e) {

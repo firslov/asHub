@@ -1,3 +1,5 @@
+import { unicodeSlice, wellFormedText } from "../unicode.js";
+
 export function stripContextWrappers(text: string): string {
   let out = String(text ?? "");
   for (;;) {
@@ -60,7 +62,7 @@ export function extractImages(content: unknown): Array<{ data: string; mimeType:
 export function snippet(text: string, max: number): string {
   const cleaned = String(text ?? "").replace(/\s+/g, " ").trim();
   if (cleaned.length <= max) return cleaned || "(empty)";
-  return cleaned.slice(0, max) + "…";
+  return unicodeSlice(wellFormedText(cleaned), 0, max) + "…";
 }
 
 export function summarizeMessage(m: unknown): string {

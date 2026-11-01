@@ -5,7 +5,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-787868.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-22-787868.svg)](.nvmrc)
-[![agent-sh](https://img.shields.io/badge/agent--sh-0.16.0-a58b5d.svg)](https://github.com/guanyilun/agent-sh/releases/tag/v0.16.0)
+[![agent-sh](https://img.shields.io/badge/agent--sh-0.16.1-a58b5d.svg)](https://github.com/guanyilun/agent-sh/releases/tag/v0.16.1)
 
 asHub is an open-source desktop workspace powered by [agent-sh](https://github.com/guanyilun/agent-sh). Keep conversations, models, subagents, terminals and project files together, with a readable result and an inspectable execution trail.
 
@@ -109,7 +109,7 @@ Open **Plugins** in the right toolbar to inspect built-in components, enable or 
 
 ## Run from source
 
-The project pins **Node.js 22.23.3** (minimum **22.12.0**) and **agent-sh 0.16.0** with the [Codex streaming fix](https://github.com/guanyilun/agent-sh/pull/281) pinned to a Git commit until the next upstream release. With nvm:
+The project pins **Node.js 22.23.3** (minimum **22.12.0**) and the official **agent-sh 0.16.1** release. Windows Codex login and queued-message compatibility patches are applied automatically. With nvm:
 
 ```sh
 git clone https://github.com/firslov/asHub.git

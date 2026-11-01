@@ -23,7 +23,7 @@ import { reasoningProfile, SessionThinking } from "./providers/reasoning.js";
 import { mobileReplayStart, mobileReplayFrame } from "./remote/replay.js";
 import { readNetworkPolicy, writeNetworkPolicy } from "./network-policy.js";
 import { CollaborationTasks } from "./collaboration.js";
-import { serveArtifact } from "./artifacts.js";
+import { serveArtifact, openArtifact } from "./artifacts.js";
 /**
  * Hub: spawns and supervises Bridges (one per session), exposes them
  * through the web UI on a single port. Path-based routing
@@ -142,7 +142,9 @@ const REPLAY_NAMES = new Set([
   "agent:cancelled",
   "agent:error",
   "agent:queued",
+  "agent:queue-updated",
   "agent:queued-submit",
+  "agent:steer-submit",
   "agent:queued-done",
   "permission:request",
   "permission:resolved",
@@ -681,6 +683,8 @@ const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".wasm": "application/wasm",
   ".svg": "image/svg+xml",
   ".woff2": "font/woff2",
   ".woff": "font/woff",
@@ -748,7 +752,7 @@ function unmaskApiKeys(parsed: Record<string, unknown>, old: Record<string, unkn
   }
 }
 
-export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => Promise<void>; remoteStatus: () => ReturnType<RemoteConnector["status"]> } {
+export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => Promise<void>; resolveArtifact: (id: string, requested: string) => Promise<string>; remoteStatus: () => ReturnType<RemoteConnector["status"]> } {
   const lifecycle = new AbortController();
   opts = { ...opts, signal: lifecycle.signal };
   const hostEvents = new HostEvents();
@@ -998,6 +1002,42 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(session.bridge.withdrawQueued ? [...(session.queuedItems?.values() ?? [])] : [])); return;
       }
+      if (req.method === "POST" && rest === "/queue/update") {
+        let input;
+        try { input = JSON.parse(await readBody(req)); } catch { res.writeHead(400); res.end("Invalid request"); return; }
+        if (typeof input?.id !== "string" || typeof input?.requestId !== "string" || !/^[a-zA-Z0-9-]{16,80}$/.test(input.requestId)
+          || !Number.isSafeInteger(input.revision) || input.revision < 0
+          || !["edit", "promote"].includes(input.action)
+          || (input.action === "edit" && (typeof input.query !== "string" || input.query.length > 1000000))) {
+          res.writeHead(400); res.end("Invalid queue update"); return;
+        }
+        const fingerprint = JSON.stringify([input.id, input.revision, input.action, input.action === "edit" ? input.query : null]);
+        const previous = session.queueMutations?.get(input.requestId);
+        if (previous) {
+          if (previous.fingerprint !== fingerprint) { res.writeHead(409); res.end("Request ID reused"); return; }
+          res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(previous.item)); return;
+        }
+        const item = session.queuedItems?.get(input.id);
+        if (!item || session._closed || session._closing || (item.revision ?? 0) !== input.revision) {
+          res.writeHead(409); res.end("Message changed or is no longer queued"); return;
+        }
+        if (input.action === "edit" && !input.query.trim() && !item.images?.length) { res.writeHead(400); res.end("Empty message"); return; }
+        // No await between checking the revision and applying the bridge mutation.
+        const delivery = session.bridge.updateQueued?.(item.id, input.action === "edit" ? input.query : undefined, input.action === "promote");
+        if (!delivery) { res.writeHead(409); res.end("Message is being processed or cannot be updated"); return; }
+        const oldQuery = item.query;
+        if (input.action === "edit") item.query = input.query;
+        item.delivery = delivery; item.revision = (item.revision ?? 0) + 1;
+        const queryIndex = session.queuedQueries?.indexOf(oldQuery) ?? -1;
+        if (queryIndex >= 0) session.queuedQueries![queryIndex] = item.query;
+        const result = { ...item };
+        const receipts = session.queueMutations ??= new Map();
+        receipts.set(input.requestId, { fingerprint, item: result });
+        if (receipts.size > 128) receipts.delete(receipts.keys().next().value!);
+        pushFrame(session, "agent:queue-updated", sseFrame({ source: id, ts: Date.now(), name: "agent:queue-updated" }, { ...result, queueId: item.id }));
+        session._onHostChange?.("queue-updated");
+        res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(result)); return;
+      }
       if (req.method === "POST" && rest === "/queue/withdraw") {
         let input;
         try { input = JSON.parse(await readBody(req)); } catch { res.writeHead(400); res.end("Invalid request"); return; }
@@ -1105,6 +1145,17 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   return {
     server,
     remoteStatus: () => mobile.status(),
+    // Native desktop API only: never expose host paths through HTTP or RPC.
+    resolveArtifact: async (id, requested) => {
+      const session = sessions.get(id);
+      if (stopping || !session || session._closing || session._closed) throw Error('Conversation unavailable');
+      const cwd = session.cwd;
+      const opened = await openArtifact(cwd, requested);
+      try {
+        if (stopping || sessions.get(id) !== session || session._closing || session._closed || session.cwd !== cwd) throw Error('Conversation changed');
+        return opened.resolved;
+      } finally { await opened.file.close(); }
+    },
     shutdown: () => {
       stopping = true;
       lifecycle.abort();
@@ -1640,6 +1691,19 @@ function routeEvent(session: Session, e: BusEvent): void {
     session.lastRequestStatus = phase === "clear" ? undefined : { phase };
   }
   session.collaboration?.event(session.id, e.name, e.payload);
+  if (e.name === "agent:steer-submit") {
+    const p = e.payload as {queueId: string; query: string};
+    const item = session.queuedItems?.get(p.queueId);
+    session.queuedItems?.delete(p.queueId);
+    const index = session.queuedQueries?.indexOf(p.query) ?? -1;
+    if (index >= 0) session.queuedQueries!.splice(index, 1);
+    flushSegment(session);
+    session.lastModified = Date.now();
+    pushFrame(session, "agent:query", sseFrame({source: session.id, ts: Date.now(), name: "agent:query"},
+      {query: p.query, queueId: p.queueId, steering: true, ...(item?.images?.length ? {images: item.images} : {})}));
+    _flushBuf(session.id);
+    return;
+  }
   if (e.name === "agent:queued-submit" || (e.name === "agent:queued-done" && (e.payload as any)?.dropped)) {
     session.queuedItems?.delete((e.payload as any)?.queueId);
     const i = session.queuedQueries?.indexOf((e.payload as any)?.query);
@@ -2662,7 +2726,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   let images: Array<{ data: string; mimeType: string }> | undefined;
 
   // Parse JSON body
-  let parsed: { query?: string; images?: Array<{ data?: string; id?: string; mimeType: string }> };
+  let parsed: { delivery?: "queue" | "steer"; query?: string; images?: Array<{ data?: string; id?: string; mimeType: string }> };
   try {
     parsed = JSON.parse(body);
   } catch (err) {
@@ -2672,6 +2736,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || (parsed.query !== undefined && typeof parsed.query !== "string")) { res.writeHead(400); res.end("invalid query"); return; }
+  if (parsed.delivery !== undefined && parsed.delivery !== "queue" && parsed.delivery !== "steer") { res.writeHead(400); res.end("invalid delivery mode"); return; }
   query = parsed.query ?? "";
   // Image refs carried by the agent:query/agent:queued frames — replay after
   // restart rebuilds the user box from these, so they must reference the
@@ -2712,7 +2777,7 @@ async function submit(req: http.IncomingMessage, res: http.ServerResponse, sessi
   if (!query.trim() && (!images || images.length === 0)) { res.statusCode = 400; res.end("empty"); return; }
 
   try {
-    const result = await submitQuery(session, query, images, imageRefs);
+    const result = await submitQuery(session, query, images, imageRefs, undefined, undefined, parsed.delivery);
     res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(result));
   } catch (err) { res.writeHead(409); res.end(String(err)); }
 }
@@ -2722,6 +2787,7 @@ async function submitQuery(session: Session, query: string,
   imageRefs?: Array<{ id?: string; data?: string; mimeType: string }>,
   beforeSubmit?: () => void,
   taskId?: string,
+  delivery: "queue" | "steer" = "queue",
 ) {
   const meta = (name: string) => ({
     source: session.id,
@@ -2797,12 +2863,15 @@ async function submitQuery(session: Session, query: string,
       ? JSON.stringify({ query, images })
       : query;
 
-    Promise.race([session.bridge.submit(submitPayload, queueId), timeout])
+    Promise.race([session.bridge.submit(submitPayload, queueId, delivery), timeout])
       .then((result) => {
         cleanup();
         if (session._closed || session._closing) return;
-        if (result.stopReason === "queued") {
-          pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query, queueId, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
+        if (result.stopReason === "queued" || result.stopReason === "steering") {
+          const item = queueId ? session.queuedItems?.get(queueId) : undefined;
+          if (!item) return; // Already consumed/withdrawn: never resurrect pending UI.
+          item.delivery = result.stopReason === "steering" ? "steer" : "queue";
+          pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query, queueId, delivery: item.delivery, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
           return;
         }
         if (taskId) session.collaboration?.finish(taskId, session._cancelled ? "cancelled" : "completed");

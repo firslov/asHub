@@ -4,7 +4,7 @@ import type { SessionStore } from "../history/session-store.js";
 import type { Capture } from "../history/capture.js";
 import type { CollaborationTasks } from "../collaboration.js";
 
-export interface QueuedMessage { id: string; query: string; images?: Array<{ id?: string; data?: string; mimeType: string }> }
+export interface QueuedMessage { revision?: number; delivery?: "queue" | "steer"; id: string; query: string; images?: Array<{ id?: string; data?: string; mimeType: string }> }
 
 export interface Session {
   /** Host-owned invalidation hook; never passed to extensions. */
@@ -52,6 +52,7 @@ export interface Session {
   queuedQueries?: string[];
   withdrawnItems?: Map<string, { requestId: string; item: QueuedMessage }>;
   queuedItems?: Map<string, QueuedMessage>;
+  queueMutations?: Map<string, { fingerprint: string; item: QueuedMessage }>;
   lastTurnError?: boolean;
   pendingPermissions?: Map<string, { expiresAt: number }>;
   store?: SessionStore;

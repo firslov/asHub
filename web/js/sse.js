@@ -1,6 +1,6 @@
 import { BALANCE_PROVIDERS, createProviderBalanceUI } from './extensions/provider-balance.js';
 import { appendApprovalPreview } from "./approval-preview.js";
-import { findQueued, attachQueueEdit } from "./queued-messages.js";
+import { findQueued, attachQueueEdit, updateQueuedBox } from "./queued-messages.js";
 import { loadThinking, saveThinking, thinkingChoices, thinkingLabel } from "./thinking-control.js";
 import { refreshActivity } from "./stream/activity.js";
 import { readSwarmOutcome } from "./stream/swarm-result.js";
@@ -399,7 +399,7 @@ export const handlers = {
     // the replay fragment, so search the container they were appended to.
     const pendRoot = (this.state.replaying && this._replayFrag) || this.streamEl;
     const existing = findQueued(pendRoot, p);
-    if (existing) { attachQueueEdit(existing, this.id, p?.queueId); return; }
+    if (existing) { attachQueueEdit(existing, this.id, p?.queueId, p?.delivery, p?.revision); return; }
     // Build turn-separator manually (same as renderTurnSep) but append
     // after any pending boxes to preserve submission order.
     const cwd = this.state.cwd ?? "";
@@ -416,8 +416,14 @@ export const handlers = {
     box.classList.add("pending");
     box.dataset.queued = queryText;
     box._queryText = queryText;
-    attachQueueEdit(box, this.id, p?.queueId);
+    attachQueueEdit(box, this.id, p?.queueId, p?.delivery, p?.revision);
     appendAfterPending(this, box);
+  },
+
+  "agent:queue-updated"(p) {
+    const root = (this.state.replaying && this._replayFrag) || this.streamEl;
+    const box = findQueued(root, p, false);
+    if (box) updateQueuedBox(box, p);
   },
 
   "agent:query"(p, meta) {
@@ -447,15 +453,32 @@ export const handlers = {
         if (p?.queryId) matched.dataset.queryId = p.queryId;
         if (p?.entryId) matched.dataset.entryId = p.entryId;
       }
-      matched.classList.remove("pending");
+      // The authoritative consumed payload wins over a stale optimistic/edit view.
+      matched._queryText = queryText;
+      const text = matched.querySelector('.q-text'); if (text) text.textContent = queryText;
+      matched.classList.remove("pending", "queue-editing");
+      for (const node of matched.querySelectorAll('.queue-actions, .queue-editor, .queue-error')) node.remove();
+      delete matched.dataset.revision;
+      delete matched.dataset.queueSession;
+      delete matched.dataset.queueHeading;
       delete matched.dataset.queued;
       delete matched.dataset.queueId;
       delete matched.dataset.withdrawing;
       matched.querySelector(".queue-edit")?.remove();
+      matched.querySelector(".queue-status")?.remove();
+      delete matched.dataset.delivery;
+      {
+        // Steering can overtake queued work. Place every consumed message
+        // at its actual boundary before pending tasks, including replay.
+        const sep = matched.previousElementSibling;
+        if (sep?.classList.contains('turn-sep')) sep.remove();
+        matched.remove();
+        append(this, matched);
+        renderTurnSep(this, meta?.ts, matched);
+      }
       return;
     }
     if (!isCommand) this.state.currentTurn++;
-    renderTurnSep(this, meta?.ts);
     const box = createUserBox(queryText, images, meta?.ts, isCommand ? null : this.state.currentTurn);
     if (!isCommand) {
       box.dataset.turn = String(this.state.currentTurn);
@@ -463,6 +486,7 @@ export const handlers = {
       if (p?.entryId) box.dataset.entryId = p.entryId;
     }
     append(this, box);
+    renderTurnSep(this, meta?.ts, box);
   },
 
   // Match the exact query frame, including identical or failed turns.

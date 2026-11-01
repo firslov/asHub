@@ -23,8 +23,7 @@ const groupState = new WeakMap();
 export const insertStreamNode = (session, node) => {
   // During replay, batch all nodes into a DocumentFragment for
   // single-pass DOM insertion — eliminates 1000+ reflows.
-  // Also skip querySelector entirely: no pending/thinking elements exist
-  // during replay since they're live-streaming concepts.
+  // Replayed queued frames still need the same placement as live messages.
   const replaying = session?.state.replaying;
   const target = (replaying && session._replayFrag)
     ? session._replayFrag
@@ -33,14 +32,27 @@ export const insertStreamNode = (session, node) => {
   node = prepareActivityNode(session, node, target);
   if (!node) return;
 
-  if (replaying) {
-    // Replay path: sequential frames in order — no pending boxes or
-    // thinking dots to work around. Just append in chronological order.
-    target.appendChild(node);
+  // Pending user messages are always last, even when a request-status
+  // event re-arms the thinking indicator after a follow-up was consumed.
+  const firstPending = target.querySelector(".agent-box.pending");
+  if (firstPending) {
+    let insertBefore = firstPending;
+    let prev = firstPending.previousElementSibling;
+    while (prev && prev.classList.contains("turn-sep")) {
+      insertBefore = prev;
+      prev = prev.previousElementSibling;
+    }
+    // Keep replies before a waiting indicator immediately ahead of the queue.
+    if (!node.classList?.contains("thinking")) {
+      while (prev?.classList.contains("thinking")) {
+        insertBefore = prev;
+        prev = prev.previousElementSibling;
+      }
+    }
+    target.insertBefore(node, insertBefore);
     return;
   }
 
-  // ── Live-streaming path ──────────────────────────────────────
   if (node.classList?.contains("thinking")) {
     target.appendChild(node);
     return;
@@ -59,18 +71,7 @@ export const insertStreamNode = (session, node) => {
     target.insertBefore(node, anchor);
     return;
   }
-  const firstPending = target.querySelector(".agent-box.pending");
-  if (firstPending) {
-    let insertBefore = firstPending;
-    let prev = firstPending.previousElementSibling;
-    while (prev && prev.classList.contains("turn-sep")) {
-      insertBefore = prev;
-      prev = prev.previousElementSibling;
-    }
-    target.insertBefore(node, insertBefore);
-  } else {
-    target.appendChild(node);
-  }
+  target.appendChild(node);
 };
 
 const toolCount = (g) => g.querySelectorAll(".tool-row").length;
@@ -194,8 +195,7 @@ export const append = (session, node) => {
  * Append a node to the very end of the stream, after any pending boxes.
  * Used for optimistic queued-message boxes, which must appear after all
  * existing pending boxes to preserve submission order.
- * During replay, routes through insertStreamNode so the node lands in the
- * replay DocumentFragment in chronological order — appending to streamEl
+ * During replay, appends to the fragment in submission order — appending to streamEl
  * directly would place it before the replayed history, which is only
  * mounted on exitReplayMode.
  */
@@ -203,7 +203,7 @@ export const appendAfterPending = (session, node) => {
   closeToolGroup(session);
   hideEmptyState(session);
   if (session?.state.replaying && session._replayFrag) {
-    insertStreamNode(session, node);
+    session._replayFrag.appendChild(node);
   } else {
     session?.streamEl?.appendChild(node);
   }

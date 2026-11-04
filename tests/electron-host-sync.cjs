@@ -17,7 +17,7 @@ const watchdog = setTimeout(() => { console.error('Host sync UI watchdog'); app.
 app.whenReady().then(async () => {
   const e = env(); e.context.process.env.ASHUB_TOKEN = 'host-sync-fixture-only';
   const headers = { Authorization: 'Bearer host-sync-fixture-only', 'Content-Type': 'application/json' };
-  let hub, proxy, win, coreBase = '', hostStreams = 0, snapshots = 0, held = null, delayNextSessions = false;
+  let hub, proxy, win, coreBase = '', hostStreams = 0, snapshots = 0, snapshotStream = 0, held = null, delayNextSessions = false;
   const streams = new Set();
   const bridges = [];
   const boot = async () => {
@@ -44,7 +44,7 @@ app.whenReady().then(async () => {
         res.setHeader('Content-Type', filename.endsWith('.js') ? 'text/javascript' : filename.endsWith('.css') ? 'text/css' : 'text/html');
         res.end(content); return;
       }
-      if (pathname === '/api/host/snapshot') snapshots++;
+      if (pathname === '/api/host/snapshot') { snapshots++; snapshotStream = hostStreams; }
       const hold = pathname === '/sessions' && delayNextSessions; if (hold) delayNextSessions = false;
       const upstream = http.request(coreBase + req.url, { method: req.method, headers: { ...req.headers, host: new URL(coreBase).host, authorization: headers.Authorization } }, upstreamResponse => {
         if (hold) {
@@ -53,7 +53,10 @@ app.whenReady().then(async () => {
           return;
         }
         if (pathname === '/api/host/events') { hostStreams++; streams.add(res); res.once('close', () => streams.delete(res)); }
-        res.writeHead(upstreamResponse.statusCode, upstreamResponse.headers); upstreamResponse.pipe(res);
+        res.writeHead(upstreamResponse.statusCode, upstreamResponse.headers);
+        // Keep reconnect slower than an ordinary project refresh, as on CI.
+        if (pathname === '/api/host/events') res.write('retry: 5000\n\n');
+        upstreamResponse.pipe(res);
       });
       upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
       res.once('close', () => upstream.destroy()); req.pipe(upstream);
@@ -245,12 +248,22 @@ app.whenReady().then(async () => {
     await wait(`import('/js/store.js').then(m=>m.allSessions.value.some(s=>s.instanceId===${JSON.stringify(a.instanceId)} && s.model==='fixture-model' && s.provider==='fixture-provider' && s.thinkingLevel==='high' && s.lastTurnError===true))`);
     await js(`import('/js/sidebar.js').then(m=>{m.sidebarView.value='projects'})`);
     // Disconnect the real SSE transport, mutate while it is down, then let
-    // native EventSource reconnect. No local sessions-changed signal is sent.
+    // native EventSource reconnect. A normal project refresh may finish first;
+    // it must not be mistaken for recovery of the event transport.
     const beforeStreams = hostStreams, beforeSnapshots = snapshots;
     for (const response of [...streams]) response.end();
     await api('/api/projects', { action: 'members', id: project.id, remove: [a.instanceId], add: [b.instanceId] });
+    await js(`import('/js/projects.js').then(m=>{m.showProjects(false);m.showProjects(true)})`);
     await wait(`!!document.querySelector('.project-chat[href="/${b.instanceId}/"]') && !document.querySelector('.project-chat[href="/${a.instanceId}/"]')`);
-    assert(hostStreams > beforeStreams, 'native EventSource did not reconnect'); assert(snapshots > beforeSnapshots, 'reconnect did not refetch the snapshot');
+    // Poll transport evidence independently of DOM changes: fallback refreshes
+    // can update the list before EventSource's retry timer opens a new stream.
+    // The snapshot must have started after that new connection, not be an older
+    // in-flight refresh that happened to complete while disconnected.
+    const reconnectDeadline = Date.now() + 10000;
+    while ((hostStreams <= beforeStreams || snapshotStream <= beforeStreams) && Date.now() < reconnectDeadline)
+      await new Promise(resolve => setTimeout(resolve, 20));
+    assert(hostStreams > beforeStreams, 'native EventSource did not reconnect');
+    assert(snapshots > beforeSnapshots && snapshotStream > beforeStreams, 'reconnect did not refetch the snapshot');
     const oldEpoch = await js('window.hostSync.state.applied.epoch');
     await hub.shutdown(); await boot();
     await wait(`window.hostSync.state.applied?.epoch!==${JSON.stringify(oldEpoch)}`);

@@ -15,8 +15,8 @@ function env(extra={}) {
  const dir=fs.mkdtempSync(path.join(base,'case-')); seq++;
  const timers=new Map(); let tid=0, now=100000;
  const fakeOS={...require('node:os'),homedir:()=>path.join(dir,'home')};
- const settings={getSettings:()=>({disabledBuiltins:['codex-provider']}),getProviderNames:()=>[],resolveProvider:()=>({baseURL:'https://example.invalid'}),CONFIG_DIR:dir};
- const auth={resolveApiKey:()=>({key:'fake-test-key'}),listAllProviders:()=>[],anyProviderConfigured:()=>true};
+ const settings={reloadSettings(){},getSettings:()=>({disabledBuiltins:['codex-provider']}),getProviderNames:()=>[],resolveProvider:()=>({baseURL:'https://example.invalid'}),CONFIG_DIR:dir};
+ const auth={KEYS_PATH:path.join(dir,'keys.json'),reloadKeysFile:()=>{},resolveApiKey:()=>({key:'fake-test-key'}),listAllProviders:()=>[],anyProviderConfigured:()=>true};
  const context=vm.createContext({console:{...console,error(){},warn(){}},Buffer,URL,URLSearchParams,AbortController,AbortSignal,TextEncoder,TextDecoder,
   CustomEvent:class {constructor(type,options={}){this.type=type;this.detail=options.detail;}},
   process:{...process, env:{AGENT_SH_HOME:dir}},

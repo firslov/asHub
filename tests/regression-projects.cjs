@@ -22,6 +22,24 @@ test('projects persist across reload; moving membership is unique and deletion p
   assert.equal(store.list().length,1);
   assert.equal(store.list()[0].id,b.id);
 });
+test('project pins persist separately, support retries and are cleared on membership changes', t => {
+  const {e,store,ProjectStore} = fixture(t);
+  const [a] = store.update({action:'create',cwd:e.dir,name:'A',add:['a','b','c']},()=>true);
+  const [,b] = store.update({action:'create',cwd:e.dir,name:'B'},()=>true);
+  const pin = (group,id,pinned) => store.update({action:'pin',id:group.id,sessionId:id,pinned},()=>true);
+  pin(a,'a',true); pin(a,'b',true); pin(a,'a',true);
+  const read = () => JSON.parse(JSON.stringify(new ProjectStore(path.join(e.dir,'projects.json')).list()));
+  assert.deepEqual(read()[0].pinnedSessionIds,['b','a']);
+  assert.throws(()=>pin(b,'a',true));
+  assert.throws(()=>pin(a,'c','yes'));
+  store.update({action:'members',id:b.id,add:['b']},()=>true);
+  assert.deepEqual(read()[0].pinnedSessionIds,['a']);
+  assert.deepEqual(read()[1].pinnedSessionIds ?? [],[]);
+  pin(a,'a',false); pin(b,'b',true);
+  store.update({action:'members',id:b.id,remove:['b']},()=>true);
+  assert.deepEqual(read().map(p=>p.pinnedSessionIds),[[],[]]);
+});
+
 test('invalid edits are atomic and corrupt storage is never overwritten', t => {
   const {e,store} = fixture(t); const p = store.update({action:'create',cwd:e.dir,name:'Keep'},()=>true)[0];
   const file = path.join(e.dir,'projects.json'), before = fs.readFileSync(file,'utf8');
@@ -132,4 +150,21 @@ test('an unchanged unavailable root does not block project metadata or membershi
  const p=store.update({action:'create',name:'Project',cwd:root},()=>true)[0];fs.rmdirSync(root);
  store.update({action:'edit',id:p.id,name:'Renamed',cwd:root,add:['a']},()=>true);
  assert.equal(store.list()[0].name,'Renamed');assert.equal(store.list()[0].cwd,root);assert.deepEqual([...store.list()[0].sessionIds],['a']);
+});
+
+test('membership changes saved by an earlier desktop version do not invalidate projects with pins', t => {
+ const {e,store} = fixture(t);
+ const [a] = store.update({action:'create',cwd:e.dir,name:'A',add:['moved','kept']},()=>true);
+ const [,b] = store.update({action:'create',cwd:e.dir,name:'B'},()=>true);
+ store.update({action:'pin',id:a.id,sessionId:'kept',pinned:true},()=>true);
+ store.update({action:'pin',id:a.id,sessionId:'moved',pinned:true},()=>true);
+ const file=path.join(e.dir,'projects.json');
+ const oldClient=JSON.parse(fs.readFileSync(file,'utf8'));
+ oldClient[0].sessionIds=['kept'];oldClient[1].sessionIds=['moved'];
+ fs.writeFileSync(file,JSON.stringify(oldClient));
+ const groups=JSON.parse(JSON.stringify(store.list()));
+ assert.deepEqual(groups[0].pinnedSessionIds,['kept']);
+ assert.deepEqual(groups[1].pinnedSessionIds ?? [],[]);
+ store.update({action:'pin',id:b.id,sessionId:'moved',pinned:true},()=>true);
+ assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')).map(p=>p.pinnedSessionIds),[['kept'],['moved']]);
 });

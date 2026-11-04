@@ -24,6 +24,26 @@ app.whenReady().then(async () => {
     debug.attach('1.3');
     await debug.sendCommand('DOM.enable');
     await debug.sendCommand('CSS.enable');
+    const modelChip = html.match(/<(?:span|button) class="usage-chip usage-model-balance"[^>]*><\/(?:span|button)>/)?.[0];
+    assert.ok(modelChip, 'session template contains the model picker trigger');
+    await run(`(() => {
+      const box = document.createElement('div');
+      box.innerHTML = '<button id="before-model">Before</button>' + ${JSON.stringify(modelChip)};
+      document.body.prepend(box);
+      const chip = box.querySelector('.usage-model-balance');
+      chip.hidden = false;
+      chip.textContent = 'Choose model';
+      chip.addEventListener('click', () => chip.dataset.clicked = 'yes');
+      box.firstElementChild.focus();
+    })()`);
+    const key = async (key, code) => {
+      await debug.sendCommand('Input.dispatchKeyEvent', {type:'keyDown', key, code:key, windowsVirtualKeyCode:code, text:key === 'Enter' ? '\r' : ''});
+      await debug.sendCommand('Input.dispatchKeyEvent', {type:'keyUp', key, code:key, windowsVirtualKeyCode:code});
+    };
+    await key('Tab', 9);
+    assert(await run("document.activeElement.matches('.usage-model-balance')"), 'Tab reaches model picker');
+    await key('Enter', 13);
+    assert.equal(await run("document.querySelector('.usage-model-balance').dataset.clicked"), 'yes', 'Enter activates model picker');
     const { root: dom } = await debug.sendCommand('DOM.getDocument');
     const { nodeId } = await debug.sendCommand('DOM.querySelector', { nodeId: dom.nodeId, selector: '#send-btn' });
     let checked = 0;

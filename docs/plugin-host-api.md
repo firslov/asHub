@@ -111,3 +111,31 @@ The host checks ownership and grant scope, waits until the target is idle, then 
 Uncertain deliveries are never automatically replayed after restart. Storage failure stops message admission without preventing unrelated core conversations from starting or shutting down. Receipts and authorizations have bounded capacity and are not automatically pruned, preserving deduplication. This is at-most-once admission, not exactly-once execution of external side effects; a crash may leave a task interrupted even if some work occurred. Plugin permissions are cooperative capabilities, not a sandbox for untrusted Node code.
 
 The `examples/extensions/scheduled-tasks` package demonstrates once/daily/weekdays/weekly/interval scheduling, confirmed message grants, bounded catch-up, pause/resume and a generic resource UI. It needs the new capabilities; older desktop releases reject it through normal manifest compatibility checks. Remote web management is not added by this package.
+
+
+## Shared package data directory
+
+Hosts advertising `plugin-data` expose the same `ctx.services.dataDirectory` to a package's session and application entries. It is an absolute, stable path scoped to the package identity and settings profile under `hub-sessions/plugin-data`. The session service object exposes only this path: no unbound operation executor, credentials or other conversations are added. Creating directories, storage schema/migrations, size limits, database connections and backup semantics remain plugin responsibilities. Feature-detect or declare this capability in the manifest; released 0.21.1 does not provide it.
+
+An application-owned database can be shared with session adapters through a canonical sibling module inside the same installed package. Stop/dispose the application service to revoke new operations; do not create a second background service per session. Upgrade after restarting asHub because JavaScript submodule caching can otherwise mix package versions. This is trusted in-process code, not a sandbox or a cross-plugin service registry.
+
+`examples/extensions/personal-assistant` demonstrates an application-owned memory store, explicit conversation association, user-reviewed memory proposals, bounded Chinese search and ephemeral multipart-safe request recall. The host does not learn personal preferences, extract history or decide memory policy.
+
+## Authorized background services
+
+The additive `background-services` capability exposes `ctx.services.background` to application entries only. Learning, memory policy, schedules and UI remain plugin code. This is trusted in-process JavaScript, not a sandbox.
+
+A resource plan may declare `backgroundAuthorization: {modelSessionId, includeHistory, excludedIds, dailyCalls}`. The host appends its own scope, provider/model and cost preview. Only user confirmation creates a package-bound grant and passes its ID to `execute(grantId)`. A plan cannot also request message authorization. A failed commit revokes the new grant; replacement invalidates the old one. Plugins cannot mint grants themselves.
+
+The grant covers current and future active agent conversations except exclusions. Archived, terminal and closing sessions are excluded. `includeHistory:false` sets the start time to preparation of this authorization. The configured model source is bound to its session identity, directory, provider and model; changes require renewed approval for inference. The host persists grants and usage atomically under the settings profile; corrupt storage fails closed without preventing ordinary conversations from starting.
+
+- `background.status(grantId)` returns the current grant and quota, without the internal model binding.
+- `background.targets(grantId)` returns authorized target metadata, including busy state.
+- `background.read(grantId, conversationId, cursor?)` returns `{target, entries, cursor, reset, more}`. Pages scan at most 40 persisted active-branch entries, with stable IDs, timestamps, roles and text capped at 3000 UTF-16 units on a safe Unicode boundary. System notes are omitted; recognized generated task envelopes use the `generated` role. This is not complete provenance classification. The cursor tracks scanned entries, even if filtered. A missing cursor restarts the active branch with `reset:true`; consumers must deduplicate by source ID.
+- `background.valid(grantId, conversationId, sourceIds)` checks whether up to 200 IDs still belong to the authorized active branch. It does not attest to semantic correctness or user intent.
+- `background.infer(grantId, messages, signal?)` makes a separate, tool-free request through the approved model. It accepts 1–8 system/user messages and at most 16000 serialized characters; output budget is 4096 tokens with a 60-second deadline. Busy model sources and concurrent requests for the same plugin are rejected for later retry. It does not append history or acquire permission to call tools.
+- `background.revoke(grantId)` cancels the package's running background request and removes the grant.
+
+Each grant permits 1–24 requests per UTC day; reservation is persisted before inference, and failed/cancelled calls count. Application/plugin shutdown, model-session disposal and caller cancellation abort related requests. Consumers must also check scope, lifetime and their own revisions before storing asynchronous results. The API gives a count/input/output ceiling, not an exact monetary cost guarantee.
+
+The personal-assistant example uses this capability for incremental, source-backed learning, bounded recall and user-feedback-based strategy revision. No assistant-specific memory or self-evolution logic is embedded in the host.

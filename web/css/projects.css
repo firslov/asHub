@@ -84,8 +84,11 @@
 .project-chat-row { position:relative; }
 .project-chat-actions { position:absolute; right:4px; top:4px; display:flex; align-items:center; background:var(--bg2); border-radius:var(--radius-sm); opacity:0; pointer-events:none; transition:opacity var(--dur-fast) var(--ease-out-expo); }
 .project-chat-row:hover .project-chat-actions, .project-chat-row:focus-within .project-chat-actions { opacity:1; pointer-events:auto; }
-.project-chat-row:hover .project-chat-name, .project-chat-row:focus-within .project-chat-name { padding-right:82px; }
+.project-chat-row:hover .project-chat-name, .project-chat-row:focus-within .project-chat-name { padding-right:110px; }
 .project-chat-action { width:28px; height:28px; display:grid; place-items:center; padding:5px; color:var(--text-faint); background:transparent; border:0; border-radius:6px; cursor:pointer; }
+.project-pin-mark { display:inline-flex; flex:none; color:var(--accent-dim); }
+.project-pin-mark svg { width:12px; height:12px; }
+.project-chat-pin[aria-pressed="true"] { color:var(--accent-dim); }
 .project-chat-action svg { width:15px; height:15px; }
 .project-chat-action:hover { color:var(--text); background:var(--bg3); }
 .project-chat-proxy[aria-pressed=true] { color:var(--accent-dim); }

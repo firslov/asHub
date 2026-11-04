@@ -1,0 +1,26 @@
+{
+  "name": "ashub-personal-assistant",
+  "version": "0.3.6",
+  "type": "module",
+  "private": true,
+  "description": "A local, reviewable personal memory assistant for asHub",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "files": [
+    "ashub-plugin.json",
+    "app.mjs",
+    "session.mjs",
+    "store.mjs",
+    "shared.mjs",
+    "context.mjs",
+    "README.md",
+    "learning.mjs",
+    "memory-context.mjs",
+    "retrieval.mjs"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.mjs"
+  }
+}

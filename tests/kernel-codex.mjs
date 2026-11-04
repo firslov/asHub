@@ -223,10 +223,12 @@ try {
   // Keep its preferred provider Codex so the kernel does not select the new API default.
   updateSettings({defaultProvider:'codex'});
   await assert.rejects(late.submit('Broken Codex must not use a stale endpoint'),/Codex provider/);
+  updateSettings({'codex-provider':{providerId:'renamed-codex'}});
+  await assert.rejects(late.submit('A failed rename still belongs to the previous Codex endpoint'),/Codex provider/);
   await late.execCommand('/model','api-fixture-model@api-fixture');
   await late.submit('Continue with the independent provider');
   assert(JSON.stringify((await late.snapshot()).messages).includes('API_PROVIDER_OK'));
-  updateSettings({'codex-provider':{models:['audit-codex-model']}});
+  updateSettings({'codex-provider':{providerId:'codex',models:['audit-codex-model']}});
   assert((await independent.getModels()).models.some(m=>m.provider==='codex'));
   await independent.execCommand('/model','audit-codex-model@codex');
   await independent.submit('Codex after repairing configuration');

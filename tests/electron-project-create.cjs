@@ -21,6 +21,15 @@ app.whenReady().then(async () => {
    if(req.url==='/api/models')return json({providers:[{name:'codex',models:[{id:'gpt-6-astra',thinkingLevels:['low','high','max']},{id:'plain',thinkingLevels:[]}]}]});
    if(req.url==='/fixture/title') {let raw='';for await(const c of req)raw+=c;sessions[0].title=JSON.parse(raw).title;return json({ok:true,title:sessions[0].title});}
    if(req.url==='/api/settings/network'){if(req.method==='PUT'){let raw='';for await(const c of req)raw+=c;const b=JSON.parse(raw);if(b.enabled===null)delete policy.sessions[b.session];else policy.sessions[b.session]=b.enabled;}return json(policy);}
+   if(req.url==='/api/projects' && req.method==='POST'){
+    let raw='';for await(const c of req)raw+=c;
+    const change=JSON.parse(raw);
+    if(change.action==='pin'){
+     assert.equal(change.id,'project');assert.equal(change.sessionId,'external');
+     projects[0].pinnedSessionIds=change.pinned?['external']:[];
+    }
+    return json(projects);
+   }
    if(req.url==='/api/projects')return json(projects);
    if(req.url==='/sessions')return json(sessions);
    if(req.url==='/api/projects/workspaces')return json({});
@@ -61,6 +70,13 @@ app.whenReady().then(async () => {
   assert.equal(await js(`document.querySelector('.project-chat-directory').textContent`),'其他目录 · 外部文献');
   assert.equal(await js(`document.querySelector('.project-chat-directory').title`),'/workspace/references/外部文献');
   await fs.promises.writeFile('/tmp/ashub-project-directory.png',(await win.webContents.capturePage()).toPNG());
+  const initialOrder=await js(`Array.from(document.querySelectorAll('.project-chat'),a=>a.pathname)`);
+  assert.deepEqual(initialOrder,['/fixture/','/external/']);
+  const externalPin=`document.querySelector('.project-chat[href="/external/"]').closest('.project-chat-row').querySelector('.project-chat-pin')`;
+  await js(externalPin+'.click()');
+  await wait(`document.querySelector('.project-chat').pathname==='/external/' && ${externalPin}.getAttribute('aria-pressed')==='true'`);
+  await js(externalPin+'.click()');
+  await wait(`document.querySelector('.project-chat').pathname==='/fixture/' && ${externalPin}.getAttribute('aria-pressed')==='false'`);
   sessions.pop();projects[0].sessionIds.pop();
   await wait(`!document.querySelector('.project-chat-directory') && !!document.querySelector('.project-group-actions button')`,350);
   await js(`document.querySelector('.project-group-actions button').click()`);

@@ -27,7 +27,7 @@ function panelUi() {
 function pickerUi() {
  const c=cacheUi(),u=c.u,s=u.active.peek(),dropdown=new El();dropdown.hidden=true;
  s.modelEl=new El();s.modelEl.getBoundingClientRect=()=>({left:0,top:100});
- Object.assign(u.e.context,{activeSession:u.active,refreshThinkingDropdown:async()=>{},getSharedDropdown:()=>dropdown,hideModelDropdown:()=>{dropdown.hidden=true},_dropdownOwner:null,_dropdownBuiltFor:null,_dropdownAnchor:null,_dropdownObserver:null,
+ Object.assign(u.e.context,{activeSession:u.active,refreshThinkingDropdown:async()=>{},getSharedDropdown:()=>dropdown,hideModelDropdown:()=>{dropdown.hidden=true},_pendingModelMenu:null,_dropdownOwner:null,_dropdownBuiltFor:null,_dropdownAnchor:null,_dropdownObserver:null,
  buildModelDropdown(){},updateModelDropdownSelection(){},MutationObserver:class{observe(){}},toast:(...x)=>u.toasts.push(x),t:x=>x});
  const toggle=variable('web/js/sse.js','toggleModelDropdown',u.e.context);
  return {...c,dropdown,open:()=>toggle(s)};
@@ -35,7 +35,7 @@ function pickerUi() {
 function routerBridge() {
  const reads=[],e=env({globals:{fetch:()=>new Promise(resolve=>reads.push(resolve))}}),A=e.load('src/bridges/ash.ts').AshBridge,b=Object.create(A.prototype);EventEmitter.call(b);
  let key='fake-key-A',registered,provider='openrouter';const registrations=[];
- e.auth.resolveApiKey=()=>({key});b.providerGeneration=0;b.closed=false;
+ e.auth.resolveApiKey=()=>({key});b.providerGeneration=0;b.closed=false;b.backendRegistered=true;
  b.extCtx={agent:{providers:{register:r=>{registered=r;registrations.push(r)}}}};
  b.core={bus:{emit(){}},handlers:{call:n=>n==='agent:get-model'?{provider,model:'common'}:registered?.models.map(m=>({...m,provider:'openrouter'}))??[]}};
  return{e,b,reads,registrations,key:v=>key=v,provider:v=>provider=v};
@@ -69,7 +69,7 @@ await check('AC01 failure from obsolete request still joins the current catalog'
 await check('AC01 stale model picker response cannot overwrite newly saved catalog',async()=>{
  const x=pickerUi();let release;x.u.e.context.fetch=()=>new Promise(r=>release=r);const pending=x.open();
  x.invalidate();x.set(catalog('new'));release(response(catalog('old')));await pending;
- assert(x.read().providers[0].models[0].id==='new'&&x.dropdown.hidden,'stale picker response applied');
+ assert(x.read().providers[0].models[0].id==='new'&&!x.dropdown.hidden,'picker must open with the newly saved catalog');
 });
 await check('AC01 superseded config polling cannot write the old model catalog',async()=>{
  const x=cacheUi(),u=x.u,reads=[];

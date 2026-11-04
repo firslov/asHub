@@ -11,6 +11,25 @@
   border-top-right-radius: var(--radius-xl);
   box-shadow: 0 -1px 0 var(--edge-highlight), 0 0 24px rgb(0 0 0 / 2%);
 }
+/* Paint the Windows reading canvas on an opaque rectangle. During composited
+   scrolling, the two cutouts should show the chrome color at every pixel. */
+.os-win32 .main {
+  border-radius: 0;
+  box-shadow: none;
+}
+.os-win32 .main::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: var(--radius-xl);
+  z-index: 7;
+  pointer-events: none;
+  background:
+    radial-gradient(circle var(--radius-xl) at right bottom, transparent calc(100% - .5px), var(--bg2) calc(100% + .5px)) left top,
+    radial-gradient(circle var(--radius-xl) at left bottom, transparent calc(100% - .5px), var(--bg2) calc(100% + .5px)) right top;
+  background-size: var(--radius-xl) 100%;
+  background-repeat: no-repeat;
+}
 .title-brand .brand-wordmark { color: var(--text-dim); opacity: 1; }
 .title-bar .session-tab {
   border-radius: 10px;

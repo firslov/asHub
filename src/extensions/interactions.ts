@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readBodyWithSignal } from '../transport/body-reader.js';
 import { ExtensionMessages, type MessageGrant } from '../services/extension-messages.js';
+import { PluginBackground, type BackgroundGrantInput } from './background.js';
 export interface ResourcePlan {
     preview?: {
         title: string;
@@ -11,6 +12,7 @@ export interface ResourcePlan {
         }>;
     };
     authorization?: MessageGrant;
+    backgroundAuthorization?: BackgroundGrantInput;
     execute(grantId?: string): unknown | Promise<unknown>;
 }
 export interface PluginResource {
@@ -38,7 +40,7 @@ export class PluginInteractions {
         run: () => Promise<unknown>;
         result?: Promise<unknown>;
     }>();
-    constructor(private messages: ExtensionMessages, private requireActive: (pluginId: string) => void, private signal: AbortSignal, private run: <T>(pluginId: string, action: () => T | Promise<T>) => Promise<T> = async (_id, action) => action()) { }
+    constructor(private messages: ExtensionMessages, private requireActive: (pluginId: string) => void, private signal: AbortSignal, private run: <T>(pluginId: string, action: () => T | Promise<T>) => Promise<T> = async (_id, action) => action(), private background?: PluginBackground) { }
     bind(pluginId: string, signal: AbortSignal) {
         return Object.freeze({ register: (id: string, resource: PluginResource) => {
                 signal.throwIfAborted();
@@ -102,28 +104,33 @@ export class PluginInteractions {
                     if (!plan || typeof plan.execute !== 'function')
                         throw Error('Invalid action plan');
                     const authorization = plan.authorization ? this.messages.prepare(entry.pluginId, plan.authorization) : undefined;
+                    if (plan.authorization && plan.backgroundAuthorization) throw Error('Conflicting authorizations');
+                    if (plan.backgroundAuthorization && !this.background) throw Error('Background services unavailable');
+                    const background = plan.backgroundAuthorization ? this.background!.prepare(entry.pluginId, plan.backgroundAuthorization) : undefined;
                     const run = () => this.run(entry.pluginId, async () => {
                         guard();
-                        const grantId = authorization ? this.messages.approve(entry.pluginId, authorization) : undefined;
+                        const grantId = authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : undefined;
                         try {
                             return { view: clone(await plan.execute(grantId)) };
                         }
                         catch (error) {
                             if (grantId)
                                 try {
-                                    this.messages.revoke(entry.pluginId, grantId);
+                                    if (background) this.background!.bind(entry.pluginId, entry.signal).revoke(grantId);
+                                    else this.messages.revoke(entry.pluginId, grantId);
                                 }
                                 catch { }
                             throw error;
                         }
                     });
-                    if (plan.preview || authorization) {
+                    if (plan.preview || authorization || background) {
                         if (this.pending.size >= 100)
                             throw Error('Too many pending confirmations');
                         const preview = clone(plan.preview ?? { title: '授权消息投递 / Authorize messages', fields: [] });
                         if (typeof preview.title !== 'string' || !Array.isArray(preview.fields) || preview.fields.length > 32 || preview.fields.some((f: any) => typeof f?.label !== 'string' || typeof f?.value !== 'string'))
                             throw Error('Invalid approval preview');
                         preview.fields.push(...authorization?.fields ?? []);
+                        preview.fields.push(...background?.fields ?? []);
                         const id = randomUUID();
                         this.pending.set(id, { key, entry, expires: Date.now() + 300000, run });
                         result = { confirmation: { id, preview } };

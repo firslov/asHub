@@ -34,6 +34,9 @@ export function codexStatus() {
 export class CodexProviderHost {
   private closed = false;
   private signature = "";
+  private lastRegisteredId?: string;
+
+  get lastRegisteredProviderId(): string | undefined { return this.lastRegisteredId; }
   private pending: Promise<void> | null = null;
   private dispose: (() => void) | null = null;
   private commands = new Map<string, (args: string) => void | Promise<void>>();
@@ -97,6 +100,7 @@ export class CodexProviderHost {
           register: (reg: Parameters<typeof agent.providers.register>[0]) => {
             if (disposed || this.closed) { dispose(); return () => {}; }
             const unregister = agent.providers.register(reg);
+            this.lastRegisteredId = reg.id;
             const untrackEndpoint = registerCodexEndpoint(reg.baseURL);
             let registered = true;
             return () => {

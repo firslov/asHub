@@ -83,6 +83,38 @@ pending 只表示等待送入；consumed 只表示进入模型上下文，不证
 成员收到补充后继续同一个 Task，完成前重新提交 conversation_deliver。协调者用 conversation_wait 检查任务最终状态及新交付，不以补充回执代替成果验收。成员若被关键问题阻塞，应将具体问题和可选方案写入 unresolved 并交付当前成果、结束当前任务；协调者收到后处理，不让双方互相排队等待。后续有依赖的工作只在所需成果经过核查后派发；普通进度不另发消息。`);
   }
   if (ctx.list().includes('ashub:collaboration:wait') && ctx.list().includes('ashub:collaboration:deliver')) {
+    const work = {type:'string', description:'本次工作的稳定编号（1–64 位字母、数字、横线或下划线）'};
+    const step = {type:'string', description:'方案内的步骤编号'};
+    const attempt = {type:'string', description:'由 brief 或 status 返回的派发尝试编号'};
+    const taskId = {type:'string', description:'本步骤实际 conversation_send 回执中的 taskId'};
+    let workRuntime;
+    const workTool = (action, description, properties, required, readOnly = false) => register(
+      'project_work_' + action, description, properties, required, async (args, signal) => {
+        const {workflow} = await import('./work.mjs');
+        signal?.throwIfAborted();
+        workRuntime ??= workflow(ctx);
+        return workRuntime(action, args, signal);
+      }, readOnly);
+    workTool('plan','登记本次工作的目标与步骤。负责人必须来自当前项目。相同 work 和相同方案可安全重复调用。', {
+      work, goal:{type:'string',description:'本次目标与共同约束'}, steps:{type:'array',minItems:1,maxItems:12,items:{
+        type:'object',additionalProperties:false,required:['id','member','output','criteria'],properties:{
+          id:step,member:{type:'string',description:'负责人对话 ID'},output:{type:'string',description:'具体交付物、材料引用及写入范围'},
+          criteria:{type:'string',description:'可核对的验收条件'},dependsOn:{type:'array',items:step}
+        }}}
+    }, ['work','goal','steps']);
+    workTool('status','查看协调对话的工作记录。省略 work 列出工作，指定 step 查看该步骤的历史、宿主交付与未决事项。',{
+      work,step
+    },[],true);
+    workTool('brief','为已就绪步骤生成一次派发说明，用返回的 send 参数原样调用 conversation_send。返工传上一轮 taskId。',{
+      work,step,previousTaskId:taskId
+    },['work','step']);
+    workTool('link','仅当自动登记缺失，核对该 attempt 的原始发送记录后，补登记真实回执；不会发送消息。',{
+      work,step,attempt,taskId
+    },['work','step','attempt','taskId']);
+    workTool('review','检查宿主交付或原始结果后记录验收。accepted 理由写明可复用结论或产物路径，revise/blocked 写明缺口。',{
+      work,step,attempt,taskId,decision:{type:'string',enum:['accepted','revise','blocked']},reason:{type:'string',maxLength:420}
+    },['work','step','attempt','taskId','decision','reason']);
+    ctx.agent.registerInstruction('project-work', '多成员任务有并行或依赖关系时，用 project_work_plan 记录目标、负责人、产物和验收条件。独立短任务直接使用原工具。对 ready 步骤生成 brief，在已授权范围内原样用 conversation_send 发出；插件会匹配并记录回执。receipt_pending 时先核对原始调用，勿盲目重发。用原有 conversation_wait 批量等待，再根据交付和实际证据 review；completed 只代表成员结束回复。仅 accepted 放行后继；返工只处理缺口。恢复时先用 project_work_status 找回工作和回执。');
     ctx.agent.registerInstruction('project-management-delivery', `项目协作交付约定：在用户授权范围内分派任务时，明确每位成员的职责、文件写入范围、验收方式和交付物，不复制整段会话历史。独立任务可以并行开展；同目录写入仍需分工。
 协调者用 conversation_wait 一次等待多个 taskId，收到一个结果即可安排有依赖的后续工作；完整使用返回的 cursors 继续等待，避免反复读取同一结果；hasMore 为真时用同一组 cursors 和 waitMs:0 继续读取其余交付。timeout 只表示本次等待结束，不需要向成员发催问消息。settled 表示所关注任务均已结束且结果已读取，停止等待。
 成员处理带 Task ID 的协作任务时，结束前用 conversation_deliver 提交简明结论（含实际验证结果）、产物引用及未解决问题；没有产物或未解决问题时传空数组。大报告保留在产物中，不把过程日志复制到 summary。提交结果不会另起模型轮次，不需再自动向协调者发消息。

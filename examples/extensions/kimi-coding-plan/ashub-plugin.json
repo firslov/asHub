@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 2,
+  "id": "ashub-kimi-coding-plan",
+  "name": "Kimi Coding Plan",
+  "minNode": "22.12.0",
+  "configNamespaces": [
+    "kimi-coding-plan"
+  ],
+  "permissions": [
+    "读取本机 Kimi Code 登录凭据，仅发送至官方 Kimi API；必要时刷新并原子更新原凭据文件",
+    "向 Kimi Coding Plan 发送所选对话的消息、工具定义及图片，使用账号套餐额度",
+    "在本机回环地址启动带随机密钥的请求适配服务；停用插件后关闭",
+    "按用户命令打开 Kimi 官方网页登录页，轮询授权结果并保存登录凭据"
+  ],
+  "entries": {
+    "session": "index.mjs"
+  },
+  "requires": {
+    "hostApi": "^1.0.0",
+    "capabilities": [
+      "session-extensions"
+    ]
+  },
+  "defaults": {
+    "kimi-coding-plan": {
+      "kimiHome": "",
+      "effort": "default"
+    }
+  },
+  "configSchema": {
+    "kimi-coding-plan": {
+      "type": "object",
+      "properties": {
+        "kimiHome": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "default",
+            "off",
+            "low",
+            "high",
+            "max"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

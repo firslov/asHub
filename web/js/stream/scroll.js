@@ -5,10 +5,11 @@ const jumpToBottom = (streamEl) => {
   streamEl.scrollTop = streamEl.scrollHeight;
 };
 
-/** Force-scroll to bottom immediately (used after replay flush). */
+/** Follow the latest output now, or on reveal if the chat has no layout. */
 export const forceScrollBottom = (session) => {
   if (!session?.streamEl) return;
-  jumpToBottom(session.streamEl);
+  session.scroll.pendingBottom = !!session.hidden;
+  if (!session.hidden) jumpToBottom(session.streamEl);
   session.scroll.stickToBottom = true;
   if (session.pillEl) session.pillEl.hidden = true;
 };
@@ -16,7 +17,7 @@ export const forceScrollBottom = (session) => {
 export const maybeScroll = (session) => {
   if (!session || session.state.replaying) return;
   if (session.scroll.stickToBottom ?? true) {
-    if (session.streamEl) jumpToBottom(session.streamEl);
+    forceScrollBottom(session);
   } else if (session.pillEl) {
     session.pillEl.hidden = false;
   }

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "id": "ashub-personal-assistant",
+  "name": "个人助手",
+  "minNode": "22.13.0",
+  "entries": {
+    "application": "app.mjs",
+    "session": "session.mjs"
+  },
+  "requires": {
+    "hostApi": "^1.0.0",
+    "capabilities": [
+      "plugin-data",
+      "plugin-resources",
+      "application-lifecycle",
+      "session-extensions",
+      "background-services"
+    ]
+  },
+  "ui": {
+    "version": 1,
+    "panels": [
+      {
+        "id": "assistant",
+        "title": "个人助手",
+        "icon": "panel",
+        "components": [
+          {
+            "type": "resource",
+            "id": "assistant"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": [
+    "一次授权后观察全部活动 agent 对话的新增持久化文字，可排除对话、包含旧历史或暂停",
+    "后台整理将选中的片段发送给指定模型，每日调用次数受限，不执行工具",
+    "自动形成有来源的记忆，推测与方法先积累证据；用户可修改、忘记和恢复版本",
+    "同一用户的记忆可跨对话检索，自动召回少量相关片段；保留来源与时间，尊重排除和忘记"
+  ],
+  "configNamespaces": []
+}

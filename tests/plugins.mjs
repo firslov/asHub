@@ -218,9 +218,13 @@ test('failed activation restores native provider reasoning, cache and request-he
 
 test('provider hook disposal restores defaults for a newly configured provider', async () => {
   const { ctx } = await makeContext(), scope = pluginScope(ctx);
-  ctx.agent.providers.register({ id: 'hook-fixture', apiKey: 'fixture-only', models: ['fixture'] });
+  const provider = { id: 'hook-fixture', apiKey: 'fixture-only', models: ['fixture'] };
+  const endpoint = () => ctx.call('agent:resolve-endpoint', { provider: provider.id, id: 'fixture' });
+  ctx.agent.providers.register(provider);
+  assert.equal(endpoint(), undefined, 'a custom provider without a base URL has no usable endpoint');
+  ctx.agent.providers.register({ ...provider, baseURL: 'https://hook-fixture.invalid/v1' });
   const read = () => {
-    const e = ctx.call('agent:resolve-endpoint', { provider: 'hook-fixture', id: 'fixture' });
+    const e = endpoint();
     return [e.buildReasoningParams('low'), e.extractCachedTokens({ prompt_tokens_details: { cached_tokens: 8 } }), e.buildRequestHeaders?.({})];
   };
   const baseline = read();

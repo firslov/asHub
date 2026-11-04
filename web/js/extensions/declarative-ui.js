@@ -17,12 +17,15 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
   const disposers = [];
   for (const definition of ui.panels) {
     const key = `extension-${feature.id.length}-${feature.id}-panel-${definition.id.length}-${definition.id}`;
-    const trigger = node('button', 'toolbar-btn extension-menu', '▤');
-    if(definition.icon==='clock'){
-      trigger.textContent='';const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
-      for(const [key,value]of Object.entries({width:'18',height:'18',viewBox:'0 0 14 14',fill:'none',stroke:'currentColor','stroke-width':'1.3','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'}))svg.setAttribute(key,value);
-      const shape=document.createElementNS(svg.namespaceURI,'path');shape.setAttribute('d','M12.5 7a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0M7 3.5V7l2.5 1.5');svg.append(shape);trigger.append(svg);
-    }
+    const trigger = node('button', 'toolbar-btn extension-menu');
+    // Use the same optical size and stroke as the toolbar, never a font glyph.
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    for (const [key, value] of Object.entries({ width:'18', height:'18', viewBox:'0 0 14 14', fill:'none', stroke:'currentColor', 'stroke-width':'1.3', 'stroke-linecap':'round', 'stroke-linejoin':'round', 'aria-hidden':'true' })) svg.setAttribute(key, value);
+    const shape = document.createElementNS(svg.namespaceURI, 'path');
+    shape.setAttribute('d', definition.icon === 'clock'
+      ? 'M12.5 7a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0M7 3.5V7l2.5 1.5'
+      : 'M4 1.5h6A2.5 2.5 0 0 1 12.5 4v6a2.5 2.5 0 0 1-2.5 2.5H4A2.5 2.5 0 0 1 1.5 10V4A2.5 2.5 0 0 1 4 1.5ZM4.5 4.5h5M4.5 7h5M4.5 9.5h2.5');
+    svg.append(shape); trigger.append(svg);
     trigger.type = 'button'; trigger.id = `${key}-toggle`; trigger.title = `${feature.name} · ${definition.title}`;
     trigger.setAttribute('aria-label', definition.title);
     const panel = node('section', 'p-drawer extension-panel'); panel.id = `${key}-panel`; panel.hidden = true;

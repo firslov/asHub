@@ -11,6 +11,97 @@ function config({catalogFailure=false}={}){const u=ui();u.e.context.CustomEvent=
  await prove('R17 skill uninstall network failure reports feedback and allows retry',async()=>{const u=ui();u.doc.getElementById('skills-overlay').hidden=true;const row=new El();row.dataset.name='sample';u.doc.getElementById('skills-installed-list').querySelectorAll=()=>[row];u.e.context.fetch=async()=>response({installed:[{name:'sample',path:'/project/.agents/skills/sample'}]});const m=u.e.load('web/js/skills-panel.js','export const audit={refreshInstalled};');await m.audit.refreshInstalled();u.e.context.fetch=async()=>{throw Error('offline')};await row.events.click[0]();assert(!row.disabled&&u.toasts.length===1&&u.toasts[0][0]==='skills.uninstall.failed');return{buttonReenabled:true,toasts:1};});
  const changeProvider=(u,id)=>{u.el('config-provider').value=id;u.el('config-provider').events.change[0]();};
  const enterKey=(u,key)=>{u.el('config-apikey').value=key;u.el('config-apikey').dispatchEvent({type:'input'});};
+ await check('Settings drafts and onboarding saves use their own provider revision', async () => {
+   const u=config(), sent=[];
+   let revision='first-version';
+   u.e.context.fetch=async (url,opts)=>{
+     if(url==='/api/models')return response({providers:[{name:'a',models:[]}]});
+     if(opts?.method==='PUT'){
+       sent.push(opts.headers['X-asHub-Provider-Revision']);
+       return {ok:false,text:async()=>'Provider settings changed'};
+     }
+     const current=revision;
+     return {...response({defaultProvider:'a',providers:{a:{apiKey:'••••••••'}}}),
+       headers:{get:name=>name.toLowerCase()==='x-ashub-provider-revision'?current:null}};
+   };
+   await u.m.setConfigOpen(true);
+   revision='second-version';
+   await u.m.saveProviderApiKey('a','fixture-onboarding');
+   enterKey(u,'fixture-panel');
+   await u.el('config-save-simple').events.click[0]();
+   assert(u.el('config-apikey').value==='fixture-panel');
+   await u.m.setConfigOpen(false);await u.m.setConfigOpen(true);
+   u.mode('advanced');await u.el('config-save').events.click[0]();
+   assert(JSON.stringify(sent)===JSON.stringify(['second-version','first-version','second-version']));
+ });
+ await check('Clearing a simple-mode credential survives a provider switch and save', async () => {
+   const u = config();
+   await u.m.setConfigOpen(true);
+   enterKey(u, '');
+   changeProvider(u, 'b');
+   changeProvider(u, 'a');
+   assert(u.el('config-apikey').value === '', 'deleted key returned after switching providers');
+   let posted;
+   u.e.context.fetch = async (_url, opts) => { posted = JSON.parse(opts.body); return response({}); };
+   await u.el('config-save-simple').events.click[0]();
+   assert(!('apiKey' in posted.providers.a) && posted.providers.b.apiKey === '••••••••');
+ });
+ await check('Saving a revealed but unedited credential preserves a concurrent rotation', async () => {
+   const u = config(), e = env(), hub = e.hub(), file = path.join(e.dir, 'settings.json');
+   await u.m.setConfigOpen(true);
+   u.e.context.fetch = async () => response({apiKey:'fixture-old'});
+   await u.el('config-apikey-toggle').events.click[0]();
+   assert(u.el('config-apikey').value === 'fixture-old');
+   fs.writeFileSync(file, JSON.stringify({providers:{a:{apiKey:'fixture-rotated'}, b:{apiKey:'fixture-b'}}}));
+   let posted;
+   u.e.context.fetch = async (_url, opts) => {
+     posted = JSON.parse(opts.body);
+     const res = new Res();
+     await hub.updateConfig(req(posted), res, new Map());
+     return {ok:res.statusCode === 200, text:async () => res.body};
+   };
+   await u.el('config-save-simple').events.click[0]();
+   assert(JSON.parse(fs.readFileSync(file,'utf8')).providers.a.apiKey === 'fixture-rotated', 'showing a key rolled back its rotation');
+   assert(posted.providers.a.apiKey === '••••••••');
+ });
+ await check('Typing during a pending reveal keeps the selected visibility and the new draft', async () => {
+   const u = config();
+   await u.m.setConfigOpen(true);
+   let finish;
+   u.e.context.fetch = () => new Promise(resolve => { finish = resolve; });
+   const reveal = u.el('config-apikey-toggle').events.click[0]();
+   enterKey(u, 'fixture-new');
+   finish(response({apiKey:'fixture-old'}));
+   await reveal;
+   assert(u.el('config-apikey').value === 'fixture-new' && u.el('config-apikey').type === 'text');
+   await u.el('config-apikey-toggle').events.click[0]();
+   assert(u.el('config-apikey').value === 'fixture-new' && u.el('config-apikey').type === 'password');
+ });
+ await check('Reset restores the description for the selected provider', async () => {
+   const u = config();
+   u.e.context.fetch = async url => response(url === '/api/models'
+     ? {providers:[{name:'a',defaultModel:'alpha',models:[]},{name:'b',defaultModel:'beta',models:[]}]}
+     : {defaultProvider:'a',providers:{a:{},b:{}}});
+   await u.m.setConfigOpen(true);
+   changeProvider(u,'b');
+   assert(u.el('config-provider-desc').textContent === 'default: beta');
+   u.el('config-reset').events.click[0]();
+   assert(u.el('config-provider').value === 'a' && u.el('config-provider-desc').textContent === 'default: alpha');
+ });
+ await check('Saving the simple form preserves custom provider IDs that match object properties', async () => {
+   const u = config(), ids = ['a','constructor','__proto__'];
+   const providers = Object.fromEntries(ids.map(id => [id,{apiKey:'••••••••',defaultModel:id+'-model'}]));
+   u.e.context.fetch = async url => response(url === '/api/models'
+     ? {providers:ids.map(name=>({name,models:[]}))}
+     : {defaultProvider:'a',providers});
+   await u.m.setConfigOpen(true);
+   enterKey(u,'new-a');
+   let posted;
+   u.e.context.fetch = async (_url, opts) => { posted = JSON.parse(opts.body); return response({}); };
+   await u.el('config-save-simple').events.click[0]();
+   for (const id of ids) assert(Object.hasOwn(posted.providers,id) && posted.providers[id].defaultModel === id+'-model');
+   assert(u.m.providerLabel('constructor') === 'constructor');
+ });
  await check('R17 saving B includes edits to A and preserves model capabilities',async()=>{const u=config();await u.m.setConfigOpen(true);u.mode('advanced');const draft=JSON.parse(u.el('config-editor').value);draft.providers.a.models=[{id:'vision',modalities:['image'],contextWindow:32000}];u.el('config-editor').value=JSON.stringify(draft);u.mode('simple');enterKey(u,'new-a');changeProvider(u,'b');enterKey(u,'new-b');let posted;u.e.context.fetch=async(url,opts)=>{posted=JSON.parse(opts.body);return response({})};await u.el('config-save-simple').events.click[0]();assert(posted.providers.a.apiKey==='new-a'&&posted.providers.b.apiKey==='new-b'&&posted.providers.a.models[0].modalities[0]==='image');});
  await check('R17 advanced roundtrip preserves keys for multiple providers',async()=>{const u=config();await u.m.setConfigOpen(true);enterKey(u,'new-a');changeProvider(u,'b');enterKey(u,'new-b');u.mode('advanced');const draft=JSON.parse(u.el('config-editor').value);assert(draft.providers.a.apiKey==='new-a'&&draft.providers.b.apiKey==='new-b');draft.providers.a.apiKey='advanced-a';delete draft.providers.b.apiKey;u.el('config-editor').value=JSON.stringify(draft);u.mode('simple');changeProvider(u,'b');assert(u.el('config-apikey').value==='');changeProvider(u,'a');assert(u.el('config-apikey').value==='advanced-a');u.mode('advanced');assert(!JSON.parse(u.el('config-editor').value).providers.b.apiKey);});
  await check('R17 revealing an unsaved advanced key never fetches stored credentials',async()=>{const u=config();await u.m.setConfigOpen(true);u.mode('advanced');const draft=JSON.parse(u.el('config-editor').value);draft.providers.a.apiKey='draft';u.el('config-editor').value=JSON.stringify(draft);u.mode('simple');let reads=0;u.e.context.fetch=async()=>{reads++;return response({apiKey:'old'})};await u.el('config-apikey-toggle').events.click[0]();assert(!reads&&u.el('config-apikey').value==='draft'&&u.el('config-apikey').type==='text');});

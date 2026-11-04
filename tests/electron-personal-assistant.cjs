@@ -59,7 +59,13 @@ app.whenReady().then(async () => {
     for(const theme of ['light','dark']){
       await js('document.documentElement.dataset.theme='+JSON.stringify(theme));
       for(const width of [1280,390,320]){
-        await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');win.setContentSize(width,900);await new Promise(r=>setTimeout(r,100));
+        await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');
+        win.setContentSize(width,900);
+        await wait('innerWidth === '+width+' && innerHeight === 900');
+        // Native resize and viewport-unit style invalidation need not finish in
+        // the same task on CI. Measure after Chromium has painted the new size,
+        // rather than after a fixed sleep that can still see the previous vw.
+        await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
         const bounds = await js('(()=>{const p=document.querySelector(".extension-panel"),r=p.getBoundingClientRect();return {scrollWidth:p.scrollWidth,clientWidth:p.clientWidth,left:r.left,right:r.right,viewport:innerWidth,height:innerHeight,hidden:p.hidden,children:[...p.children].map(n=>({className:n.className,scrollWidth:n.scrollWidth,clientWidth:n.clientWidth,width:n.getBoundingClientRect().width}))}})()');
         assert(bounds.scrollWidth<=bounds.clientWidth+1&&bounds.left>=-1, JSON.stringify({theme,width,...bounds}));
         assert.equal(await js('document.querySelectorAll(".extension-resource-actions > button").length'),2);

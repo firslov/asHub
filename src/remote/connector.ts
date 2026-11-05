@@ -233,7 +233,12 @@ export class RemoteConnector {
     const shared = new Set((await this.sessions()).map((s: any) => s.instanceId));
     const groups = await this.local('/api/projects');
     this.current(epoch);
-    return groups.map((p: any) => ({ id: p.id, name: p.name, sessionIds: p.sessionIds.filter((id: string) => shared.has(id)) }))
+    return groups.map((p: any) => {
+      const sessionIds = p.sessionIds.filter((id: string) => shared.has(id));
+      const members = new Set(sessionIds);
+      return { id: p.id, name: p.name, sessionIds,
+        pinnedSessionIds: (p.pinnedSessionIds ?? []).filter((id: string) => members.has(id)) };
+    })
       .filter((p: any) => p.sessionIds.length);
   }
   private async projectTasks(args: any, epoch: number) {

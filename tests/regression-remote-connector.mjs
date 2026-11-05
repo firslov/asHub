@@ -189,7 +189,7 @@ function adapterFixture(t) {
 }
 test('remote groups and task receipts expose only shared conversations on both sides', async t => {
   const { connector } = adapterFixture(t);
-  assert.deepEqual(await connector.execute('project-groups', {}), [{ id: 'project', name: 'Mixed project', sessionIds: ['aaaaaa', 'bbbbbb'] }]);
+  assert.deepEqual(await connector.execute('project-groups', {}), [{ id: 'project', name: 'Mixed project', sessionIds: ['aaaaaa', 'bbbbbb'], pinnedSessionIds: [] }]);
   assert.deepEqual((await connector.execute('project-tasks', { projectId: 'project' })).map(t => t.id), ['shared-task']);
   assert.equal((await connector.execute('project-tasks', { projectId: 'project', taskId: 'shared-task' })).text, 'shared output 🟡');
   await assert.rejects(connector.execute('project-tasks', { projectId: 'project', taskId: 'private-task' }), e => e.status === 403);
@@ -297,4 +297,24 @@ test('queue mutations forward revision and identity only for authorized sessions
  assert.deepEqual(effects,[{route:'/abcdef/queue/update',body:{id:args.id,requestId:args.requestId,revision:3,action:'edit',query:'new text'}}]);
  await assert.rejects(connector.execute('queue-update',{...args,session:'cccccc'}),e=>e.status===403||e.status===404);
  assert.equal(effects.length,1);
+});
+
+
+test('project pins preserve desktop order without exposing unshared or nonmember conversations', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ashub-remote-pins-'));
+  const connector = new RemoteConnector({ dataDir: dir });
+  connector.config = { deviceId:'desk', deviceToken:'test', username:'alice', deviceName:'Desk', roots:[dir] };
+  t.after(() => { connector.close(); fs.rmSync(dir, { recursive:true, force:true }); });
+  const projects = [{ id:'p', name:'Project', sessionIds:['aaaaaa','bbbbbb','hidden'], pinnedSessionIds:['hidden','bbbbbb','outsid','aaaaaa'] },
+    { id:'legacy', name:'Legacy', sessionIds:['aaaaaa'] }, { id:'private', name:'Private', sessionIds:['hidden'], pinnedSessionIds:['hidden'] }];
+  connector.sessions = async () => ['aaaaaa','bbbbbb','outsid'].map(instanceId => ({instanceId}));
+  connector.local = async route => { assert.equal(route, '/api/projects'); return projects; };
+  const groups = await connector.groups(0);
+  assert.deepEqual(groups, [
+    {id:'p',name:'Project',sessionIds:['aaaaaa','bbbbbb'],pinnedSessionIds:['bbbbbb','aaaaaa']},
+    {id:'legacy',name:'Legacy',sessionIds:['aaaaaa'],pinnedSessionIds:[]}
+  ]);
+  assert.deepEqual(projects[0].pinnedSessionIds, ['hidden','bbbbbb','outsid','aaaaaa']);
+  connector.config.enabled = false;
+  await assert.rejects(connector.groups(0), /移动访问授权已变更/);
 });

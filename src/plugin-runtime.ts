@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { ensureTsSupport } from 'agent-sh/extension-loader';
 import type { AgentShellCore } from 'agent-sh';
+import { pluginDataDirectory } from './extensions/data-directory.js';
 import { pluginCatalog, readPluginSettings, type PluginStatus } from './plugins.js';
 type Context = ReturnType<AgentShellCore['extensionContext']>;
 
@@ -282,6 +283,9 @@ export class PluginRuntime {
       }
       if (!plugin.sessionEnabled) { state.state = plugin.manifest?.ui ? 'frontend' : 'registered'; continue; }
       const scope = pluginScope(ctx); this.scopes.add(scope);
+      // The same package/profile directory is available to both plugin entries.
+      // No conversation contents, application services or credentials are exposed.
+      Object.defineProperty(scope.ctx, 'services', { value: Object.freeze({ dataDirectory: pluginDataDirectory(this.file, plugin.id) }), enumerable: true });
       // Snapshot per kernel: new kernels see saved edits without resetting the
       // process-wide kernel settings cache or changing running conversations.
       scope.ctx.getExtensionSettings = (namespace, defaults) => {

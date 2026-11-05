@@ -249,3 +249,23 @@ test('dynamic plugin resources retain bound package identity and reject unbound 
   assert.equal(registry.snapshot().features[0].ui.panels[0].icon,'clock');
   registry.apply(snapshot([{...dynamic,pluginId:undefined}]));assert.equal(registry.snapshot().features[0].ui,undefined);
 });
+
+test('overlapping balance reads from two chats cannot roll back their shared model chips', async () => {
+  const {ui, El} = require('./ui-harness.cjs');
+  const u = ui(), requests = [];
+  u.e.context.fetch = () => new Promise(resolve => requests.push(resolve));
+  const chats = new Map(['a','b'].map(id => [id,{agentInfo:{provider:'deepseek'}, balanceEl:new El()}]));
+  const balance = u.e.load('web/js/extensions/provider-balance.js').createProviderBalanceUI({sessions:chats, refreshModelChip(){}});
+  const response = amount => ({ok:true, json:async()=>({is_available:true,balance_infos:[{currency:'USD',total_balance:amount}]})});
+  const first = balance.refreshProviderBalance('deepseek');
+  const second = balance.refreshProviderBalance('deepseek');
+  // With a shared in-flight read there is one reply. In the old implementation
+  // the second reply arrived first and the first reply replaced it on both chips.
+  requests.at(-1)(response('2.00'));
+  await second;
+  if (requests.length > 1) requests[0](response('99.00'));
+  await first;
+  balance.syncAllBalanceChips();
+  for (const chat of chats.values()) assert.equal(chat.balanceEl._balanceLabel,'💰 $2.00');
+  assert.equal(requests.length,1);
+});

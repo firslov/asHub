@@ -137,6 +137,28 @@ app.whenReady().then(async () => {
       }
     }
     await run("document.documentElement.classList.remove('os-win32');document.documentElement.dataset.nativeTitlebar='';document.querySelector('#win-title-bar').hidden=true");
+    // Simulate a mismatched compositor backing surface under the Windows canvas.
+    // Corner pixels must come from the surrounding chrome, even during stream repaint.
+    win.setContentSize(1180,900);
+    const probe=await run(`(async()=>{
+      const doc=document.documentElement, main=document.querySelector('.main');
+      doc.classList.add('os-win32');doc.dataset.platform='win32';
+      document.querySelector('#ctx-panel').hidden=true;
+      const shell=document.querySelector('.app');shell.style.backgroundColor='rgb(112,112,112)';
+      const layer=document.querySelector('.terminal'); layer.style.transform='translateZ(0)';
+      const reply=document.createElement('p');reply.textContent='Streaming reply';layer.querySelector('.session-stream').append(reply);
+      await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+      const rect=main.getBoundingClientRect();
+      const ref=document.createElement('div');ref.style.background='var(--bg2)';main.append(ref);
+      const bg=getComputedStyle(ref).backgroundColor.match(/\\d+/g).map(Number);ref.remove();
+      return {left:Math.ceil(rect.left),right:Math.floor(rect.right),top:Math.ceil(rect.top),bg};
+    })()`);
+    for(const x of [probe.left+2,probe.right-3]){
+      const image=await win.webContents.capturePage({x,y:probe.top+2,width:1,height:1});
+      const [b,g,r]=image.toBitmap();
+      assert([r,g,b].every((v,i)=>Math.abs(v-probe.bg[i])<=3),theme+' Windows canvas corner: '+[r,g,b]+' expected '+probe.bg);
+    }
+    await run("document.querySelector('.app').style.removeProperty('background-color'); document.querySelector('.terminal').style.removeProperty('transform');document.documentElement.classList.remove('os-win32');document.documentElement.dataset.platform='linux'");
     console.log(`PASS ${theme}: 48 contrast pairs, 3 viewport sizes, focus, preferences, Mac/browser/Windows branding`);
   }
 }).then(()=>finish(0),e=>{console.error(e);finish(1)});

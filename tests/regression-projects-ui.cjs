@@ -34,7 +34,7 @@ function setup(options = {}) {
     if (options.fetch) return options.fetch(url, opts);
     return {ok:!fail,json:async()=>[project]};
   }}});
-  const mod=e.load('web/js/projects.js','export const audit={edit,taskHistory,newProjectChat,deleteProjectChat,pollStatus};');
+  const mod=e.load('web/js/projects.js','export const audit={refresh,edit,taskHistory,newProjectChat,deleteProjectChat,pollStatus};');
   return {mod,root,body,calls,events,closed,snapshots,project,window,activeSessionId,fail:()=>fail=true};
 }
 test('project picker preserves hidden and archived selections and sends only membership deltas',async()=>{
@@ -370,4 +370,225 @@ test('slow or failed project refresh preserves the list and does not stall conve
  release({ok:false});await tick();mode='fail';await s.mod.audit.pollStatus();await tick();
  assert.equal(descendants(s.root).find(n=>n.className==='project-name').textContent,'Team');
  mode='ready';await s.mod.audit.pollStatus();await tick();assert.equal(reads,4);
+});
+
+test('project pin stays locked across status redraws until its request settles', async () => {
+ const group={id:'project',name:'Test',sessionIds:['a']};
+ let title='Before', release, posts=0, reject=true;
+ const s=setup({liveSessions:true,sessionList:()=>[{instanceId:'a',kind:'agent',title}],
+   fetch:async(_url,opts)=>{
+     if(opts?.method==='POST'){
+       posts++; if(reject) { await new Promise(r=>{release=r;}); return {ok:false}; }
+       group.pinnedSessionIds=['a'];
+     }
+     return {ok:true,json:async()=>[structuredClone(group)]};
+   }});
+ s.mod.showProjects(true);await tick();
+ const pin=()=>s.root.querySelectorAll('button').find(b=>b.className.includes('project-chat-pin'));
+ const original=pin();const pending=original.events.click[0]();
+ title='After';await s.mod.audit.pollStatus();await tick();
+ assert.notEqual(pin(),original);
+ const redraw=pin();if(!redraw.disabled)redraw.dispatchEvent({type:'click'});
+ assert.equal(posts,1,'status redraw allowed a duplicate mutation while a pin request was pending');
+ release();await pending;await tick();assert(!pin().disabled);
+ reject=false;await pin().events.click[0]();await tick();
+ assert.equal(posts,2);
+ assert.equal(pin().getAttribute('aria-pressed'),'true');
+});
+
+test('a confirmed pin remains visible when subsequent project reads are unavailable', async () => {
+ const project={id:'p',name:'Team',sessionIds:['a','b']};
+ let offline=false;
+ const s=setup({fetch:async(_url,opts)=>{
+   if(opts?.method==='POST'){
+     assert.equal(JSON.parse(opts.body).sessionId,'b');
+     offline=true;
+     return {ok:true,json:async()=>[{...project,pinnedSessionIds:['b']}]};
+   }
+   return {ok:!offline,json:async()=>[structuredClone(project)]};
+ }});
+ s.mod.showProjects(true);await tick();
+ const buttons=()=>s.root.querySelectorAll('button').filter(n=>n.className.includes('project-chat-pin'));
+ await buttons()[1].events.click[0]();
+ await s.mod.audit.pollStatus();await tick();
+ assert.deepEqual(s.root.querySelectorAll('a').map(n=>n.href),['/b/','/a/']);
+ assert.equal(buttons()[0].getAttribute('aria-pressed'),'true');
+});
+
+test('late pin acknowledgement cannot overwrite a newer pin order', async () => {
+ const project={id:'p',name:'Team',sessionIds:['a','b'],pinnedSessionIds:[]};
+ let release;
+ const s=setup({fetch:async(_url,opts)=>{
+   if(opts?.method==='POST'){
+     const id=JSON.parse(opts.body).sessionId;
+     project.pinnedSessionIds.unshift(id);
+     const snapshot=structuredClone(project);
+     if(id==='a')await new Promise(resolve=>{ release=resolve; });
+     return {ok:true,json:async()=>[snapshot]};
+   }
+   return {ok:true,json:async()=>[structuredClone(project)]};
+ }});
+ s.mod.showProjects(true);await tick();
+ const buttons=()=>s.root.querySelectorAll('button').filter(n=>n.className.includes('project-chat-pin'));
+ const first=buttons()[0].events.click[0]();
+ await buttons()[1].events.click[0]();
+ release();await first;
+ assert.deepEqual(s.root.querySelectorAll('a').map(n=>n.href),['/b/','/a/']);
+ assert(buttons().every(n=>n.getAttribute('aria-pressed')==='true'));
+});
+
+test('an unchanged poll during a pin does not discard the acknowledgement while offline', async () => {
+ const project={id:'p',name:'Team',sessionIds:['a','b']};
+ let finish, offline=false;
+ const s=setup({fetch:async(_url,opts)=>{
+   if(opts?.method==='POST'){
+     await new Promise(resolve=>{finish=resolve;});
+     offline=true;
+     return {ok:true,json:async()=>[{...project,pinnedSessionIds:['b']}]};
+   }
+   return {ok:!offline,json:async()=>[structuredClone(project)]};
+ }});
+ s.mod.showProjects(true);await tick();
+ const button=s.root.querySelectorAll('button').filter(n=>n.className.includes('project-chat-pin'))[1];
+ const pending=button.events.click[0]();
+ await s.mod.audit.pollStatus();await tick();
+ finish();await pending;
+ assert.deepEqual(s.root.querySelectorAll('a').map(a=>a.href),['/b/','/a/']);
+});
+
+test('a slow pin reconciliation cannot bring back a member removed in a later poll', async () => {
+ const project={id:'p',name:'Team',sessionIds:['a','b']};
+ let ack, reply, hold=false;
+ const s=setup({fetch:async(_url,opts)=>{
+   if(opts?.method==='POST'){
+     await new Promise(resolve=>{ack=resolve;});project.pinnedSessionIds=['b'];
+   }
+   const result=[structuredClone(project)];
+   if(hold && !opts?.method){hold=false;await new Promise(resolve=>{reply=resolve;});}
+   return {ok:true,json:async()=>result};
+ }});
+ s.mod.showProjects(true);await tick();
+ const button=s.root.querySelectorAll('button').filter(n=>n.className.includes('project-chat-pin'))[1];
+ const pending=button.events.click[0]();
+ project.name='Renamed';await s.mod.audit.pollStatus();await tick();
+ hold=true;ack();await tick();assert(reply);
+ project.sessionIds=['a'];project.pinnedSessionIds=[];
+ await s.mod.audit.pollStatus();await tick();
+ assert.deepEqual(s.root.querySelectorAll('a').map(a=>a.href),['/a/']);
+ reply();await pending;
+ assert.deepEqual(s.root.querySelectorAll('a').map(a=>a.href),['/a/']);
+});
+
+for (const newerPoll of [true,false]) test(newerPoll
+ ? 'a delayed pin cannot undo another window unpinning it, even when the list again looks identical'
+ : 'a confirmed pin survives a preceding project rename when offline', async () => {
+ const project={id:'p',name:'Team',sessionIds:['a','b'],pinnedSessionIds:[]};
+ let revision=1, release, offline=false;
+ const snapshot=()=>{const data=structuredClone(project),stamp='test-host:'+revision;return {
+   ok:true, headers:{get:()=>stamp}, json:async()=>[data]
+ };};
+ const s=setup({fetch:async(_url,opts)=>{
+   if(opts?.method!=='POST')return offline?{ok:false}:snapshot();
+   if(!newerPoll)project.name='Renamed';
+   if(!newerPoll)await new Promise(resolve=>{release=resolve;});
+   project.pinnedSessionIds=['b'];revision++;
+   const confirmed=snapshot();
+   if(newerPoll)await new Promise(resolve=>{release=resolve;});
+   offline=true;return confirmed;
+ }});
+ s.mod.showProjects(true);await tick();
+ const buttons=()=>s.root.querySelectorAll('button').filter(n=>n.className.includes('project-chat-pin'));
+ const pending=buttons()[1].events.click[0]();
+ if(newerPoll)project.pinnedSessionIds=[];
+ revision++;await s.mod.audit.pollStatus();await tick();
+ release();await pending;
+ assert.deepEqual(s.root.querySelectorAll('a').map(a=>a.href),newerPoll?['/a/','/b/']:['/b/','/a/']);
+ assert.equal(buttons()[0].getAttribute('aria-pressed'),String(!newerPoll));
+ if(!newerPoll)assert.equal(descendants(s.root).find(n=>n.className==='project-name').textContent,'Renamed');
+});
+
+for (const restarted of [true,false]) test(restarted
+ ? 'late project edit from the previous Hub cannot roll back a pin after restart'
+ : 'a project edit acknowledgement keeps a newer pending pin snapshot eligible', async () => {
+ const project={id:'project',name:'Before',cwd:'/workspace',sessionIds:['a','b'],pinnedSessionIds:[]};
+ let epoch='first',revision=1,releaseEdit,releaseRead,hold=false;
+ const snapshot=()=>{const data=structuredClone(project),stamp=epoch+':'+revision;
+   return {ok:true,headers:{get:()=>stamp},json:async()=>[data]};
+ };
+ const s=setup({fetch:async(_url,opts)=>{
+   if(opts?.method==='POST'){
+     project.name=JSON.parse(opts.body).name;revision++;const result=snapshot();
+     await new Promise(resolve=>{releaseEdit=resolve;});return result;
+   }
+   const result=snapshot();
+   if(hold){hold=false;await new Promise(resolve=>{releaseRead=resolve;});}
+   return result;
+ }});
+ s.mod.showProjects(true);await tick();s.mod.audit.edit(project);
+ const form=s.body.children.at(-1).children[0];
+ form.querySelectorAll('input')[0].value='Renamed';form.dispatchEvent({type:'submit',preventDefault(){}});
+ assert(releaseEdit);
+ if(restarted){epoch='next';revision=0;}
+ project.pinnedSessionIds=['b'];revision++;
+ hold=!restarted;await s.mod.audit.pollStatus();await tick();
+ releaseEdit();await tick();
+ if(!restarted){assert(releaseRead);releaseRead();await tick();}
+ assert.deepEqual(s.root.querySelectorAll('a').map(a=>a.href),['/b/','/a/']);
+});
+
+for (const firstPoll of [false,true]) test('the newest Hub revision wins when the earlier request was a '+(firstPoll?'poll':'refresh'), async () => {
+ const project={id:'p',name:'Team',sessionIds:['a','b']};
+ let hold=false,release,rev=1;
+ const s=setup({fetch:async()=>{
+   if(hold){hold=false;await new Promise(done=>{release=done;});}
+   const data=structuredClone(project), stamp='host:'+rev;
+   return {ok:true,headers:{get:()=>stamp},json:async()=>[data]};
+ }});
+ s.mod.showProjects(true);await tick();
+ const read=poll=>poll?s.mod.audit.pollStatus({force:true}):s.mod.audit.refresh({background:true});
+ hold=true;const first=read(firstPoll);await tick();assert(release);
+ await read(!firstPoll);await tick();
+ project.pinnedSessionIds=['b'];rev++;release();
+ await first;await tick();
+ assert.deepEqual(s.root.querySelectorAll('a').map(a=>a.href),['/b/','/a/']);
+});
+
+test('a failed foreground read does not hide a newer confirmed pin', async () => {
+ const project={id:'p',name:'Team',sessionIds:['a','b']};
+ let revision=1,finishPin,failRead,hold=false;
+ const s=setup({fetch:async(_url,opts)=>{
+   if(opts?.method==='POST'){
+     await new Promise(done=>{finishPin=done;});
+     project.pinnedSessionIds=['b'];revision++;
+   } else if(hold){
+     await new Promise(done=>{failRead=done;});return {ok:false};
+   }
+   const data=structuredClone(project),stamp='host:'+revision;
+   return {ok:true,headers:{get:()=>stamp},json:async()=>[data]};
+ }});
+ s.mod.showProjects(true);await tick();
+ const buttons=s.root.querySelectorAll('button').filter(b=>b.className.includes('project-chat-pin'));
+ const write=buttons[1].events.click[0]();hold=true;
+ const read=s.mod.audit.refresh();finishPin();await write;failRead();await read;
+ assert.deepEqual(s.root.querySelectorAll('a').map(a=>a.href),['/b/','/a/']);
+});
+
+test('refocusing a project while offline retains its confirmed pin order and reconnect refreshes it', async () => {
+ const project={id:'project',name:'Team',sessionIds:['a','b'],pinnedSessionIds:['b']};
+ let offline=false,revision=1;
+ const s=setup({fetch:async()=>{
+   if(offline)return {ok:false};
+   const snapshot=structuredClone(project),stamp='hub:'+revision;
+   return {ok:true,headers:{get:()=>stamp},json:async()=>[snapshot]};
+ }});
+ const order=()=>s.root.querySelectorAll('a').map(a=>a.href);
+ s.mod.showProjects(true);await tick();
+ assert.deepEqual(order(),['/b/','/a/']);
+ offline=true;s.window.dispatchEvent({type:'focus'});await tick();
+ assert.deepEqual(order(),['/b/','/a/']);
+ s.mod.showProjects(false);s.mod.showProjects(true);await tick();
+ assert.deepEqual(order(),['/b/','/a/']);
+ project.pinnedSessionIds=['a'];revision++;offline=false;
+ s.window.dispatchEvent({type:'focus'});await tick();
+ assert.deepEqual(order(),['/a/','/b/']);
 });

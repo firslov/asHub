@@ -120,6 +120,8 @@ export async function handleProjectRequest(req: http.IncomingMessage, res: http.
           const input = JSON.parse(await readBody(req));
           result = await projects.change(input);
         }
+        const version = projects.versionOf(Array.isArray(result) ? result : result.projects);
+        if (version) res.setHeader("X-asHub-Project-Version", `${version.epoch}:${version.revision}`);
         res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(result));
       } catch (e) { res.writeHead(req.method === "GET" ? 500 : 400); res.end(String(e)); }
       return true;

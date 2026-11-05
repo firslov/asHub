@@ -1,0 +1,321 @@
+{
+  "files": [
+    {
+      "path": "src/agent/agent-loop.ts",
+      "hunks": [
+        {
+          "before": "let identityChanged = false;\n      if (fresh) {\n        this.activeModel = fresh;\n        const ep = this.resolveEndpoint(fresh);\n        if (ep && (ep.apiKey !== this.activeEndpoint?.apiKey || ep.baseURL !== this.activeEndpoint?.baseURL)) {\n          this.llmClient.reconfigure({ apiKey: ep.apiKey, baseURL: ep.baseURL, model: fresh.id });\n        }\n        this.activeEndpoint = ep;\n        ",
+          "after": "const ep = this.resolveEndpoint(fresh ?? prev);\n      if (ep && (ep.apiKey !== this.activeEndpoint?.apiKey || ep.baseURL !== this.activeEndpoint?.baseURL)) {\n        this.llmClient.reconfigure({ apiKey: ep.apiKey, baseURL: ep.baseURL, model: prev.id });\n      } else if (!ep && this.activeEndpoint) {\n        this.llmClient.disable();\n      }\n      this.activeEndpoint = ep;\n      let identityChanged = false;\n      if (fresh) {\n        this.activeModel = fresh;\n        "
+        },
+        {
+          "before": "updateSettings({\n        defaultProvider: found.provider,",
+          "after": "const saved = updateSettings({\n        defaultProvider: found.provider,"
+        },
+        {
+          "before": "Model: ${found.provider}: ${found.id} (saved as default)",
+          "after": "Model: ${found.provider}: ${found.id} (${saved ? \"saved as default\" : \"session only; settings could not be saved\"})"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/llm-client.ts",
+      "hunks": [
+        {
+          "before": "private client: OpenAI;",
+          "after": "private client?: OpenAI;"
+        },
+        {
+          "before": "stream(opts: StreamOpts) {",
+          "after": "disable() {\n    this.client = undefined;\n    this.config = { ...this.config, apiKey: \"\" };\n  }\n\n  stream(opts: StreamOpts) {\n    if (!this.client) throw new Error(\"Provider unavailable. Check the API key and endpoint in Settings.\");"
+        },
+        {
+          "before": "async complete(opts: CompleteOpts): Promise<string> {",
+          "after": "async complete(opts: CompleteOpts): Promise<string> {\n    if (!this.client) throw new Error(\"Provider unavailable. Check the API key and endpoint in Settings.\");"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/index.ts",
+      "hunks": [
+        {
+          "before": "if (!p?.apiKey) return undefined;",
+          "after": "if (!p?.apiKey || !usableProvider(p)) return undefined;"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/providers/deepseek.ts",
+      "hunks": [
+        {
+          "before": "apiKey: resolveApiKey(\"deepseek\").key ?? undefined,",
+          "after": "get apiKey() { return resolveApiKey(\"deepseek\").key ?? undefined; },"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/providers/openai.ts",
+      "hunks": [
+        {
+          "before": "apiKey: resolveApiKey(\"openai\").key ?? undefined,",
+          "after": "get apiKey() { return resolveApiKey(\"openai\").key ?? undefined; },"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/providers/openrouter.ts",
+      "hunks": [
+        {
+          "before": "apiKey: apiKey ?? undefined,\n    baseURL: BASE_URL,",
+          "after": "get apiKey() { return resolveApiKey(\"openrouter\").key ?? undefined; },\n    baseURL: BASE_URL,"
+        },
+        {
+          "before": "apiKey,\n      baseURL: BASE_URL,",
+          "after": "get apiKey() { return resolveApiKey(\"openrouter\").key ?? undefined; },\n      baseURL: BASE_URL,"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/providers/zai-coding-plan.ts",
+      "hunks": [
+        {
+          "before": "const { key } = resolveApiKey(ID);",
+          "after": "// Resolve credentials when the provider registry is refreshed."
+        },
+        {
+          "before": "apiKey: key ?? process.env.ZAI_API_KEY ?? process.env.ZHIPU_API_KEY,",
+          "after": "get apiKey() { return resolveApiKey(ID).key ?? process.env.ZHIPU_API_KEY; },"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/providers/ollama.ts",
+      "hunks": [
+        {
+          "before": "const sdkKey = cloudKey || \"no-key\";",
+          "after": "const currentKey = () => cloudKey ? resolveApiKey(id).key ?? process.env.OLLAMA_API_KEY : \"no-key\";"
+        },
+        {
+          "before": "apiKey: sdkKey, baseURL",
+          "after": "get apiKey() { return currentKey(); }, baseURL"
+        },
+        {
+          "before": "apiKey: sdkKey,\n",
+          "after": "get apiKey() { return currentKey(); },\n"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/agent-loop.js",
+      "hunks": [
+        {
+          "before": "let identityChanged = false;\n            if (fresh) {\n                this.activeModel = fresh;\n                const ep = this.resolveEndpoint(fresh);\n                if (ep && (ep.apiKey !== this.activeEndpoint?.apiKey || ep.baseURL !== this.activeEndpoint?.baseURL)) {\n                    this.llmClient.reconfigure({ apiKey: ep.apiKey, baseURL: ep.baseURL, model: fresh.id });\n                }\n                this.activeEndpoint = ep;\n                ",
+          "after": "const ep = this.resolveEndpoint(fresh ?? prev);\n            if (ep && (ep.apiKey !== this.activeEndpoint?.apiKey || ep.baseURL !== this.activeEndpoint?.baseURL)) {\n                this.llmClient.reconfigure({ apiKey: ep.apiKey, baseURL: ep.baseURL, model: prev.id });\n            } else if (!ep && this.activeEndpoint) {\n                this.llmClient.disable();\n            }\n            this.activeEndpoint = ep;\n            let identityChanged = false;\n            if (fresh) {\n                this.activeModel = fresh;\n                "
+        },
+        {
+          "before": "updateSettings({\n                defaultProvider: found.provider,",
+          "after": "const saved = updateSettings({\n                defaultProvider: found.provider,"
+        },
+        {
+          "before": "Model: ${found.provider}: ${found.id} (saved as default)",
+          "after": "Model: ${found.provider}: ${found.id} (${saved ? \"saved as default\" : \"session only; settings could not be saved\"})"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/llm-client.js",
+      "hunks": [
+        {
+          "before": "stream(opts) {",
+          "after": "disable() {\n        this.client = undefined;\n        this.config = { ...this.config, apiKey: \"\" };\n    }\n\n    stream(opts) {\n        if (!this.client) throw new Error(\"Provider unavailable. Check the API key and endpoint in Settings.\");"
+        },
+        {
+          "before": "async complete(opts) {",
+          "after": "async complete(opts) {\n        if (!this.client) throw new Error(\"Provider unavailable. Check the API key and endpoint in Settings.\");"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/index.js",
+      "hunks": [
+        {
+          "before": "if (!p?.apiKey)\n            return undefined;",
+          "after": "if (!p?.apiKey || !usableProvider(p)) return undefined;"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/providers/deepseek.js",
+      "hunks": [
+        {
+          "before": "apiKey: resolveApiKey(\"deepseek\").key ?? undefined,",
+          "after": "get apiKey() { return resolveApiKey(\"deepseek\").key ?? undefined; },"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/providers/openai.js",
+      "hunks": [
+        {
+          "before": "apiKey: resolveApiKey(\"openai\").key ?? undefined,",
+          "after": "get apiKey() { return resolveApiKey(\"openai\").key ?? undefined; },"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/providers/openrouter.js",
+      "hunks": [
+        {
+          "before": "apiKey: apiKey ?? undefined,\n        baseURL: BASE_URL,",
+          "after": "get apiKey() { return resolveApiKey(\"openrouter\").key ?? undefined; },\n        baseURL: BASE_URL,"
+        },
+        {
+          "before": "apiKey,\n            baseURL: BASE_URL,",
+          "after": "get apiKey() { return resolveApiKey(\"openrouter\").key ?? undefined; },\n            baseURL: BASE_URL,"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/providers/zai-coding-plan.js",
+      "hunks": [
+        {
+          "before": "const { key } = resolveApiKey(ID);",
+          "after": "// Resolve credentials when the provider registry is refreshed."
+        },
+        {
+          "before": "apiKey: key ?? process.env.ZAI_API_KEY ?? process.env.ZHIPU_API_KEY,",
+          "after": "get apiKey() { return resolveApiKey(ID).key ?? process.env.ZHIPU_API_KEY; },"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/providers/ollama.js",
+      "hunks": [
+        {
+          "before": "const sdkKey = cloudKey || \"no-key\";",
+          "after": "const currentKey = () => cloudKey ? resolveApiKey(id).key ?? process.env.OLLAMA_API_KEY : \"no-key\";"
+        },
+        {
+          "before": "apiKey: sdkKey, baseURL",
+          "after": "get apiKey() { return currentKey(); }, baseURL"
+        },
+        {
+          "before": "apiKey: sdkKey,\n",
+          "after": "get apiKey() { return currentKey(); },\n"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/llm-client.d.ts",
+      "hunks": [
+        {
+          "before": "    stream(opts:",
+          "after": "    disable(): void;\n    stream(opts:"
+        }
+      ]
+    },
+    {
+      "path": "src/cli/auth/keys.ts",
+      "hunks": [
+        {
+          "before": "export function reloadKeysFile(): void {\n  cached = null;",
+          "after": "export function reloadKeysFile(snapshot?: KeysFile): void {\n  cached = snapshot ?? null;"
+        },
+        {
+          "before": "  const fileKey = loadKeysFile()[providerId];\n  if (fileKey)",
+          "after": "  const keys = loadKeysFile();\n  const fileKey = Object.hasOwn(keys, providerId) ? keys[providerId] : undefined;\n  if (typeof fileKey === \"string\" && fileKey)"
+        },
+        {
+          "before": "console.error(`[agent-sh] Warning: invalid JSON in ${KEYS_PATH}: ${err.message}`);",
+          "after": "console.error(`[agent-sh] Warning: invalid JSON in ${KEYS_PATH}`);"
+        }
+      ]
+    },
+    {
+      "path": "dist/cli/auth/keys.js",
+      "hunks": [
+        {
+          "before": "export function reloadKeysFile() {\n    cached = null;",
+          "after": "export function reloadKeysFile(snapshot) {\n    cached = snapshot ?? null;"
+        },
+        {
+          "before": "    const fileKey = loadKeysFile()[providerId];\n    if (fileKey)",
+          "after": "    const keys = loadKeysFile();\n    const fileKey = Object.hasOwn(keys, providerId) ? keys[providerId] : undefined;\n    if (typeof fileKey === \"string\" && fileKey)"
+        },
+        {
+          "before": "console.error(`[agent-sh] Warning: invalid JSON in ${KEYS_PATH}: ${err.message}`);",
+          "after": "console.error(`[agent-sh] Warning: invalid JSON in ${KEYS_PATH}`);"
+        }
+      ]
+    },
+    {
+      "path": "dist/cli/auth/keys.d.ts",
+      "hunks": [
+        {
+          "before": "export declare function reloadKeysFile(): void;",
+          "after": "export declare function reloadKeysFile(snapshot?: KeysFile): void;"
+        }
+      ]
+    },
+    {
+      "path": "src/core/settings.ts",
+      "hunks": [
+        {
+          "before": "console.error(`[agent-sh] Warning: invalid JSON in ${SETTINGS_PATH}: ${err.message}`);",
+          "after": "console.error(`[agent-sh] Warning: invalid JSON in ${SETTINGS_PATH}`);"
+        },
+        {
+          "before": "export function updateSettings(patch: Record<string, unknown>): void {\n  let existing: Record<string, unknown> = {};\n  try {\n    const raw = fs.readFileSync(SETTINGS_PATH, \"utf-8\");\n    existing = JSON.parse(raw) as Record<string, unknown>;\n  } catch {\n    // file missing or unreadable \u2014 start fresh\n  }\n\n  const merged = deepMerge(existing, patch);\n\n  try {\n    fs.mkdirSync(CONFIG_DIR, { recursive: true });\n    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(merged, null, 2) + \"\\n\", \"utf-8\");\n    cached = null;\n  } catch (err) {\n    console.error(`[agent-sh] Warning: failed to update ${SETTINGS_PATH}: ${(err as Error).message}`);\n  }\n}",
+          "after": "export function updateSettings(patch: Record<string, unknown>): boolean {\n  let existing: Record<string, unknown> = {};\n  try {\n    const raw = fs.readFileSync(SETTINGS_PATH, \"utf-8\");\n    existing = JSON.parse(raw) as Record<string, unknown>;\n    if (!existing || typeof existing !== \"object\" || Array.isArray(existing)) throw new SyntaxError();\n  } catch (err) {\n    if ((err as NodeJS.ErrnoException).code !== \"ENOENT\") {\n      console.error(`[agent-sh] Warning: could not read settings object from ${SETTINGS_PATH}; file left unchanged`);\n      return false;\n    }\n  }\n\n  const merged = deepMerge(existing, patch);\n\n  try {\n    fs.mkdirSync(CONFIG_DIR, { recursive: true });\n    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(merged, null, 2) + \"\\n\", \"utf-8\");\n    cached = null;\n    return true;\n  } catch (err) {\n    console.error(`[agent-sh] Warning: failed to update ${SETTINGS_PATH}: ${(err as Error).message}`);\n    return false;\n  }\n}"
+        }
+      ]
+    },
+    {
+      "path": "src/core/index.ts",
+      "hunks": [
+        {
+          "before": "settingsMod.updateSettings({ defaultBackend: name });",
+          "after": "const saved = settingsMod.updateSettings({ defaultBackend: name });"
+        },
+        {
+          "before": "Backend: ${name} (saved as default)",
+          "after": "Backend: ${name} (${saved ? \"saved as default\" : \"session only; settings could not be saved\"})"
+        }
+      ]
+    },
+    {
+      "path": "dist/core/settings.js",
+      "hunks": [
+        {
+          "before": "console.error(`[agent-sh] Warning: invalid JSON in ${SETTINGS_PATH}: ${err.message}`);",
+          "after": "console.error(`[agent-sh] Warning: invalid JSON in ${SETTINGS_PATH}`);"
+        },
+        {
+          "before": "export function updateSettings(patch) {\n    let existing = {};\n    try {\n        const raw = fs.readFileSync(SETTINGS_PATH, \"utf-8\");\n        existing = JSON.parse(raw);\n    }\n    catch {\n        // file missing or unreadable \u2014 start fresh\n    }\n    const merged = deepMerge(existing, patch);\n    try {\n        fs.mkdirSync(CONFIG_DIR, { recursive: true });\n        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(merged, null, 2) + \"\\n\", \"utf-8\");\n        cached = null;\n    }\n    catch (err) {\n        console.error(`[agent-sh] Warning: failed to update ${SETTINGS_PATH}: ${err.message}`);\n    }\n}",
+          "after": "export function updateSettings(patch) {\n    let existing = {};\n    try {\n        const raw = fs.readFileSync(SETTINGS_PATH, \"utf-8\");\n        existing = JSON.parse(raw);\n        if (!existing || typeof existing !== \"object\" || Array.isArray(existing)) throw new SyntaxError();\n    }\n    catch (err) {\n        if (err.code !== \"ENOENT\") {\n            console.error(`[agent-sh] Warning: could not read settings object from ${SETTINGS_PATH}; file left unchanged`);\n            return false;\n        }\n    }\n    const merged = deepMerge(existing, patch);\n    try {\n        fs.mkdirSync(CONFIG_DIR, { recursive: true });\n        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(merged, null, 2) + \"\\n\", \"utf-8\");\n        cached = null;\n        return true;\n    }\n    catch (err) {\n        console.error(`[agent-sh] Warning: failed to update ${SETTINGS_PATH}: ${err.message}`);\n        return false;\n    }\n}"
+        }
+      ]
+    },
+    {
+      "path": "dist/core/index.js",
+      "hunks": [
+        {
+          "before": "settingsMod.updateSettings({ defaultBackend: name });",
+          "after": "const saved = settingsMod.updateSettings({ defaultBackend: name });"
+        },
+        {
+          "before": "Backend: ${name} (saved as default)",
+          "after": "Backend: ${name} (${saved ? \"saved as default\" : \"session only; settings could not be saved\"})"
+        }
+      ]
+    },
+    {
+      "path": "dist/core/settings.d.ts",
+      "hunks": [
+        {
+          "before": "updateSettings(patch: Record<string, unknown>): void;",
+          "after": "updateSettings(patch: Record<string, unknown>): boolean;"
+        }
+      ]
+    }
+  ]
+}

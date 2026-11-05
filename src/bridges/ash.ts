@@ -36,7 +36,7 @@ import { builtinPluginCatalog, type PluginStatus } from "../plugins.js";
 import { PluginRuntime, preparePluginRegistrations } from "../plugin-runtime.js";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
 import { CodexProviderHost, codexStatus } from "../providers/codex.js";
-import { getSettings, reloadSettings, resolveProvider, getProviderNames, CONFIG_DIR } from "agent-sh/settings";
+import { getSettings, reloadSettings, CONFIG_DIR } from "agent-sh/settings";
 import { resolveApiKey } from "agent-sh/auth";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
 import { Shell } from "agent-sh/shell";
@@ -339,7 +339,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private codexHost: CodexProviderHost | null = null;
   private codexUsage: CodexUsage | undefined;
   private codexFailure: string | null = null;
-  private codexBackendActivation: Promise<void> | null = null;
+  private backendActivation: Promise<void> | null = null;
   private loadedExtensionNames: string[] = [];
   private plugins?: PluginRuntime;
   private builtinExtensionNames: string[] = [];
@@ -374,6 +374,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   readonly backendId = "ash";
   readonly readOnlyContext = false;
   private thinking?: SessionThinking;
+  private backgroundControllers = new Set<AbortController>();
   private compactionControllers = new Set<AbortController>();
 
   constructor(opts: BridgeOpts) {
@@ -387,6 +388,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.submit = scoped(this.submit);
     this.execCommand = scoped(this.execCommand);
     this.complete = scoped(this.complete);
+    this.backgroundComplete = scoped(this.backgroundComplete);
     this.compact = scoped(this.compact);
     this.drainQueue = scoped(this.drainQueue);
     this.reloadProviders = scoped(this.reloadProviders);
@@ -490,7 +492,6 @@ export class AshBridge extends EventEmitter implements Bridge {
     guardLlmUnicode(core.handlers.call("llm:get-client"));
     guardImageContext(core.handlers.call("llm:get-client"), path.join(CONFIG_DIR, "hub-sessions", "uploads"), sessionId);
     guardCodexRetries(core.handlers.call("llm:get-client"), message => core.bus.emit("ui:info", { message }));
-    this.registerUserProviders(extCtx);
     configureDeepSeek(extCtx);
 
     // Clarify task authorization without changing the actual permission gate.
@@ -1773,30 +1774,6 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
   }
 
-  // Built-in provider activators inject keys.json keys themselves; user-defined providers have no such activator.
-  private registerUserProviders(extCtx: ReturnType<AgentShellCore["extensionContext"]>): void {
-    const ctxAgent = (extCtx as unknown as { agent?: { providers?: { register: (reg: Record<string, unknown>) => unknown } } }).agent;
-    if (!ctxAgent?.providers?.register) return;
-    // register() replaces the whole contribution, so merge over a built-in's prior registration.
-    const prior = this.core?.bus.emitPipe("agent:providers", { providers: [] }).providers ?? [];
-    const priorById = new Map(prior.map((reg) => [reg.id, reg] as const));
-    for (const name of getProviderNames()) {
-      const p = resolveProvider(name);
-      if (!p) continue;
-      if (p.apiKey) continue;
-      const resolved = resolveApiKey(name);
-      if (!resolved.key) continue;
-      const base = priorById.get(name);
-      ctxAgent.providers.register({
-        id: name,
-        apiKey: resolved.key,
-        baseURL: p.baseURL ?? base?.baseURL,
-        defaultModel: p.defaultModel ?? base?.defaultModel,
-        models: p.modelsExplicit ? p.models : (base?.models ?? p.models),
-      });
-    }
-  }
-
   private activeModelSupportsImage(): boolean {
     if (!this.core) return false;
     const active = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
@@ -2348,14 +2325,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.core.bus.emit("config:changed", {});
   }
 
-  reloadProviders(): void {
+  reloadProviders(): void | Promise<void> {
     const generation = ++this.providerGeneration;
-    // agent-sh 0.15.3 calls refreshSettingsProviders() on
-    // providers:changed, which re-reads settings.json and
-    // merges fresh apiKey/baseURL with the existing provider
-    // contributions (which retain the async-fetched model list).
-    // config:switch-model then forces agent-loop to re-resolve
-    // activeEndpoint and reconfigure llmClient immediately.
+    // The kernel refreshes the active client's endpoint on providers:changed.
+    // Re-selecting the active model here would also persist it as the global default.
     if (!this.core || this.closed) return;
     // For OpenRouter, re-fetch the full model catalog with the
     // new apiKey so the model list updates without restart.
@@ -2372,12 +2345,15 @@ export class AshBridge extends EventEmitter implements Bridge {
       }
     } catch { /* ignore */ }
     this.core.bus.emit("agent:providers:changed", {});
-    try {
-      const mode = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
-      if (mode?.model && mode?.provider) {
-        this.core.bus.emit("config:switch-model", { id: mode.model, provider: mode.provider });
-      }
-    } catch { /* ignore */ }
+    if (this.backendActivation) return this.backendActivation;
+    if (!this.backendRegistered && this.initPromise) {
+      // A key saved after first launch must also activate an already-open conversation.
+      return this.initPromise.then(() => this.syncCodex()).catch(error => {
+        if (this.closed) return;
+        this.emit("event", { name: "ui:error", payload: { message: String(error) } });
+        throw error;
+      });
+    }
   }
 
   private async refetchOpenRouterModels(
@@ -2396,7 +2372,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       if (models.length === 0) return;
       ctxAgent.providers.register({
         id: "openrouter",
-        apiKey,
+        get apiKey() { return resolveApiKey("openrouter").key ?? undefined; },
         baseURL: "https://openrouter.ai/api/v1",
         defaultModel: "deepseek/deepseek-v4-flash",
         supportsReasoningEffort: true,
@@ -2505,28 +2481,55 @@ export class AshBridge extends EventEmitter implements Bridge {
     const active = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
     const models = (this.core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string }>;
     // Also covers a renamed Codex provider whose previous endpoint was released.
-    if (active?.provider === codexStatus().providerId || (active?.model && !models.some(m => m.id === active.model && m.provider === active.provider))) {
+    if (active?.provider === codexStatus().providerId || (active?.model && active.provider === this.codexHost?.lastRegisteredProviderId
+      && !models.some(m => m.id === active.model && m.provider === active.provider))) {
       throw new Error(this.codexFailure);
     }
   }
 
   private async syncCodex(): Promise<void> {
-    if (!await this.syncCodexProvider()) return;
-    if (this.codexBackendActivation) {
-      await this.codexBackendActivation;
+    // Failure in the optional Codex provider must not block activation of a configured API model.
+    const codexReady = await this.syncCodexProvider();
+    if (this.backendActivation) {
+      await this.backendActivation;
       return;
     }
-    if (!this.core || this.closed || this.backendRegistered || !this.codexHost || !codexStatus().configured) return;
-    // A session opened before its first OAuth login has no agent backend.
+    if (!this.core || this.closed || this.backendRegistered) return;
+    const models = this.core.handlers.call("agent:get-models") as unknown[] | undefined;
+    if (!models?.length && !(codexReady && this.codexHost && codexStatus().configured)) return;
+    // A session opened before its first API key or OAuth login has no agent backend.
     // Register it once credentials arrive, preserving the existing bridge.
-    if (!this.codexBackendActivation) {
-      this.codexBackendActivation = (async () => {
+    if (!this.backendActivation) {
+      this.backendActivation = (async () => {
         this.core!.bus.emit("core:extensions-loaded", { names: this.loadedExtensionNames });
         await this.core!.activateBackend();
         if (this.closed) this.releaseResources();
-      })().finally(() => { this.codexBackendActivation = null; });
+      })().catch(error => {
+        // Registration precedes backend.start(); a rejected start must remain retryable.
+        this.backendRegistered = false;
+        throw error;
+      }).finally(() => { this.backendActivation = null; });
     }
-    await this.codexBackendActivation;
+    await this.backendActivation;
+  }
+
+  async backgroundComplete(messages: Array<{ role: string; content: string }>, signal: AbortSignal, expected: { model?: string; provider?: string }): Promise<string> {
+    await this.initPromise; signal.throwIfAborted();
+    if (!this.core || this.closed) throw Error('Backend unavailable');
+    const controller = new AbortController(); this.backgroundControllers.add(controller);
+    const combined = AbortSignal.any([signal, controller.signal]);
+    try {
+      await this.syncCodex(); this.assertCodexAvailable(); combined.throwIfAborted();
+      const active = this.core.handlers.call('agent:get-model') as { model: string; provider: string };
+      if (active.model !== expected.model || active.provider !== expected.provider) throw Error('Background provider changed');
+      const endpoint = this.core.handlers.call('agent:resolve-endpoint', { provider: active.provider, id: active.model }) as { buildRequestHeaders?: (info: { sessionId: string }) => Record<string, string> } | undefined;
+      const profile = reasoningProfile({ id: active.model, provider: active.provider });
+      return await generateSummary(this.core.handlers.call('llm:get-client') as SummaryClient, messages, combined, {
+        model: active.model, maxTokens: 4096, timeoutMs: 60000,
+        params: profile?.levels.includes('low') ? nativeReasoningParams(profile, 'low') : {},
+        headers: endpoint?.buildRequestHeaders?.({ sessionId: `${this.opts.sessionId}:background` }),
+      });
+    } finally { this.backgroundControllers.delete(controller); controller.abort(); }
   }
 
   async complete(
@@ -2653,6 +2656,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   }
 
   private releaseResources(): void {
+    for (const controller of this.backgroundControllers) controller.abort();
     for (const controller of this.compactionControllers) controller.abort();
     this.explicitApprovals?.cancel();
     this.requests?.end();

@@ -1,6 +1,7 @@
 import { signal, computed, effect } from "../vendor/signals-core.js";
 import { activeSessionId, openTabs } from "./store.js";
 import { toast } from "./toast.js";
+import { forceScrollBottom } from "./stream/scroll.js";
 
 export { activeSessionId, openTabs } from "./store.js";
 
@@ -87,20 +88,27 @@ effect(() => {
   // Only toggle the previous and new active session — O(1) vs O(n).
   if (_prevActive && _prevActive !== active) {
     const prev = sessions.get(_prevActive);
-    if (prev) prev.hidden = true;
+    if (prev) {
+      // The native scroll event can arrive a frame after the user switches tabs.
+      prev.captureScrollPosition?.({ beforeHide: true });
+      prev.hidden = true;
+    }
   }
+  // Restore the composer layout before measuring a newly visible chat.
+  const kind = active ? sessionKinds.get(active) : null;
+  document.querySelector(".app")?.classList.toggle("terminal-active", kind === "terminal" || kind === "ash-terminal");
   const next = sessions.get(active);
   if (next) {
     // Deferred restored tabs subscribe + replay on first activation only.
     next.activateDeferred?.();
     next.hidden = false;
+    if (next.scroll?.pendingBottom) forceScrollBottom(next);
   }
   _prevActive = active;
 
-  const kind = active ? sessionKinds.get(active) : null;
-  document.querySelector(".app")?.classList.toggle("terminal-active", kind === "terminal" || kind === "ash-terminal");
   // Restore input focus after session switch (needed on Windows where
   // the textarea can lose its editable state during DOM toggling).
+  let focusFrame;
   if (active) {
     const input = document.getElementById("query");
     const form = document.getElementById("form");
@@ -111,8 +119,10 @@ effect(() => {
       if (!document.hasFocus() && window.electronAPI?.focusWindow) {
         window.electronAPI.focusWindow();
       }
-      requestAnimationFrame(() => {
-        if (document.activeElement !== input) input.focus();
+      const previousFocus = document.activeElement;
+      focusFrame = requestAnimationFrame(() => {
+        const focused = document.activeElement;
+        if (focused !== input && (focused === previousFocus || focused === document.body)) input.focus();
       });
     }
   }
@@ -128,6 +138,9 @@ effect(() => {
     const spinner = document.getElementById("spinner");
     if (spinner) spinner.hidden = true;
   }
+  return () => {
+    if (focusFrame !== undefined) cancelAnimationFrame(focusFrame);
+  };
 });
 
 export const globalConnState = signal(

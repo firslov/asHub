@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { pluginDataDirectory } from './data-directory.js';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -43,7 +44,7 @@ export function installedApplicationDefinitions(settingsFile: string, options: {
         if (typeof activate !== 'function') throw new Error('Missing application activate(ctx) export');
         const settings = readPluginSettings(settingsFile);
         const pluginContext: InstalledApplicationContext = Object.freeze({
-          ...context, pluginId: entry.id, services: Object.freeze({ ...options.services, ...options.bindServices?.(entry.id, context) }),
+          ...context, pluginId: entry.id, services: Object.freeze({ dataDirectory: pluginDataDirectory(settingsFile, entry.id), ...options.services, ...options.bindServices?.(entry.id, context) }),
           getExtensionSettings<T extends Record<string, unknown>>(namespace: string, defaults: T): T {
             if (context.signal.aborted) throw new Error('Extension activation has ended');
             if (!manifest.configNamespaces.includes(namespace)) throw new Error('Plugin settings namespace was not declared');

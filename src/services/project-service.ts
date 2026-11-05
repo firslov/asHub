@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { ProjectStore, type Project } from '../projects.js';
-import type { HostEvents } from './host-events.js';
+import type { HostEvents, HostVersion } from './host-events.js';
 import type { Session } from './session-types.js';
 
 interface ProjectRuntime {
@@ -17,9 +17,18 @@ export class ProjectService extends ProjectStore {
   private deleting = false;
   constructor(file: string, private runtime: ProjectRuntime) { super(file); }
   isDeleting = () => this.deleting;
+  // Stamp the snapshot at the synchronous read/commit, before HTTP delivery can interleave.
+  private versions = new WeakMap<Project[], HostVersion>();
+  versionOf(snapshot: Project[]) { return this.versions.get(snapshot); }
+  override list(): Project[] {
+    const groups = super.list();
+    this.versions.set(groups, this.runtime.events.version());
+    return groups;
+  }
   override update(input: unknown, canAdd: (id: string) => boolean) {
     const result = super.update(input, canAdd);
     this.runtime.events.publish('projects');
+    this.versions.set(result, this.runtime.events.version());
     return result;
   }
   assertAvailable(): void {

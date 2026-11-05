@@ -26,7 +26,7 @@
     "test:http": "node tests/http-steering.cjs && node tests/http-queue-actions.cjs && node tests/http-plugin-installer.cjs && node tests/http-host-operations.cjs && node tests/http-artifacts.cjs && node tests/http-projects.cjs && node tests/http-project-options.cjs && node tests/http-queue-edit.cjs && node tests/http-smoke.cjs && node tests/http-round5.cjs && node tests/http-round6.cjs && node tests/http-round7.cjs && node tests/http-round8.cjs && node tests/http-round18.cjs && node tests/http-round19.cjs && node tests/http-round20.cjs && node tests/http-network-mobile.cjs && node tests/http-plugins.cjs",
     "test:worktrees": "npm run build && node --test tests/worktrees.mjs",
     "test:network": "npm run build && node --test tests/network-proxy.mjs tests/desktop-network.cjs tests/network-policy.mjs tests/regression-network-settings.cjs",
-    "test:kernel": "npm run build && node tests/kernel-compat.mjs && node tests/kernel-codex.mjs && node tests/kernel-codex-liveness.mjs && node --test tests/plugins.mjs",
+    "test:kernel": "npm run build && node tests/kernel-compat.mjs && node --test tests/provider-onboarding.mjs && node tests/kernel-codex.mjs && node tests/kernel-codex-liveness.mjs && node --test tests/plugins.mjs",
     "test:windows": "node --test tests/regression-windows.cjs",
     "test:desktop-network": "electron tests/electron-network.cjs && electron tests/electron-codex-network.cjs",
     "test:plugins": "npm run build && node --test tests/plugins.mjs && node tests/http-plugins.cjs",
@@ -49,8 +49,10 @@
     "test:compaction": "npm run build && node --test tests/compaction.mjs tests/compaction-kernel.mjs",
     "test:scheduled-tasks": "npm run build && node --test tests/extension-messages.cjs tests/plugin-interactions.cjs examples/extensions/scheduled-tasks/tests/*.mjs tests/http-plugin-resources.cjs",
     "test:scheduled-tasks:ui": "electron tests/electron-scheduled-tasks.cjs",
-    "check:core": "npm run build && npm run typecheck:web && npm test && npm run test:http && npm run test:scheduled-tasks && npm run test:network && node --test tests/release-workflows.cjs tests/replay-writer.cjs tests/replay-recovery.cjs tests/replay-frame.cjs tests/sse-writer.cjs tests/http-replay-flow.cjs",
-    "check:remote-release": "npm run build && node scripts/check-remote-release.cjs"
+    "check:core": "npm run build && npm run typecheck:web && npm test && npm run test:http && npm run test:scheduled-tasks && npm run test:network && node --test tests/release-workflows.cjs tests/replay-writer.cjs tests/replay-recovery.cjs tests/replay-frame.cjs tests/sse-writer.cjs tests/http-replay-flow.cjs && node --test examples/extensions/personal-assistant/tests/*.mjs tests/personal-assistant.mjs tests/plugin-background.mjs tests/http-background.cjs",
+    "check:remote-release": "npm run build && node scripts/check-remote-release.cjs",
+    "test:personal-assistant": "npm run build && node --test examples/extensions/personal-assistant/tests/*.mjs tests/personal-assistant.mjs tests/plugin-background.mjs tests/http-background.cjs",
+    "test:personal-assistant:ui": "electron tests/electron-personal-assistant.cjs"
   },
   "dependencies": {
     "agent-sh": "0.16.1",

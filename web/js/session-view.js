@@ -2,6 +2,7 @@ import { resetActivity, disposeActivity, activityEvent, beginActivityFrame } fro
 import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
 import { compactReasoning } from "./stream/compact.js";
+import { forceScrollBottom } from "./stream/scroll.js";
 import { hideUsage } from "./stream/renderers.js";
 import { discardPendingThinking } from "./stream/thinking.js";
 
@@ -115,17 +116,8 @@ class SessionView extends HTMLElement {
     this.replayFlushTimer = null;
 
     const ac = this.controller.signal;
-    this.streamEl.addEventListener("scroll", () => {
-      const stick = this.streamEl.scrollHeight - this.streamEl.scrollTop - this.streamEl.clientHeight <= SCROLL_SLOP;
-      this.scroll.stickToBottom = stick;
-      if (this.pillEl && stick) this.pillEl.hidden = true;
-    }, { signal: ac });
-    this.pillEl?.addEventListener("click", () => {
-      const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-      this.streamEl.scrollTo({ top: this.streamEl.scrollHeight, behavior: reducedMotion ? "instant" : "smooth" });
-      this.scroll.stickToBottom = true;
-      if (this.pillEl) this.pillEl.hidden = true;
-    }, { signal: ac });
+    this.streamEl.addEventListener("scroll", () => this.captureScrollPosition(), { signal: ac });
+    this.pillEl?.addEventListener("click", () => forceScrollBottom(this), { signal: ac });
     this.querySelector(".stream-empty-prompt")?.addEventListener("click", () => {
       document.getElementById("query")?.focus();
     }, { signal: ac });
@@ -150,6 +142,17 @@ class SessionView extends HTMLElement {
         }, { signal: ac });
       });
     }
+  }
+
+  captureScrollPosition({ beforeHide = false } = {}) {
+    const el = this.streamEl;
+    if (this.hidden || !el?.clientHeight) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // Preserve an actual bottom anchor across hidden layout changes, even without new output.
+    if (beforeHide) this.scroll.pendingBottom = distance <= 1;
+    const stick = distance <= SCROLL_SLOP;
+    this.scroll.stickToBottom = stick;
+    if (this.pillEl && stick) this.pillEl.hidden = true;
   }
 
   resync({ force = false } = {}) {

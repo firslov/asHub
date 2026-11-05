@@ -8,6 +8,7 @@ export const BALANCE_PROVIDERS = new Set(["deepseek", "openrouter"]);
 
 export function createProviderBalanceUI({ sessions, refreshModelChip }) {
   const _balanceCache = new Map();  // provider -> { data, ts }
+  const pendingBalances = new Map();
   let _balanceGeneration = 0;
 
   async function fetchProviderBalance(provider) {
@@ -64,7 +65,17 @@ export function createProviderBalanceUI({ sessions, refreshModelChip }) {
   }
 
   // Refresh a provider's balance and sync all chips for that provider.
-  async function refreshProviderBalance(provider) {
+  function refreshProviderBalance(provider) {
+    const pending = pendingBalances.get(provider);
+    if (pending) return pending;
+    const reading = updateProviderBalance(provider).finally(() => {
+      if (pendingBalances.get(provider) === reading) pendingBalances.delete(provider);
+    });
+    pendingBalances.set(provider, reading);
+    return reading;
+  }
+
+  async function updateProviderBalance(provider) {
     const generation = _balanceGeneration;
     const data = await fetchProviderBalance(provider);
     if (!data || generation !== _balanceGeneration) return;
@@ -80,6 +91,7 @@ export function createProviderBalanceUI({ sessions, refreshModelChip }) {
   // same provider credentials, including requests still in flight at save time.
   const invalidate = () => {
     _balanceGeneration++;
+    pendingBalances.clear();
     _balanceCache.clear();
     syncAllBalanceChips();
     if (featureEnabled('provider-balance')) for (const provider of BALANCE_PROVIDERS) void refreshProviderBalance(provider);

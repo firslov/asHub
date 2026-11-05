@@ -30,5 +30,5 @@ export function configureDeepSeek(ctx: ReturnType<AgentShellCore["extensionConte
   // Keep credentials, endpoint and the native cache hook. Explicit user settings
   // remain authoritative through agent-sh's settings overlay.
   ctx.agent.providers.configure("deepseek", { reasoningParams: deepSeekReasoningParams });
-  ctx.agent.providers.register({ ...previous, defaultModel: "deepseek-flash", models: DEEPSEEK_MODELS });
+  ctx.agent.providers.register({ ...previous, get apiKey() { return previous.apiKey; }, defaultModel: "deepseek-flash", models: DEEPSEEK_MODELS });
 }

@@ -93,6 +93,8 @@ export interface Bridge {
   ready(): Promise<void>;
 
   getPluginStatus?(): import("../plugins.js").PluginStatus[];
+  /** Tool-free, abortable background inference; does not mutate conversation history. */
+  backgroundComplete?(messages: Array<{ role: string; content: string }>, signal: AbortSignal, expected: { model?: string; provider?: string }): Promise<string>;
 
   getRestoreState?(): Record<string, unknown> | undefined;
 
@@ -164,7 +166,7 @@ export interface Bridge {
 
   /** Notify the backend that provider settings have changed (e.g. new API key saved).
    *  The bridge should re-resolve provider registrations. */
-  reloadProviders?(): void;
+  reloadProviders?(): void | Promise<void>;
 
   /** Subscribe to BusEvents the bridge produces. Returns an unsubscriber. */
   onEvent(fn: (e: BusEvent) => void): () => void;

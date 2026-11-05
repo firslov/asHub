@@ -101,10 +101,17 @@ function npmCLI(): string | undefined {
 }
 export async function runPluginSetup(script: string, args: string[], cwd: string, home: string, dataDir: string, signal: AbortSignal) {
   signal.throwIfAborted();
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', AGENT_SH_HOME: home, ASHUB_PLUGIN_DATA: dataDir };
+  // npm 12 rejects inherited CLI script policies for project installs, even
+  // with --ignore-scripts. This invocation deliberately runs no lifecycle
+  // scripts; retain registry/proxy settings and leave the parent env untouched.
+  if (path.basename(script) === 'npm-cli.js' && args[0] === 'ci' && args.includes('--ignore-scripts')) {
+    for (const key of Object.keys(childEnv)) if (key.toLowerCase() === 'npm_config_allow_scripts') delete childEnv[key];
+  }
   await new Promise<void>((resolve, reject) => {
     let failure: Error | null = null;
     const child = execFile(process.execPath, [script, ...args], { cwd, windowsHide: true, timeout: 15 * 60_000, maxBuffer: 1024 * 1024,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AGENT_SH_HOME: home, ASHUB_PLUGIN_DATA: dataDir }, signal }, (e, _stdout, stderr) => {
+      env: childEnv, signal }, (e, _stdout, stderr) => {
       if (e) failure = Error((stderr || e.message).slice(-2000));
     });
     // Do not remove staging until the child has actually exited after abort.

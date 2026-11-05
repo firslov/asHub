@@ -10,7 +10,7 @@ export async function generateSummary(
   client: SummaryClient,
   messages: Array<{ role: string; content: string }>,
   signal: AbortSignal,
-  options: { model?: string; headers?: Record<string, string>; params?: Record<string, unknown>; timeoutMs?: number } = {},
+  options: { model?: string; headers?: Record<string, string>; params?: Record<string, unknown>; timeoutMs?: number; maxTokens?: number } = {},
 ): Promise<string> {
   const controller = new AbortController();
   const abort = () => controller.abort(signal.reason);
@@ -25,9 +25,10 @@ export async function generateSummary(
   const run = async () => {
     controller.signal.throwIfAborted();
     const stream = await client.stream({ ...options.params, messages, model: options.model,
-      max_tokens: 8192, signal: controller.signal, ...(options.headers ? { headers: options.headers } : {}) });
+      max_tokens: options.maxTokens ?? 8192, signal: controller.signal, ...(options.headers ? { headers: options.headers } : {}) });
     let text = "", finished = false;
     try {
+      controller.signal.throwIfAborted();
       for await (const chunk of stream) {
         controller.signal.throwIfAborted();
         const choice = chunk.choices?.[0];

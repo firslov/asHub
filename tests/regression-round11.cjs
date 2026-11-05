@@ -173,6 +173,16 @@ for (const failure of [false, true]) {
   });
 }
 
+await check('a failing session reload cannot skip subsequent sessions or acknowledge full success', async () => {
+  const e = env(), h = hub(e), res = new Res();
+  let refreshed = false;
+  const sessions = new Map([
+    ['first', {bridge:{reloadProviders(){throw Error('fixture failure');}}}],
+    ['second', {bridge:{reloadProviders(){refreshed = true;}}}],
+  ]);
+  await h.updateConfig(req({}), res, sessions);
+  assert(refreshed && res.statusCode === 500 && res.json().ok === false, 'incorrect partial refresh');
+});
 await check('AB03 reload failure still invalidates prior-account balance cache', async () => {
   let account = 'A', calls = 0;
   const e = env({ globals: { fetch: async () => { calls++; return { ok: true, json: async () => ({ is_available: true, balance_infos: [{ total_balance: account }] }) }; } } }), h = hub(e);

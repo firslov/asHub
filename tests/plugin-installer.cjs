@@ -118,3 +118,24 @@ test('preview recovery reuses capacity without authorization and expires normall
  const pending=await f.i.preview(zip(plugin()));f.e.clock(pending.expiresAt+1);
  assert.throws(()=>f.i.previewStatus(pending.token),e=>e.status===404);await f.i.close();
 });
+
+
+test('npm dependency install ignores inherited script allowlists without changing setup or registry settings', async()=>{
+ const {EventEmitter}=require('node:events');
+ const inherited={npm_config_allow_scripts:'*',NPM_CONFIG_ALLOW_SCRIPTS:'another-package',npm_config_registry:'https://registry.example.invalid',npm_config_proxy:'http://127.0.0.1:1234',KEEP_PLUGIN_SETTING:'keep'};
+ const invocations=[];
+ const e=env({globals:{setTimeout,clearTimeout,process:{...process,env:inherited}},modules:{'node:child_process':{execFile(file,args,options,callback){
+  invocations.push({file,args,options});const child=new EventEmitter();child.kill=()=>true;
+  setImmediate(()=>{callback(null,'','');child.emit('close',0);});return child;
+ }}}});
+ const {runPluginSetup}=e.load('src/plugin-installer.ts');
+ await runPluginSetup('/npm/bin/npm-cli.js',['ci','--ignore-scripts'],e.dir,e.dir,e.dir,new AbortController().signal);
+ const child=invocations[0].options.env;
+ assert.equal(child.npm_config_allow_scripts,undefined);assert.equal(child.NPM_CONFIG_ALLOW_SCRIPTS,undefined);
+ assert.equal(child.npm_config_registry,inherited.npm_config_registry);assert.equal(child.npm_config_proxy,inherited.npm_config_proxy);
+ assert.equal(child.KEEP_PLUGIN_SETTING,'keep');assert.equal(child.ELECTRON_RUN_AS_NODE,'1');
+ assert.equal(inherited.npm_config_allow_scripts,'*');assert.equal(inherited.NPM_CONFIG_ALLOW_SCRIPTS,'another-package');
+ assert.deepEqual(Array.from(invocations[0].args).slice(1),['ci','--ignore-scripts']);
+ await runPluginSetup('/plugin/setup.mjs',[],e.dir,e.dir,e.dir,new AbortController().signal);
+ assert.equal(invocations[1].options.env.npm_config_allow_scripts,'*','explicit setup retains its environment');
+});

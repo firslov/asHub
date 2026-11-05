@@ -1437,9 +1437,11 @@ export const onReplayDone = (session) => {
   refreshModelChip(session);
   refreshCwdChip(session);
   syncAllBalanceChips();
-  // Sync vision indicator on cached session switches.
-  const btn = document.getElementById("vision-indicator");
-  if (btn) btn.hidden = !session.agentInfo?.modalities?.includes("image");
+  // Replay may finish after the user switches to a different conversation.
+  if (activeSession.peek() === session) {
+    const btn = document.getElementById("vision-indicator");
+    if (btn) btn.hidden = !session.agentInfo?.modalities?.includes("image");
+  }
 };
 
 export const seedSessionInfo = (session, info) => {
@@ -1460,15 +1462,15 @@ const refreshModelChip = (session) => {
   if (wrap?.dataset.uiUsageModelShow !== "true") { session.modelEl.hidden = true; return; }
   const ai = session.agentInfo;
   const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off" && ai.thinkingLevel !== "default";
-  const modelLabel = ai?.provider ? `${ai.model}@${ai.provider}` : ai?.model;
+  const modelLabel = ai?.model && ai?.provider ? `${ai.model}@${ai.provider}` : ai?.model;
   const modelText = [modelLabel, showThink ? `[${(Array.isArray(ai.thinkingLevels) ? thinkingLabel(ai.thinkingLevel) : reasoningLabel(ai.thinkingLevel, ai.provider))}]` : ""].filter(Boolean).join(" ");
 
   // Combined model + balance
   const balanceText = session.modelEl?._balanceLabel ?? "";
-  const text = [modelText, balanceText].filter(Boolean).join(" · ");
+  const text = [modelText || t("model.choose"), balanceText].filter(Boolean).join(" · ");
   session.modelEl.title = text; // Keep the full label available when the chip is truncated.
-  if (text) { session.modelEl.textContent = text; session.modelEl.hidden = false; }
-  else { session.modelEl.hidden = true; }
+  session.modelEl.textContent = text;
+  session.modelEl.hidden = false;
 
   // Guard on the chip element itself, not the session: resync() rebuilds
   // the shell, so the chip is a fresh node that must be re-bound, while
@@ -1527,13 +1529,15 @@ export const modelSupportsImages = (model, provider) => {
 let _sharedDropdown = null;
 let _dropdownOwner = null;    // session the open dropdown is anchored to
 let _dropdownAnchor = null;   // chip node the open dropdown was positioned on
+let _pendingModelMenu = null;
 let _dropdownObserver = null; // MutationObserver watching for anchor removal
 let _thinkingLoadSeq = 0;
-let _modelSelectionPending = false;
 let _dropdownBuiltFor = null; // _allModelsCache reference the DOM was built from
 
 const hideModelDropdown = () => {
   const dd = _sharedDropdown;
+  _pendingModelMenu?.controller.abort();
+  _pendingModelMenu = null;
   _thinkingLoadSeq++;
   _dropdownOwner = null;
   _dropdownAnchor = null;
@@ -1561,7 +1565,7 @@ const getSharedDropdown = () => {
     // before the outside-click listener sees that now-detached target.
     ev.stopPropagation();
     const session = _dropdownOwner;
-    if (!session || _modelSelectionPending || session._thinkingPending) return;
+    if (!session || session._modelSelectionPending || session._thinkingPending) return;
     if (ev.target.closest(".model-thinking-retry")) { void refreshThinkingDropdown(session); return; }
     const effort = ev.target.closest(".model-thinking-option");
     if (effort) {
@@ -1583,13 +1587,12 @@ const getSharedDropdown = () => {
     if (!opt) return;
     const modelId = opt.dataset.model, provider = opt.dataset.provider;
     if (!modelId) return;
-    _modelSelectionPending = true;
+    session._modelSelectionPending = true;
     dd.querySelectorAll(".model-option").forEach(el => { el.disabled = true; });
     renderThinkingDropdown(session, "loading");
     try { await selectModel(session, modelId, provider); }
     finally {
-      _modelSelectionPending = false;
-      dd.querySelectorAll(".model-option").forEach(el => { el.disabled = false; });
+      session._modelSelectionPending = false;
       if (_dropdownOwner === session) {
         updateModelDropdownSelection(dd, session);
         await refreshThinkingDropdown(session);
@@ -1609,7 +1612,8 @@ const getSharedDropdown = () => {
 // the chip it is anchored to is gone, so the menu would float orphaned.
 effect(() => {
   const sid = activeSessionId.value;
-  if (_dropdownOwner && _dropdownOwner.id !== sid) hideModelDropdown();
+  const owner = _dropdownOwner ?? _pendingModelMenu?.session;
+  if (owner && owner.id !== sid) hideModelDropdown();
 });
 
 // Full DOM build — runs once per _allModelsCache version, not per open.
@@ -1669,6 +1673,7 @@ const updateModelDropdownSelection = (dropdown, session) => {
       badge.remove();
     }
     group.querySelectorAll(".model-option").forEach((opt) => {
+      opt.disabled = !!session._modelSelectionPending;
       const selected = isCurrent && opt.dataset.model === currentModel;
       opt.classList.toggle("selected", selected);
       opt.setAttribute("aria-pressed", String(selected));
@@ -1690,7 +1695,7 @@ const renderThinkingDropdown = (session, state = "ready") => {
     return;
   }
   if (!choices.length) { root.innerHTML += `<p class="model-thinking-note">${escapeAttr(t("model.thinking.unavailable"))}</p>`; return; }
-  const disabled = session._thinkingPending || _modelSelectionPending;
+  const disabled = session._thinkingPending || session._modelSelectionPending;
   root.innerHTML += `<div class="model-thinking-options" role="group" aria-label="${escapeAttr(t("model.thinking.title"))}">${choices.map(level => `<button type="button" class="model-thinking-option" data-level="${escapeAttr(level)}" aria-pressed="${level === session.agentInfo.thinkingLevel}" ${disabled ? "disabled" : ""}>${escapeAttr(thinkingLabel(level))}</button>`).join("")}</div>`;
   if (focusedLevel && !disabled && choices.includes(focusedLevel)) {
     root.querySelector(`.model-thinking-option[data-level="${focusedLevel}"]`)?.focus();
@@ -1721,7 +1726,7 @@ const toggleModelDropdown = async (session) => {
   const dropdown = getSharedDropdown();
 
   // Close if already open for this chip
-  if (!dropdown.hidden && _dropdownOwner === session) {
+  if (_pendingModelMenu?.session === session || (!dropdown.hidden && _dropdownOwner === session)) {
     hideModelDropdown();
     return;
   }
@@ -1735,17 +1740,49 @@ const toggleModelDropdown = async (session) => {
     _allModelsCache.providers?.some((p) => p.name === "openrouter" && (p.models?.length || 0) <= 1)
   );
   if (needsRefresh) {
-    const generation = _modelCacheGeneration;
+    const anchor = session.modelEl;
+    const controller = new AbortController();
+    _pendingModelMenu = {session, controller};
+    // Chromium may change activeElement without firing focusin in an unfocused window.
+    const openingFocus = document.activeElement;
+    const current = () => !controller.signal.aborted && document.activeElement === openingFocus &&
+      activeSession.peek() === session && anchor === session.modelEl && anchor?.isConnected;
+    const dismissOutside = ev => {
+      if (ev.target !== anchor) hideModelDropdown();
+    };
+    document.addEventListener("click", dismissOutside, {signal:controller.signal});
+    document.addEventListener("focusin", dismissOutside, {signal:controller.signal, capture:true});
+    document.addEventListener("keydown", ev => {
+      if (ev.key === "Escape") hideModelDropdown();
+    }, {signal:controller.signal});
     try {
-      const r = await fetch("/api/models");
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      if (generation !== _modelCacheGeneration) return;
-      if (!setModelCache(data, generation)) throw new Error("Invalid model catalog");
+      // Another session can invalidate the shared catalog while this picker is loading.
+      // Keep the user's open intent, but never publish a stale response or retry indefinitely.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const generation = _modelCacheGeneration;
+        let data;
+        try {
+          const r = await fetch("/api/models", {signal:controller.signal});
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          data = await r.json();
+        } catch (error) {
+          if (generation === _modelCacheGeneration) throw error;
+        }
+        if (!current()) return;
+        if (generation === _modelCacheGeneration) {
+          if (!setModelCache(data, generation)) throw new Error("Invalid model catalog");
+          break;
+        }
+        if (_allModelsCache) break; // Another reader already populated the new generation.
+      }
+      if (!_allModelsCache) throw new Error("Model catalog changed while loading");
     } catch {
-      if (generation !== _modelCacheGeneration) return;
+      if (!current()) return;
       toast(t("model.list.failed"), { type: "error" });
       if (!_allModelsCache) return;
+    } finally {
+      if (_pendingModelMenu?.controller === controller) _pendingModelMenu = null;
+      controller.abort();
     }
   }
 
@@ -1766,13 +1803,6 @@ const toggleModelDropdown = async (session) => {
     searchInput.value = "";
     dropdown.querySelectorAll(".model-option").forEach((opt) => { opt.hidden = false; });
     dropdown.querySelectorAll(".model-group").forEach((group) => { group.hidden = false; });
-    // Focus the search input after a tick — but only if this open wasn't
-    // superseded meanwhile (session switch closed/hid the dropdown).
-    setTimeout(() => {
-      if (dropdown.hidden || _dropdownOwner !== session) return;
-      if (activeSession.peek() !== session) return;
-      searchInput.focus();
-    }, 50);
   }
 
   // Position dropdown above the model chip — the chip may have been
@@ -1789,6 +1819,7 @@ const toggleModelDropdown = async (session) => {
   dropdown.hidden = false;
   _dropdownOwner = session;
   _dropdownAnchor = session.modelEl;
+  searchInput?.focus({preventScroll:true});
   void refreshThinkingDropdown(session);
 
   // resync() (rewind, session-view refresh) rebuilds the shell and swaps
@@ -1808,7 +1839,7 @@ const toggleModelDropdown = async (session) => {
     }
   };
   dropdown._closeHandler = close;
-  setTimeout(() => document.addEventListener("click", close), 0);
+  document.addEventListener("click", close);
 };
 
 const selectModel = (session, modelId, provider) => {

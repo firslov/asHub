@@ -34,6 +34,7 @@ let panelProviderCatalog = null;
 let configMode = "simple";
 let originalConfig = "";
 let serverConfig = "";
+let panelProviderRevision = "";
 let originalApiKey = "";
 let simpleProviderId = "";
 let configLoadGeneration = 0;
@@ -76,7 +77,7 @@ const PROVIDER_LABELS = {
   "zai-coding-plan": "Z.AI Coding Plan",
 };
 
-export const providerLabel = (id) => PROVIDER_LABELS[id] ?? id;
+export const providerLabel = (id) => Object.hasOwn(PROVIDER_LABELS, id) ? PROVIDER_LABELS[id] : id;
 
 const providerEntry = (id) =>
   (panelProviderCatalog ?? providerCatalog)?.providers?.find((p) => p.name === id) ?? null;
@@ -150,7 +151,10 @@ const renderModelDatalist = (providerId) => {
 };
 
 const buildConfig = (providerId = configProvider.value) => {
-  const apiKey = configApikey.value.trim();
+  // Revealing a stored key is a read. Keep its placeholder on save so the
+  // server resolves the current key, including rotations since the reveal.
+  const apiKey = _revealedApiKey && configApikey.value === _revealedApiKey
+    ? _maskedApiKey : configApikey.value.trim();
   if (!providerId) return null;
 
   let existing = {};
@@ -169,40 +173,17 @@ const buildConfig = (providerId = configProvider.value) => {
   // Model definitions may belong to a custom provider. The simple editor
   // only edits credentials; preserve model ids, defaults and capabilities.
 
-  if (apiKey) {
-    providerCfg.apiKey = apiKey;
-  } else if (typeof prev.apiKey === "string" && prev.apiKey) {
-    providerCfg.apiKey = prev.apiKey;
-  }
+  if (apiKey) providerCfg.apiKey = apiKey;
 
-  const config = {
-    providers: { [providerId]: providerCfg },
+  return {
+    ...existing,
+    providers: { ...existing.providers, [providerId]: providerCfg },
     defaultProvider: existing.defaultProvider || providerId,
   };
-
-  for (const [key, val] of Object.entries(existing)) {
-    if (key !== "providers" && key !== "defaultProvider") {
-      config[key] = val;
-    }
-  }
-
-  if (existing.providers && typeof existing.providers === "object") {
-    for (const [key, val] of Object.entries(existing.providers)) {
-      if (!(key in config.providers)) {
-        config.providers[key] = val;
-      }
-    }
-  }
-
-  return config;
 };
 
 const parseConfigToSimple = (config) => {
-  const known = (panelProviderCatalog?.providers ?? []).reduce((acc, p) => {
-    acc[p.name] = p;
-    return acc;
-  }, {});
-  const knownIds = Object.keys(known);
+  const knownIds = (panelProviderCatalog?.providers ?? []).map(p => p.name);
   const fallback = knownIds[0] ?? "";
 
   if (!config || typeof config !== "object" || Object.keys(config).length === 0) {
@@ -217,11 +198,11 @@ const parseConfigToSimple = (config) => {
   let detectedProvider = null;
   let detectedApiKey = "";
 
-  if (dp && known[dp]) {
+  if (dp && knownIds.includes(dp)) {
     detectedProvider = dp;
   } else if (config.providers && typeof config.providers === "object") {
     for (const key of Object.keys(config.providers)) {
-      if (known[key]) { detectedProvider = key; break; }
+      if (knownIds.includes(key)) { detectedProvider = key; break; }
     }
   }
 
@@ -317,12 +298,17 @@ const switchConfigMode = (mode) => {
 
 let apiKeyVisible = false;
 let apiKeyRequest = 0;
-configApikey?.addEventListener("input", () => { apiKeyRequest++; });
 let _maskedApiKey = "";
 let _revealedApiKey = "";
+configApikey?.addEventListener("input", () => {
+  apiKeyRequest++;
+  _revealedApiKey = "";
+});
 configApikeyToggle?.addEventListener("click", async () => {
   const request = ++apiKeyRequest;
   apiKeyVisible = !apiKeyVisible;
+  configApikey.type = apiKeyVisible ? "text" : "password";
+  configApikeyToggle.classList.toggle("showing", apiKeyVisible);
   if (apiKeyVisible) {
     // GET /api/config masks API keys by design — fetch the real value on
     // demand so the "show" button actually reveals it.
@@ -348,9 +334,6 @@ configApikeyToggle?.addEventListener("click", async () => {
     }
     _revealedApiKey = "";
   }
-  if (request !== apiKeyRequest) return;
-  configApikey.type = apiKeyVisible ? "text" : "password";
-  configApikeyToggle.classList.toggle("showing", apiKeyVisible);
 });
 
 // Only server placeholders may be revealed. Draft values must never trigger
@@ -404,10 +387,11 @@ export const setConfigOpen = async (on) => {
     panelProviderCatalog = catalog;
     populateProviderSelect();
 
-    let rawConfig;
+    let rawConfig, revision;
     try {
       const r = await fetch("/api/config");
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      revision = r.headers?.get("X-asHub-Provider-Revision") || "";
       rawConfig = await r.json();
       if (!rawConfig || typeof rawConfig !== "object" || Array.isArray(rawConfig)) {
         throw new Error("Invalid configuration");
@@ -420,6 +404,7 @@ export const setConfigOpen = async (on) => {
     }
     if (generation !== configLoadGeneration) return;
     originalConfig = JSON.stringify(rawConfig, null, 2);
+    panelProviderRevision = revision;
     serverConfig = originalConfig;
     configEditor.value = originalConfig;
 
@@ -489,11 +474,11 @@ configEditor?.addEventListener("keydown", (ev) => {
   }
 });
 
-let doSave = async (jsonStr) => {
+let doSave = async (jsonStr, revision = "") => {
   try {
     const r = await fetch("/api/config", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(revision ? { "X-asHub-Provider-Revision": revision } : {}) },
       body: jsonStr,
     });
     if (!r.ok) throw new Error(await r.text());
@@ -541,10 +526,11 @@ let doSave = async (jsonStr) => {
 // the current server config (GET then merged PUT), leaving other fields —
 // and other providers' settings — untouched.
 export const saveProviderApiKey = async (providerId, apiKey) => {
-  let existing;
+  let existing, revision;
   try {
     const r = await fetch("/api/config");
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    revision = r.headers?.get("X-asHub-Provider-Revision") || "";
     existing = await r.json();
   } catch (e) {
     toast(t("config.save.failed", { msg: e.message ?? e }), { type: "error" });
@@ -563,7 +549,7 @@ export const saveProviderApiKey = async (providerId, apiKey) => {
     },
     defaultProvider: existing.defaultProvider || providerId,
   };
-  return doSave(JSON.stringify(config, null, 2) + "\n");
+  return doSave(JSON.stringify(config, null, 2) + "\n", revision);
 };
 
 // A save belongs to the opening that started it. Its eventual completion
@@ -575,7 +561,7 @@ const savePanelConfig = async (jsonStr) => {
   configSaving = true;
   setConfigReady(configReady);
   try {
-    const ok = await doSave(jsonStr);
+    const ok = await doSave(jsonStr, panelProviderRevision);
     if (ok && owner === configLoadGeneration) {
       originalConfig = jsonStr;
       setConfigOpen(false);
@@ -637,6 +623,7 @@ configReset?.addEventListener("click", () => {
     originalConfig = serverConfig;
     configEditor.value = serverConfig;
     parseConfigToSimple(JSON.parse(serverConfig || "{}"));
+    updateProviderDesc();
   }
 });
 

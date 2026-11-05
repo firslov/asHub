@@ -8,7 +8,11 @@ export function updateSettingsFile(file: string, update: (data: Record<string, a
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let data: Record<string, any> = {};
   try { data = JSON.parse(fs.readFileSync(file, "utf-8")); }
-  catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
+  catch (err) {
+    // JSON.parse may include nearby credential text in its error message.
+    if (err instanceof SyntaxError) throw new SyntaxError("Invalid JSON in settings.json");
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("invalid settings object");
   const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
   try {

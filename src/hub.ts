@@ -1,3 +1,4 @@
+import { PluginBackground } from './extensions/background.js';
 import { replayEventName } from './history/replay-frame.js';
 import { ReplayWriter } from './history/replay-writer.js';
 import { getSseWriter } from './transport/sse-writer.js';
@@ -52,13 +53,14 @@ import { createAccessGuard } from "./http-auth.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { randomBytes, createHash, randomUUID } from "node:crypto";
+import { randomBytes, createHash, createHmac, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { execFile } from "node:child_process";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import type { Bridge, BridgeFactory, BusEvent, ContextSnapshot, SessionKind } from "./bridges/types.js";
 import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
-import { listAllProviders, resolveApiKey, anyProviderConfigured } from "agent-sh/auth";
+import { listAllProviders, resolveApiKey, anyProviderConfigured, reloadKeysFile, KEYS_PATH } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
 import { extractText, extractImages, snippet, stripContextWrappers, summarizeMessage, isSystemNoteMessage } from "./history/summarize.js";
@@ -81,6 +83,7 @@ export interface HubOpts {
 
 
 const AUTO_APPROVE_KEY = "ashub.permissions.autoApprove";
+const independentlySavedSettings = [AUTO_APPROVE_KEY, "ashub.network", PLUGIN_DISABLED, "subagentModels", "subagentBudgets", "ashub.features.disabled"];
 
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;
@@ -717,6 +720,68 @@ function isAllowedHost(hostHeader: string | undefined, bindHost: string): boolea
 
 /** Placeholder substituted for configured provider API keys on the wire. */
 const MASKED_API_KEY = "••••••••";
+class ProviderConfigConflict extends Error {}
+
+// PUT replaces the editable settings document, including plugin-owned provider configuration.
+function editorRevision(config: Record<string, unknown>): string {
+  const editable = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+  delete editable.anyProviderConfigured;
+  for (const key of independentlySavedSettings) delete editable[key];
+  maskApiKeys(editable); // Ordinary provider keys are resolved from disk at save time.
+  const snapshot = JSON.stringify(editable, (_key, value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return Object.fromEntries(Object.keys(value).sort().map(name => [name, value[name]]));
+    }
+    return value;
+  });
+  return createHash("sha256").update(snapshot).digest("hex");
+}
+
+// A read token identifies both the editable layout and its credential baseline.
+// Keep only bounded, process-keyed fingerprints; never retain a copy of a secret.
+const editorSigningKey = randomBytes(32);
+type EditorBaseline = { layout: string; keys: Map<string, string> };
+const editorBaselines = new Map<string, EditorBaseline>();
+
+function editorBaseline(config: Record<string, unknown>) {
+  const providers = config.providers as Record<string, { apiKey?: unknown }> | undefined;
+  const keys = new Map<string, string>();
+  for (const name of Object.keys(providers ?? {}).sort()) {
+    const key = providers?.[name]?.apiKey;
+    if (typeof key === "string" && key) {
+      keys.set(name, createHmac("sha256", editorSigningKey).update(JSON.stringify([name, key])).digest("hex"));
+    }
+  }
+  const layout = editorRevision(config);
+  const token = createHash("sha256").update(JSON.stringify([layout, [...keys]])).digest("hex");
+  return { token, layout, keys };
+}
+
+function rememberEditor(config: Record<string, unknown>): string {
+  const state = editorBaseline(config);
+  editorBaselines.delete(state.token);
+  editorBaselines.set(state.token, state);
+  if (editorBaselines.size > 128) editorBaselines.delete(editorBaselines.keys().next().value!);
+  return state.token;
+}
+
+function checkEditorWrite(expected: string, old: Record<string, any>, next: Record<string, any>): void {
+  if (isDeepStrictEqual(next, old)) return;
+  const current = editorBaseline(old);
+  if (current.token === expected) return;
+  const base = editorBaselines.get(expected);
+  if (base?.layout === current.layout) {
+    // Unmasking has already restored the live key for unchanged inputs. A
+    // concurrent rotation conflicts only if this save changes its key or route.
+    const conflict = [...current.keys].some(([name, fingerprint]) => {
+      if (base.keys.get(name) === fingerprint) return false;
+      const prev = old.providers[name], proposed = next.providers?.[name];
+      return proposed?.apiKey !== prev.apiKey || proposed?.baseURL !== prev.baseURL;
+    });
+    if (!conflict) return;
+  }
+  throw new ProviderConfigConflict("Settings changed. Reopen Settings and reapply your edits.");
+}
 
 /** Strip real API keys out of a settings.json object before sending it to the client. */
 function maskApiKeys(config: Record<string, unknown>): void {
@@ -735,18 +800,21 @@ function maskApiKeys(config: Record<string, unknown>): void {
  * so an untouched apiKey arrives back as MASKED_API_KEY — write the real
  * value back instead of clobbering it with the placeholder.
  */
-function unmaskApiKeys(parsed: Record<string, unknown>, old: Record<string, unknown>): void {
+function unmaskApiKeys(parsed: Record<string, unknown>, old: Record<string, unknown>, versioned: boolean): void {
   const newProviders = (parsed as { providers?: Record<string, Record<string, unknown>> }).providers;
   const oldProviders = (old as { providers?: Record<string, Record<string, unknown>> }).providers;
   if (!newProviders || typeof newProviders !== "object") return;
-  if (!oldProviders || typeof oldProviders !== "object") return;
   for (const [name, p] of Object.entries(newProviders)) {
     if (!p || typeof p !== "object" || p.apiKey !== MASKED_API_KEY) continue;
-    const prev = oldProviders[name];
-    if (prev && typeof prev === "object") {
-      if (typeof prev.apiKey === "string" && prev.apiKey) p.apiKey = prev.apiKey;
-      else delete p.apiKey;
+    const previous = oldProviders && Object.hasOwn(oldProviders, name) ? oldProviders[name] : undefined;
+    const key = previous?.apiKey;
+    if (typeof key !== "string" || !key || key === MASKED_API_KEY) {
+      throw new ProviderConfigConflict(`No saved API key for "${name}". Re-enter the key or remove the apiKey field.`);
     }
+    if (!versioned && (p.baseURL ?? "") !== (previous?.baseURL ?? "")) {
+      throw new ProviderConfigConflict("Provider endpoint changed. Reload settings or re-enter the API key.");
+    }
+    p.apiKey = key;
   }
 }
 
@@ -811,11 +879,29 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       }, undefined, 'queue', settled);
     },
   });
-  const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action));
+  const background = new PluginBackground(path.join(SESSIONS_DIR, 'background-grants.json'), {
+    targets: () => sessionService.list(projects).filter(s => s.kind === 'agent' && !s.readOnlyContext && !sessions.get(s.instanceId)?._closing && !sessions.get(s.instanceId)?._closed)
+      .map(s => ({ id: s.instanceId, cwd: s.cwd, title: s.title, model: s.model, provider: s.provider, projectId: s.projectId, busy: s.isProcessing })),
+    store: id => {
+      const s = sessions.get(id); if (!s) return undefined;
+      const file = path.join(SESSIONS_DIR, `${id}.jsonl`);
+      if (!s.store && fs.existsSync(file)) s.store = new SessionStore(file, { metaPath: sessionMetaPath(id) });
+      return s.store;
+    },
+    complete: async (id, messages, signal) => {
+      const s = sessions.get(id); if (!s || sessionBusy(s)) throw Error('Backend busy or unavailable');
+      const binding = JSON.stringify([s.cwd, s.provider, s.model]);
+      await s._ensureBridge?.(); signal.throwIfAborted();
+      if (sessions.get(id) !== s || s._closed || s._closing || sessionBusy(s) || binding !== JSON.stringify([s.cwd, s.provider, s.model]) || !s.bridge.backgroundComplete) throw Error('Backend changed or unsupported');
+      const answer = await s.bridge.backgroundComplete(messages, signal, { model: s.model, provider: s.provider });
+      if (sessions.get(id) !== s || s._closed || s._closing || binding !== JSON.stringify([s.cwd, s.provider, s.model])) throw Error('Backend changed');
+      return answer;
+    },
+  }, lifecycle.signal);
+  const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action), background);
   extensions = new ApplicationExtensionRegistry({ settingsFile: settingsPath(), capabilities: HOST_PLUGIN_CAPABILITIES,
     discover: () => installedApplicationDefinitions(settingsPath(), { bindServices: (id, context) => ({
-      dataDirectory: path.join(SESSIONS_DIR, 'plugin-data', encodeURIComponent(id)),
-      messages: extensionMessages.bind(id, context.signal), interactions: interactions.bind(id, context.signal),
+      background: background.bind(id, context.signal), messages: extensionMessages.bind(id, context.signal), interactions: interactions.bind(id, context.signal),
     }), services: {
       host: Object.freeze({ capabilities: () => JSON.parse(JSON.stringify(HOST_CAPABILITIES)), snapshot: () => JSON.parse(JSON.stringify(hostSnapshot())),
         subscribe: (listener: Parameters<HostEvents['subscribe']>[0]) => hostEvents.subscribe(listener) }),
@@ -1416,6 +1502,7 @@ function getConfig(res: http.ServerResponse): void {
       // Only a missing file is an empty initial configuration. Read failures
       // must not let the editor replace existing settings with defaults.
       const missing = err.code === "ENOENT";
+      if (missing) res.setHeader("X-asHub-Provider-Revision", rememberEditor({}));
       res.writeHead(missing ? 200 : 500, { "Content-Type": "application/json" });
       res.end(JSON.stringify(missing ? { anyProviderConfigured: anyConfigured } : { error: "Failed to read settings" }));
       return;
@@ -1426,6 +1513,7 @@ function getConfig(res: http.ServerResponse): void {
       parsed.anyProviderConfigured = anyConfigured;
       // Never send real API keys to the renderer — mask them; the editor
       // round-trips the masked value and updateConfig restores the originals.
+      res.setHeader("X-asHub-Provider-Revision", rememberEditor(parsed));
       maskApiKeys(parsed);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(parsed));
@@ -1491,34 +1579,26 @@ async function updateConfig(req: http.IncomingMessage, res: http.ServerResponse,
   try {
     delete parsed.anyProviderConfigured;
     updateSettingsFile(fp, (old) => {
-      for (const key of [AUTO_APPROVE_KEY, "ashub.network", PLUGIN_DISABLED, "subagentModels", "subagentBudgets", "ashub.features.disabled"]) {
+      for (const key of independentlySavedSettings) {
         if (old[key] !== undefined) parsed[key] = old[key];
         else delete parsed[key];
       }
-      unmaskApiKeys(parsed, old);
+      const expected = req.headers["x-ashub-provider-revision"];
+      unmaskApiKeys(parsed, old, expected !== undefined);
+      if (expected !== undefined) checkEditorWrite(String(expected), old, parsed);
       return parsed;
     });
-    invalidateSkillCaches(sessions);
-    invalidateBalanceCache(sessions);
-    invalidateServerModelCache();
-    try {
-      const { reloadSettings } = await import("agent-sh/settings");
-      await reloadSettings();
-      invalidateModelProviders();
-      for (const s of sessions.values()) { s.bridge?.reloadProviders?.(); }
-      sessionServices.get(sessions)?.events.publish('configuration');
-    } catch {}
-    finally {
-      // Also discard reads started while provider reload was in progress.
-      invalidateBalanceCache(sessions);
-      invalidateServerModelCache();
-    }
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true }));
   } catch (err) {
+    if (err instanceof ProviderConfigConflict) {
+      res.writeHead(409);
+      res.end(err.message);
+      return;
+    }
     res.statusCode = 500;
     res.end(`write failed: ${err instanceof Error ? err.message : err}`);
+    return;
   }
+  await reloadConfig(res, sessions, true);
 }
 
 // Auto-approve setting (stored as a key in settings.json)
@@ -1573,12 +1653,78 @@ async function setAutoApprove(req: http.IncomingMessage, res: http.ServerRespons
   }
 }
 
-function reloadConfig(res: http.ServerResponse, sessions?: Map<string, Session>): void {
-  import("agent-sh/settings")
-    .then(async (m) => { await m.reloadSettings(); invalidateSkillCaches(sessions); invalidateBalanceCache(sessions); invalidateModelProviders(); invalidateServerModelCache(); if (sessions) sessionServices.get(sessions)?.events.publish('configuration'); })
-    .catch(() => {});
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ ok: true }));
+// Read once so the credential cache gets exactly the snapshot we validated.
+function readCredentialSnapshot(): Record<string, string> {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(KEYS_PATH, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+  const keys = JSON.parse(raw);
+  if (!keys || typeof keys !== "object" || Array.isArray(keys) || !Object.values(keys).every(key => typeof key === "string")) {
+    throw new SyntaxError("Invalid keys.json");
+  }
+  return keys;
+}
+
+async function reloadConfig(res: http.ServerResponse, sessions: Map<string, Session>, saved = false): Promise<void> {
+  // PUT already validated its input. For external edits, check the file before
+  // clearing live state: the kernel silently treats a JSON read failure as defaults.
+  if (!saved) {
+    try {
+      const raw = fs.readFileSync(settingsPath(), "utf8");
+      const invalid = settingsValidationError(JSON.parse(raw));
+      if (invalid) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: invalid }));
+        return;
+      }
+    } catch (error) {
+      // An absent settings file is a valid first-run/default profile.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        const malformed = error instanceof SyntaxError;
+        res.writeHead(malformed ? 400 : 500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: malformed ? "Invalid settings JSON" : "Failed to read settings" }));
+        return;
+      }
+    }
+  }
+  let keys: Record<string, string>;
+  try {
+    keys = readCredentialSnapshot();
+  } catch (error) {
+    const malformed = error instanceof SyntaxError;
+    const reason = malformed ? "Invalid keys.json" : "Failed to read keys.json";
+    res.writeHead(malformed ? 400 : 500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: saved ? "Settings saved. " + reason : reason }));
+    return;
+  }
+  invalidateSkillCaches(sessions);
+  invalidateBalanceCache(sessions);
+  invalidateServerModelCache();
+  try {
+    const { reloadSettings } = await import("agent-sh/settings");
+    await reloadSettings();
+    reloadKeysFile(keys);
+    invalidateModelProviders();
+    const refreshed = await Promise.allSettled(Array.from(sessions.values(),
+      async session => session.bridge?.reloadProviders?.()));
+    sessionServices.get(sessions)?.events.publish('configuration');
+    if (refreshed.some(result => result.status === 'rejected')) throw new Error('Session provider refresh failed');
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+  } catch {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: saved
+      ? "Settings saved, but live configuration refresh failed."
+      : "Live configuration refresh failed." }));
+  } finally {
+    // Also discard reads started while provider reload was in progress.
+    invalidateBalanceCache(sessions);
+    invalidateServerModelCache();
+  }
 }
 
 // ── Session management ──────────────────────────────────────────────

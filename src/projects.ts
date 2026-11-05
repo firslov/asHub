@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 
-export interface Project { id: string; name: string; cwd?: string; sessionIds: string[] }
+export interface Project { id: string; name: string; cwd?: string; sessionIds: string[]; pinnedSessionIds?: string[] }
 export class ProjectStore {
   private listeners = new Set<() => void>();
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
@@ -17,6 +17,12 @@ export class ProjectStore {
     for (const p of data) {
       if (!p || typeof p.id !== "string" || ids.has(p.id) || typeof p.name !== "string" || !p.name.trim() || !Array.isArray(p.sessionIds)) throw new Error("Invalid project data");
       if (p.cwd !== undefined && (typeof p.cwd !== "string" || !path.isAbsolute(p.cwd))) throw new Error("Invalid project directory");
+      if (p.pinnedSessionIds !== undefined) {
+        if (!Array.isArray(p.pinnedSessionIds) || !p.pinnedSessionIds.every((id: unknown) => typeof id === "string") ||
+            new Set(p.pinnedSessionIds).size !== p.pinnedSessionIds.length) throw new Error("Invalid project pins");
+        // Older clients update membership without removing pins for departed members.
+        p.pinnedSessionIds = p.pinnedSessionIds.filter((id: string) => p.sessionIds.includes(id));
+      }
       ids.add(p.id);
       for (const id of p.sessionIds) {
         if (typeof id !== "string" || members.has(id)) throw new Error("Invalid project membership");
@@ -26,7 +32,7 @@ export class ProjectStore {
     return data;
   }
   update(input: unknown, canAdd: (id: string) => boolean): Project[] {
-    const b = input as { action?: string; id?: string; name?: string; cwd?: string; add?: string[]; remove?: string[] };
+    const b = input as { action?: string; id?: string; name?: string; cwd?: string; add?: string[]; remove?: string[]; sessionId?: string; pinned?: boolean };
     if (!b || typeof b !== "object" || Array.isArray(b)) throw new Error("Invalid project request");
     const projects = this.list();
     let p = projects.find(p => p.id === b.id);
@@ -42,6 +48,15 @@ export class ProjectStore {
       if (b.action === "create") { p = { id: randomUUID(), name: b.name.trim(), cwd, sessionIds: [] }; projects.push(p); }
       else p!.name = b.name.trim();
     } else if (b.action === "delete") projects.splice(projects.indexOf(p!), 1);
+    else if (b.action === "pin") {
+      const id = b.sessionId;
+      if (typeof id !== "string" || typeof b.pinned !== "boolean" || !p!.sessionIds.includes(id) || !canAdd(id)) {
+        throw new Error("Invalid project pin");
+      }
+      const pins = p!.pinnedSessionIds ?? [];
+      if (b.pinned && !pins.includes(id)) p!.pinnedSessionIds = [id, ...pins];
+      if (!b.pinned) p!.pinnedSessionIds = pins.filter(pin => pin !== id);
+    }
     else if (b.action !== "members") throw new Error("Unknown project action");
     if (b.action === "edit" && cwd !== undefined) p!.cwd = cwd;
     if (b.action === "members" || b.action === "edit" || b.action === "create") {
@@ -50,6 +65,9 @@ export class ProjectStore {
       const moved = new Set(add), removed = new Set(remove);
       for (const group of projects) group.sessionIds = group.sessionIds.filter(id => !moved.has(id) && (group !== p || !removed.has(id)));
       p!.sessionIds.push(...moved);
+      for (const group of projects) {
+        if (group.pinnedSessionIds) group.pinnedSessionIds = group.pinnedSessionIds.filter(id => group.sessionIds.includes(id));
+      }
     }
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const tmp = this.file + "." + randomUUID() + ".tmp";

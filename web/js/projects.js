@@ -12,37 +12,74 @@ let groups = [], visible = false, loading = false, error = "", generation = 0;
 let dialog = null;
 let workspaces = {}, pollTimer = null, polling = false, groupPolling = false, workspacePolling = false, rendered = "", statusGeneration = 0;
 let statusReadSeq = 0, groupReadSeq = 0, workspaceReadSeq = 0;
+let appliedGroupPoll = 0;
+const projectPinIcon = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
 const collapsed = new Set();
 const networkSaving = new Set();
+const pinSaving = new Set();
 try { for (const id of JSON.parse(localStorage.getItem("ash.project-folded") || "[]")) collapsed.add(id); } catch {}
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
 const button = (text, fn, cls = "project-button") => { const n = el("button", cls, text); n.type = "button"; n.addEventListener("click", fn); return n; };
 const chats = () => allSessions.value.filter(s => s.kind === "agent");
+const projectVersions = new WeakMap();
+function compareGroups(next, current) {
+  const a = projectVersions.get(next), b = projectVersions.get(current);
+  return a && b && a.epoch === b.epoch ? a.revision - b.revision : null;
+}
+function acceptGroups(next, currentRequest) {
+  const order = compareGroups(next, groups) ?? 0;
+  // Request order breaks ties and handles unversioned or different-epoch reads.
+  if (order < 0 || (order === 0 && !currentRequest)) return false;
+  groups = next;
+  return true;
+}
 async function request(body) {
   const res = await fetch("/api/projects", body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : { cache: "no-store" });
   if (!res.ok) throw new Error(body ? t("projects.saveFailed") : t("projects.loadFailed"));
   const result = await res.json();
+  const stamp = /^([^:]+):(\d+)$/.exec(res.headers?.get('X-asHub-Project-Version') ?? '');
+  if (stamp) projectVersions.set(Array.isArray(result) ? result : result.projects, { epoch: stamp[1], revision: Number(stamp[2]) });
   if (body) document.dispatchEvent(new CustomEvent("ash:sessions-changed"));
   return result;
 }
 async function refresh(options) {
-  const seq = ++generation;
+  const seq = ++generation, pollAtStart = appliedGroupPoll, before = groups;
+  const current = () => seq === generation && appliedGroupPoll === pollAtStart;
   loading = options?.background !== true; error = ""; render();
-  try { const result = await request(); if (seq === generation) groups = result; }
-  catch (e) { if (seq === generation) error = e.message; }
-  finally { if (seq === generation) { loading = false; render(); } }
+  try { const result = await request(); if (acceptGroups(result, current())) error = ""; }
+  catch (e) { if (current() && groups === before && (!options?.background || !groups.length)) error = e.message; }
+  finally { if (seq === generation) loading = false; render(); }
+}
+// A versioned write must not invalidate an in-flight read: that read may
+// already contain a later commit from another window.
+async function applyProjectWrite(next, previousGroups = groups, seq = generation) {
+  const order = compareGroups(next, groups);
+  if (order !== null) {
+    if (order >= 0) { groups = next; loading = false; error = ""; }
+  } else if (projectVersions.has(next) && projectVersions.has(groups)) {
+    // Across Hub restarts neither revision counter orders the two snapshots.
+    await refresh({ background: true });
+    return projectVersions.get(next).epoch === projectVersions.get(groups)?.epoch;
+  } else if (groups === previousGroups && seq === generation) {
+    ++generation; // Legacy responses have no revision to compare against older reads.
+    groups = next; loading = false; error = "";
+  } else {
+    if (seq === generation && JSON.stringify(groups) === JSON.stringify(previousGroups)) groups = next;
+    await refresh({ background: true });
+  }
+  return true;
 }
 export function showProjects(show) {
   if (!root) return;
   root.hidden = !show;
   const changed = visible !== show; visible = show;
-  if (show && changed) { void refresh(); void pollStatus(); pollTimer = setInterval(pollStatus, 5000); }
+  if (show && changed) { void refresh({ background: groups.length > 0 }); void pollStatus(); pollTimer = setInterval(pollStatus, 5000); }
   if (!show && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 function render() {
   if (!root || !visible) return;
   // Preserve focus and expanded navigation when a status poll has no changes.
-  const signature = JSON.stringify([groups, loading, error, chats(), activeSessionId.value, [...collapsed], workspaces, networkPolicy.value, [...networkSaving], t("projects.title")]);
+  const signature = JSON.stringify([groups, loading, error, chats(), activeSessionId.value, [...collapsed], workspaces, networkPolicy.value, [...networkSaving], [...pinSaving], t("projects.title")]);
   if (signature === rendered) return;
   rendered = signature;
   root.replaceChildren();
@@ -64,7 +101,9 @@ function render() {
   for (const p of groups) {
     const block = el("section", "project-group");
     const row = el("div", "project-heading");
+    const pins = new Map((p.pinnedSessionIds ?? []).map((id, index) => [id, index]));
     const members = list.filter(s => p.sessionIds.includes(s.instanceId));
+    if (pins.size) members.sort((a, b) => (pins.get(a.instanceId) ?? pins.size) - (pins.get(b.instanceId) ?? pins.size));
     const primaryCwd = p.cwd;
     const toggle = button("", () => {
       if (collapsed.has(p.id)) collapsed.delete(p.id); else collapsed.add(p.id);
@@ -111,7 +150,13 @@ function render() {
         const labels = [status !== 'idle' ? t("projects.status." + status) : "", s.queuedCount > 0 && status !== 'queued' ? t("projects.queueCount", { n: s.queuedCount }) : "", shared ? t("projects.sharedWorkspace") : ""].filter(Boolean);
         if (labels.length) body.append(el("small", "project-chat-status " + status, labels.join(" · ")));
         if (shared) link.title += "\n" + t("projects.sharedWorkspaceHint");
-        link.append(el("span", "project-chat-dot " + status), body);
+        const pinned = pins.has(s.instanceId);
+        link.append(el("span", "project-chat-dot " + status));
+        if (pinned) {
+          const marker = el("span", "project-pin-mark"); marker.innerHTML = projectPinIcon;
+          link.append(marker);
+        }
+        link.append(body);
         const chatRow = el('div', 'project-chat-row');
         const remove = button('×', () => deleteProjectChat(s, p), 'project-chat-delete');
         remove.title = t('projects.removeChat'); remove.setAttribute('aria-label', t('projects.removeChat') + ': ' + (s.title || t('untitled')));
@@ -124,7 +169,23 @@ function render() {
         proxy.title = proxy.ariaLabel = t(vpn ? 'network.on' : 'network.off') + '\n' + t('network.tabHint');
         proxy.ariaPressed = String(!!vpn); proxy.disabled = !policy || networkSaving.has(s.instanceId);
         proxy.addEventListener('contextmenu', e => { e.preventDefault(); void changeProxy(s.instanceId, true); });
-        actions.append(rename, proxy, remove); chatRow.append(link, actions); block.append(chatRow);
+        const pin = button('', async () => {
+          if (pinSaving.has(s.instanceId)) return;
+          pinSaving.add(s.instanceId);
+          pin.disabled = true;
+          const previousGroups = groups, seq = generation;
+          try {
+            const confirmed = await request({ action: 'pin', id: p.id, sessionId: s.instanceId, pinned: !pinned });
+            await applyProjectWrite(confirmed, previousGroups, seq);
+          } catch (e) { toast(t('projects.saveFailed'), { type: 'error', detail: String(e) }); }
+          finally { pinSaving.delete(s.instanceId); pin.disabled = false; render(); }
+        }, 'project-chat-action project-chat-pin');
+        pin.disabled = pinSaving.has(s.instanceId);
+        pin.innerHTML = projectPinIcon;
+        pin.title = t(pinned ? 'unpin' : 'pin');
+        pin.setAttribute('aria-label', pin.title + ': ' + (s.title || t('untitled')));
+        pin.setAttribute('aria-pressed', String(pinned));
+        actions.append(rename, pin, proxy, remove); chatRow.append(link, actions); block.append(chatRow);
       }
     }
     root.append(block);
@@ -180,7 +241,10 @@ async function pollStatus(options) {
     groupPolling = true;
     const seq = generation, read = ++groupReadSeq;
     void request().then(result => {
-      if (visible && seq === generation && read === groupReadSeq) { groups = result; error = ""; render(); }
+      if (visible && acceptGroups(result, seq === generation && read === groupReadSeq)) {
+        ++appliedGroupPoll;
+        error = ""; render();
+      }
     }).catch(() => {}).finally(() => { if (read === groupReadSeq) groupPolling = false; });
   }
   // Git discovery may be slow on network drives; never hold up task status.
@@ -487,10 +551,9 @@ function edit(project) {
     for (const control of form.querySelectorAll("button, input")) control.disabled = true;
     try {
       const result = await request(body);
-      // Invalidate older reads only after a successful write. A failed save
-      // must leave the pending list request able to finish and clear loading.
-      ++generation; groups = Array.isArray(result) ? result : result.projects; loading = false; error = "";
+      const sameHub = await applyProjectWrite(Array.isArray(result) ? result : result.projects);
       render(); currentDialog.close();
+      if (!sameHub) return; // Deletion receipts apply only to sessions from their Hub.
       if (body.action === 'delete' && body.deleteConversations) {
         // Use the server's deletion snapshot, not membership from when the
         // dialog opened: another window may have moved conversations since.
@@ -537,7 +600,7 @@ function edit(project) {
 if (root) {
   effect(() => { allSessions.value; activeSessionId.value; networkPolicy.value; render(); });
   document.addEventListener("langchange", render);
-  window.addEventListener("focus", () => { if (visible && !dialog) void refresh(); });
+  window.addEventListener("focus", () => { if (visible && !dialog) void refresh({ background: groups.length > 0 }); });
   document.addEventListener("ash:host-state-changed", event => {
     const domains = event.detail?.domains;
     if (Array.isArray(domains) && !domains.some(kind => kind === "sessions" || kind === "projects")) return;

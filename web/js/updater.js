@@ -91,7 +91,7 @@ const render = () => {
     return b;
   });
 
-  let icon = "⬇";
+  let icon = "download";
   let title = "";
   let detail = "";
   let progressHtml = "";
@@ -99,7 +99,7 @@ const render = () => {
 
   switch (state) {
     case "available":
-      icon = "✨";
+      icon = "available";
       title = t("update.available", { ver: version });
       detail = t("update.available.hint");
       buttons = [
@@ -108,7 +108,7 @@ const render = () => {
       ];
       break;
     case "downloading":
-      icon = "⬇";
+      icon = "download";
       title = t("update.downloading", { ver: version });
       const pct = Math.max(0, Math.min(100, progress.percent || 0));
       const speed = fmtBytes(progress.bytesPerSecond) + "/s";
@@ -123,7 +123,7 @@ const render = () => {
         </div>`;
       break;
     case "downloaded":
-      icon = "✅";
+      icon = "check";
       title = t("update.downloaded", { ver: version });
       if (manualInstall) {
         // Ad-hoc signed builds can't auto-install (Squirrel's signature
@@ -143,7 +143,7 @@ const render = () => {
       ];
       break;
     case "error":
-      icon = "⚠";
+      icon = "error";
       title = t("update.failed");
       detail = errorMsg || t("update.failed.hint");
       buttons = [
@@ -156,7 +156,14 @@ const render = () => {
   card.innerHTML = "";
   const iconEl = document.createElement("span");
   iconEl.className = "update-card-icon";
-  iconEl.textContent = icon;
+  iconEl.setAttribute("aria-hidden", "true");
+  const paths = {
+    available: '<path d="M12 4v12m-4-4 4 4 4-4M5 20h14"/>',
+    download: '<path d="M12 3v12m-4-4 4 4 4-4M5 16v5h14v-5"/>',
+    check: '<path d="m5 12 4 4L19 6"/>',
+    error: '<path d="M12 7v6m0 4h.01"/><circle cx="12" cy="12" r="9"/>',
+  };
+  iconEl.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${paths[icon]}</svg>`;
   const body = document.createElement("div");
   body.className = "update-card-body";
   const titleEl = document.createElement("div");

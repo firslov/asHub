@@ -473,12 +473,12 @@
 
 /* Buttons → p-btn language: flat primary, hairline ghost, no gradient */
 .update-btn {
-  height: 26px;
-  padding: 0 var(--space-3);
+  min-height: 34px;
+  padding: 7px var(--space-3);
   border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
   font-weight: 500;
-  line-height: 1;
+  line-height: 1.35;
   transition: background var(--dur-fast) var(--ease-out-expo),
               color var(--dur-fast) var(--ease-out-expo),
               border-color var(--dur-fast) var(--ease-out-expo),

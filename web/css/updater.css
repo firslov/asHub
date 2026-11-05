@@ -6,10 +6,16 @@
   right: 18px;
   bottom: 18px;
   z-index: 10001;
-  display: flex;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: start;
   gap: 12px;
-  width: min(340px, calc(100vw - 36px));
+  width: min(380px, calc(100vw - 36px));
+  box-sizing: border-box;
+  max-height: calc(100vh - 36px);
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  scrollbar-width: thin;
   padding: 14px 16px;
   background: var(--bg-elevated);
   color: var(--text);
@@ -52,7 +58,10 @@
   gap: 3px;
 }
 
+.update-card-icon svg { width: 18px; height: 18px; }
+
 .update-card-title {
+  overflow-wrap: anywhere;
   font-weight: 600;
   font-size: 13.5px;
   color: var(--text);
@@ -61,7 +70,8 @@
 .update-card-detail {
   font-size: 12px;
   color: var(--text-dim);
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
 }
 
 /* ── Progress ── */
@@ -106,10 +116,16 @@
 
 /* ── Buttons ── */
 .update-actions {
+  grid-column: 1 / -1;
   display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 2px;
 }
+.update-actions:empty { display: none; }
+.update-btn { max-width: 100%; overflow-wrap: anywhere; }
+.update-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .update-btn {
   appearance: none;

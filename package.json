@@ -38,6 +38,7 @@
     "test:activity:ui": "electron tests/electron-activity.cjs",
     "test:scrollbar:ui": "electron tests/electron-scrollbar.cjs",
     "test:themes:ui": "node --test tests/regression-branding.cjs && electron tests/electron-themes.cjs",
+    "test:updater:ui": "electron tests/electron-updater.cjs",
     "test:composer:ui": "electron tests/electron-composer.cjs",
     "test:host:ui": "electron tests/electron-host-approvals.cjs",
     "test:plugins:install:ui": "electron tests/electron-plugin-install.cjs",

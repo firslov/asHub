@@ -369,21 +369,32 @@ app.whenReady().then(async () => {
         () => js("document.querySelector('.browser-pane').offsetWidth>" + old),
         'keyboard resizing',
       );
-      const rect = await js("document.querySelector('.browser-divider').getBoundingClientRect().toJSON()");
-      const x = Math.round(rect.x + 2),
-        y = Math.round(rect.y + 40);
-      win.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
-      await until(
-        () => js("document.querySelector('.browser-pane').classList.contains('resizing')"),
-        'pointer capture',
-      );
-      win.webContents.sendInputEvent({ type: 'mouseMove', x: x + 60, y, modifiers: ['leftButtonDown'] });
-      win.webContents.sendInputEvent({ type: 'mouseUp', x: x + 60, y, button: 'left', clickCount: 1 });
-      await until(
-        () => js("!document.querySelector('.browser-pane').classList.contains('resizing')"),
-        'pointer release',
-      );
-      assert((await js("document.querySelector('.browser-pane').offsetWidth")) < old);
+      // Exercise both normal movement and a release delivered without its
+      // intermediate pointermove (Chromium may coalesce native input on CI).
+      for (const move of [true, false]) {
+        const rect = await js("document.querySelector('.browser-divider').getBoundingClientRect().toJSON()");
+        const right = await js("document.querySelector('.browser-pane').getBoundingClientRect().right");
+        const x = Math.round(rect.x + 2), y = Math.round(rect.y + 40);
+        const releaseX = x + (move ? 60 : -40);
+        const expected = Math.round(right - releaseX);
+        win.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+        await until(
+          () => js("document.querySelector('.browser-pane').classList.contains('resizing')"),
+          'pointer capture',
+        );
+        if (move) win.webContents.sendInputEvent({ type: 'mouseMove', x: releaseX, y, modifiers: ['leftButtonDown'] });
+        win.webContents.sendInputEvent({ type: 'mouseUp', x: releaseX, y, button: 'left', clickCount: 1 });
+        await until(
+          () => js("!document.querySelector('.browser-pane').classList.contains('resizing')"),
+          'pointer release',
+        );
+        const width = await js("document.querySelector('.browser-pane').offsetWidth");
+        assert(Math.abs(width - expected) <= 1,
+          `release commits final width (move=${move}): expected ${expected}, got ${width}`);
+        const savedWidth = await js("Number(localStorage.getItem('ash.browser.width-ratio')) * (document.querySelector('.browser-pane').getBoundingClientRect().right - document.querySelector('.main').getBoundingClientRect().left)");
+        assert(Math.abs(savedWidth - expected) <= 1, 'release persists the final width');
+        await until(() => view() === guest, 'browser restored after drag');
+      }
     }
     for (const width of [1100, 1200, 1440]) {
       await resize(width);

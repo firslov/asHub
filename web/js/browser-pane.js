@@ -55,7 +55,11 @@ if (api?.browserStatus) {
     dragging = false; pane.classList.remove('resizing'); saveRatio(); layout();
   };
   divider.onpointerup = event => {
-    if (divider.hasPointerCapture(event.pointerId)) divider.releasePointerCapture(event.pointerId);
+    if (!divider.hasPointerCapture(event.pointerId)) return;
+    // A release can arrive before the last coalesced pointermove. Commit its
+    // coordinates before lostpointercapture persists the final width.
+    if (dragging) sizePage(pane.getBoundingClientRect().right - event.clientX);
+    divider.releasePointerCapture(event.pointerId);
   };
   divider.onkeydown = event => {
     const total = available(), width = clampPage(total * ratio, total);

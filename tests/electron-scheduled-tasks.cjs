@@ -244,6 +244,7 @@ app.whenReady().then(async () => {
     }
     catch (e) {
         console.error(e);
+        if (process.env.GITHUB_ACTIONS) console.error('::error::' + String(e.stack || e).slice(0, 16000).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A'));
         if (win)
             console.log(await win.webContents.executeJavaScript("document.querySelector('.extension-panel')?.outerHTML"));
         process.exitCode = 1;

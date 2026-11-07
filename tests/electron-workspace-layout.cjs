@@ -389,7 +389,11 @@ app.whenReady().then(async () => {
         for(const type of ['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture']) {
           document.addEventListener(type,event=>{
             window.resizeEvents.push({type,x:event.clientX,buttons:event.buttons,target:event.target.className,
-              captured:event.target.hasPointerCapture?.(event.pointerId),focused:document.hasFocus()});
+              captured:event.target.hasPointerCapture?.(event.pointerId),focused:document.hasFocus(),
+              viewport:innerWidth, mainLeft:document.querySelector('.main').getBoundingClientRect().left,
+              pane:document.querySelector('.browser-pane').getBoundingClientRect().toJSON(),
+              widthStyle:document.querySelector('.app').style.getPropertyValue('--browser-width'),
+              ratio:localStorage.getItem('ash.browser.width-ratio')});
             if(window.resizeEvents.length>24)window.resizeEvents.shift();
           },true);
         }`);
@@ -418,6 +422,12 @@ app.whenReady().then(async () => {
           () => js("!document.querySelector('.browser-pane').classList.contains('resizing')"),
           'pointer release',
         );
+        // The native input and renderer layout notifications use separate queues.
+        // Wait for the final geometry, retaining the exact width assertion below.
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (await js(`Math.abs(document.querySelector('.browser-pane').offsetWidth - ${expected}) <= 1`)) break;
+          await sleep(25);
+        }
         const width = await js("document.querySelector('.browser-pane').offsetWidth");
         const events = await js('JSON.stringify(window.resizeEvents)');
         assert(Math.abs(width - expected) <= 1,
@@ -802,6 +812,7 @@ app.whenReady().then(async () => {
     );
   } catch (err) {
     console.error(err);
+        if (process.env.GITHUB_ACTIONS) console.error('::error::' + String(err.stack || err).slice(0, 16000).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A'));
     process.exitCode = 1;
   } finally {
     clearTimeout(timeout);

@@ -371,6 +371,14 @@ app.whenReady().then(async () => {
       );
       // Exercise both normal movement and a release delivered without its
       // intermediate pointermove (Chromium may coalesce native input on CI).
+      await js(`window.resizeEvents=[];
+        for(const type of ['pointerdown','pointermove','pointerup','pointercancel','gotpointercapture','lostpointercapture']) {
+          document.addEventListener(type,event=>{
+            window.resizeEvents.push({type,x:event.clientX,buttons:event.buttons,target:event.target.className,
+              captured:event.target.hasPointerCapture?.(event.pointerId),focused:document.hasFocus()});
+            if(window.resizeEvents.length>24)window.resizeEvents.shift();
+          },true);
+        }`);
       for (const move of [true, false]) {
         const rect = await js("document.querySelector('.browser-divider').getBoundingClientRect().toJSON()");
         const right = await js("document.querySelector('.browser-pane').getBoundingClientRect().right");
@@ -389,8 +397,9 @@ app.whenReady().then(async () => {
           'pointer release',
         );
         const width = await js("document.querySelector('.browser-pane').offsetWidth");
+        const events = await js('JSON.stringify(window.resizeEvents)');
         assert(Math.abs(width - expected) <= 1,
-          `release commits final width (move=${move}): expected ${expected}, got ${width}`);
+          `release commits final width (move=${move}): expected ${expected}, got ${width}; events=${events}`);
         const savedWidth = await js("Number(localStorage.getItem('ash.browser.width-ratio')) * (document.querySelector('.browser-pane').getBoundingClientRect().right - document.querySelector('.main').getBoundingClientRect().left)");
         assert(Math.abs(savedWidth - expected) <= 1, 'release persists the final width');
         await until(() => view() === guest, 'browser restored after drag');

@@ -72,7 +72,7 @@ export class SessionService {
         supportsCwdChange: !!s.bridge?.supportsCwdChange, startedAt: s.startedAt,
         lastModified: s.lastModified, isProcessing: s.isProcessing, hasUnread: s.hasUnread,
         waitingApproval: [...(s.pendingPermissions?.values() ?? [])].some(p => p.expiresAt > Date.now()),
-        queuedCount: s.queuedQueries?.length ?? 0, lastTurnError: !!s.lastTurnError,
+        queuedCount: s.queuedQueries?.length ?? 0, lastTurnError: !!s.lastTurnError, lastTurnErrorAt: s.lastTurnErrorAt,
       }));
   }
 }

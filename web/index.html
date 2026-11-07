@@ -71,6 +71,7 @@
   <link rel="stylesheet" href="/css/live.css" />
   <link rel="stylesheet" href="/css/toast.css" />
   <link rel="stylesheet" href="/css/updater.css" />
+  <link rel="stylesheet" href="/css/browser-pane.css" />
   <link rel="stylesheet" href="/css/panels.css" />
   <link rel="stylesheet" href="/css/panels/files.css" />
   <link rel="stylesheet" href="/css/panels/context.css" />
@@ -222,9 +223,9 @@
                 data-query-en="Explore and explain how this project works"
                 data-query-zh="探索这个项目并解释它是如何工作的">🗺️ Explore project</button>
               <button type="button" class="stream-empty-prompt template" data-i18n="hint.plan"
-                data-query="Create a detailed plan for building a blog system"
-                data-query-en="Create a detailed plan for building a blog system"
-                data-query-zh="为搭建一个博客系统制定一份详细计划">📋 Plan a project</button>
+                data-query="Draft an implementation plan based on the goals and structure of this project"
+                data-query-en="Draft an implementation plan based on the goals and structure of this project"
+                data-query-zh="请根据当前项目的目标和目录结构，帮我制定一份实施计划。">📋 Plan a project</button>
             </div>
           </div>
           <form class="live-input" id="form">
@@ -279,9 +280,9 @@
               data-query-en="Use the review subagent to check the codebase for bugs"
               data-query-zh="用 review 子代理检查代码库里的 bug">🔍 Review codebase</button>
             <button class="hint-chip" data-i18n="hint.plan"
-              data-query="Create a detailed plan for building a blog system"
-              data-query-en="Create a detailed plan for building a blog system"
-              data-query-zh="为搭建一个博客系统制定一份详细计划">📋 Plan a project</button>
+              data-query="Draft an implementation plan based on the goals and structure of this project"
+              data-query-en="Draft an implementation plan based on the goals and structure of this project"
+              data-query-zh="请根据当前项目的目标和目录结构，帮我制定一份实施计划。">📋 Plan a project</button>
             <button class="hint-chip" data-i18n="hint.trip"
               data-query="Help me design a weekend trip itinerary"
               data-query-en="Help me design a weekend trip itinerary"
@@ -303,7 +304,7 @@
       </button>
       <div class="usage-strip" hidden>
         <span class="model-picker">
-          <button class="usage-chip usage-model-balance" type="button" hidden></button>
+          <button class="usage-chip usage-model-balance" type="button" aria-haspopup="dialog" aria-expanded="false" hidden></button>
         </span>
         <span class="usage-chip usage-location" hidden></span>
         <span class="terminal-usage"></span>

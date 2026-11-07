@@ -26,6 +26,7 @@ export class FeatureRegistry {
         || !['application', 'frontend'].includes(feature.scope) || typeof feature.state !== 'string') throw Error('Invalid extension metadata');
       // Copy the supported fields. Ignore executable paths, markup and unknown fields.
       const entry = { id: feature.id, name: feature.name.slice(0, 200), scope: feature.scope, enabled: feature.enabled, state: feature.state.slice(0, 80) };
+      if (typeof feature.pluginId === 'string' && feature.pluginId && feature.pluginId.length <= 200) entry.pluginId = feature.pluginId;
       if (feature.ui?.panels !== undefined) {
         try {
           const ui = validateDeclarativeUI(feature.ui);

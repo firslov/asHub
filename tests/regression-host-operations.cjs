@@ -19,7 +19,7 @@ test('exact immutable preview, concurrent idempotency, durable results, paramete
  const first=f.gateway.run('a',raw,f.prepare,async p=>{preview=p;return approval;});
  const duplicate=f.gateway.run('a',request(),f.prepare,async()=>{throw Error('duplicate approval');});
  raw.operations[0].input.title='Modified after approval request'; await new Promise(r=>setImmediate(r));
- assert.equal(preview.items[0].fields[0].value,'Reader');resolve(true);
+ assert.equal(preview.scope,'once');assert.equal(preview.items[0].fields[0].value,'Reader');resolve(true);
  assert.deepEqual(plain(await first),plain(await duplicate));assert.equal(f.calls,1);
  const restored=new f.HostOperations(path.join(f.e.dir,'receipts'));
  assert.equal((await restored.run('a',request(),f.prepare,async()=>{throw Error('must use receipt');})).status,'completed');assert.equal(f.calls,1);
@@ -57,6 +57,7 @@ test('AshBridge auto-approve and session-wide decisions cannot approve future ex
 });
 test('approval preview uses text nodes and remains identical on mobile',()=>{
  const {ui,El}=require('./ui-harness.cjs'),u=ui(),{appendApprovalPreview}=u.e.load('web/js/approval-preview.js'),parent=new El();
+ parent.querySelector=()=>null; // This text-only fixture contains no action row.
  appendApprovalPreview(parent,[{title:'<script>bad</script>',fields:[{label:'<img>',value:'<b>raw</b>'}]}]);
  const section=parent.children[0].children[0];assert.equal(section.children[0].textContent,'<script>bad</script>');assert.equal(section.children[1].children[1].textContent,'<b>raw</b>');
  const desktop=fs.readFileSync(path.join(require('./harness.cjs').root,'web/js/approval-preview.js'),'utf8');

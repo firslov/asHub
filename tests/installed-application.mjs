@@ -97,3 +97,23 @@ test('v2 entry-path migration is rejected before replacing a disabled package or
   assert.deepEqual(JSON.parse(fs.readFileSync(f.file)),before);const current=pluginCatalog(f.file)[0];assert.equal(current.id,entry.id);assert.equal(current.enabled,false);assert.equal(current.version,'1.0.0');
   assert.equal(current.manifest.entries.application,'app.mjs');assert(fs.existsSync(path.join(current.packageRoot,'app.mjs')));assert(!fs.existsSync(path.join(current.packageRoot,'app/start.mjs')));
 });
+
+test('uninstall refuses dependent packages and busy work, and restores activation if removal fails',async t=>{
+  const f=await installed(t,{schemaVersion:2,id:'removal-fixture',entries:{application:'app.mjs'}},{'app.mjs':'export default () => ({})'});
+  const registry=new ApplicationExtensionRegistry({settingsFile:f.file,definitions:[],discover:()=>installedApplicationDefinitions(f.file)});
+  t.after(()=>registry.close());await registry.start();
+  const plugin=pluginCatalog(f.file)[0], featureId='plugin-'+plugin.id;
+  const uninstall=(remove)=>registry.uninstallPlugin(plugin.id,()=>{},remove);
+  let release;
+  const pending=registry.run(featureId,()=>new Promise(r=>{release=r}));
+  await assert.rejects(uninstall(()=>assert.fail()),/busy/);
+  release();await pending;
+  const dep=path.join(f.dir,'extensions','dependent');
+  fs.mkdirSync(dep);fs.writeFileSync(path.join(dep,'index.mjs'),'export default ()=>{}');
+  fs.writeFileSync(path.join(dep,'package.json'),JSON.stringify({name:'dependent',version:'1.0.0'}));
+  fs.writeFileSync(path.join(dep,'ashub-plugin.json'),JSON.stringify({schemaVersion:2,id:'dependent',entries:{session:'index.mjs'},dependencies:[{id:'removal-fixture',minVersion:'1.0.0'}]}));
+  await assert.rejects(uninstall(()=>assert.fail()),/Required by/);
+  fs.renameSync(dep,path.join(f.dir,'unregistered-dependent'));
+  await assert.rejects(uninstall(()=>{throw Error('fixture storage error')}),/fixture storage error/);
+  assert.equal(registry.snapshot().features.find(entry=>entry.id===featureId).state,'active');
+});

@@ -7,11 +7,11 @@ function find(sf,p){let out;function walk(n){if(!out&&p(n))out=n;if(!out)ts.forE
 function variable(file,name,ctx){const sf=ast(file),n=find(sf,n=>ts.isVariableDeclaration(n)&&n.name?.text===name);return vm.runInContext('('+n.initializer.getText(sf)+')',ctx)}
 function method(file,name,ctx){const sf=ast(file),n=find(sf,n=>ts.isMethodDeclaration(n)&&n.name?.text===name);return vm.runInContext(ts.transpileModule('({'+n.getText(sf)+'})['+JSON.stringify(name)+']',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ctx)}
 function callback(file,expression,event,ctx){const sf=ast(file),n=find(sf,n=>ts.isCallExpression(n)&&n.expression.getText(sf)===expression&&n.arguments[0]?.text===event);return vm.runInContext(ts.transpileModule('('+n.arguments[1].getText(sf)+')',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ctx)}
-function hub(e){return e.load('src/hub.ts','export const audit={startHub,createSession,closeSession,forkEndpoint,rewindContext,saveSessionMeta,archiveSession,unarchiveSession,shutdownHub,_flushBuf,persistReplayFile,routeEvent,submit,dropContext,openSseMulti,getContext,setCwdEndpoint,updateConfig,setAutoApprove,uploadImage,serveUpload,readBody,updateTitle,flushPtyBuffer,setSubagentModel,setSubagentBudget,loadArchivedSessions,listSessions,restoreSessions,_writeLocks};').audit}
+function hub(e){return e.load('src/hub.ts','export const audit={decidePermission,startHub,createSession,closeSession,forkEndpoint,rewindContext,saveSessionMeta,archiveSession,unarchiveSession,shutdownHub,_flushBuf,persistReplayFile,routeEvent,submit,dropContext,openSseMulti,getContext,setCwdEndpoint,updateConfig,setAutoApprove,uploadImage,serveUpload,readBody,updateTitle,flushPtyBuffer,setSubagentModel,setSubagentBudget,loadArchivedSessions,listSessions,restoreSessions,_writeLocks};').audit}
 async function create(extra={}){const e=env(extra),h=hub(e),ss=new Map(),s=await h.createSession(ss,{makeBridge:o=>new Bridge(o)},e.dir);return{e,h,ss,s}}
 const frame=f=>JSON.parse(f.split('data: ')[1]);
 async function check(id,fn){try{const detail=await fn();findings.push({id,passed:true,detail});console.log('PASS',id,JSON.stringify(detail))}catch(e){findings.push({id,passed:false,error:e.stack});console.log('FAIL',id,e.stack)}}
-function acp(){const calls=[],child=new EventEmitter();child.stdout=new EventEmitter();child.stdout.setEncoding=()=>{};child.kill=()=>{};child.stdin=Object.assign(new EventEmitter(),{writable:true,end(){},write:raw=>{const m=JSON.parse(raw);calls.push(m);if(m.method==='initialize'||m.method==='session/new'||m.method==='session/load'||m.method==='session/prompt')queueMicrotask(()=>child.stdout.emit('data',JSON.stringify({jsonrpc:'2.0',id:m.id,result:m.method==='initialize'?{protocolVersion:1,agentCapabilities:{loadSession:true}}:m.method==='session/new'?{sessionId:'remote'}:{stopReason:'end_turn'}})+'\n'));}});const e=env({modules:{'node:child_process':{spawn:()=>child}}}),A=e.load('src/bridges/acp.ts').AcpBridge;return{e,A,calls,child}}
+function acp(){const calls=[],child=new EventEmitter();child.stdout=new EventEmitter();child.stdout.setEncoding=()=>{};child.kill=()=>{};child.stdin=Object.assign(new EventEmitter(),{writable:true,end(){},write:(raw,done)=>{const m=JSON.parse(raw);calls.push(m);done?.();if(m.method==='initialize'||m.method==='session/new'||m.method==='session/load'||m.method==='session/prompt')queueMicrotask(()=>child.stdout.emit('data',JSON.stringify({jsonrpc:'2.0',id:m.id,result:m.method==='initialize'?{protocolVersion:1,agentCapabilities:{loadSession:true}}:m.method==='session/new'?{sessionId:'remote'}:{stopReason:'end_turn'}})+'\n'));}});const e=env({modules:{'node:child_process':{spawn:()=>child}}}),A=e.load('src/bridges/acp.ts').AcpBridge;return{e,A,calls,child}}
 const watchdog=setTimeout(()=>{console.error('AUDIT TIMEOUT');process.exit(1)},30000);
 (async()=>{
 await check('U01 empty rewind does not restore stale replay',async()=>{
@@ -93,6 +93,100 @@ await check('U08 actual command dispatch propagates both settings failures',asyn
 });
 await check('U09 direct ACP image submission rejects without sending prompt',async()=>{
  const {A,calls}=acp(),b=new A({extra:{command:'fake'}});await b.ready();const rejected=await b.submit(JSON.stringify({query:'image',images:[{data:'YQ==',mimeType:'image/png'}]})).then(()=>false,()=>true);assert(rejected&&!calls.some(c=>c.method==='session/prompt'),'direct submit lost images');await b.submit('ordinary text');assert(calls.at(-1).params.prompt[0].text==='ordinary text','text submit broken');
+});
+await check('ACP child exit settles every open approval before notifying clients',async()=>{
+ const {e,A,calls,child}=acp(),b=new A({extra:{command:'fake'}});await b.ready();
+ const resolutions=[],events=[];b.onEvent(v=>{if(v.name==='permission:resolved'){events.push('resolved');resolutions.push(v.payload);}});
+ b.onClose(()=>events.push('closed'));
+ for(const id of [81,82]) b.handleRequest({id,method:'session/request_permission',params:{options:[{optionId:'ok',kind:'allow_once',name:'OK'}]}});
+ const before=calls.length;child.stdin.writable=false;child.emit('close',1);
+ assert(events.join(',')==='resolved,resolved,closed','approval was still pending when the desktop removed the session');
+ assert(resolutions.every(v=>v.outcome==='denied')&&b.pendingAcpPermissions.size===0,'expired approval survived the child');
+ assert(![...e.timers.values()].some(t=>t.ms===30000),'approval deadlines still pending');
+ for(const r of resolutions)b.decidePermission(r.requestId,'approved');
+ assert(calls.length===before,'wrote a decision after process exit');
+ assert(await b.submit('later').then(()=>false,()=>true),'closed transport accepted a new turn');
+});
+await check('ACP failed permission write cannot report approval or settle pending peers twice',async()=>{
+ const {A,child}=acp(),b=new A({extra:{command:'fake'}});await b.ready();
+ const requests=[],results=[];b.onEvent(v=>{
+  if(v.name==='permission:request')requests.push(v.payload.requestId);
+  if(v.name==='permission:resolved')results.push(v.payload);
+ });
+ for(const id of [83,84])b.handleRequest({id,method:'session/request_permission',params:{options:[{optionId:'ok',kind:'allow_once',name:'OK'}]}});
+ child.stdin.writable=false;b.decidePermission(requests[0],'approved');
+ assert(results.length===2&&new Set(results.map(v=>v.requestId)).size===2&&results.every(v=>v.outcome==='denied'),
+  'an unsent approval was reported as granted or a peer was settled twice');
+ child.emit('close',1);assert(results.length===2,'approval repeated on process close');
+});
+for (const ending of ['written','epipe','cancel','timeout','child-close']) await check('ACP queued permission write: '+ending,async()=>{
+ const {e,A,child}=acp(),b=new A({extra:{command:'fake'}});await b.ready();
+ let request,callback;const resolved=[];
+ b.onEvent(v=>{if(v.name==='permission:request')request=v.payload.requestId;if(v.name==='permission:resolved')resolved.push(v.payload.outcome);});
+ b.handleRequest({id:'buffered',method:'session/request_permission',params:{options:[{optionId:'ok',kind:'allow_once',name:'OK'}]}});
+ child.stdin.write=(raw,cb)=>{if(JSON.parse(raw).id==='buffered')callback=cb;return false;};
+ const receipt=b.decidePermission(request,'approved');
+ assert(!resolved.length,'buffered response reported approval before the write completed');
+ if(ending==='epipe')callback(Error('broken pipe'));
+ if(ending==='child-close')child.emit('close',1);
+ if(ending==='cancel'){b.cancel();assert(!resolved.length,'turn cancellation cannot retract a submitted pipe write');}
+ if(ending==='timeout')[...e.timers.values()].find(t=>t.ms===30000).fn();
+ callback();await receipt;
+ const expected=['written','cancel'].includes(ending)?'approved':ending==='epipe'?'denied':'unconfirmed';
+ assert(resolved.length===1&&resolved[0]===expected,'incorrect or repeated buffered decision');
+ b.close();
+});
+for (const finish of ['archive','delete','shutdown']) await check('ACP delivery outcome survives session '+finish,async()=>{
+ const {e,A,child}=acp(),h=hub(e),ss=new Map();
+ const s=await h.createSession(ss,{makeBridge:o=>new A({...o,extra:{command:'fake'}})},e.dir);
+ let id,writeDone;
+ s.bridge.onEvent(ev=>{if(ev.name==='permission:request')id=ev.payload.requestId;});
+ s.bridge.handleRequest({id:'last',method:'session/request_permission',params:{options:[{optionId:'once',kind:'allow_once',name:'One'}]}});
+ child.stdin.write=(raw,done)=>{if(JSON.parse(raw).id==='last')writeDone=done;};
+ const response=new Res(),decision=h.decidePermission(req({sessionId:s.id,requestId:id,outcome:'approved'}),response,ss);
+ await tick();assert(writeDone,'approval was not submitted');
+ if(finish==='archive')await h.archiveSession(req({id:s.id}),new Res(),ss);
+ else if(finish==='delete')await h.closeSession(new Res(),ss,s.id);
+ else await h.shutdownHub(undefined,ss);
+ await decision;
+ assert(response.json().outcome==='unconfirmed','closed-session HTTP response falsely reports approval');
+ const replay=path.join(e.dir,'hub-sessions',s.id+'.replay.jsonl');
+ if(finish!=='delete')assert(fs.readFileSync(replay,'utf8').includes('unconfirmed'),'saved history lost the uncertain result');
+ writeDone();await tick();
+ if(finish==='delete')assert(!fs.existsSync(replay),'late delivery recreated deleted history');
+});
+for (const finish of ['archive','shutdown']) await check('late ACP approval during final history flush is settled before '+finish,async()=>{
+ const {e,A}=acp(),h=hub(e),ss=new Map();
+ const s=await h.createSession(ss,{makeBridge:o=>new A({...o,extra:{command:'fake'}})},e.dir);
+ let requestId,injected=false;
+ s.bridge.onEvent(ev=>{if(ev.name==='permission:request')requestId=ev.payload.requestId;});
+ const seal=s.store.seal.bind(s.store);
+ s.store.seal=async()=>{
+  if(!injected){
+   injected=true;
+   s.bridge.handleRequest({id:'late',method:'session/request_permission',params:{options:[{optionId:'yes',kind:'allow_once',name:'Once'}]}});
+  }
+  await seal();
+ };
+ if(finish==='archive')await h.archiveSession(req({id:s.id}),new Res(),ss);
+ else await h.shutdownHub(undefined,ss);
+ const replay=path.join(e.dir,'hub-sessions',s.id+'.replay.jsonl');
+ const frames=fs.readFileSync(replay,'utf8').split('\n').filter(row=>row.startsWith('data: ')).map(row=>JSON.parse(row.slice(6))).filter(f=>f.payload?.requestId===requestId);
+ assert(frames.length===2&&frames[0].meta.name==='permission:request'&&frames[1].meta.name==='permission:resolved'&&frames[1].payload.outcome==='denied','saved history retains an unresolved late approval');
+ assert(s.pendingPermissions.size===0,'closed session still has pending approval');
+ const before=fs.readFileSync(replay,'utf8');
+ s.bridge.close();await tick();
+ assert(fs.readFileSync(replay,'utf8')===before,'repeated close changed final history');
+});
+for(const phase of ['before','restore'])await check('approval requests cannot start during session closure '+phase,async()=>{
+ const {e,h,s,ss}=await create();
+ const local=e.hub();let decided=0;
+ local.routeEvent(s,{name:'permission:request',payload:{requestId:'closing',expiresAt:130000}});
+ s.bridge.decidePermission=()=>{decided++;};
+ if(phase==='before')s._closing=true;
+ else s._ensureBridge=async()=>{s._closing=true;};
+ const r=new Res();await local.decidePermission(req({sessionId:s.id,requestId:'closing',outcome:'approved'}),r,ss);
+ assert(r.statusCode===409&&decided===0,'new approval was delivered during closure');
 });
 await check('U11 compatible ACP restore retains original backend identity',async()=>{
  const {e,A}=acp(),h=hub(e),ss=new Map(),s=await h.createSession(ss,{makeBridge:o=>new A({...o,extra:{command:'fake'}})},e.dir);await h.submit(req({query:'prior'}),new Res(),s);await tick();await h.shutdownHub(undefined,ss);const meta=JSON.parse(fs.readFileSync(path.join(e.dir,'hub-sessions',s.id+'.meta.json')));assert(meta.backendId==='acp','backend identity not saved');const restored=await h.createSession(ss,{makeBridge:o=>new A({...o,extra:{command:'fake'}})},e.dir,{...meta,replay:[]});await restored._ensureBridge();assert(restored.bridge.backendId==='acp'&&restored.replay.some(f=>f.includes('prior')),'compatible history lost');

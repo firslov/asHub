@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "id": "ashub-browser-automation",
+  "name": "会话浏览器",
+  "minNode": "22.13.0",
+  "entries": {
+    "session": "index.mjs"
+  },
+  "requires": {
+    "hostApi": "^1.0.0",
+    "capabilities": [
+      "session-extensions",
+      "browser-pages"
+    ]
+  },
+  "permissions": [
+    "读取经授权的 HTTPS 页面。点击和填写由宿主授权；默认逐次确认，用户可在插件配置中开启自动批准。单独授权的独立按钮可每天点击一次。"
+  ]
+}

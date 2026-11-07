@@ -3,21 +3,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ashub-plugins-'));
 process.env.AGENT_SH_HOME = home;
 for (const key of Object.keys(process.env)) if (/(API_KEY|AUTH_TOKEN|ACCESS_TOKEN)$/.test(key)) delete process.env[key];
 globalThis.fetch = async () => { throw new Error('External network disabled'); };
 const { pluginCatalog, builtinPluginCatalog, setPluginEnabled, getPluginConfig, savePluginConfig, PluginConfigConflict, PLUGIN_DISABLED } = await import('../dist/plugins.js');
-const { PluginRuntime, pluginScope, preparePluginRegistrations } = await import('../dist/plugin-runtime.js');
+const { PluginRuntime, pluginScope, preparePluginRegistrations, prepareScopedHandlers } = await import('../dist/plugin-runtime.js');
 const { createCore } = await import('agent-sh');
 const { activateAgent } = await import('agent-sh/agent');
 const { loadBuiltinExtensions, BUILTIN_EXTENSIONS } = await import('agent-sh/extensions');
 const cores = [];
 const makeContext = async () => {
   const core = createCore({}); cores.push(core);
+  const defineOwned = prepareScopedHandlers(core.handlers);
   const ctx = core.extensionContext({ quit() {} }); preparePluginRegistrations(ctx); activateAgent(ctx); preparePluginRegistrations(ctx);
   await loadBuiltinExtensions(ctx, ['codex-provider', 'file-autocomplete']);
-  return { core, ctx };
+  return { core, ctx, defineOwned };
 };
 let sequence = 0;
 function fixture(code = 'export default () => {};', filename = 'sample.mjs') {
@@ -43,11 +45,177 @@ test('native disabled flag, explicit entry precedence and path deduplication', (
   assert.equal(pluginCatalog(f.file)[0].enabled, false);
   const relative = path.relative(process.cwd(), f.entry);
   fs.writeFileSync(f.file, JSON.stringify({ disabledExtensions: ['sample'], extensions: [relative] }));
-  assert.equal(pluginCatalog(f.file).length, 1); assert(pluginCatalog(f.file)[0].enabled);
+  assert.equal(pluginCatalog(f.file).filter(entry => !entry.bundled).length, 1); assert(pluginCatalog(f.file)[0].enabled);
   setPluginEnabled(f.file, pluginCatalog(f.file)[0].id, false);
   assert(!pluginCatalog(f.file)[0].enabled);
   setPluginEnabled(f.file, pluginCatalog(f.file)[0].id, true);
   assert(pluginCatalog(f.file)[0].enabled);
+});
+test('included apps are opt-in, retain settings, and give precedence to a manual installation', async () => {
+  const f=fixture();
+  const catalog=()=>pluginCatalog(f.file);
+  const bundled=catalog().filter(p=>p.bundled);
+  assert.equal(bundled.length,3);
+  for(const plugin of bundled) {
+    assert(!plugin.enabled && plugin.includedApp);
+    assert(fs.existsSync(plugin.sessionSpecifier));
+    // Also resolve transitive imports (including Kimi's proper-lockfile) without activating tools.
+    assert.equal(typeof (await import(pathToFileURL(plugin.sessionSpecifier).href)).default,'function');
+  }
+  const project=bundled.find(p=>p.manifest.id==='ashub-project-management');
+  const kimi=bundled.find(p=>p.manifest.id==='ashub-kimi-coding-plan');
+  process.env.KIMI_CODE_HOME=path.join(f.root,'empty-kimi-home');
+  setPluginEnabled(f.file, project.id, true); setPluginEnabled(f.file, kimi.id, true);
+  const {ctx,defineOwned}=await makeContext(), runtime=new PluginRuntime(f.file,undefined,undefined,defineOwned);
+  try {
+    await runtime.load(ctx);
+    assert(runtime.status.some(s=>s.id===project.id && s.state==='loaded'));
+    assert(runtime.status.some(s=>s.id===kimi.id && s.state==='loaded'));
+    assert(ctx.agent.getTools().some(t=>t.name==='project_management_create_members'));
+  } finally { runtime.close(); }
+  const manual=path.join(f.root,'extensions','original-folder');
+  fs.mkdirSync(manual);
+  for(const file of ['package.json','ashub-plugin.json','index.mjs','work.mjs']) fs.copyFileSync(path.join(project.packageRoot,file),path.join(manual,file));
+  const copies=()=>catalog().filter(p=>p.manifest?.id==='ashub-project-management');
+  assert.equal(copies().length,1);
+  const [original]=copies();assert(!original.bundled && original.includedApp && original.id!==project.id);
+  setPluginEnabled(f.file,original.id,false);
+  assert(!copies()[0].enabled);
+  fs.rmSync(manual,{recursive:true});
+  assert.equal(copies()[0].id,project.id);assert(!copies()[0].enabled,'disabling a manual copy must not reactivate its fallback');
+  setPluginEnabled(f.file,project.id,false);assert(!copies()[0].enabled);
+});
+test('an explicitly configured package name keeps the included app in Local extensions', () => {
+  const f=fixture(), name='ashub-project-management';
+  fs.writeFileSync(f.file,JSON.stringify({extensions:[name]}));
+  const catalog=pluginCatalog(f.file);
+  const manual=catalog.find(p=>p.specifier===name);
+  assert(manual.includedApp && !manual.bundled);
+  assert(!catalog.some(p=>p.bundled && p.manifest.id===name));
+});
+test('broken manual app never falls back to an enabled bundled app', () => {
+  const f=fixture(), id='ashub-project-management';
+  const included=pluginCatalog(f.file).find(p=>p.manifest?.id===id);
+  setPluginEnabled(f.file,included.id,true);
+  const local=path.join(f.root,'extensions',id);
+  fs.mkdirSync(local);
+  for(const name of ['package.json','ashub-plugin.json','index.mjs','work.mjs']) fs.copyFileSync(path.join(included.packageRoot,name),path.join(local,name));
+  const original=pluginCatalog(f.file).find(p=>p.manifest?.id===id);
+  setPluginEnabled(f.file,original.id,false);
+  for(const broken of ['ashub-plugin.json','package.json']) {
+    fs.writeFileSync(path.join(local,broken),'{');
+    const catalog=pluginCatalog(f.file);
+    assert(!catalog.some(p=>p.id===included.id),'a broken manual app must not expose the active bundled fallback: '+broken);
+    const damaged=catalog.find(p=>p.packageRoot===local);
+    assert(damaged.includedApp && damaged.compatibilityError && !damaged.sessionEnabled,'damaged copy must remain identifiable under Local extensions');
+  }
+  fs.rmSync(local,{recursive:true});
+  assert(!pluginCatalog(f.file).find(p=>p.id===included.id).enabled);
+});
+test('conflicting manual package and manifest names cannot activate either bundled fallback', () => {
+  const f=fixture(), project='ashub-project-management', kimi='ashub-kimi-coding-plan';
+  const originals=pluginCatalog(f.file).filter(p=>p.manifest?.id===project || p.manifest?.id===kimi);
+  for(const p of originals)setPluginEnabled(f.file,p.id,true);
+  const source=originals.find(p=>p.manifest.id===project);
+  const dir=path.join(f.root,'extensions','custom-team');
+  fs.mkdirSync(dir);
+  for(const name of ['package.json','ashub-plugin.json','index.mjs','work.mjs'])fs.copyFileSync(path.join(source.packageRoot,name),path.join(dir,name));
+  const manual=()=>pluginCatalog(f.file).find(p=>p.packageRoot===dir);
+  const originalId=manual().id;
+  setPluginEnabled(f.file,originalId,false);
+  const json=fs.readFileSync(path.join(dir,'package.json'),'utf8');
+  try {
+    for(const changed of ['wrong-package-name',kimi]) {
+      fs.writeFileSync(path.join(dir,'package.json'),JSON.stringify({...JSON.parse(json),name:changed}));
+      const catalog=pluginCatalog(f.file), broken=catalog.find(p=>p.packageRoot===dir);
+      assert(!catalog.some(p=>p.bundled && (p.manifest.id===project || p.manifest.id===changed)), 'a damaged manual identity exposed its bundled copy');
+      assert(broken.includedApp && broken.compatibilityError && !broken.sessionEnabled);
+    }
+  } finally {fs.writeFileSync(path.join(dir,'package.json'),json);}
+  assert.equal(manual().id,originalId);assert(!manual().enabled && !manual().compatibilityError);
+});
+test('uninstall removes only the selected plugin from a running kernel', async () => {
+  const source = name => `export default ctx => ctx.agent.registerTool({ name: '${name}', description: 'fixture',
+    input_schema: {type:'object',properties:{}}, execute:async()=>({content:'ok'}) })`;
+  const f = fixture(source('remove_this'));
+  fs.writeFileSync(path.join(f.root,'extensions','keep.mjs'), source('keep_this'));
+  const {ctx} = await makeContext(), runtime = new PluginRuntime(f.file);
+  await runtime.load(ctx);
+  const selected = pluginCatalog(f.file).find(plugin => plugin.name === 'sample');
+  runtime.uninstall(selected.id);
+  assert(!ctx.agent.getTools().some(t=>t.name==='remove_this'));
+  assert(ctx.agent.getTools().some(t=>t.name==='keep_this'));
+  assert(!runtime.status.some(plugin=>plugin.id===selected.id));
+  runtime.close();
+});
+test('uninstall removes named handlers and command handlers, retaining the original base and advisors', async () => {
+  const f = fixture(`export default ctx => {
+    ctx.define('plugin:probe', () => 'plugin only');
+    ctx.define('shared', () => 'plugin override');
+    ctx.define('later', () => 'plugin override');
+    ctx.registerCommand('plugin-probe', 'fixture', () => 'plugin command');
+  }`);
+  const { core, ctx, defineOwned } = await makeContext();
+  await loadBuiltinExtensions(ctx, ['slash-commands']);
+  const runtime = new PluginRuntime(f.file, undefined, undefined, defineOwned);
+  ctx.define('shared', () => 'host');
+  const off = ctx.advise('shared', next => '[' + next() + ']');
+  await runtime.load(ctx);
+  assert.equal(ctx.call('plugin:probe'), 'plugin only');
+  assert.equal(core.handlers.call('command:/plugin-probe'), 'plugin command');
+  assert.equal(ctx.call('shared'), '[plugin override]');
+  ctx.define('later', () => 'new host base');
+  const releaseNewer = defineOwned('shared', () => 'newer plugin');
+  runtime.uninstall(pluginCatalog(f.file)[0].id);
+  assert.equal(ctx.call('plugin:probe'), undefined);
+  assert(!ctx.list().includes('plugin:probe'));
+  assert.equal(core.handlers.call('command:/plugin-probe'), undefined);
+  assert.equal(ctx.call('shared'), '[newer plugin]');
+  releaseNewer();
+  assert.equal(ctx.call('shared'), '[host]');
+  assert.equal(ctx.call('later'), 'new host base');
+  off(); runtime.close();
+});
+for (const failActivation of [false, true]) test('event-registered commands are removed after ' + (failActivation ? 'failed activation' : 'uninstall'), async () => {
+  const f = fixture(`export default ctx => {
+    let runs=0;
+    ctx.bus.emit('command:register',{name:'/help',description:'duplicate',handler:()=>99});
+    ctx.bus.emit('command:register',{name:'event-probe',description:'fixture',handler:()=>++runs});
+    ${failActivation ? "throw new Error('failed fixture');" : ''}
+  }`);
+  const { ctx, defineOwned } = await makeContext();
+  await loadBuiltinExtensions(ctx, ['slash-commands']);
+  const runtime = new PluginRuntime(f.file, undefined, undefined, defineOwned);
+  const messages = [];
+  ctx.bus.on('ui:info', event => messages.push(event.message));
+  await runtime.load(ctx);
+  const execute = () => ctx.bus.emit('command:execute', { name: '/event-probe', args: '' });
+  if (failActivation) {
+    assert.equal(runtime.status[0].state, 'error');
+  } else {
+    execute();
+    assert.equal(ctx.call('command:/event-probe', ''), 2);
+    runtime.uninstall(pluginCatalog(f.file)[0].id);
+  }
+  execute();
+  assert.equal(ctx.call('command:/event-probe', ''), undefined);
+  assert(!ctx.list().includes('command:/event-probe'));
+  assert(messages.at(-1).includes('Unknown command: /event-probe'));
+  ctx.bus.emit('command:execute', { name: '/help', args: '' });
+  assert(messages.at(-1).includes('Available commands'));
+  runtime.close();
+});
+test('unloading a replacement command does not restore an explicitly unregistered plugin handler', async () => {
+  const { ctx, defineOwned } = await makeContext();
+  await loadBuiltinExtensions(ctx, ['slash-commands']);
+  const first = pluginScope(ctx, defineOwned), second = pluginScope(ctx, defineOwned);
+  first.ctx.registerCommand('retired-probe', 'first', () => 'retired');
+  first.ctx.bus.emit('command:unregister', { name: '/retired-probe' });
+  second.ctx.registerCommand('retired-probe', 'second', () => 'replacement');
+  assert.equal(ctx.call('command:/retired-probe', ''), 'replacement');
+  second.dispose();
+  assert.equal(ctx.call('command:/retired-probe', ''), undefined);
+  first.dispose();
 });
 test('malformed settings cannot be replaced by a plugin toggle', () => {
   const f = fixture(); fs.writeFileSync(f.file, '{broken');

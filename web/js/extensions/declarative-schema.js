@@ -20,7 +20,7 @@ export function validateDeclarativeUI(value) {
   const panelIds = new Set();
   for (const panel of value.panels) {
     if (!only(panel, ['id', 'title', 'icon', 'components']) || !id(panel.id) || panelIds.has(panel.id) || !text(panel.title, 200) || !array(panel.components, 32)) fail();
-    if(panel.icon!==undefined&&!['clock','panel'].includes(panel.icon))fail();
+    if(panel.icon!==undefined&&!['clock','panel','browser'].includes(panel.icon))fail();
     panelIds.add(panel.id);
     const formIds = new Set();
     for (const item of panel.components) {
@@ -69,3 +69,5 @@ export function validateDeclarativeUI(value) {
   // Copy caller-owned input; validation must not be invalidated by later mutation.
   return JSON.parse(JSON.stringify(value));
 }
+
+export const panelKey = (featureId, panelId) => `extension-${featureId.length}-${featureId}-panel-${panelId.length}-${panelId}`;

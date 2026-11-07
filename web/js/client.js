@@ -34,6 +34,7 @@ import { initializeHostSync } from './host-sync.js';
 import "./links.js";
 import "./version.js";
 import "./updater.js";
+import "./browser-pane.js";
 import "./sidebar.js";
 import "./tabs.js";
 import "./sse.js";

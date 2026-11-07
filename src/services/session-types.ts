@@ -1,5 +1,5 @@
 import type * as http from "node:http";
-import type { Bridge, SessionKind } from "../bridges/types.js";
+import type { Bridge, PermissionOutcome, SessionKind } from "../bridges/types.js";
 import type { SessionStore } from "../history/session-store.js";
 import type { Capture } from "../history/capture.js";
 import type { CollaborationTasks } from "../collaboration.js";
@@ -54,7 +54,8 @@ export interface Session {
   queuedItems?: Map<string, QueuedMessage>;
   queueMutations?: Map<string, { fingerprint: string; item: QueuedMessage }>;
   lastTurnError?: boolean;
-  pendingPermissions?: Map<string, { expiresAt: number }>;
+  lastTurnErrorAt?: number;
+  pendingPermissions?: Map<string, { expiresAt: number; requiresDesktop?: boolean; deciding?: boolean; outcome?: PermissionOutcome }>;
   store?: SessionStore;
   capture?: Capture;
   _cancelled?: boolean;

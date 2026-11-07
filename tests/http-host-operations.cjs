@@ -56,6 +56,36 @@ const assert=require('node:assert/strict'),{once}=require('node:events');
   await api('/api/permission/decide',{sessionId:from.instanceId,requestId:preview.requestId,outcome:'approved',sessionWide:true});
   assert.equal((await approvedThroughHttp).status,'completed');
   response=await fetch(base+'/api/permission/decide',{method:'POST',headers,body:JSON.stringify({sessionId:from.instanceId,requestId:preview.requestId,outcome:'approved'})});assert.equal(response.status,409);
+  // An ACP decision can wait for the child pipe. The first caller owns it until it settles.
+  {
+   let release, entered, item;
+   const gate=new Promise(resolve=>{release=resolve}), started=new Promise(resolve=>{entered=resolve});
+   const decide=bridge.decidePermission;
+   bridge.once('event',ev=>{item=ev.payload;});
+   const receipt=bridge.approvals.request({title:'Delayed delivery',items:[]});
+   bridge.decidePermission=async function(key){entered();await gate;decide.call(this,key,'denied');};
+   const post=()=>fetch(base+'/api/permission/decide',{method:'POST',headers,body:JSON.stringify({sessionId:from.instanceId,requestId:item.requestId,outcome:'approved'})});
+   try {
+    const first=post();await started;
+    const second=await post();assert.equal(second.status,409);
+    release();const answer=await first;assert.equal(answer.status,200);
+    assert.equal((await answer.json()).outcome,'denied','HTTP ACK must reflect failed asynchronous delivery');assert.equal(await receipt,false);
+   } finally {release();bridge.decidePermission=decide;}
+  }
+  // The bridge's final deadline check may reject a request accepted by the HTTP precheck.
+  const originalDecide = bridge.decidePermission;
+  let deadline;
+  bridge.once('event', event => { deadline = event.payload; });
+  const receipt = bridge.approvals.request({title:'At deadline',items:[]});
+  bridge.decidePermission = function(id, outcome) {
+    e.clock(deadline.expiresAt);
+    return originalDecide.call(this,id,outcome);
+  };
+  const ack = await api('/api/permission/decide',{sessionId:from.instanceId,requestId:deadline.requestId,outcome:'approved'});
+  assert.equal(await receipt,false);
+  assert.equal(ack.outcome,'denied','HTTP must report the actual bridge decision');
+  bridge.decidePermission = originalDecide;
+  e.clock(100000);
   // Stop while the final asynchronous model check is in flight, after approval.
   const beforeCancel=(await api('/sessions')).length,controller=new AbortController();
   let releaseCheck,enteredCheck,checks=0;

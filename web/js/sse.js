@@ -1,5 +1,7 @@
 import "./conversation-presentation.js";
 import { BALANCE_PROVIDERS, createProviderBalanceUI } from './extensions/provider-balance.js';
+import { directoryLabels } from './directory-labels.js';
+import { presentApproval, formatApprovalTime, showApprovalResult } from './approval-labels.js';
 import { appendApprovalPreview } from "./approval-preview.js";
 import { findQueued, attachQueueEdit, updateQueuedBox } from "./queued-messages.js";
 import { loadThinking, saveThinking, thinkingChoices, thinkingLabel } from "./thinking-control.js";
@@ -972,7 +974,7 @@ export const handlers = {
 
     const requestId = p?.requestId || "";
     const title = p?.title || "File operation";
-    const kind = p?.kind || "unknown";
+
     const filePath = p?.metadata?.filePath || "";
     const description = p?.description || "";
     const diff = p?.metadata?.diff || "";
@@ -993,7 +995,7 @@ export const handlers = {
         `<div class="permission-head">` +
           `<span class="permission-icon">${shieldIcon}</span>` +
           `<span class="permission-label">${escape(title)}</span>` +
-          `<span class="permission-kind-badge">${escape(kind)}</span>` +
+
         `</div>` +
         (filePath || description ? `<div class="permission-body">` +
           (filePath ? `<div class="permission-path">${escape(filePath)}</div>` : "") +
@@ -1007,7 +1009,7 @@ export const handlers = {
             `</button>` +
           `</div>` +
           `<div class="permission-actions-right">` +
-            `<span class="permission-countdown"><svg width="18" height="18" viewBox="0 0 24 24" class="perm-ring"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.15"/><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="62.83" stroke-dashoffset="0" class="perm-ring-fill"/></svg><span class="perm-count-text">30</span></span>` +
+            `<span class="permission-countdown" role="timer" aria-live="off"><span class="perm-count-text"></span></span>` +
             `<span class="permission-timeout-note">${escape(t("permission.timeout_note"))}</span>` +
             `<button class="permission-btn approve-all" title="${escape(t("permission.approve_all_hint"))}">` +
               `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 13 10 18 19 6"/><polyline points="5 13 10 18 19 6" opacity="0.4" transform="translate(-3,-2)"/></svg>` +
@@ -1021,8 +1023,13 @@ export const handlers = {
         `</div>` +
       `</div>`;
 
-    if (p?.explicit) card.querySelector('.approve-all')?.remove();
+    if (p?.explicit || p?.acpExtendedOption === null) card.querySelector('.approve-all')?.remove();
+    if (p?.requiresDesktop && p.acpExtendedOption !== undefined) card.querySelector('.approve')?.remove();
     if (Array.isArray(p?.items)) appendApprovalPreview(card.querySelector('.permission-main'), p.items);
+
+    const relabel = () => presentApproval(card, p);
+    card._relabelPermission = relabel;
+    relabel();
 
     // Diff preview appended after main (collapsed with fade + expand toggle)
     let diffWrap = null;
@@ -1055,6 +1062,7 @@ export const handlers = {
       card.querySelector(".permission-timeout-note")?.remove();
       const status = document.createElement("span");
       status.className = "permission-status";
+      status.dataset.i18n = "permission.handled";
       status.textContent = t("permission.handled");
       card.querySelector(".permission-actions-right")?.appendChild(status);
       insertStreamNode(this, card);
@@ -1070,32 +1078,24 @@ export const handlers = {
       if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null; }
       if (approveAllBtn) {
         approveAllBtn.classList.remove("confirming");
-        const label = approveAllBtn.querySelector("span");
-        if (label) label.textContent = t("permission.approve_all");
+        relabel();
       }
     };
     card._disarm = disarmApproveAll;
 
     // Countdown
-    const ringCircle = card.querySelector(".perm-ring-fill");
     const countText = card.querySelector(".perm-count-text");
     const expiresAt = p?.expiresAt ?? Date.now() + 30_000;
-    let remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
-    if (countText) countText.textContent = String(remaining);
+    const updateClock = () => {
+      const remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+      if (countText) countText.textContent = formatApprovalTime(remaining);
+      card.classList.toggle("countdown-urgent", remaining <= 10);
+      return remaining;
+    };
+    updateClock();
     const tick = () => {
-      // Session tab closed or stream rebuilt (resync / branch switch) —
-      // stop the countdown instead of idling on a detached card.
       if (!card.isConnected && !this.state.replaying) { clearInterval(timer); return; }
-      remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
-      if (countText) countText.textContent = String(remaining);
-      if (ringCircle) {
-        const offset = 62.83 * (1 - remaining / ((p?.durationMs || 30_000) / 1000));
-        ringCircle.setAttribute("stroke-dashoffset", String(offset));
-      }
-      if (remaining <= 5) {
-        card.classList.add("countdown-urgent");
-        if (ringCircle) ringCircle.setAttribute("stroke", "#ef4444");
-      }
+      const remaining = updateClock();
       if (remaining <= 0) {
         clearInterval(timer);
         disarmApproveAll();
@@ -1106,6 +1106,7 @@ export const handlers = {
         card.querySelector(".permission-timeout-note")?.remove();
         const status = document.createElement("span");
         status.className = "permission-status";
+        status.dataset.i18n = "permission.timed_out";
         status.textContent = t("permission.timed_out");
         card.querySelector(".permission-actions-right")?.appendChild(status);
       }
@@ -1123,15 +1124,22 @@ export const handlers = {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ requestId, outcome, sessionId: this.id, sessionWide }),
         });
+        // A different window may already have decided. Only the host event can
+        // tell us its decision, but this request can no longer be retried.
+        if (response.status === 409) {
+          if (!card.classList.contains("decided")) {
+            if (expiresAt <= Date.now()) tick();
+            else showApprovalResult(card, "handled");
+          }
+          return;
+        }
         if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
-        clearInterval(timer);
-        disarmApproveAll();
-        card.classList.add("decided", outcome === "approved" ? "allowed" : "blocked");
-        card.querySelector(".permission-countdown")?.remove();
-        card.querySelector(".permission-timeout-note")?.remove();
+        const ack = await response.json();
+        if (!card.dataset.hostOutcome) showApprovalResult(card, ack.outcome ?? outcome);
       } catch (err) {
+        if (!card.isConnected || card.classList.contains("decided")) return;
         toast(String(err.message ?? err), { type: "error" });
-        if (!card.classList.contains("decided") && Date.now() < expiresAt) {
+        if (Date.now() < expiresAt) {
           card.querySelectorAll(".permission-btn").forEach(b => b.disabled = false);
         }
       } finally { deciding = false; }
@@ -1145,14 +1153,14 @@ export const handlers = {
         return;
       }
       approveAllBtn.classList.add("confirming");
-      const label = approveAllBtn.querySelector("span");
-      if (label) label.textContent = t("permission.approve_all_confirm");
+      relabel();
       confirmTimer = setTimeout(disarmApproveAll, 3000);
     });
 
     insertStreamNode(this, card);
-    // Live requests only — replayed frames are history, not actionable.
-    if (!this.state.replaying) {
+    if (expiresAt <= Date.now()) tick();
+    // Only notify about requests that can still be decided.
+    if (!this.state.replaying && !card.classList.contains('decided')) {
       const label = sessionLabel(this);
       const detail = description || title;
       sendSystemNotification(
@@ -1174,12 +1182,8 @@ export const handlers = {
     const root = (this.state.replaying && this._replayFrag) || this.streamEl;
     const card = root?.querySelector(`.permission-card[data-request-id="${CSS.escape(String(p?.requestId ?? ""))}"]`);
     if (!card) return;
-    clearInterval(card._timer);
-    card._disarm?.();
-    card.classList.add("decided", p.outcome === "approved" ? "allowed" : "blocked");
-    card.querySelectorAll(".permission-btn").forEach(b => b.disabled = true);
-    card.querySelector(".permission-countdown")?.remove();
-    card.querySelector(".permission-timeout-note")?.remove();
+    card.dataset.hostOutcome = p.outcome;
+    showApprovalResult(card, p.outcome);
   },
 
   "permission:request-cleanup"() {
@@ -1540,6 +1544,7 @@ const hideModelDropdown = () => {
   _pendingModelMenu = null;
   _thinkingLoadSeq++;
   _dropdownOwner = null;
+  if (_dropdownAnchor) _dropdownAnchor.ariaExpanded = "false";
   _dropdownAnchor = null;
   if (_dropdownObserver) {
     _dropdownObserver.disconnect();
@@ -1557,6 +1562,9 @@ const getSharedDropdown = () => {
   if (_sharedDropdown) return _sharedDropdown;
   const dd = document.createElement("div");
   dd.className = "model-dropdown";
+  dd.setAttribute("role", "dialog");
+  dd.dataset.i18nAria = "model.choose";
+  dd.setAttribute("aria-label", t("model.choose"));
   dd.hidden = true;
   // Event delegation: a single click listener for every .model-option,
   // bound once — no per-option listeners to re-attach on rebuild.
@@ -1819,6 +1827,7 @@ const toggleModelDropdown = async (session) => {
   dropdown.hidden = false;
   _dropdownOwner = session;
   _dropdownAnchor = session.modelEl;
+  _dropdownAnchor.ariaExpanded = "true";
   searchInput?.focus({preventScroll:true});
   void refreshThinkingDropdown(session);
 
@@ -1883,7 +1892,7 @@ const refreshCwdChip = (session) => {
   const cwd = session.state?.cwd ?? "";
   if (!cwd) { session._cwdText = ""; refreshLocationChip(session); return; }
   if (session._cwdPath === cwd) return;
-  const base = cwd.split("/").filter(Boolean).pop() ?? cwd;
+  const base = directoryLabels([cwd]).get(cwd) ?? cwd;
   session._cwdText = base;
   session._cwdPath = cwd;
   refreshLocationChip(session);
@@ -1956,4 +1965,9 @@ document.getElementById("usage-strip-toggle")?.addEventListener("click", () => {
   s.usageStripEl.classList.toggle("collapsed");
   const btn = document.getElementById("usage-strip-toggle");
   if (btn) btn.classList.toggle("collapsed", s.usageStripEl.classList.contains("collapsed"));
+});
+
+document.addEventListener("langchange", () => {
+  document.querySelectorAll(".permission-card").forEach(card => card._relabelPermission?.());
+  for (const session of sessions.values()) refreshModelChip(session);
 });

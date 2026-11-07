@@ -16,16 +16,27 @@ export interface InstalledApplicationContext extends ApplicationExtensionContext
 /** Installed application/UI contributions use the same package catalog, disable flag and config
  * namespaces as session plugins. No executable module is imported during discovery. */
 export function installedApplicationDefinitions(settingsFile: string, options: {
+  enableBrowserPages?(id: string, signal: AbortSignal): void;
   services?: Readonly<Record<string, unknown>>;
   bindServices?(pluginId: string, context: ApplicationExtensionContext): Readonly<Record<string, unknown>>;
 } = {}): ApplicationExtensionDefinition[] {
   const entries = pluginCatalog(settingsFile);
-  const selected = entries.filter(entry => entry.applicationSpecifier || entry.manifest?.ui);
+  const selected = entries.filter(entry => entry.applicationSpecifier || entry.manifest?.ui || entry.manifest?.requires.capabilities.includes('browser-pages'));
   const featureId = (id: string) => `plugin-${id}`;
   const features = new Map(selected.map(entry => [entry.manifest!.id, featureId(entry.id)]));
   return selected.map(entry => {
     const manifest = entry.manifest!;
+    // Older browser ZIPs contributed a panel that only inserted an open-page prompt.
+    // Keep its session tools and native service, without registering the retired shortcut.
+    let ui = manifest.ui;
+    if (ui && manifest.id === 'ashub-browser-automation') {
+      const panels = ui.panels.filter(panel => panel.id !== 'browser' || panel.components.length !== 1 ||
+        panel.components[0].type !== 'action' || panel.components[0].action !== 'composer.insert' ||
+        panel.components[0].value !== '打开网页 https://');
+      ui = panels.length ? { ...ui, panels } : undefined;
+    }
     const specifier = entry.applicationSpecifier;
+    const enableBrowser = manifest.requires.capabilities.includes('browser-pages') ? options.enableBrowserPages : undefined;
     const stats = specifier && fs.existsSync(specifier) ? fs.statSync(specifier) : undefined;
     const revision = createHash('sha256').update(JSON.stringify({ manifest, version: entry.version, compatibilityError: entry.compatibilityError, modified: stats?.mtimeMs, size: stats?.size, enabled: entry.enabled })).digest('hex');
     return {
@@ -34,9 +45,11 @@ export function installedApplicationDefinitions(settingsFile: string, options: {
       initiallyEnabled: entry.enabled, revision, compatibilityError: entry.compatibilityError,
       capabilities: manifest.requires.capabilities,
       dependencies: manifest.dependencies.flatMap(dependency => features.has(dependency.id) ? [features.get(dependency.id)!] : []),
-      ...(manifest.ui ? { ui: manifest.ui } : {}),
-      ...(specifier ? { create: async (context: ApplicationExtensionContext): Promise<ApplicationExtensionInstance | void> => {
+      ...(ui ? { ui } : {}),
+      ...(specifier || enableBrowser ? { create: async (context: ApplicationExtensionContext): Promise<ApplicationExtensionInstance | void> => {
         if (context.signal.aborted) throw new Error('Extension activation has ended');
+        enableBrowser?.(entry.id, context.signal);
+        if (!specifier) return;
         if (/\.(ts|tsx|mts)$/.test(specifier)) await ensureTsSupport();
         const module = await import(pathToFileURL(path.resolve(specifier)).href + '?ashub=' + revision);
         if (context.signal.aborted) throw new Error('Extension activation has ended');

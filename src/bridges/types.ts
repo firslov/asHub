@@ -7,6 +7,8 @@
  * New backends (e.g. claude-code) just implement this interface.
  */
 
+export type PermissionOutcome = "approved" | "denied" | "unconfirmed";
+
 export interface BusEvent {
   /** Event name as the web client sees it (e.g. "agent:tool-started"). */
   name: string;
@@ -29,6 +31,11 @@ export interface BridgeOpts {
   /** Hub-owned identity, stable across lazy restore and application restarts. */
   sessionId?: string;
   conversationAccess?: ConversationAccess;
+  bindBrowserPages?: (plugin: string, approve: (preview: import("../host-operations.js").ApprovalPreview, signal?: AbortSignal) => Promise<boolean | "automatic">) => {
+    available(): boolean;
+    run(request: unknown, signal?: AbortSignal): Promise<unknown>;
+    close(): void;
+  };
   hostAccess?: import("../host-operations.js").HostAccess;
   instructions?: string;
   cwd?: string;
@@ -92,6 +99,7 @@ export interface Bridge {
   /** Resolves once the underlying agent is initialized and ready for prompts. */
   ready(): Promise<void>;
 
+  uninstallPlugin?(id: string): void;
   getPluginStatus?(): import("../plugins.js").PluginStatus[];
   /** Tool-free, abortable background inference; does not mutate conversation history. */
   backgroundComplete?(messages: Array<{ role: string; content: string }>, signal: AbortSignal, expected: { model?: string; provider?: string }): Promise<string>;
@@ -132,7 +140,10 @@ export interface Bridge {
   isProcessing?(): boolean;
 
   /** Called by hub when user responds to a permission prompt. */
-  decidePermission?(requestId: string, outcome: string, sessionWide?: boolean): void;
+  decidePermission?(requestId: string, outcome: string, sessionWide?: boolean): void | PermissionOutcome | Promise<void | PermissionOutcome>;
+
+  /** Settle open approvals before saving history and closing the session. */
+  settlePermissions?(): void;
 
   /** Called by hub when auto-approve setting changes. */
   setAutoApprove?(enabled: boolean): void;

@@ -41,8 +41,22 @@ function panels(){const u=ui();delete u.modules['./panel-manager.js'];u.e.contex
  await check('R15 repeated advanced-mode click preserves edited key and malformed drafts',async()=>{
   const u=config();await u.m.setConfigOpen(true);const click=()=>u.el('config-mode-tabs').events.click[0]({target:{closest:()=>({dataset:{mode:'advanced'}})}});click();const draft=JSON.parse(u.el('config-editor').value);draft.providers.preview.apiKey='unsaved-fixture';u.el('config-editor').value=JSON.stringify(draft);click();assert(JSON.parse(u.el('config-editor').value).providers.preview.apiKey==='unsaved-fixture');u.el('config-editor').value='{ editing';click();assert(u.el('config-editor').value==='{ editing');
  });
- await check('R15 template waits for its creation result and submits only to that id',async()=>{
-  const x=template(),pending=x.button.events.click[0]();x.activate('bbbbbb');x.poll();assert(!x.submitted.length,'submitted before creation');x.resolve('cccccc');await pending;x.poll();assert(x.opens.join()==='cccccc'&&x.submitted.length===1&&x.submitted[0].id==='cccccc');x.poll();assert(x.submitted.length===1,'submitted twice');
+ await check('sidebar labels distinguish Windows drives, UNC shares and POSIX parents',async()=>{
+  const {directoryLabels}=await import('../web/js/directory-labels.js');
+  const paths=['/course/source/notes','/review/source/notes','C:\\team\\notes','D:\\team\\notes','\\\\host\\share\\standalone','/'];
+  const labels=directoryLabels([...paths,paths[0]]);
+  assert(labels.get(paths[0])==='course/source/notes' && labels.get(paths[1])==='review/source/notes');
+  assert(labels.get(paths[2])==='C:/team/notes'&&labels.get(paths[3])==='D:/team/notes');
+  assert(labels.get(paths[4])==='standalone'&&labels.get('/')==='/');
+  const unixPath=String.raw`/course/week\one`;
+  assert(directoryLabels([unixPath]).get(unixPath)===String.raw`week\one`,'POSIX backslash belongs to the directory name');
+ });
+ await check('R15 template creates an editable draft in its own session without sending',async()=>{
+  const x=template(),pending=x.button.events.click[0]();x.resolve('cccccc');await pending;x.poll();
+  assert(x.opens.join()==='cccccc'&&!x.submitted.length&&x.input.value==='review this project');x.poll();assert(!x.submitted.length);
+ });
+ await check('R15 template never switches away from a conversation opened while creating',async()=>{
+  const x=template(),pending=x.button.events.click[0]();x.activate('bbbbbb');x.resolve('cccccc');await pending;x.poll();assert(!x.opens.length&&!x.input.value&&!x.submitted.length);
  });
  await check('R15 template gives up after navigation instead of sending to another empty session',async()=>{const x=template(),pending=x.button.events.click[0]();x.resolve('cccccc');await pending;x.activate('bbbbbb');x.poll();assert(!x.submitted.length)});
  await check('R15 template preserves text typed while the new session becomes ready',async()=>{const x=template(),pending=x.button.events.click[0]();x.resolve('cccccc');await pending;x.input.value='my own draft';x.poll();assert(!x.submitted.length&&x.input.value==='my own draft')});

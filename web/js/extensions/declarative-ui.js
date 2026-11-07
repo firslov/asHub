@@ -1,5 +1,5 @@
 import { mountResource } from './resource-view.js';
-import { validateDeclarativeUI, fieldDefaultValue } from './declarative-schema.js';
+import { validateDeclarativeUI, fieldDefaultValue, panelKey } from './declarative-schema.js';
 import { registerPanel, unregisterPanel } from '../panel-manager.js';
 import { t } from '../i18n.js';
 import { PluginConfigForm } from './plugin-config-form.js';
@@ -16,15 +16,20 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
   const ui = validateDeclarativeUI(feature.ui);
   const disposers = [];
   for (const definition of ui.panels) {
-    const key = `extension-${feature.id.length}-${feature.id}-panel-${definition.id.length}-${definition.id}`;
+    const key = panelKey(feature.id, definition.id);
     const trigger = node('button', 'toolbar-btn extension-menu');
     // Use the same optical size and stroke as the toolbar, never a font glyph.
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     for (const [key, value] of Object.entries({ width:'18', height:'18', viewBox:'0 0 14 14', fill:'none', stroke:'currentColor', 'stroke-width':'1.3', 'stroke-linecap':'round', 'stroke-linejoin':'round', 'aria-hidden':'true' })) svg.setAttribute(key, value);
     const shape = document.createElementNS(svg.namespaceURI, 'path');
-    shape.setAttribute('d', definition.icon === 'clock'
-      ? 'M12.5 7a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0M7 3.5V7l2.5 1.5'
-      : 'M4 1.5h6A2.5 2.5 0 0 1 12.5 4v6a2.5 2.5 0 0 1-2.5 2.5H4A2.5 2.5 0 0 1 1.5 10V4A2.5 2.5 0 0 1 4 1.5ZM4.5 4.5h5M4.5 7h5M4.5 9.5h2.5');
+    const paths = {
+      clock: 'M12.5 7a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0M7 3.5V7l2.5 1.5',
+      browser: 'M3 2h8a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 11 12H3a1.5 1.5 0 0 1-1.5-1.5v-7A1.5 1.5 0 0 1 3 2ZM1.5 5.3h11M3.6 3.7h.6',
+      panel: 'M4 1.5h6A2.5 2.5 0 0 1 12.5 4v6a2.5 2.5 0 0 1-2.5 2.5H4A2.5 2.5 0 0 1 1.5 10V4A2.5 2.5 0 0 1 4 1.5ZM4.5 4.5h5M4.5 7h5M4.5 9.5h2.5',
+    };
+    const icon = definition.icon === 'clock' || definition.icon === 'browser' ? definition.icon
+      : feature.capabilities?.includes('browser-pages') ? 'browser' : 'panel';
+    shape.setAttribute('d', paths[icon]);
     svg.append(shape); trigger.append(svg);
     trigger.type = 'button'; trigger.id = `${key}-toggle`; trigger.title = `${feature.name} · ${definition.title}`;
     trigger.setAttribute('aria-label', definition.title);
@@ -106,7 +111,7 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
       }
     }
     // Keep installed panels with the other tools, above settings and utilities.
-    const anchor = menuHost.querySelector(':scope > #config-toggle, :scope > .toolbar-sep');
+    const anchor = menuHost.querySelector(':scope > .rail-more, :scope > #config-toggle, :scope > .toolbar-sep');
     menuHost.insertBefore(trigger, anchor); panelHost.append(panel);
     const hide = () => { panel.hidden = true; trigger.classList.remove('active'); };
     close.addEventListener('click', () => { hide(); trigger.focus(); });

@@ -42,10 +42,57 @@ await check('07 custom home approval setting is authoritative',async()=>{
 await check('08 mutation rechecks processing after body arrives',async()=>{
  const {h,s}=await create();s.bridge.messages=[{role:'user',content:'keep'}];await s.capture.flush();const q=new EventEmitter(),r=new Res();const p=h.dropContext(q,r,s);s.isProcessing=true;q.emit('data',Buffer.from('{"indices":[0]}'));q.emit('end');await p;assert(r.statusCode===409&&s.bridge.messages[0].content==='keep','busy context replaced');
 });
-function acpEnv(){const calls=[],child=new EventEmitter();child.stdout=new EventEmitter();child.stdout.setEncoding=()=>{};child.kill=()=>{};child.stdin={writable:true,end(){},write:raw=>{const m=JSON.parse(raw);calls.push(m);if(m.id!==undefined&&m.method)queueMicrotask(()=>child.stdout.emit('data',JSON.stringify({jsonrpc:'2.0',id:m.id,result:m.method==='initialize'?{protocolVersion:1,agentCapabilities:{loadSession:true}}:m.method==='session/new'?{sessionId:'remote-id'}:{}})+'\n'));}};const e=env({modules:{'node:child_process':{spawn:()=>child}}});return {e,calls,child,AcpBridge:e.load('src/bridges/acp.ts').AcpBridge};}
+function acpEnv(){const calls=[],child=new EventEmitter();child.stdout=new EventEmitter();child.stdout.setEncoding=()=>{};child.kill=()=>{};child.stdin={writable:true,end(){},write:(raw,done)=>{const m=JSON.parse(raw);calls.push(m);done?.();if(m.id!==undefined&&m.method)queueMicrotask(()=>child.stdout.emit('data',JSON.stringify({jsonrpc:'2.0',id:m.id,result:m.method==='initialize'?{protocolVersion:1,agentCapabilities:{loadSession:true}}:m.method==='session/new'?{sessionId:'remote-id'}:{}})+'\n'));}};const e=env({modules:{'node:child_process':{spawn:()=>child}}});return {e,calls,child,AcpBridge:e.load('src/bridges/acp.ts').AcpBridge};}
 await check('09 ACP initialize uses integer protocol version',async()=>{const {AcpBridge,calls}=acpEnv();const b=new AcpBridge({extra:{command:'fake'}});await b.ready();assert(calls[0].params.protocolVersion===1,'wrong protocol');});
 await check('10,35 ACP permissions use standard identifiers and outcomes',async()=>{
- const {AcpBridge,calls}=acpEnv(),b=new AcpBridge({extra:{command:'fake'}});await b.ready();for(const decision of ['approved','denied']){b.handleRequest({id:90,method:'session/request_permission',params:{toolCall:{title:'write'},options:[{optionId:'yes',name:'Allow',kind:'allow_once'},{optionId:'no',name:'Reject',kind:'reject_once'}]}});b.decidePermission('remote-id:90',decision);const sent=calls.at(-1);assert(sent.result.outcome.outcome==='selected'&&sent.result.outcome.optionId===(decision==='approved'?'yes':'no'),'invalid ACP decision');}
+ const {AcpBridge,calls}=acpEnv(),b=new AcpBridge({extra:{command:'fake'}});await b.ready();for(const decision of ['approved','denied']){let publicId;b.once('event',e=>publicId=e.payload.requestId);b.handleRequest({id:90,method:'session/request_permission',params:{toolCall:{title:'write'},options:[{optionId:'yes',name:'Allow',kind:'allow_once'},{optionId:'no',name:'Reject',kind:'reject_once'}]}});b.decidePermission(publicId,decision);const sent=calls.at(-1);assert(sent.result.outcome.outcome==='selected'&&sent.result.outcome.optionId===(decision==='approved'?'yes':'no'),'invalid ACP decision');}
+});
+await check('ACP remote approvals require a provable one-time option; denying never creates a persistent rule',async()=>{
+ const {AcpBridge,calls}=acpEnv(),b=new AcpBridge({extra:{command:'fake'}});await b.ready();
+ const make=(options)=>{let request;b.once('event',e=>request=e.payload);b.handleRequest({id:91,method:'session/request_permission',params:{options}});return request;};
+ const persistent=[{optionId:'y',name:'Always allow',kind:'allow_always'},{optionId:'n',name:'Always reject',kind:'reject_always'}];
+ const p=make(persistent);
+ assert(p.requiresDesktop===true,'mobile must not offer a one-time approval for always-only ACP options');
+ b.decidePermission(p.requestId,'denied');assert(calls.at(-1).result.outcome.outcome==='cancelled','declining cannot persist a deny rule');
+ const mixed=make([{optionId:'allow_session',name:'Legacy ambiguous allow'},...persistent,{optionId:'opaque',name:'Once',kind:'allow_once'}]);
+ assert(!mixed.requiresDesktop,'an explicit once option is usable on mobile');
+ b.decidePermission(mixed.requestId,'approved');assert(calls.at(-1).result.outcome.optionId==='opaque','once chooses exactly the one-time option');
+ const wide=make(persistent);b.decidePermission(wide.requestId,'approved',true);
+ assert(calls.at(-1).result.outcome.optionId==='y','desktop approval with persistent scope still works');
+ b.close();
+});
+await check('CLI ACP command preserves quoted empty and spaced arguments before spawning',async()=>{
+ const sf=ast('src/cli.ts'),functions=['splitCommand','makeFactory'].map(name=>
+  find(sf,node=>ts.isFunctionDeclaration(node)&&node.name?.text===name).getText(sf));
+ const context=vm.createContext({AcpBridge:class{constructor(opts){this.opts=opts;}}});
+ const src=functions.join('\n')+"\nmakeFactory({backend:'acp',cmd:command})({kind:'agent'}).opts.extra";
+ context.command='"C:\\Program Files\\agent.cmd" --label "" "A & B" ""';
+ const child=vm.runInContext(ts.transpileModule(src,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+ assert(child.command==='C:\\Program Files\\agent.cmd','quoted executable changed');
+ assert(JSON.stringify(child.args)===JSON.stringify(['--label','','A & B','']),'quoted empty arguments were dropped or shifted');
+});
+await check('ACP desktop approval selects only the requested scope even when option IDs are misleading',async()=>{
+ const {AcpBridge,calls}=acpEnv(),b=new AcpBridge({extra:{command:'fake'}});await b.ready();
+ const decide=(options,wide)=>{
+  let req;b.once('event',e=>req=e.payload);b.handleRequest({id:432,method:'session/request_permission',params:{options}});
+  b.decidePermission(req.requestId,'approved',wide);return calls.at(-1).result.outcome;
+ };
+ const always={optionId:'saved',kind:'allow_always',name:'Remember for tool'};
+ const once={optionId:'looks_always',kind:'allow_once',name:'Just once'};
+ assert(decide([always],false).outcome==='cancelled','single approval must not choose an always grant');
+ assert(decide([once,always],true).optionId==='saved','declared kind must take precedence over an opaque ID');
+ assert(decide([once,always],false).optionId==='looks_always','single approval must select the once kind');
+ b.close();
+});
+await check('ACP wire ID reuse cannot route a stale decision into a later request',async()=>{
+ const {AcpBridge,calls}=acpEnv(),b=new AcpBridge({extra:{command:'fake'}});await b.ready();
+ const ask=()=>{let id;b.once('event',e=>id=e.payload.requestId);b.handleRequest({id:'r:1',method:'session/request_permission',params:{options:[{optionId:'yes',name:'Allow once',kind:'allow_once'}]}});return id;};
+ const first=ask();b.decidePermission(first,'denied');
+ const second=ask(), count=calls.length;
+ b.decidePermission(first,'approved');
+ assert(calls.length===count,'late approval consumed the next request with the same wire ID');
+ b.decidePermission(second,'approved');const reply=calls.at(-1);
+ assert(reply.id==='r:1'&&reply.result.outcome.optionId==='yes','real reply should retain the agent wire ID');b.close();
 });
 await check('11 ACP restoration loads saved remote ID; unsupported history fails visibly',async()=>{
  const {AcpBridge,calls}=acpEnv();const b=new AcpBridge({extra:{command:'fake'},isRestored:true,restoreState:{acpSessionId:'old-id'}});await b.ready();assert(calls[1].method==='session/load'&&calls[1].params.sessionId==='old-id'&&!calls.some(x=>x.method==='session/new'),'empty session created');
@@ -68,7 +115,7 @@ await check('16,17 reconnect requests complete replay and resets partial rendere
 await check('18 disconnected SSE restore does not leak a client',async()=>{const e=env(),h=e.hub();let release,started;const gate=new Promise(r=>release=r),ready=new Promise(r=>started=r);const s={id:'aaaaaa',sseClients:new Set(),replay:[],_ensureBridge:()=>{started();return gate}};const q=new EventEmitter();q.headers={};const r=new Res(),p=h.openSseMulti(q,r,new Map([[s.id,s]]),s.id+':all','');await ready;q.emit('close');release();await p;assert(s.sseClients.size===0,'closed client subscribed');});
 await check('19 forced resync requests entire history',async()=>{const u=ui(),sources=[];u.modules['./store.js']={activeSessionId:signal(''),openTabs:signal([])};u.e.context.EventSource=class{constructor(url){sources.push(url);}close(){}};const m=u.e.load('web/js/session-manager.js');m.subscribeSession('aaaaaa');await tick();m.resyncSession('aaaaaa');await tick();assert(sources.at(-1).includes('all'),'truncated history');});
 await check('20 hiding page preserves notifications stream',async()=>{const u=ui();let pauses=0;u.modules['./session-manager.js']={pauseSSE:()=>pauses++,resumeSSE(){}};u.e.load('web/js/lifecycle.js');u.doc.hidden=true;u.doc.dispatchEvent({type:'visibilitychange'});assert(pauses===0,'hidden page disconnected');});
-function permissions(){const u=ui(),cards=[];Object.assign(u.e.context,{closeReply(){},escape:String,t:s=>s,insertStreamNode:(_,c)=>cards.push(c),sessionLabel:()=>'',sendSystemNotification(){},toast:(...x)=>u.toasts.push(x)});return {...u,cards,handler:method('web/js/sse.js','permission:request',u.e.context)};}
+function permissions(){const u=ui(),cards=[];Object.assign(u.e.context,{...u.e.load('web/js/approval-labels.js'),closeReply(){},escape:String,t:s=>s,insertStreamNode:(_,c)=>cards.push(c),sessionLabel:()=>'',sendSystemNotification(){},toast:(...x)=>u.toasts.push(x)});return {...u,cards,handler:method('web/js/sse.js','permission:request',u.e.context)};}
 await check('21 pending permission remains actionable after replay; completed stays inert',async()=>{
  const u=permissions();for(const pending of [true,false])u.handler.call({id:'a',state:{replaying:true},streamEl:new El()},{requestId:'pending',pending,expiresAt:130000});assert(u.cards[0].querySelector('.approve').events.click?.length&&!u.cards[0].classList.contains('decided'),'pending disabled');assert(u.cards[1].classList.contains('decided'),'historical permission actionable');
  const {h,s}=await create();h.routeEvent(s,{name:'permission:request',payload:{requestId:'x',expiresAt:130000}});const f=s.replay.find(f=>frame(f).meta.name==='permission:request');assert(frame(h.permissionReplayFrame(s,f)).payload.pending,'server omits pending state');h.routeEvent(s,{name:'permission:resolved',payload:{requestId:'x',outcome:'denied'}});assert(!frame(h.permissionReplayFrame(s,f)).payload.pending,'resolved request pending');

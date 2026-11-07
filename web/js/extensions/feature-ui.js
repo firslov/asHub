@@ -1,3 +1,4 @@
+import { mountToolMenu } from './tool-menu.js';
 import { registerPanel, closePanel } from '../panel-manager.js';
 import { bundledFeatures, features, featureEnabled, loadFeature, featuresReady, refreshFeatures } from './feature-state.js';
 import { mountDeclarativeUI } from './declarative-ui.js';
@@ -6,6 +7,7 @@ let initialized = false;
 export function initializeFeatureUI() {
   if (initialized) return;
   initialized = true;
+  mountToolMenu(document.getElementById('toolbar'));
   const contributions = new Map();
   const drafts = new Map();
   for (const feature of bundledFeatures) {

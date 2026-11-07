@@ -3,7 +3,8 @@ import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 export interface ApprovalItem { title: string; fields: Array<{ label: string; value: string }> }
-export interface ApprovalPreview { title: string; items: ApprovalItem[] }
+export interface ApprovalPreview { title: string; items: ApprovalItem[]; scope?: 'once' | 'site' | 'daily7';
+  browser?: { action: 'open' | 'click' | 'fill'; origin: string }; sourceName?: string }
 export type Approve = (preview: ApprovalPreview, signal?: AbortSignal) => Promise<boolean>;
 export interface HostAccess {
   catalog(signal?: AbortSignal): Promise<unknown>;
@@ -50,7 +51,7 @@ export class HostOperations {
     const work = async (): Promise<Receipt> => {
       const operations: PreparedOperation[] = [];
       for (const op of request.operations) { signal?.throwIfAborted(); operations.push(await prepare(op)); }
-      const preview = { title: '确认操作 / Confirm operations', items: operations.map(op => op.preview) };
+      const preview: ApprovalPreview = { scope: 'once', title: '确认操作 / Confirm operations', items: operations.map(op => op.preview) };
       if (!await approve(preview, signal)) return { fingerprint, status: 'denied', results: [] };
       signal?.throwIfAborted();
       // Revalidate all items before any side effect, and again per operation.

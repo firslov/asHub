@@ -24,6 +24,23 @@ try {
  await done;assert.equal(session.exitCode,0,session.output);
  assert.equal(await fs.readFile(path.join(dir,'结果 文件.txt'),'utf8'),'WINDOWS_BASH_OK');
  console.log('PASS Git Bash discovery and command execution in a Unicode directory');
+ const shim=path.join(dir,'ACP host.cmd'),agent=path.join(dir,'agent fixture.cjs');
+ await fs.writeFile(shim,'@echo off\r\n"'+process.execPath+'" "%~dp0agent fixture.cjs" %*\r\n');
+ await fs.writeFile(agent,`
+  const fs=require('node:fs');fs.writeFileSync('received.json',JSON.stringify(process.argv.slice(2)));
+  require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+   const req=JSON.parse(line);
+   if(req.id===undefined)return;
+   console.log(JSON.stringify({jsonrpc:'2.0',id:req.id,result:req.method==='initialize'?{protocolVersion:1}:{sessionId:'fixture'}}));
+  });
+ `);
+ const {AcpBridge}=await load('dist/bridges/acp.js');
+ const argv=['--label','两个 words',''];
+ const bridge=new AcpBridge({cwd:dir,extra:{command:shim,args:argv}});
+ try{await bridge.ready();assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir,'received.json'),'utf8')),argv);}
+ finally{bridge.close();}
+ console.log('PASS ACP cmd shim with a Unicode path, spaced argument and empty argument');
+
  const {rgPath}=await import(pathToFileURL(requireApp.resolve('@vscode/ripgrep')).href);
  assert.match(execFileSync(rgPath,['WINDOWS_BASH_OK',dir],{encoding:'utf8'}),/WINDOWS_BASH_OK/);
  console.log('PASS packaged native ripgrep');

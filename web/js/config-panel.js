@@ -33,6 +33,8 @@ const configModeTabs = document.getElementById("config-mode-tabs");
 let panelProviderCatalog = null;
 let configMode = "simple";
 let originalConfig = "";
+const credentialEdits = new Map();
+let inferDefaultFromKey = true;
 let serverConfig = "";
 let panelProviderRevision = "";
 let originalApiKey = "";
@@ -150,36 +152,71 @@ const renderModelDatalist = (providerId) => {
   }));
 };
 
+// Keep explicit JSON settings separate from pending credential edits. Reverting
+// an input then restores the original entry, including whether it existed.
+const providerDraft = () => {
+  const config = JSON.parse(originalConfig || "{}");
+  for (const [id, key] of credentialEdits) {
+    config.providers ??= {};
+    const provider = { ...config.providers[id] };
+    if (key) {
+      provider.apiKey = key;
+      if (inferDefaultFromKey && !config.defaultProvider) config.defaultProvider = id;
+    } else {
+      delete provider.apiKey;
+    }
+    config.providers = { ...config.providers, [id]: provider };
+  }
+  return config;
+};
+
 const buildConfig = (providerId = configProvider.value) => {
-  // Revealing a stored key is a read. Keep its placeholder on save so the
-  // server resolves the current key, including rotations since the reveal.
+  if (!providerId) return null;
   const apiKey = _revealedApiKey && configApikey.value === _revealedApiKey
     ? _maskedApiKey : configApikey.value.trim();
-  if (!providerId) return null;
+  const base = JSON.parse(originalConfig || "{}");
+  if (apiKey === (base.providers?.[providerId]?.apiKey ?? "")) credentialEdits.delete(providerId);
+  else credentialEdits.set(providerId, apiKey);
+  return providerDraft();
+};
 
-  let existing = {};
-  try { existing = JSON.parse(originalConfig || "{}"); } catch {}
-
-  const existingProvider =
-    existing.providers && typeof existing.providers === "object"
-      ? existing.providers[providerId]
-      : null;
-  const prev = existingProvider && typeof existingProvider === "object"
-    ? existingProvider
-    : {};
-
-  const providerCfg = { ...prev };
-  delete providerCfg.apiKey;
-  // Model definitions may belong to a custom provider. The simple editor
-  // only edits credentials; preserve model ids, defaults and capabilities.
-
-  if (apiKey) providerCfg.apiKey = apiKey;
-
-  return {
-    ...existing,
-    providers: { ...existing.providers, [providerId]: providerCfg },
-    defaultProvider: existing.defaultProvider || providerId,
-  };
+// Preserve undo for simple-form edits when someone changes a different
+// provider or an unrelated field in the JSON editor.
+const acceptAdvancedDraft = (edited) => {
+  const preview = providerDraft();
+  if (JSON.stringify(preview) === JSON.stringify(edited)) return;
+  const previous = JSON.parse(originalConfig || "{}");
+  const base = JSON.parse(JSON.stringify(edited));
+  const defaultEdited = base.defaultProvider !== preview.defaultProvider;
+  // Capture where the default came from before reconciling removed or edited keys.
+  const inferredDefault = !defaultEdited && !previous.defaultProvider && credentialEdits.has(preview.defaultProvider);
+  if (defaultEdited) inferDefaultFromKey = Boolean(base.defaultProvider);
+  for (const id of credentialEdits.keys()) {
+    const provider = base.providers?.[id];
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) {
+      credentialEdits.delete(id);
+      continue;
+    }
+    const prior = previous.providers?.[id];
+    if (provider.apiKey !== preview.providers?.[id]?.apiKey) {
+      if (typeof provider.apiKey !== "string" || !provider.apiKey || provider.apiKey === prior?.apiKey) {
+        credentialEdits.delete(id);
+        continue;
+      }
+      // A replacement is still an edit to the same credential. Keep its order
+      // and allow undo without making the preview's default permanent.
+      credentialEdits.set(id, provider.apiKey);
+    }
+    if (Object.hasOwn(prior ?? {}, "apiKey")) provider.apiKey = prior.apiKey;
+    else delete provider.apiKey;
+    if (!Object.hasOwn(previous.providers ?? {}, id) && !Object.keys(provider).length) delete base.providers[id];
+  }
+  if (inferredDefault) {
+    if (Object.hasOwn(previous, "defaultProvider")) base.defaultProvider = previous.defaultProvider;
+    else delete base.defaultProvider;
+  }
+  if (credentialEdits.size && base.providers && !Object.keys(base.providers).length && !Object.hasOwn(previous, "providers")) delete base.providers;
+  originalConfig = JSON.stringify(base, null, 2);
 };
 
 const parseConfigToSimple = (config) => {
@@ -269,18 +306,9 @@ const switchConfigMode = (mode) => {
   if (mode === "simple") {
     configBodySimple.removeAttribute("hidden");
     configBodyAdvanced.setAttribute("hidden", "");
-    try {
-      const edited = JSON.parse(configEditor.value);
-      if (edited && typeof edited === "object" && !Array.isArray(edited)) {
-        originalConfig = JSON.stringify(edited, null, 2);
-      }
-    } catch {}
-    try {
-      const parsed = JSON.parse(configEditor.value || "{}");
-      parseConfigToSimple(parsed);
-    } catch {
-      parseConfigToSimple({});
-    }
+    const edited = JSON.parse(configEditor.value || "{}");
+    acceptAdvancedDraft(edited);
+    parseConfigToSimple(providerDraft());
     updateProviderDesc();
     updateModelField();
     setConfigReady(configReady);
@@ -359,10 +387,8 @@ configProvider?.addEventListener("change", () => {
   // The select has already changed, but the input still belongs to the
   // previous provider. Merge it into the draft before showing the next one.
   const draft = buildConfig(simpleProviderId);
-  if (draft) originalConfig = JSON.stringify(draft, null, 2);
   simpleProviderId = configProvider.value;
-  const cfg = JSON.parse(originalConfig || "{}");
-  const key = cfg.providers?.[simpleProviderId]?.apiKey;
+  const key = draft?.providers?.[simpleProviderId]?.apiKey;
   configApikey.value = typeof key === "string" ? key : "";
   originalApiKey = storedApiKey(simpleProviderId);
   updateProviderDesc();
@@ -371,6 +397,8 @@ configProvider?.addEventListener("change", () => {
 });
 
 export const setConfigOpen = async (on) => {
+  credentialEdits.clear();
+  inferDefaultFromKey = true;
   const generation = ++configLoadGeneration;
   setConfigReady(false);
   resetApiKeyReveal();
@@ -614,6 +642,8 @@ configFormat?.addEventListener("click", () => {
 
 configReset?.addEventListener("click", () => {
   if (!configReady) return;
+  credentialEdits.clear();
+  inferDefaultFromKey = true;
   resetApiKeyReveal();
   if (configMode === "advanced") {
     configEditor.value = serverConfig;

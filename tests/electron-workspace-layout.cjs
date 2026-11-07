@@ -120,7 +120,13 @@ app.whenReady().then(async () => {
       delayNextStatus = undefined;
       return delay ? delay(result) : result;
     });
-    ipcMain.on('desktop:browser-layout', (_e, id, box) => pages.mount(win, id, box));
+    ipcMain.on('desktop:browser-layout', (event, id, box) => {
+      // Match the production sender routing: a late pagehide from the previous
+      // renderer must never detach the replacement window's native guest.
+      if (event.sender.isDestroyed()) return;
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      if (senderWindow && !senderWindow.isDestroyed()) pages.mount(senderWindow, id, box);
+    });
     let rejectHandoff = false;
     ipcMain.on('desktop:browser-control', (_e, id, action, pageId) => { if (!rejectHandoff) pages.control(id, action, pageId); });
     ipcMain.handle('get-update-mode', () => ({ manual: true }));
@@ -603,20 +609,40 @@ app.whenReady().then(async () => {
       await until(() => js("!document.querySelector('.extension-panel').hidden"), 'unpinned tool opened');
       await js("document.querySelector('.extension-panel .p-icon-btn').click()");
       const saved = await js("localStorage.getItem('ash.browser.width-ratio')");
-      const oldWindow = win;
-      win = null;
-      oldWindow.destroy();
-      await openWindow(base + '/' + id + '/');
-      await until(
-        () => js("!!document.querySelector('.extension-menu.rail-unpinned')"),
-        'saved pin on fresh window',
-      );
-      await assertRetiredEntryAbsent();
-      await until(() => !!view(), 'browser restored on fresh window');
-      const ratio = await js(
-        "document.querySelector('.browser-pane').offsetWidth/(document.querySelector('.browser-pane').getBoundingClientRect().right-document.querySelector('.main').getBoundingClientRect().left)",
-      );
-      assert(Math.abs(ratio - Number(saved)) < 0.01);
+      for (const delayedUnload of [false, true]) {
+        const oldWindow = win;
+        win = null;
+        if (!delayedUnload) oldWindow.destroy();
+        try {
+          await openWindow(base + '/' + id + '/');
+          await until(
+            () => js("!!document.querySelector('.extension-menu.rail-unpinned')"),
+            'saved pin on fresh window',
+          );
+          await assertRetiredEntryAbsent();
+          await until(() => view() === guest, 'browser restored on fresh window');
+          if (delayedUnload) {
+            const unloaded = new Promise(resolve => {
+              const listener = (event, sessionId, bounds) => {
+                if (event.sender === oldWindow.webContents && sessionId === id && bounds === null) {
+                  ipcMain.removeListener('desktop:browser-layout', listener);
+                  resolve();
+                }
+              };
+              ipcMain.on('desktop:browser-layout', listener);
+            });
+            await oldWindow.webContents.executeJavaScript('window.electronAPI.browserLayout(' + JSON.stringify(id) + ',null)');
+            await unloaded;
+            assert.equal(view(), guest, 'late old-window layout must not detach the replacement browser');
+          }
+          const ratio = await js(
+            "document.querySelector('.browser-pane').offsetWidth/(document.querySelector('.browser-pane').getBoundingClientRect().right-document.querySelector('.main').getBoundingClientRect().left)",
+          );
+          assert(Math.abs(ratio - Number(saved)) < 0.01);
+        } finally {
+          if (!oldWindow.isDestroyed()) oldWindow.destroy();
+        }
+      }
     }
     if (!baseline) {
       const oldPage=pages.status(id);

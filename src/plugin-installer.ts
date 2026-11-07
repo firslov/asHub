@@ -6,7 +6,8 @@ import { pipeline } from 'node:stream/promises';
 import * as yauzl from 'yauzl';
 import { satisfies, validRange } from 'semver';
 import { updateSettingsFile } from './settings-store.js';
-import { pluginCatalog, PLUGIN_ENTRY_FILES } from './plugins.js';
+import { PLUGIN_AUTO_APPROVE } from './plugin-approvals.js';
+import { pluginCatalog, readPluginSettings, bundledPluginId, includedPackageIds, restorableApps, BUNDLED_ENABLED, BUNDLED_REMOVED, PLUGIN_DISABLED, PLUGIN_ENTRY_FILES } from './plugins.js';
 import { readPluginManifest, pluginCompatibility, validatePluginEntries, type NormalizedPluginManifest } from './extensions/manifest.js';
 
 export const MAX_PLUGIN_ZIP = 32 * 1024 * 1024;
@@ -149,8 +150,13 @@ export class PluginInstaller {
     const root = path.join(path.dirname(this.settingsFile), 'extensions');
     const candidates = new Set<string>();
     for (const p of pluginCatalog(this.settingsFile)) {
+      if (p.bundled) continue;
+      if (p.damagedAppId === packageName && p.packageName !== packageName) throw Error('Repair or remove the damaged manual installation before updating');
       const dir = p.packageRoot ?? path.dirname(p.source);
-      try { if (json(path.join(dir, 'package.json')).name === packageName) candidates.add(dir); } catch {}
+      try { if (json(path.join(dir, 'package.json')).name === packageName) candidates.add(dir); }
+      catch {
+        if (p.includedApp && p.packageName === packageName) throw Error('Repair or remove the damaged manual installation before updating');
+      }
     }
     if (candidates.size > 1) throw Error('Multiple copies of this plugin are installed; remove duplicates first');
     const target = [...candidates][0] ?? path.join(root, id);
@@ -161,7 +167,9 @@ export class PluginInstaller {
   }
   private checks(p: Plan): Check[] {
     const m = p.manifest, checks: Check[] = [];
-    if (p.previous) checks.push({ label: 'inUse', ok: !this.inUse(p.target), detail: 'Finish active tasks using this plugin before upgrading' });
+    const included = p.previous ? undefined : pluginCatalog(this.settingsFile).find(app => app.bundled && app.packageName === p.id);
+    const previousSource = p.previous ? p.target : included?.packageRoot;
+    if (previousSource) checks.push({ label: 'inUse', ok: !this.inUse(previousSource), detail: 'Finish active tasks using this plugin before upgrading' });
     checks.push({ label: 'platform', ok: !m?.platforms || m.platforms.includes(this.platform), detail: m?.platforms?.join(', ') ?? 'Any' });
     checks.push({ label: 'node', ok: atLeast(process.versions.node, m?.minNode ?? '22.12.0') && (!p.nodeRange || satisfies(process.versions.node, p.nodeRange)), detail: `Node ${process.versions.node} / ${p.nodeRange ?? '>= ' + (m?.minNode ?? '22.12.0')}` });
     if (m) {
@@ -262,6 +270,60 @@ export class PluginInstaller {
     this.active = this.install(p, job).finally(() => { this.active = undefined; });
     return { ...job };
   }
+  restore(id: string): void {
+    this.controller.signal.throwIfAborted();
+    if (this.active) throw Error('A plugin installation is in progress');
+    if (!restorableApps(this.settingsFile).some(app => app.id === id)) throw Error('This included extension is not available to reinstall');
+    const pluginId = bundledPluginId(id);
+    updateSettingsFile(this.settingsFile, settings => {
+      settings[BUNDLED_REMOVED] = settings[BUNDLED_REMOVED].filter((name: string) => name !== id);
+      for (const key of [BUNDLED_ENABLED, PLUGIN_AUTO_APPROVE]) {
+        if (Array.isArray(settings[key])) settings[key] = settings[key].filter((value: string) => value !== pluginId);
+      }
+      return settings;
+    });
+  }
+  uninstall(id: string): void {
+    this.controller.signal.throwIfAborted();
+    if (this.active) throw Error('A plugin installation is in progress');
+    const catalog = pluginCatalog(this.settingsFile);
+    const entry = catalog.find(plugin => plugin.id === id);
+    if (!entry) throw Error('Plugin no longer installed');
+    let target: string | undefined, backup: string | undefined;
+    if (entry.directoryNames.length) {
+      const root = path.join(path.dirname(this.settingsFile), 'extensions');
+      const relative = path.relative(root, entry.source);
+      if (!relative || relative.startsWith('..' + path.sep) || path.isAbsolute(relative) || relative === '..')
+        throw Error('Cannot identify the installed plugin directory');
+      // Move only the discovered direct child (a symlink is moved as a link).
+      target = path.join(root, relative.split(path.sep)[0]!);
+      if (catalog.some(other => other.id !== id && (other.source === target || other.source.startsWith(target + path.sep))))
+        throw Error('Remove other registrations for this plugin directory first');
+      backup = path.join(this.base, 'backups', 'uninstalled-' + id + '-' + randomUUID());
+      fs.mkdirSync(path.dirname(backup), { recursive: true });
+      fs.renameSync(target, backup);
+    }
+    try {
+      updateSettingsFile(this.settingsFile, settings => {
+        const remove = (key: string, values: readonly string[]) => {
+          if (Array.isArray(settings[key])) settings[key] = settings[key].filter((value: string) => !values.includes(value));
+        };
+        remove('extensions', entry.configuredSpecs ?? []);
+        remove('disabledExtensions', entry.directoryNames.filter(name => !catalog.some(other => other.id !== id && other.directoryNames.includes(name))));
+        remove(PLUGIN_DISABLED, [id]);
+        const included = includedPackageIds(entry);
+        if (included.length) {
+          settings[BUNDLED_REMOVED] = [...new Set([...(settings[BUNDLED_REMOVED] ?? []), ...included])];
+          remove(BUNDLED_ENABLED, included.map(bundledPluginId));
+        }
+        remove(PLUGIN_AUTO_APPROVE, [id, ...included.map(bundledPluginId)]);
+        return settings;
+      });
+    } catch (error) {
+      if (backup && target) fs.renameSync(backup, target);
+      throw error;
+    }
+  }
   private async install(p: Plan, job: Job) {
     const home = path.dirname(this.settingsFile), signal = this.controller.signal;
     let backup: string | undefined, placed = false, committed = false;
@@ -299,6 +361,7 @@ export class PluginInstaller {
       } else if (fs.existsSync(path.join(p.packageRoot, 'ashub-plugin.json')) || PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(p.packageRoot, n))) !== p.entry) throw Error('Plugin entry or manifest changed during setup');
       if (fingerprint(p.target) !== p.previous) throw Error('Installed plugin changed during setup');
       if (!this.checks(p).every(c => c.ok)) throw Error('A plugin dependency changed during setup');
+      const replacedBundle = !p.previous && pluginCatalog(this.settingsFile).find(app => app.bundled && app.packageName === p.id);
       fs.mkdirSync(path.dirname(p.target), { recursive: true });
       if (p.previous) {
         backup = path.join(this.base, 'backups', p.id + '-' + p.token); fs.mkdirSync(path.dirname(backup), { recursive: true });
@@ -306,8 +369,20 @@ export class PluginInstaller {
       }
       try { fs.renameSync(p.packageRoot, p.target); placed = true; }
       catch (e) { if (backup) fs.renameSync(backup, p.target); throw e; }
-      if (p.manifest?.defaults) updateSettingsFile(this.settingsFile, settings => {
-        for (const [key, value] of Object.entries(p.manifest!.defaults!)) if (!Object.hasOwn(settings, key)) settings[key] = value;
+      const replacesIncluded = !!replacedBundle || (!p.previous && (readPluginSettings(this.settingsFile)[BUNDLED_REMOVED] ?? []).includes(p.id));
+      if (p.manifest?.defaults || replacesIncluded) updateSettingsFile(this.settingsFile, settings => {
+        if (replacesIncluded) {
+          const installed = pluginCatalog(this.settingsFile).find(plugin => plugin.packageRoot === p.target);
+          if (!installed) throw Error('Cannot identify the installed extension');
+          if (!replacedBundle || !replacedBundle.enabled) settings[PLUGIN_DISABLED] = [...new Set([...(settings[PLUGIN_DISABLED] ?? []), installed.id])];
+          // The new copy owns its own consent. Keep the replaced resource off
+          // the catalog even if this manual installation later disappears.
+          settings[BUNDLED_REMOVED] = [...new Set([...(settings[BUNDLED_REMOVED] ?? []), p.id])];
+          for (const [key, ids] of [[BUNDLED_ENABLED, [bundledPluginId(p.id)]], [PLUGIN_AUTO_APPROVE, [installed.id, bundledPluginId(p.id)]]] as const) {
+            if (Array.isArray(settings[key])) settings[key] = settings[key].filter((value: string) => !ids.some(id => id === value));
+          }
+        }
+        for (const [key, value] of Object.entries(p.manifest?.defaults ?? {})) if (!Object.hasOwn(settings, key)) settings[key] = value;
         return settings;
       });
       job.backup = backup; committed = true;

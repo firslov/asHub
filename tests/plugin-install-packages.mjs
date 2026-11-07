@@ -26,7 +26,7 @@ try {
   assert.equal(installer.confirm(preview.token).state,'succeeded');installer.discard(preview.token);
  }
  const settings=JSON.parse(fs.readFileSync(file));assert.equal(settings.test,'preserve');assert.deepEqual(settings['desktop-control'],{enabled:false,allowedApps:[]});assert.equal(settings.wechat.mode,'read-only');assert.equal(settings.wechat.enabled,false);
- const plugins=pluginCatalog(file);assert.equal(plugins.length,3);assert(plugins.some(p=>p.name==='微信'&&p.configNamespaces.includes('wechat')));
+ const plugins=pluginCatalog(file).filter(plugin=>!plugin.bundled);assert.equal(plugins.length,3);assert(plugins.some(p=>p.name==='微信'&&p.configNamespaces.includes('wechat')));
  for(const [id,marker] of [['ashub-desktop-control','.ashub-desktop-control'],['ashub-wechat','.ashub-wechat']])assert(fs.existsSync(path.join(home,'extensions',id,marker)));
  console.log('PASS three release ZIPs: prerequisite gating, actual setup scripts, prepared Python/OCR imports, safe defaults, plugin discovery and duplicate confirmation');
 } finally {await installer.close();fs.rmSync(home,{recursive:true,force:true});}

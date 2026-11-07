@@ -107,7 +107,9 @@ Project views, task receipts, result downloads and thinking controls require des
 
 Open **Plugins** in the right toolbar to import a trusted plugin ZIP, review its setup and manage configuration. Optional features use the same menus and design as the app. Some kernel extensions take effect when a conversation next starts.
 
-The [scheduled-tasks plugin](examples/extensions/scheduled-tasks) requires **v0.21.1+**. After explicit approval, it delivers a message to an existing conversation once or on a recurring schedule. Keep asHub running and the computer awake; tool permissions still apply. [Project management](examples/extensions/project-management) adds approved conversation setup and collaboration tools. These plugins are optional, not enabled by default.
+In **Plugins → Local extensions**, enable **Kimi Coding Plan**, **Project management** or the **Conversation browser**. Uninstalling an included extension keeps it removed across updates; use its reinstall button to bring it back disabled without a ZIP. All three ship with asHub and start disabled. Existing manual installations keep their settings and take precedence. Start a new conversation to load enabled tools. Use `/kimi-login` for Kimi web sign-in.
+
+The [scheduled-tasks plugin](examples/extensions/scheduled-tasks) requires **v0.21.1+**. After explicit approval, it delivers a message to an existing conversation once or on a recurring schedule. Keep asHub running and the computer awake; tool permissions still apply.
 
 ## Run from source
 

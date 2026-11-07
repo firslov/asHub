@@ -1,4 +1,5 @@
 import { withNetworkSession } from "../network-policy.js";
+import { canAutoApprovePlugin, currentPluginIdentity } from "../plugin-approvals.js";
 import { ExplicitApprovals } from "../host-operations.js";
 import { conversationTools } from "../conversation-tools.js";
 import { logCompaction } from "../history/compaction-diagnostics.js";
@@ -33,7 +34,7 @@ import * as os from "node:os";
 import { createCore, type AgentShellCore, runSubagent, type ToolDefinition } from "agent-sh";
 import { activateAgent } from "agent-sh/agent";
 import { builtinPluginCatalog, type PluginStatus } from "../plugins.js";
-import { PluginRuntime, preparePluginRegistrations } from "../plugin-runtime.js";
+import { PluginRuntime, prepareScopedHandlers, preparePluginRegistrations } from "../plugin-runtime.js";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
 import { CodexProviderHost, codexStatus } from "../providers/codex.js";
 import { getSettings, reloadSettings, CONFIG_DIR } from "agent-sh/settings";
@@ -343,6 +344,14 @@ export class AshBridge extends EventEmitter implements Bridge {
   private loadedExtensionNames: string[] = [];
   private plugins?: PluginRuntime;
   private builtinExtensionNames: string[] = [];
+  uninstallPlugin(id: string): void {
+    const name = this.plugins?.status.find(plugin => plugin.id === id)?.name;
+    this.plugins?.uninstall(id);
+    if (name) {
+      this.loadedExtensionNames = this.loadedExtensionNames.filter(loaded => loaded !== name || this.builtinExtensionNames.includes(name) || this.plugins?.status.some(p => p.name === name && p.state === 'loaded'));
+      this.core?.bus.emit("core:extensions-loaded", { names: this.loadedExtensionNames });
+    }
+  }
   getPluginStatus(): PluginStatus[] {
     const local = this.plugins?.status.map(s => ({ ...s, configNamespaces: s.configNamespaces?.slice() })) ?? [];
     if (!this.core || !this.extCtx || this.closed) return local;
@@ -408,6 +417,14 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (this.closed) throw new Error("bridge closed during initialization");
   }
 
+  private requestPluginApproval(preview: import("../host-operations.js").ApprovalPreview, signal?: AbortSignal, pluginId = currentPluginIdentity()): Promise<boolean | "automatic"> {
+    this.assertOpen();
+    if (signal?.aborted) return Promise.resolve(false);
+    if (canAutoApprovePlugin(path.join(CONFIG_DIR, "settings.json"), pluginId)) return Promise.resolve("automatic");
+    const sourceName = this.plugins?.status.find(plugin => plugin.id === pluginId)?.name;
+    return this.explicitApprovals.request({ ...preview, sourceName }, signal);
+  }
+
   private async init(): Promise<void> {
     // Read auto-approve setting from disk
     try {
@@ -418,6 +435,7 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     this.assertOpen();
     const core = createCore({ model: this.opts.model, provider: this.opts.provider });
+    const defineOwned = prepareScopedHandlers(core.handlers);
     this.core = core;
     const sessionId = this.opts.sessionId || randomUUID();
     core.handlers.define("session:current-id", () => sessionId);
@@ -427,8 +445,8 @@ export class AshBridge extends EventEmitter implements Bridge {
       });
       core.handlers.define("ashub:execute", (p: { request: unknown; signal?: AbortSignal }) => {
         this.assertOpen();
-        return this.opts.hostAccess!.execute(p.request, (preview, signal) => {
-          this.assertOpen(); return this.explicitApprovals.request(preview, signal);
+        return this.opts.hostAccess!.execute(p.request, async (preview, signal) => {
+          return (await this.requestPluginApproval(preview, signal)) !== false;
         }, p.signal);
       });
     }
@@ -524,7 +542,9 @@ export class AshBridge extends EventEmitter implements Bridge {
       this.assertOpen();
     }
 
-    this.plugins = new PluginRuntime(path.join(CONFIG_DIR, "settings.json"));
+    this.plugins = new PluginRuntime(path.join(CONFIG_DIR, "settings.json"), undefined, this.opts.bindBrowserPages
+      ? id => this.opts.bindBrowserPages!(id, (preview, signal) => this.requestPluginApproval(preview, signal, id))
+      : undefined, defineOwned);
     const userNames = await this.plugins.load(extCtx);
     // Hot reload cannot safely replace tools in an in-flight turn. New kernels
     // load current settings; existing conversations apply changes after restart.
@@ -2010,7 +2030,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       p.expiresAt = Date.now() + 30_000;
 
       // Forward to client for user approval
-      this.emit("event", { name: "permission:request", payload: { ...p, signal: undefined } });
+      this.emit("event", { name: "permission:request", payload: { ...p, signal: undefined, scope: undefined, browser: undefined, sourceName: undefined, requiresDesktop: undefined, acpExtendedOption: undefined } });
 
       // Wait for user decision (30s timeout → auto-deny)
       const decision = await new Promise<{ outcome: string; reason?: string }>((resolve) => {

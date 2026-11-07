@@ -65,6 +65,15 @@ const { createBackgroundController, isTrustedDesktopEvent } = require('./backgro
 let background = null;
 let remoteStatusRef = () => ({});
 let resolveArtifactRef = async () => { throw Error('Application is not ready'); };
+const browserPages = require('./browser-pages.cjs').createBrowserPages({
+  electron: require('electron'),
+  notify(id) {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('desktop:browser-changed', id);
+    }
+  },
+});
+
 const { performFileAction } = require('./files.cjs');
 const desktopReady = new WeakSet();
 const pendingMobile = new WeakSet();
@@ -249,6 +258,7 @@ function createTearOutWindow(loadPath, screenPos) {
     // in-page custom title bar is the only one; hiddenInset on macOS.
     frame: process.platform !== "win32",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    trafficLightPosition: process.platform === "darwin" ? { x: 14, y: 19 } : undefined,
     titleBarOverlay: process.platform === "darwin" ? {
       color: isDark ? "#272824" : "#f3f0e8",
       symbolColor: isDark ? "#ebe7dc" : "#343630",
@@ -293,6 +303,7 @@ function createWindow() {
     // Windows: frameless + custom title bar for theme integration.
     frame: process.platform !== "win32",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    trafficLightPosition: process.platform === "darwin" ? { x: 14, y: 19 } : undefined,
     titleBarOverlay: process.platform === "darwin" ? {
       color: isDark ? "#272824" : "#f3f0e8",
       symbolColor: isDark ? "#ebe7dc" : "#343630",
@@ -397,6 +408,22 @@ function setupAutoUpdater() {
 
 function setupIPC() {
   const trustedDesktop = event => isTrustedDesktopEvent(event, BrowserWindow, `http://127.0.0.1:${HUB_PORT}`);
+  // Native controls use DIP coordinates; the page reports its actual title-bar height.
+  ipcMain.on('desktop:titlebar-height', (event, height) => {
+    if (process.platform !== 'darwin' || !trustedDesktop(event) ||
+        typeof height !== 'number' || !Number.isFinite(height) || height < 28 || height > 128) return;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    const y = Math.max(8, Math.round((height * event.sender.getZoomFactor() - 14) / 2));
+    if (win.getWindowButtonPosition()?.y !== y) win.setWindowButtonPosition({ x: 14, y });
+  });
+  ipcMain.handle('desktop:browser-status', (event, id) => trustedDesktop(event) ? browserPages.status(id) : null);
+  ipcMain.on('desktop:browser-layout', (event, id, bounds) => {
+    if (trustedDesktop(event)) browserPages.mount(BrowserWindow.fromWebContents(event.sender), id, bounds);
+  });
+  ipcMain.on('desktop:browser-control', (event, id, action, pageId) => {
+    if (trustedDesktop(event)) browserPages.control(id, action, pageId);
+  });
   ipcMain.handle('desktop:file', (event, request) => performFileAction({trusted:trustedDesktop, resolve:resolveArtifactRef, shell}, event, request));
   ipcMain.handle('desktop:background:get', event => {
     if (!trustedDesktop(event)) throw new Error('Untrusted desktop sender');
@@ -722,10 +749,14 @@ async function startServer() {
     } : undefined;
     const hubOptions = {
       remoteSecretStore,
+      enableBrowserPages: browserPages.enable,
       port: HUB_PORT,
       host: "127.0.0.1",
       webRoot,
-      makeBridge: (opts) => opts.kind === "terminal" ? new TerminalBridge(opts) : new AshBridge(opts),
+      makeBridge: (opts) => opts.kind === "terminal" ? new TerminalBridge(opts) : new AshBridge({
+        ...opts, bindBrowserPages: opts.kind === 'agent' && opts.sessionId
+          ? (plugin, approve) => browserPages.bind(opts.sessionId, plugin, approve) : undefined,
+      }),
     };
     const hub = startHub(hubOptions);
     restartHubRef = () => {

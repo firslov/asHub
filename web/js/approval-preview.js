@@ -13,5 +13,7 @@ export function appendApprovalPreview(parent, items) {
     }
     row.appendChild(list); root.appendChild(row);
   }
-  parent.appendChild(root);
+  const actions = parent.querySelector(':scope > .permission-actions');
+  if (actions) actions.before(root);
+  else parent.appendChild(root);
 }

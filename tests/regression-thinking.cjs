@@ -346,7 +346,7 @@ test('a model change in one chat cannot lock or prematurely unlock another chatâ
   const chats = ['a','b'].map(id => ({id, agentInfo:{}}));
   const pending = new Map();
   Object.assign(u.e.context, {
-    _sharedDropdown:null, _dropdownOwner:chats[0],
+    t:key=>key, _sharedDropdown:null, _dropdownOwner:chats[0],
     renderThinkingDropdown(){}, refreshThinkingDropdown(){},
     selectModel:session => new Promise(resolve => pending.set(session.id, resolve)),
   });

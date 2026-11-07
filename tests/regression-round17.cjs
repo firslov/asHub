@@ -11,6 +11,136 @@ function config({catalogFailure=false}={}){const u=ui();u.e.context.CustomEvent=
  await prove('R17 skill uninstall network failure reports feedback and allows retry',async()=>{const u=ui();u.doc.getElementById('skills-overlay').hidden=true;const row=new El();row.dataset.name='sample';u.doc.getElementById('skills-installed-list').querySelectorAll=()=>[row];u.e.context.fetch=async()=>response({installed:[{name:'sample',path:'/project/.agents/skills/sample'}]});const m=u.e.load('web/js/skills-panel.js','export const audit={refreshInstalled};');await m.audit.refreshInstalled();u.e.context.fetch=async()=>{throw Error('offline')};await row.events.click[0]();assert(!row.disabled&&u.toasts.length===1&&u.toasts[0][0]==='skills.uninstall.failed');return{buttonReenabled:true,toasts:1};});
  const changeProvider=(u,id)=>{u.el('config-provider').value=id;u.el('config-provider').events.change[0]();};
  const enterKey=(u,key)=>{u.el('config-apikey').value=key;u.el('config-apikey').dispatchEvent({type:'input'});};
+ for (const initial of [{}, {providers:{a:{models:['existing-model']}}}]) {
+   await check('Browsing providers before the first key does not set a default ('+(initial.providers?'old catalog':'new profile')+')', async () => {
+     const u=config(); let saved;
+     u.e.context.fetch=async (url, options)=>{
+       if (url==='/api/models') return response({providers:[{name:'a',models:[]},{name:'b',models:[]}]});
+       if (options?.method==='PUT') saved=JSON.parse(options.body);
+       return response(initial);
+     };
+     await u.m.setConfigOpen(true);
+     changeProvider(u,'b');
+     enterKey(u,'fixture-only-key');
+     await u.el('config-save-simple').events.click[0]();
+     assert(saved.defaultProvider==='b','untouched first provider became the default');
+     assert(saved.providers.b.apiKey==='fixture-only-key');
+     assert(JSON.stringify(saved.providers.a)===JSON.stringify(initial.providers?.a),'browsing changed the untouched provider');
+   });
+ }
+ await check('Saving other preferences after browsing providers leaves their configuration untouched',async()=>{
+   const u=config(), stored={providers:{a:{models:['existing'],apiKey:'••••••••'}}}; let posted, writes=0;
+   u.e.context.fetch=async(url,opts)=>{
+     if(url==='/api/models') return response({providers:['a','b'].map(name=>({name,models:[]}))});
+     if(opts?.method==='PUT'){writes++;posted=JSON.parse(opts.body);}
+     return response(stored);
+   };
+   await u.m.setConfigOpen(true); changeProvider(u,'b'); await u.m.setConfigOpen(false);
+   assert(writes===0,'closing settings must not write');
+   await u.m.setConfigOpen(true); changeProvider(u,'b');
+   u.el('config-default-cwd').value='/fixture';
+   await u.el('config-save-simple').events.click[0]();
+   assert(writes===1 && JSON.stringify(posted)===JSON.stringify(stored),'saving local preferences changed provider configuration');
+ });
+ await check('Removing the only credential from an old profile does not select its provider as default',async()=>{
+   const u=config(); let posted;
+   u.e.context.fetch=async(url,opts)=>{
+     if(url==='/api/models')return response({providers:[{name:'a',models:[]}]});
+     if(opts?.method==='PUT')posted=JSON.parse(opts.body);
+     return response({providers:{a:{models:['existing'],apiKey:'••••••••'}}});
+   };
+   await u.m.setConfigOpen(true); enterKey(u,''); await u.el('config-save-simple').events.click[0]();
+   assert(!Object.hasOwn(posted,'defaultProvider') && !Object.hasOwn(posted.providers.a,'apiKey') && posted.providers.a.models[0]==='existing');
+ });
+ for (const keepSecond of [false,true]) {
+   await check('Reverting the first credential restores the final provider choices ('+keepSecond+')',async()=>{
+     const u=config(); let saved; let writes=0;
+     u.e.context.fetch=async(url,opts)=>{
+       if(url==='/api/models')return response({providers:['a','b'].map(name=>({name,models:[]}))});
+       if(opts?.method==='PUT'){writes++;saved=JSON.parse(opts.body);}
+       return response({keep:'original'});
+     };
+     await u.m.setConfigOpen(true);
+     enterKey(u,'fixture-temporary'); changeProvider(u,'b');
+     if(keepSecond)enterKey(u,'fixture-retained');
+     u.mode('advanced');
+     const json=JSON.parse(u.el('config-editor').value);
+     json.keep='edited separately';
+     if(keepSecond)json.providers.other={models:['custom-model']};
+     u.el('config-editor').value=JSON.stringify(json);
+     u.mode('simple');
+     changeProvider(u,'a'); enterKey(u,'');
+     await u.el('config-save-simple').events.click[0]();
+     assert(writes===1 && saved.keep==='edited separately');
+     assert(!saved.providers?.a,'reverted credential left an empty provider entry');
+     if(keepSecond) assert(saved.defaultProvider==='b' && saved.providers.b.apiKey==='fixture-retained' && saved.providers.other.models[0]==='custom-model');
+     else assert(!Object.hasOwn(saved,'defaultProvider') && !Object.hasOwn(saved,'providers'));
+   });
+ }
+ for (const explicitDefault of [null,'b']) {
+   await check('Advanced default edit survives undo of a separate temporary credential ('+explicitDefault+')',async()=>{
+     const u=config(); let saved;
+     u.e.context.fetch=async(url,opts)=>{
+       if(url==='/api/models')return response({providers:['a','b'].map(name=>({name,models:[]}))});
+       if(opts?.method==='PUT')saved=JSON.parse(opts.body);
+       return response({});
+     };
+     await u.m.setConfigOpen(true); enterKey(u,'temporary-key'); changeProvider(u,'b'); enterKey(u,'retained-key');
+     u.mode('advanced'); const draft=JSON.parse(u.el('config-editor').value);
+     if(explicitDefault) draft.defaultProvider=explicitDefault; else delete draft.defaultProvider;
+     u.el('config-editor').value=JSON.stringify(draft); u.mode('simple');
+     changeProvider(u,'a'); enterKey(u,''); await u.el('config-save-simple').events.click[0]();
+     assert(!Object.hasOwn(saved.providers,'a') && saved.providers.b.apiKey==='retained-key');
+     assert(explicitDefault ? saved.defaultProvider===explicitDefault : !Object.hasOwn(saved,'defaultProvider'));
+   });
+ }
+ for (const replacement of [false,true]) {
+   await check('Editing model metadata does not make an inferred provider default permanent ('+replacement+')', async()=>{
+     const u=config();let saved;
+     u.e.context.fetch=async(url,opts)=>{
+       if(url==='/api/models')return response({providers:['a','b'].map(name=>({name,models:[]}))});
+       if(opts?.method==='PUT')saved=JSON.parse(opts.body);
+       return response({});
+     };
+     await u.m.setConfigOpen(true);
+     enterKey(u,'temporary-a'); changeProvider(u,'b');
+     if(replacement)enterKey(u,'retained-b');
+     u.mode('advanced'); const draft=JSON.parse(u.el('config-editor').value);
+     draft.providers.a.models=['custom-model']; draft.providers.a.contextWindow=32768;
+     u.el('config-editor').value=JSON.stringify(draft); u.mode('simple');
+     changeProvider(u,'a'); enterKey(u,'');
+     await u.el('config-save-simple').events.click[0]();
+     assert(saved.providers.a.models[0]==='custom-model' && saved.providers.a.contextWindow===32768 && !Object.hasOwn(saved.providers.a,'apiKey'));
+     assert(replacement ? saved.defaultProvider==='b' : !Object.hasOwn(saved,'defaultProvider'), 'metadata edit promoted the temporary default');
+   });
+ }
+ for (const edit of ['replace-key','delete-provider','clear-key']) {
+   await check('An inferred default follows the surviving credentials after advanced '+edit,async()=>{
+     const u=config();let saved;
+     u.e.context.fetch=async(url,opts)=>{
+       if(url==='/api/models')return response({providers:['a','b'].map(name=>({name,models:[]}))});
+       if(opts?.method==='PUT')saved=JSON.parse(opts.body);
+       return response({});
+     };
+     await u.m.setConfigOpen(true); enterKey(u,'first-a'); changeProvider(u,'b'); enterKey(u,'keep-b');
+     u.mode('advanced');const draft=JSON.parse(u.el('config-editor').value);
+     if(edit==='delete-provider')delete draft.providers.a;
+     else {
+       draft.providers.a.models=['custom-a'];
+       if(edit==='replace-key')draft.providers.a.apiKey='second-a';
+       else delete draft.providers.a.apiKey;
+     }
+     u.el('config-editor').value=JSON.stringify(draft);u.mode('simple');
+     if(edit!=='replace-key')assert(u.el('config-provider').value==='b','simple form must show the effective default');
+     if(edit==='replace-key'){
+       changeProvider(u,'a');assert(u.el('config-apikey').value==='second-a');enterKey(u,'');
+     }
+     await u.el('config-save-simple').events.click[0]();
+     assert(saved.defaultProvider==='b' && saved.providers.b.apiKey==='keep-b','inferred default is still bound to the removed credential');
+     if(edit==='delete-provider')assert(!Object.hasOwn(saved.providers,'a'));
+     else assert(!Object.hasOwn(saved.providers.a,'apiKey') && saved.providers.a.models[0]==='custom-a');
+   });
+ }
  await check('Settings drafts and onboarding saves use their own provider revision', async () => {
    const u=config(), sent=[];
    let revision='first-version';

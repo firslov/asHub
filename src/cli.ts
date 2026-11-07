@@ -90,18 +90,20 @@ Endpoints:
 function splitCommand(input: string): { command: string; args: string[] } {
   const args: string[] = [];
   let current = "";
-  let inQuotes = false;
+  let inQuotes = false, hasArgument = false;
   for (let i = 0; i < input.length; i++) {
     const ch = input[i];
     if (ch === '"') {
       inQuotes = !inQuotes;
+      hasArgument = true;
     } else if (ch === ' ' && !inQuotes) {
-      if (current) { args.push(current); current = ""; }
+      if (hasArgument) { args.push(current); current = ""; hasArgument = false; }
     } else {
+      hasArgument = true;
       current += ch;
     }
   }
-  if (current) args.push(current);
+  if (hasArgument) args.push(current);
   const command = args.shift() ?? "";
   return { command, args };
 }

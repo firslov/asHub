@@ -96,7 +96,7 @@ Queued collaboration tasks keep a stable queue ID across user edits, so editing 
 
 Application plugins may declare the additive `plugin-resources` and `authorized-messages` capabilities. The host exposes no calendar or task-specific operations: recurrence, catch-up rules, templates and job history remain plugin code.
 
-`ctx.services.dataDirectory` is a stable package-scoped local directory. `ctx.services.interactions.register(id, {view, prepare})` registers a bounded declarative resource; the manifest renders it with `{type:"resource", id}`. A panel may use a built-in `icon:"clock"` or `"panel"`. A resource view contains `actions`, `rows`, optional `note`, and an optional form. Forms accept text, textarea, number, checkbox, select, time and datetime-local controls, optional advanced groups, and `when:{field,values}` visibility conditions. `refresh:false` holds a detail view until the user navigates back. A row's `conversationId` creates a host-generated local conversation link. Arbitrary HTML, scripts, event names and URLs are not accepted.
+`ctx.services.dataDirectory` is a stable package-scoped local directory. `ctx.services.interactions.register(id, {view, prepare})` registers a bounded declarative resource; the manifest renders it with `{type:"resource", id}`. A panel may use the built-in `clock`, `panel`, or `browser` icon. Older browser-capable packages using the generic panel icon receive the browser glyph automatically. A resource view contains `actions`, `rows`, optional `note`, and an optional form. Forms accept text, textarea, number, checkbox, select, time and datetime-local controls, optional advanced groups, and `when:{field,values}` visibility conditions. `refresh:false` holds a detail view until the user navigates back. A row's `conversationId` creates a host-generated local conversation link. Arbitrary HTML, scripts, event names and URLs are not accepted.
 
 `prepare(action, values)` returns `{preview?, authorization?, execute(grantId?)}`. The host renders the preview, appends its own authorization scope, and issues a short-lived, resource-scoped confirmation token. Only confirmation creates a grant and invokes the prepared commit. Duplicate confirmation shares one result. Plugin stop/disposal invalidates pending confirmations. Commits participate in the application registry's in-flight operation tracking; failed commits revoke newly created grants. Plugins must recheck their own revision/version before mutation.
 
@@ -139,3 +139,35 @@ The grant covers current and future active agent conversations except exclusions
 Each grant permits 1–24 requests per UTC day; reservation is persisted before inference, and failed/cancelled calls count. Application/plugin shutdown, model-session disposal and caller cancellation abort related requests. Consumers must also check scope, lifetime and their own revisions before storing asynchronous results. The API gives a count/input/output ceiling, not an exact monetary cost guarantee.
 
 The personal-assistant example uses this capability for incremental, source-backed learning, bounded recall and user-feedback-based strategy revision. No assistant-specific memory or self-evolution logic is embedded in the host.
+
+## Desktop browser pages
+
+Electron advertises the optional `browser-pages` capability. Declare it in a v2
+session plugin manifest to receive `ctx.services.browserPages`. Each binding is
+owned by the plugin activation and the host-provided conversation ID. Use
+`available()` for tool visibility. Disabling the feature or disposing the
+session revokes access and closes its native page. CLI hosts omit the capability.
+
+`run(request, signal?)` accepts the following bounded primitives:
+
+- `open` with an HTTPS `url` opens the conversation's isolated page and returns a snapshot.
+- `observe` returns the URL (without query or fragment), semantic items, and a truncation flag. By default it issues fresh element references. Set `references: false` to inspect text without invalidating existing references.
+- `fill` with `ref` and `value`, or `click` with `ref`, goes through the host permission preview. Bind approvals to the actual control and recheck identity, page and form fields before dispatch. For a stable standalone button the caller may explicitly request a seven-day, once-per-calendar-day grant with `daily: true`. A reserved attempt is never automatically repeated. Form submissions require one-time approval.
+- `close` revokes the open page and its grants. `close()` on the service releases the binding itself. Human takeover suspends all automated reading and mutation.
+
+The host does not expose cookies, arbitrary page JavaScript or raw debugger commands through this interface. Trusted plugin code owns model tools, summaries and post-action verification. Persisted site data is scoped to conversation and origin. The `examples/extensions/browser-automation` package demonstrates the interface.
+
+
+## Per-plugin operation approval
+
+The plugin configuration editor includes an optional auto-approval switch for host
+operations. It defaults to off and applies to subsequent requests immediately.
+The host owns this consent in `ashub.plugins.autoApprove`; plugin defaults and
+configuration namespaces cannot grant it. The runtime supplies the installed
+package identity for `ctx.call('ashub:execute', ...)`, and browser services bind
+the same identity when created. This setting covers that plugin's supported
+host mutations, including conversation deletion and webpage actions. Existing
+validation, cancellation, receipts and page checks still apply.
+Pending manual requests retain their existing approval and expiry.
+
+Uninstalling an installed plugin removes its registration, session tools and automatic approval. Settings and plugin data are retained. Discovered packages are moved to `plugin-install/backups` under the agent home; explicitly configured external sources are unregistered in place. Installed dependents must be removed first.

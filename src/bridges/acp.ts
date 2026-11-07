@@ -4,9 +4,11 @@
  * into BusEvents the hub broadcasts.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
 import { Translator } from "./translator.js";
-import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
+import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy, PermissionOutcome } from "./types.js";
 
 interface JsonRpcMessage {
   jsonrpc: "2.0";
@@ -35,7 +37,7 @@ interface AcpPermissionRequest {
 
 /** Stored state for a pending permission request. */
 interface PendingPermission {
-  resolve: (optionId: string | null) => void;
+  resolve: (optionId: string | null, approved?: boolean) => PermissionOutcome | Promise<PermissionOutcome>;
   options: AcpPermissionOption[];
 }
 
@@ -70,29 +72,23 @@ function classifyOption(o: AcpPermissionOption): OptionClass {
   return "unknown";
 }
 
-function isAlwaysOption(o: AcpPermissionOption): boolean {
-  return (typeof o.kind === "string" && o.kind.endsWith("_always")) || o.optionId.includes("always");
+// Only a declared once kind (or its standard ID for older agents) proves the scope.
+function onceOption(options: AcpPermissionOption[], kind: "allow_once" | "reject_once") {
+  return options.find(o => (o.kind ?? o.optionId) === kind);
 }
 
-/** Option id to answer a denial with: reject_once, else any reject variant. */
-function pickRejectOption(options: AcpPermissionOption[]): string {
-  const rejects = options.filter((o) => classifyOption(o) === "reject");
-  return rejects.find((o) => !isAlwaysOption(o))?.optionId ?? rejects[0]?.optionId ?? "reject_once";
+function pickRejectOption(options: AcpPermissionOption[]): string | null {
+  // Cancellation declines this request even if the agent only offers a permanent denial.
+  return onceOption(options, "reject_once")?.optionId ?? null;
 }
 
-/** Option id to answer an approval with. */
-function pickAllowOption(options: AcpPermissionOption[], sessionWide?: boolean): string {
-  const allows = options.filter((o) => classifyOption(o) === "allow");
-  if (sessionWide) {
-    const always = allows.find((o) => isAlwaysOption(o));
-    if (always) return always.optionId;
-  }
-  const once = allows.find((o) => !isAlwaysOption(o));
-  if (once) return once.optionId;
-  if (allows[0]) return allows[0].optionId;
-  // Legacy fallback: first option that doesn't look like a denial.
-  return options.find((o) => classifyOption(o) !== "reject")?.optionId
-    ?? (sessionWide ? "allow_always" : "allow_once");
+/** Keep the advertised desktop choice and the wire decision in sync. */
+function extendedOption(options: AcpPermissionOption[]) {
+  const always = options.find(o => (o.kind ?? o.optionId) === "allow_always");
+  if (always || onceOption(options, "allow_once")) return always;
+  // Some older agents only expose a label. Show their actual option on desktop
+  // and require explicit confirmation rather than treating it as a one-time grant.
+  return options.find(o => classifyOption(o) === "allow") ?? options.find(o => classifyOption(o) === "unknown");
 }
 
 const INIT_TIMEOUT_MS = 15_000;
@@ -120,7 +116,8 @@ export class AcpBridge extends EventEmitter implements Bridge {
   private buf = "";
   private nextId = 1;
   private pending = new Map<number | string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
-  private pendingAcpPermissions = new Map<number | string, PendingPermission>();
+  private pendingAcpPermissions = new Map<string, PendingPermission>();
+  private approvalWrites = new Map<string, (outcome: PermissionOutcome) => void>();
   private sessionId: string | null = null;
   private initPromise: Promise<void>;
   private loading = false;
@@ -133,22 +130,22 @@ export class AcpBridge extends EventEmitter implements Bridge {
     const extra = (opts.extra ?? {}) as Partial<AcpBridgeExtra>;
     if (!extra.command) throw new Error("AcpBridge requires extra.command");
 
-    this.child = spawn(extra.command, extra.args ?? [], {
+    // Windows .cmd shims need cmd.exe escaping; native executables take an argument vector.
+    const launch: typeof spawn = process.platform === "win32" ? createRequire(import.meta.url)("cross-spawn") : spawn;
+    this.child = launch(extra.command, extra.args ?? [], {
       cwd: opts.cwd ?? process.cwd(),
       env: extra.env ?? process.env,
       stdio: ["pipe", "pipe", "inherit"],
-      // On Windows, globally installed npm commands are .cmd shims that can
-      // only run through a shell. Node quotes each arg correctly when
-      // shell:true is used, so args with spaces still survive.
-      shell: process.platform === "win32",
     });
 
     this.child.stdout!.setEncoding("utf-8");
     this.child.stdout!.on("data", (chunk: string) => this.onChunk(chunk));
     this.child.on("close", () => {
-      this.emit("closed");
-      for (const p of this.pending.values()) p.reject(new Error("child closed"));
+      this.transportError ??= new Error("ACP child closed");
+      for (const p of this.pending.values()) p.reject(this.transportError);
       this.pending.clear();
+      this.settlePermissions();
+      this.emit("closed");
     });
     const transportFailed = (err: Error) => this.failTransport(err);
     this.child.on("error", transportFailed);
@@ -214,17 +211,24 @@ export class AcpBridge extends EventEmitter implements Bridge {
   }
 
   cancel(): void {
-    if (!this.sessionId) return;
-    this.notify("session/cancel", { sessionId: this.sessionId });
-    for (const p of this.pendingAcpPermissions.values()) p.resolve(null);
+    if (this.sessionId) this.notify("session/cancel", { sessionId: this.sessionId });
+    // A turn cancellation cannot retract a decision already submitted to the pipe.
+    this.cancelPendingPermissions();
+  }
+
+  settlePermissions(): void {
+    for (const finish of this.approvalWrites.values()) finish("unconfirmed");
+    this.cancelPendingPermissions();
+  }
+
+  private cancelPendingPermissions(): void {
+    const pending = [...this.pendingAcpPermissions.values()];
     this.pendingAcpPermissions.clear();
+    for (const p of pending) p.resolve(null);
   }
 
   close(): void {
-    for (const p of this.pendingAcpPermissions.values()) {
-      p.resolve(null);
-    }
-    this.pendingAcpPermissions.clear();
+    this.settlePermissions();
     try { this.child.stdin?.end(); } catch {}
     try { this.child.kill(); } catch {}
   }
@@ -309,10 +313,45 @@ export class AcpBridge extends EventEmitter implements Bridge {
         || "ACP permission request";
       const description = typeof params.description === "string" ? params.description.trim() : "";
 
-      // Public id the hub round-trips back to decidePermission. The raw ACP
-      // id may itself contain ":", so the pending map is keyed by this exact
-      // string — no delimiter-based decoding on the way back.
-      const publicRequestId = `${this.sessionId}:${requestId}`;
+      // JSON-RPC IDs may be reused after a response. Each visible approval needs its own identity.
+      const publicRequestId = randomUUID();
+
+      // 30-second timeout: auto-deny if no response from the hub.
+      const timer = setTimeout(() => {
+        const p = this.pendingAcpPermissions.get(publicRequestId);
+        if (p) {
+          this.pendingAcpPermissions.delete(publicRequestId);
+          p.resolve(pickRejectOption(options));
+        } else this.approvalWrites.get(publicRequestId)?.("unconfirmed");
+      }, 30_000);
+
+      this.pendingAcpPermissions.set(publicRequestId, {
+        resolve: (optionId, approved = false) => {
+          const chosen = options.find(o => o.optionId === optionId);
+          const outcome = chosen ? { outcome: "selected", optionId: chosen.optionId } : { outcome: "cancelled" };
+          const reply: JsonRpcMessage = { jsonrpc: "2.0", id: requestId, result: { outcome } };
+          const report = (result: PermissionOutcome) => {
+            clearTimeout(timer);
+            this.emit("event", { name: "permission:resolved", payload: {
+              requestId: publicRequestId, outcome: result,
+            } });
+            return result;
+          };
+          if (!approved || !chosen || this.transportError) {
+            this.send(reply); return report("denied");
+          }
+          return new Promise<PermissionOutcome>(resolve => {
+            const finish = (result: PermissionOutcome) => {
+              if (!this.approvalWrites.delete(publicRequestId)) return;
+              report(result); resolve(result);
+            };
+            this.approvalWrites.set(publicRequestId, finish);
+            this.send(reply, err => finish(err ? "denied" : "approved"));
+          });
+        },
+        options,
+      });
+      const extended = extendedOption(options);
       this.emit("event", {
         name: "permission:request",
         payload: {
@@ -321,53 +360,21 @@ export class AcpBridge extends EventEmitter implements Bridge {
           title,
           description,
           expiresAt: Date.now() + 30_000,
+          requiresDesktop: !onceOption(options, "allow_once"),
+          acpExtendedOption: extended?.name || extended?.optionId || null,
         },
-      });
-
-      // 30-second timeout: auto-deny if no response from the hub.
-      const timer = setTimeout(() => {
-        const p = this.pendingAcpPermissions.get(publicRequestId);
-        if (p) {
-          p.resolve(pickRejectOption(options));
-          this.pendingAcpPermissions.delete(publicRequestId);
-        }
-      }, 30_000);
-
-      this.pendingAcpPermissions.set(publicRequestId, {
-        resolve: (optionId) => {
-          clearTimeout(timer);
-          const chosen = options.find((o) => o.optionId === optionId);
-          const outcome = chosen ? { outcome: "selected", optionId: chosen.optionId } : { outcome: "cancelled" };
-          this.send({ jsonrpc: "2.0", id: requestId, result: { outcome } });
-          this.emit("event", { name: "permission:resolved", payload: {
-            requestId: publicRequestId, outcome: chosen && classifyOption(chosen) === "allow" ? "approved" : "denied",
-          } });
-        },
-        options,
       });
       return;
     }
     this.send({ jsonrpc: "2.0", id: msg.id!, error: { code: -32601, message: `Method not found: ${msg.method}` } });
   }
 
-  decidePermission(requestId: string, outcome: string, sessionWide?: boolean): void {
-    // Keyed by the exact public id emitted in permission:request — the raw
-    // ACP id may contain ":", so delimiter-based decoding would rebuild the
-    // wrong key.
-    let key: number | string = requestId;
-    let pending = this.pendingAcpPermissions.get(key);
-    if (!pending) {
-      // Tolerate callers that pass the raw ACP id.
-      const raw: number | string = Number.isNaN(Number(requestId)) ? requestId : Number(requestId);
-      pending = this.pendingAcpPermissions.get(raw);
-      if (pending) key = raw;
-    }
+  decidePermission(requestId: string, outcome: string, sessionWide?: boolean): void | PermissionOutcome | Promise<PermissionOutcome> {
+    const pending = this.pendingAcpPermissions.get(requestId);
     if (!pending) return;
-
-    pending.resolve(outcome === "approved"
-      ? pickAllowOption(pending.options, sessionWide)
-      : pickRejectOption(pending.options));
-    this.pendingAcpPermissions.delete(key);
+    this.pendingAcpPermissions.delete(requestId);
+    const allowed = sessionWide ? extendedOption(pending.options) : onceOption(pending.options, "allow_once");
+    return pending.resolve(outcome === "approved" ? allowed?.optionId ?? null : pickRejectOption(pending.options), outcome === "approved");
   }
 
   private request(method: string, params: unknown): Promise<unknown> {
@@ -393,10 +400,14 @@ export class AcpBridge extends EventEmitter implements Bridge {
     this.close();
   }
 
-  private send(msg: JsonRpcMessage): void {
-    if (this.transportError) return;
-    if (!this.child.stdin?.writable) { this.failTransport(new Error("ACP input closed")); return; }
-    try { this.child.stdin.write(JSON.stringify(msg) + "\n"); }
-    catch (err) { this.failTransport(err instanceof Error ? err : new Error(String(err))); }
+  private send(msg: JsonRpcMessage, written?: (err?: Error | null) => void): void {
+    if (this.transportError) { written?.(this.transportError); return; }
+    try {
+      if (!this.child.stdin?.writable) throw new Error("ACP input closed");
+      this.child.stdin.write(JSON.stringify(msg) + "\n", written);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      written?.(error); this.failTransport(error);
+    }
   }
 }

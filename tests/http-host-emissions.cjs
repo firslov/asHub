@@ -134,3 +134,16 @@ test('successful PTY input invalidates public session ordering while failed or i
     assert.equal(unchanged.sessions.find(session => session.instanceId === id).lastModified, 200000);
   } finally { await f.close(); }
 });
+
+test('session-only app changes and approval revocation invalidate other windows', async () => {
+  const f=await fixture();
+  try {
+    const app=(await f.api('/api/plugins')).value.plugins.find(p=>p.bundled && p.manifest?.id==='ashub-kimi-coding-plan');
+    await f.subscribe();
+    for(const change of [{enabled:true},{autoApprove:true},{autoApprove:false},{enabled:false}]) {
+      const before=f.events.filter(e=>e.data.kind==='extensions').length;
+      assert.equal((await f.api('/api/plugins',{id:app.id,...change},'PUT')).status,200);
+      await waitFor(()=>f.events.filter(e=>e.data.kind==='extensions').length>before,'missing plugin change event for '+JSON.stringify(change));
+    }
+  } finally {await f.close();}
+});

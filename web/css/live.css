@@ -3602,10 +3602,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 }
 
 /* Generic explicit-operation previews, shared by all plugins. */
-.approval-items { min-width: 0; max-height: 45vh; overflow: auto; margin: 12px 0; }
-.approval-items section + section { border-top: 1px solid currentColor; border-color: color-mix(in srgb, currentColor 15%, transparent); padding-top: 12px; margin-top: 12px; }
-.approval-items strong { font-size: 13px; font-weight: 600; }
-.approval-items dl { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 3fr); gap: 6px 12px; font-size: 12px; line-height: 1.6; margin: 8px 0; }
-.approval-items dt { opacity: .65; }
-.approval-items dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (max-width: 480px) { .approval-items dl { grid-template-columns: 1fr; gap: 2px; } .approval-items dd { margin-bottom: 8px; } }
+.approval-items { min-width: 0; max-height: 45vh; overflow: auto; margin: 2px 0 8px; padding: 8px var(--space-3, 16px); }
+.approval-items section + section { border-top: 1px solid var(--border-light, var(--line)); padding-top: 12px; margin-top: 12px; }
+.approval-items strong { font-size: var(--fs-sm, 13px); font-weight: 500; color: var(--text-mid, var(--text)); }
+.approval-items dl { display: grid; grid-template-columns: minmax(64px, 104px) minmax(0, 1fr); gap: 8px 16px; font-size: var(--fs-xs, 12px); line-height: 1.65; margin: 10px 0 0; }
+.approval-items dt { color: var(--text-dim, var(--muted)); overflow-wrap: anywhere; }
+.approval-items dd { min-width: 0; margin: 0; color: var(--text-mid, var(--text)); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .approval-items dl { grid-template-columns: 1fr; gap: 3px; } .approval-items dd { margin-bottom: 8px; } }

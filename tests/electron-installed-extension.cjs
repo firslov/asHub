@@ -23,7 +23,7 @@ app.whenReady().then(async () => {
       schemaVersion: 2, id: 'delivery-ui', name: 'Delivery UI', configNamespaces: ['delivery'],
       defaults: { delivery: { label: 'Review', retained: 'keep' } },
       configSchema: { delivery: { type: 'object', properties: { label: { type: 'string', maxLength: 80 } } } },
-      ui: { version: 1, panels: [{ id: 'settings', title: 'Delivery preferences', components: [
+      ui: { version: 1, panels: [{ id: 'settings', title: 'Delivery preferences', icon: 'browser', components: [
         { type: 'text', text: 'Installed from a real ZIP' },
         { type: 'form', id: 'config', mode: 'config', namespace: 'delivery', fields: [{ id: 'label', label: 'Name', type: 'text', value: 'Review' }] },
         { type: 'action', label: 'Prepare review', action: 'composer.insert', value: 'Review this project' },
@@ -59,6 +59,20 @@ app.whenReady().then(async () => {
     await wait(`!!document.querySelector('.extension-menu')`);
     await js(`document.querySelector('.extension-menu').click()`);
     await wait(`document.querySelector('.extension-panel input')?.value === 'Verified'`);
+    await js(`document.getElementById('plugins-toggle').click()`);
+    const row = `.plugin-item:has(#plugin-toggle-${feature.pluginId})`;
+    await wait(`!!document.querySelector('${row} .plugin-configure')`);
+    await js(`document.querySelector('${row} .plugin-configure').click()`);
+    await wait(`!document.querySelector('${row} .plugin-config').hidden`);
+    assert.equal(await js(`document.querySelector('${row} .plugin-approval-toggle').getAttribute('aria-checked')`),'false');
+    await js(`document.querySelector('${row} .plugin-approval-toggle').click()`);
+    await wait(`document.querySelector('${row} .plugin-approval-toggle')?.getAttribute('aria-checked')==='true' && !document.querySelector('${row} .plugin-approval-toggle').disabled`);
+    assert(JSON.parse(fs.readFileSync(settingsFile,'utf8'))['ashub.plugins.autoApprove'].includes(feature.pluginId));
+    await js(`document.querySelector('${row} .plugin-approval-toggle').click()`);
+    await wait(`document.querySelector('${row} .plugin-approval-toggle')?.getAttribute('aria-checked')==='false' && !document.querySelector('${row} .plugin-approval-toggle').disabled`);
+    assert(!JSON.parse(fs.readFileSync(settingsFile,'utf8'))['ashub.plugins.autoApprove'].includes(feature.pluginId));
+    await js(`document.getElementById('plugins-close').click();document.querySelector('.extension-menu').click()`);
+    await wait(`document.querySelector('.extension-panel input')?.value === 'Verified'`);
     for (const width of [390, 320]) {
       win.setContentSize(width, 850);
       // Native resize and Chromium layout are asynchronous on CI. Do not sample
@@ -78,6 +92,27 @@ app.whenReady().then(async () => {
       assert(layout.left >= -1 && layout.right <= width + 1 && layout.scrollWidth <= layout.clientWidth + 1,
         'panel overflow at ' + width + ': ' + JSON.stringify(layout));
     }
+    const glyph = await js(`document.querySelector('.extension-menu path').getAttribute('d')`);
+    const icons = await js(`(async () => {
+      const { mountDeclarativeUI } = await import('/js/extensions/declarative-ui.js');
+      return [[], ['browser-pages']].map(capabilities => {
+        const menuHost = document.createElement('div'), panelHost = document.createElement('div');
+        const dispose = mountDeclarativeUI({id:'fixture',name:'Fixture',capabilities,ui:{
+          version:1,panels:[{id:'panel',title:'Panel',icon:'panel',components:[]}]}}, {menuHost,panelHost});
+        const path = menuHost.querySelector('path').getAttribute('d'); dispose(); return path;
+      });
+    })()`);
+    assert.notEqual(glyph, icons[0], 'generic assistant panel differs from browser');
+    assert.equal(glyph, icons[1], 'earlier browser packages use the new browser glyph');
+    await js(`document.getElementById('plugins-toggle').click()`);
+    await wait(`!!document.querySelector('${row} .plugin-configure')`);
+    await js(`(()=>{const item=document.querySelector('${row}');if(item.querySelector('.plugin-config').hidden)item.querySelector('.plugin-configure').click();item.querySelector('.plugin-uninstall-open').click()})()`);
+    await js(`document.querySelector('${row} .plugin-uninstall-confirm button').click()`);
+    assert((await call('/api/plugins')).plugins.some(p=>p.id===feature.pluginId));
+    await js(`document.querySelector('${row} .plugin-uninstall-open').click();document.querySelector('${row} .plugin-uninstall-submit').click()`);
+    await wait(`!document.querySelector('.extension-menu') && !document.querySelector('${row} .plugin-uninstall-open')`);
+    assert(!(await call('/api/plugins')).plugins.some(p=>p.id===feature.pluginId));
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile,'utf8')).delivery,saved.delivery);
     console.log('PASS real installed UI: ZIP confirmation, host discovery, full app mount, durable form save, draft-only action, disable/reenable and 320/390px layout');
   } catch (error) { console.error(error); process.exitCode = 1; }
   finally { win?.destroy(); await hub?.shutdown(); clearTimeout(watchdog); app.exit(process.exitCode || 0); }

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readBodyWithSignal } from '../transport/body-reader.js';
 import { updateSettingsFile } from '../settings-store.js';
-import { readPluginSettings, pluginCatalog, PLUGIN_DISABLED, setPluginEnabled as persistPluginEnabled } from '../plugins.js';
+import { readPluginSettings, pluginCatalog, BUNDLED_ENABLED, bundledPluginId, includedPackageIds, PLUGIN_DISABLED, setPluginEnabled as persistPluginEnabled } from '../plugins.js';
 
 export const FEATURES_DISABLED = 'ashub.features.disabled';
 export type ApplicationExtensionState = 'inactive' | 'starting' | 'active' | 'stopping' | 'error';
@@ -149,8 +149,35 @@ export class ApplicationExtensionRegistry {
     const affected = this.affectedPluginIds(pluginId);
     return [...this.entries.values()].some(entry => !!entry.definition.pluginId && affected.has(entry.definition.pluginId) && this.busy(entry));
   }
-  /** The plugin manager and feature toggles share this queue. Refuse a busy
-   * dependency closure BEFORE changing the kernel disable flags. */
+  uninstallPlugin(pluginId: string, checkIdle: () => void, remove: () => void): Promise<void> {
+    return this.queue(async () => {
+      if (this.closed) throw failure('Application is shutting down', 503);
+      await this.reconcile();
+      const plugin = pluginCatalog(this.options.settingsFile).find(item => item.id === pluginId);
+      if (!plugin) throw failure('Installed plugin not found', 404);
+      const dependents = [...this.affectedPluginIds(pluginId)].filter(id => id !== pluginId);
+      if (dependents.length) {
+        const names = pluginCatalog(this.options.settingsFile).filter(item => dependents.includes(item.id)).map(item => item.name);
+        throw failure('Required by: ' + names.join(', '));
+      }
+      const entries = [...this.entries.values()].filter(entry => entry.definition.pluginId === pluginId);
+      if (entries.some(entry => this.busy(entry))) throw failure('Installed plugin is busy');
+      checkIdle();
+      const active = entries.filter(entry => entry.state === 'active');
+      for (const entry of entries) entry.admissionBlocked = true;
+      try {
+        for (const entry of active) await this.deactivate(entry);
+        checkIdle();
+        remove();
+      } catch (error) {
+        for (const entry of active) if (entry.state === 'inactive') await this.activate(entry);
+        throw error;
+      } finally {
+        for (const entry of entries) entry.admissionBlocked = false;
+      }
+      await this.reconcile();
+    });
+  }
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<ReturnType<ApplicationExtensionRegistry['snapshot']>> {
     return this.queue(async () => {
       if (this.closed) throw failure('Application is shutting down', 503);
@@ -176,7 +203,7 @@ export class ApplicationExtensionRegistry {
         if (persisted && (error as {status?: number}).status === 409) {
           try {
             updateSettingsFile(this.options.settingsFile, data => {
-              for (const [key, ids] of [[PLUGIN_DISABLED, [pluginId]], ['disabledExtensions', plugin.directoryNames]] as const) {
+              for (const [key, ids] of [[PLUGIN_DISABLED, [pluginId]], [BUNDLED_ENABLED, includedPackageIds(plugin).map(bundledPluginId)], ['disabledExtensions', plugin.directoryNames]] as const) {
                 const current = data[key] ?? [], before = previous[key] ?? [];
                 if (!Array.isArray(current) || !Array.isArray(before)) throw new Error(`Invalid ${key}`);
                 const values = new Set<string>(current);

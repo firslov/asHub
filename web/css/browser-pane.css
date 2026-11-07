@@ -1,0 +1,91 @@
+.app > .main.with-browser-pane {
+  margin-inline-end: var(--browser-width, 42%);
+}
+.browser-pane {
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: end;
+  align-self: stretch;
+  width: var(--browser-width, 42%);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-inline-start: 1px solid var(--border-light);
+  color: var(--text);
+}
+.browser-pane[hidden] {
+  display: none;
+}
+.browser-pane header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-light);
+}
+.browser-origin {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font: var(--fs-xs) var(--font-mono);
+}
+.browser-pane button {
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-mid);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 5px 7px;
+  cursor: pointer;
+}
+.browser-pane button:hover,
+.browser-pane button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.browser-pane button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.browser-pane .browser-close {
+  font-size: 18px;
+}
+.browser-viewport {
+  flex: 1;
+  min-height: 0;
+}
+
+.browser-pane button:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.browser-back,
+.browser-forward {
+  font-size: 18px;
+}
+
+/* Native guest contents paint above renderer overlays, regardless of z-index. */
+body:has(.browser-pane:not([hidden])) :is(.update-card, .toast-container) {
+  right: calc(var(--browser-pane-inset, 0px) + 16px);
+  max-width: calc(100vw - var(--browser-pane-inset, 0px) - 32px);
+}
+
+.browser-pane { position: relative; }
+.browser-divider { position: absolute; inset: 0 auto 0 -5px; width: 10px; z-index: 1; cursor: col-resize; touch-action: none; }
+.browser-divider::after { content: ''; position: absolute; inset: 0 auto 0 4px; width: 2px; }
+.browser-divider:hover::after, .browser-divider:focus-visible::after, .resizing .browser-divider::after { background: var(--accent); }
+.browser-switch { display: none; }
+.app > .main.with-browser-pane.browser-compact { margin-inline-end: 0; margin-top: 40px; }
+.main.browser-behind { visibility: hidden; }
+.browser-pane[data-layout="compact"] { width: 100%; border-inline-start: 0; }
+.browser-pane[data-layout="compact"] .browser-divider { display: none; }
+.browser-pane[data-layout="compact"] .browser-switch { display: flex; gap: 2px; flex-shrink: 0; }
+.browser-pane[data-layout="compact"] header { height: 40px; box-sizing: border-box; }
+.browser-pane[data-layout="compact"][data-view="chat"] { align-self: start; height: 40px; }
+.browser-pane[data-layout="compact"][data-view="chat"] :is(.browser-viewport,.browser-back,.browser-forward,.browser-mode) { display: none; }

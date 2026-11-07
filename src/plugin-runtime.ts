@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { withPluginIdentity } from './plugin-approvals.js';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { ensureTsSupport } from 'agent-sh/extension-loader';
@@ -132,8 +133,56 @@ export function preparePluginRegistrations(ctx: Context): Map<string, Register> 
   return methods;
 }
 
+type Handler = Parameters<Context['define']>[1];
+type ScopedDefine = (name: string, fn: Handler) => () => void;
+
+/** Install on a fresh kernel, before advice is registered. Plugin base handlers
+ * can then be detached without deleting a host base or changing advice order. */
+export function prepareScopedHandlers(registry: AgentShellCore['handlers']): ScopedDefine {
+  const bases = new Map<string, Array<{ handler: Handler }>>();
+  const advised = new Set<string>();
+  const advise = registry.advise.bind(registry);
+  let trackingBases = false;
+  registry.advise = (name, advisor) => {
+    if (!advised.has(name)) {
+      advised.add(name);
+      // Keep all ordinary advisors outside the selected base, even those
+      // registered before a plugin definition. The native base stays intact.
+      advise(name, (next, ...args) => (bases.get(name)?.at(-1)?.handler ?? next)(...args));
+    }
+    return advise(name, advisor);
+  };
+  return (name, handler) => {
+    if (!trackingBases) {
+      const define = registry.define.bind(registry), call = registry.call.bind(registry);
+      const list = registry.list.bind(registry), has = registry.has.bind(registry);
+      registry.define = (key, fn) => {
+        define(key, fn);
+        bases.delete(key); // A later host definition supersedes earlier owners.
+      };
+      registry.call = (key, ...args) => {
+        const base = !advised.has(key) && bases.get(key)?.at(-1);
+        return base ? base.handler(...args) : call(key, ...args);
+      };
+      registry.has = key => bases.has(key) || has(key);
+      registry.list = () => [...new Set([...list(), ...bases.keys()])];
+      trackingBases = true;
+    }
+    const stack = bases.get(name) ?? [];
+    const entry = { handler };
+    stack.push(entry);
+    bases.set(name, stack);
+    return () => {
+      if (bases.get(name) !== stack) return;
+      const index = stack.indexOf(entry);
+      if (index >= 0) stack.splice(index, 1);
+      if (!stack.length) bases.delete(name);
+    };
+  };
+}
+
 /** Registrations belong to this activation, never to a process-global plugin name. */
-export function pluginScope(ctx: Context) {
+export function pluginScope(ctx: Context, defineOwned?: ScopedDefine) {
   let disposed = false, disposing = false;
   const cleanups: Array<() => void> = [];
   const remember = (fn: () => void) => { if (disposed) fn(); else cleanups.push(fn); };
@@ -184,43 +233,56 @@ export function pluginScope(ctx: Context) {
     return release;
   });
   for (const method of ['emitPipe', 'emitPipeAsync']) bus[method] = guard((...args) => (ctx.bus as any)[method](...args));
+  const registerScopedCommand = (name: string, handler: Handler, publish: () => void) => {
+    // The kernel dispatches registration synchronously, but its bus catches
+    // duplicate-command errors. Only own cleanup after the registry actually
+    // defines our handler; otherwise a failed plugin could remove /help.
+    const key = commandKey(name);
+    const define = ctx.define;
+    let registered = false, active = false;
+    let releaseBase: (() => void) | undefined;
+    const retired = ({ name: removed }: { name: string }) => {
+      if (commandKey(removed) !== key) return;
+      active = false;
+      releaseBase?.(); releaseBase = undefined;
+    };
+    const cleanup = () => {
+      ctx.bus.off('command:unregister', retired);
+      releaseBase?.(); releaseBase = undefined;
+      if (active) { active = false; ctx.bus.emit('command:unregister', { name }); }
+    };
+    // A command name can be reused after explicit unregistration. Once
+    // retired, this activation must never remove a later registration.
+    ctx.bus.on('command:unregister', retired);
+    ctx.define = (definedName, fn) => {
+      if (definedName === key && fn === handler) {
+        if (defineOwned) releaseBase = defineOwned(definedName, fn); else define(definedName, fn);
+        registered = true; active = true;
+      } else define(definedName, fn);
+    };
+    try { publish(); }
+    catch (e) { cleanup(); throw e; }
+    finally { ctx.define = define; }
+    if (!registered) { cleanup(); return false; }
+    const owned = commands.get(key) ?? [];
+    owned.push(cleanup); commands.set(key, owned);
+    remember(cleanup);
+    return true;
+  };
   bus.emit = guard((event, payload) => {
+    if (event === 'command:register' && typeof payload?.name === 'string' && typeof payload.handler === 'function') {
+      registerScopedCommand(payload.name, payload.handler, () => ctx.bus.emit('command:register', payload));
+      return;
+    }
     const owned = event === 'command:unregister' && typeof payload?.name === 'string' ? commands.get(commandKey(payload.name)) : undefined;
     if (owned) { for (const release of owned.splice(0).reverse()) release(); }
     else (ctx.bus.emit as any)(event, payload);
   });
   const scoped: any = { ...ctx, bus, onDispose: remember, advise: tracked(ctx, 'advise'), adviseCommand: tracked(ctx, 'adviseCommand'),
-    define: guard(ctx.define), call: guard(ctx.call), quit: guard(ctx.quit), registerCommand: guard((name, description, handler) => {
-      // The kernel dispatches registration synchronously, but its bus catches
-      // duplicate-command errors. Only own cleanup after the registry actually
-      // defines our handler; otherwise a failed plugin could remove /help.
-      const key = commandKey(name);
-      const define = ctx.define;
-      let registered = false, active = false;
-      const retired = ({ name: removed }: { name: string }) => {
-        if (commandKey(removed) === key) active = false;
-      };
-      const cleanup = () => {
-        ctx.bus.off('command:unregister', retired);
-        if (active) { active = false; ctx.bus.emit('command:unregister', { name }); }
-      };
-      // A command name can be reused after explicit unregistration. Once
-      // retired, this activation must never remove a later registration.
-      ctx.bus.on('command:unregister', retired);
-      ctx.define = (definedName, fn) => {
-        define(definedName, fn);
-        if (definedName === key && fn === handler) { registered = true; active = true; }
-      };
-      try { ctx.registerCommand(name, description, handler); }
-      catch (e) { cleanup(); throw e; }
-      finally { ctx.define = define; }
-      if (!registered) {
-        cleanup();
+    define: guard((name, fn) => { if (defineOwned) remember(defineOwned(name, fn)); else ctx.define(name, fn); }), call: guard(ctx.call), quit: guard(ctx.quit), registerCommand: guard((name, description, handler) => {
+      if (!registerScopedCommand(name, handler, () => ctx.registerCommand(name, description, handler))) {
         throw new Error(`Command "${name}" could not be registered; use adviseCommand for existing commands`);
       }
-      const owned = commands.get(key) ?? [];
-      owned.push(cleanup); commands.set(key, owned);
-      remember(cleanup);
     }) };
   if (ctx.agent) {
     const agent: any = scoped.agent = { ...ctx.agent };
@@ -261,10 +323,13 @@ export function pluginScope(ctx: Context) {
 }
 
 export class PluginRuntime {
-  private scopes = new Set<ReturnType<typeof pluginScope>>();
+  private scopes = new Map<string, ReturnType<typeof pluginScope>>();
+  private uninstalled = new Set<string>();
   private closed = false;
   readonly status: PluginStatus[] = [];
-  constructor(private file: string, private timeout = 10_000) {}
+  constructor(private file: string, private timeout = 10_000,
+    private bindBrowser?: (plugin: string) => ReturnType<NonNullable<import('./bridges/types.js').BridgeOpts['bindBrowserPages']>>,
+    private defineOwned?: ScopedDefine) {}
   async load(ctx: Context): Promise<string[]> {
     let entries, settings: Record<string, any>;
     try { entries = pluginCatalog(this.file).filter(p => p.enabled); settings = readPluginSettings(this.file); }
@@ -274,6 +339,7 @@ export class PluginRuntime {
     }
     for (const plugin of entries) {
       if (this.closed) break;
+      if (this.uninstalled.has(plugin.id)) continue;
       const state: PluginStatus = { id: plugin.id, name: plugin.name, state: 'loading', configNamespaces: [] };
       this.status.push(state);
       if (plugin.compatibilityError) {
@@ -282,10 +348,16 @@ export class PluginRuntime {
         continue;
       }
       if (!plugin.sessionEnabled) { state.state = plugin.manifest?.ui ? 'frontend' : 'registered'; continue; }
-      const scope = pluginScope(ctx); this.scopes.add(scope);
+      const scope = pluginScope(ctx, this.defineOwned); this.scopes.set(plugin.id, scope);
+      const call = scope.ctx.call;
+      scope.ctx.call = ((...args: Parameters<typeof call>) =>
+        withPluginIdentity(plugin.id, () => call(...args))) as typeof call;
       // The same package/profile directory is available to both plugin entries.
       // No conversation contents, application services or credentials are exposed.
-      Object.defineProperty(scope.ctx, 'services', { value: Object.freeze({ dataDirectory: pluginDataDirectory(this.file, plugin.id) }), enumerable: true });
+      const browserPages = plugin.manifest?.requires.capabilities.includes('browser-pages') ? this.bindBrowser?.(plugin.id) : undefined;
+      if (browserPages) scope.ctx.onDispose(() => browserPages.close());
+      Object.defineProperty(scope.ctx, 'services', { value: Object.freeze({ dataDirectory: pluginDataDirectory(this.file, plugin.id),
+        ...(browserPages ? {browserPages} : {}) }), enumerable: true });
       // Snapshot per kernel: new kernels see saved edits without resetting the
       // process-wide kernel settings cache or changing running conversations.
       scope.ctx.getExtensionSettings = (namespace, defaults) => {
@@ -306,7 +378,7 @@ export class PluginRuntime {
               await ensureTsSupport();
             }
             const mod = await import(path.isAbsolute(spec) ? pathToFileURL(spec).href : spec);
-            if (this.closed || state.state === 'error') return;
+            if (this.closed || this.uninstalled.has(plugin.id) || state.state === 'error') return;
             const activate = typeof mod.default === 'function' ? mod.default : typeof mod.default?.default === 'function' ? mod.default.default : mod.activate;
             if (typeof activate !== 'function') throw new Error('Missing activate(ctx) export');
             await activate(scope.ctx);
@@ -314,14 +386,21 @@ export class PluginRuntime {
           new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Plugin activation timed out (${this.timeout}ms)`)), this.timeout); }),
         ]);
         if (this.closed) { scope.dispose(); break; }
-        state.state = 'loaded';
+        if (!this.uninstalled.has(plugin.id)) state.state = 'loaded';
       } catch (e) {
-        scope.dispose(); this.scopes.delete(scope);
+        scope.dispose(); this.scopes.delete(plugin.id);
         state.state = 'error'; state.error = e instanceof Error ? e.message : String(e);
         if (!this.closed) ctx.bus.emit('ui:error', { message: `Plugin ${plugin.name}: ${state.error}` });
       } finally { if (timer) clearTimeout(timer); }
     }
     return this.status.filter(s => s.state === 'loaded').map(s => s.name);
   }
-  close(): void { this.closed = true; for (const scope of [...this.scopes].reverse()) scope.dispose(); this.scopes.clear(); }
+  uninstall(id: string): void {
+    this.uninstalled.add(id);
+    this.scopes.get(id)?.dispose();
+    this.scopes.delete(id);
+    const index = this.status.findIndex(plugin => plugin.id === id);
+    if (index >= 0) this.status.splice(index, 1);
+  }
+  close(): void { this.closed = true; for (const scope of [...this.scopes.values()].reverse()) scope.dispose(); this.scopes.clear(); }
 }

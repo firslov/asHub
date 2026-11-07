@@ -30,7 +30,7 @@ await check('Z03 prompt edits in a second window preserve first window saved pro
  const save=(u,name)=>{u.doc.getElementById('prompt-editor-name').value=name;u.doc.getElementById('prompt-editor-content').value='content '+name;u.doc.getElementById('prompt-editor-save').events.click[0]();return tick()};await save(windows[0],'A saved prompt');const first=windows[0].mod.audit.read();await save(windows[1],'B saved prompt');const final=windows[1].mod.audit.read();assert(first.length===1&&final.length===2&&final[0].name==='A saved prompt'&&final[1].name==='B saved prompt','regression');return{afterFirstSave:first,afterSecondWindowSave:final};
 });
 await check('Z04 older sessions response cannot overwrite confirmed newer metadata',async()=>{
- const u=ui(),reads=[],stored=[];Object.assign(u.e.context,{sessionsFetchSeq:0,sessionsRenderSeq:0,lastSessionsList:null,fullHashCache:'',storeContentHash:'',sessionsHash:'',editingId:null,filterQuery:()=>'',refreshPinned:async()=>false,setSessionKind(){},setSessions:list=>stored.push(list),getSession:()=>null,sidebarView:signal('sessions'),pinnedIds:signal(new Set()),homeDir:signal(''),sessionList:new El(),BUCKET_ORDER:[],sideEmpty:()=>new El(),t:x=>x,fetch:()=>new Promise(r=>reads.push(r))});
+ const u=ui(),reads=[],stored=[];Object.assign(u.e.context,{directoryLabels:u.e.load("web/js/directory-labels.js").directoryLabels,seenErrors:new Map(),activeSessionId:signal(""),attentionFor:s=>u.e.load("web/js/project-status.js").sessionAttention(s,"",0,0),sessionLabels:new Map(),sessionsFetchSeq:0,sessionsRenderSeq:0,lastSessionsList:null,fullHashCache:'',storeContentHash:'',sessionsHash:'',editingId:null,filterQuery:()=>'',refreshPinned:async()=>false,setSessionKind(){},setSessions:list=>stored.push(list),getSession:()=>null,sidebarView:signal('sessions'),pinnedIds:signal(new Set()),homeDir:signal(''),sessionList:new El(),BUCKET_ORDER:[],sideEmpty:()=>new El(),t:x=>x,fetch:()=>new Promise(r=>reads.push(r))});
  const render=variable('web/js/sidebar.js','renderSessions',u.e.context),old=render(true),fresh=render(true);
  reads[1]({ok:true,json:async()=>[{instanceId:'aaaaaa',kind:'terminal',title:'confirmed new title'}]});await fresh;
  reads[0]({ok:true,json:async()=>[{instanceId:'aaaaaa',kind:'terminal',title:'old title'}]});await old;
@@ -72,10 +72,22 @@ await check('Z03 conflicting edits retain draft and do not resurrect deleted pro
 await check('Z03 storage event refreshes autocomplete data and failed writes retain editor',async()=>{
  const p=promptWindows(),[a,b]=p.windows;await p.save(a,'A');b.e.context.window.dispatchEvent({type:'storage',key:'ash.prompt.id-0'});assert(b.mod.audit.get().length===1,'storage event did not synchronize');p.storage.setItem=()=>{throw Error('quota')};await p.save(b,'unsaved');assert(p.get().length===1&&b.toasts.length===1&&b.doc.getElementById('prompt-editor-name').value==='unsaved'&&!b.doc.getElementById('prompt-editor-save').disabled,'failed save lost draft');
 });
-function sidebarEnv(){const u=ui(),reads=[],stored=[],rendered=[];Object.assign(u.e.context,{sessionsFetchSeq:0,sessionsRenderSeq:0,lastSessionsList:null,fullHashCache:'',storeContentHash:'',sessionsHash:'',editingId:null,filterQuery:()=>'',refreshPinned:async()=>false,setSessionKind(){},setSessions:list=>stored.push(list),getSession:()=>null,sidebarView:signal('sessions'),pinnedIds:signal(new Set()),homeDir:signal('/home/test'),sessionList:new El(),BUCKET_ORDER:['today'],bucketKey:()=> 'today',sideEmpty:()=>new El(),renderSessionItem:s=>{rendered.push(s.title);return new El()},t:x=>x,fetch:()=>new Promise(r=>reads.push(r))});return{u,reads,stored,rendered,render:variable('web/js/sidebar.js','renderSessions',u.e.context)}}
+function sidebarEnv(){const u=ui(),reads=[],stored=[],rendered=[];Object.assign(u.e.context,{directoryLabels:u.e.load("web/js/directory-labels.js").directoryLabels,seenErrors:new Map(),activeSessionId:signal(""),attentionFor:s=>u.e.load("web/js/project-status.js").sessionAttention(s,"",0,0),sessionLabels:new Map(),sessionsFetchSeq:0,sessionsRenderSeq:0,lastSessionsList:null,fullHashCache:'',storeContentHash:'',sessionsHash:'',editingId:null,filterQuery:()=>'',refreshPinned:async()=>false,setSessionKind(){},setSessions:list=>stored.push(list),getSession:()=>null,sidebarView:signal('sessions'),pinnedIds:signal(new Set()),homeDir:signal('/home/test'),sessionList:new El(),BUCKET_ORDER:['today'],bucketKey:()=> 'today',sideEmpty:()=>new El(),renderSessionItem:s=>{rendered.push(s.title);return new El()},t:x=>x,fetch:()=>new Promise(r=>reads.push(r))});return{u,reads,stored,rendered,render:variable('web/js/sidebar.js','renderSessions',u.e.context)}}
 const sessionResponse=title=>({ok:true,json:async()=>[{instanceId:'aaaaaa',kind:'agent',title,cwd:'/tmp'}]});
 await check('Z04 cache-only render does not discard pending network refresh',async()=>{
  const x=sidebarEnv();x.u.e.context.lastSessionsList=[{instanceId:'aaaaaa',title:'cached',cwd:'/tmp'}];const pending=x.render(true);await x.render(true,{fromCache:true});x.reads[0](sessionResponse('fresh'));await pending;assert(x.stored.at(-1)[0].title==='fresh'&&x.rendered.at(-1)==='fresh','filter render suppressed fresh list');
+});
+await check('Z04 filtered row updates its directory label when a hidden sibling shares the leaf',async()=>{
+ const x=sidebarEnv(), labels=[];
+ const ctx=x.u.e.context;
+ ctx.filterQuery=()=> 'visible';ctx.matchesFilter=title=>title==='visible';
+ ctx.renderSessionItem=s=>{labels.push(ctx.sessionLabels.get(s.cwd));return new El()};
+ const a={instanceId:'aaaaaa',title:'visible',cwd:'/course/notes'};
+ const b={instanceId:'bbbbbb',title:'other',cwd:'/review/notes'};
+ for(const list of [[a],[a,b],[a]]){
+   const rendering=x.render(true);x.reads.at(-1)({ok:true,json:async()=>list});await rendering;
+ }
+ assert(labels.join('|')==='notes|course/notes|notes','filtered directory label is stale');
 });
 await check('Z04 render delayed by pinned fetch cannot replace newer DOM',async()=>{
  const x=sidebarEnv();let release,started;const ready=new Promise(r=>started=r);let calls=0;x.u.e.context.refreshPinned=async()=>{if(++calls===1){started();await new Promise(r=>release=r)}return false};const old=x.render(true);x.reads[0](sessionResponse('old'));await ready;const next=x.render(true);x.reads[1](sessionResponse('fresh'));await next;release();await old;assert(x.stored.at(-1)[0].title==='fresh'&&x.rendered.join()==='fresh','older render overwrote newer DOM');

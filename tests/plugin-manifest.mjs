@@ -99,7 +99,7 @@ test('v1 explicit entry paths preserve their separate identity and directory dis
   const root = installed(f, 'sample-plugin', { schemaVersion: 1, id: 'sample-plugin' });
   fs.writeFileSync(path.join(root, 'index.js'), 'export default () => {}');
   fs.writeFileSync(f.file, JSON.stringify({ extensions: [path.join(root, 'index.mjs')], disabledExtensions: ['sample-plugin'] }));
-  const entries = f.catalog.pluginCatalog(f.file);
+  const entries = f.catalog.pluginCatalog(f.file).filter(p=>!p.bundled);
   assert.equal(entries.length, 2);
   const explicit = entries.find(entry => entry.source.endsWith('index.mjs')), directory = entries.find(entry => entry.source.endsWith('index.js'));
   assert(explicit.enabled); assert.equal(directory.enabled, false);
@@ -113,7 +113,7 @@ test('managed v2 application scope survives explicit nested paths and nested pac
   fs.writeFileSync(path.join(root, 'app/package.json'), '{"type":"module"}');
   const [directoryOnly] = f.catalog.pluginCatalog(f.file);
   fs.writeFileSync(f.file, JSON.stringify({ extensions: [entry] }));
-  const entries = f.catalog.pluginCatalog(f.file), [explicit] = entries;
+  const entries = f.catalog.pluginCatalog(f.file).filter(p=>!p.bundled), [explicit] = entries;
   assert.equal(entries.length, 1); assert.equal(explicit.id, directoryOnly.id);
   assert.equal(explicit.manifest.schemaVersion, 2); assert.equal(explicit.packageRoot, root);
   assert.equal(explicit.applicationSpecifier, entry); assert.equal(explicit.sessionSpecifier, undefined); assert.equal(explicit.sessionEnabled, false);
@@ -227,11 +227,73 @@ test('dependencies use package IDs, enforce enabled/version/compatibility, and r
   const dependency = f.catalog.pluginCatalog(f.file)[0]; f.catalog.setPluginEnabled(f.file, dependency.id, false);
   assert.equal(f.installer.previewStatus(preview.token).canInstall, false); assert.throws(() => f.installer.confirm(preview.token), /prerequisites/);
   f.catalog.setPluginEnabled(f.file, dependency.id, true); installed(f, 'sample-plugin', dependent);
-  assert(f.catalog.pluginCatalog(f.file).every(entry => entry.compatibility.compatible));
+  assert(f.catalog.pluginCatalog(f.file).filter(p=>!p.bundled).every(entry => entry.compatibility.compatible));
   const cycle = { schemaVersion: 1, id: 'dependency-plugin', dependencies: [{ id: 'sample-plugin', minVersion: '1.0.0' }] };
   fs.writeFileSync(path.join(dependency.packageRoot, 'ashub-plugin.json'), JSON.stringify(cycle));
-  assert(f.catalog.pluginCatalog(f.file).every(entry => entry.compatibility.compatible === false && !entry.sessionEnabled));
+  assert(f.catalog.pluginCatalog(f.file).filter(p=>!p.bundled).every(entry => entry.compatibility.compatible === false && !entry.sessionEnabled));
   await f.installer.close();
+});
+test('a damaged manual app in a custom folder blocks a duplicate ZIP installation', async () => {
+  const f=fixture(), m={schemaVersion:1,id:'ashub-project-management'};
+  const dir=installed(f,'my-team-tools',m);
+  fs.writeFileSync(path.join(dir,'package.json'),'{');
+  const bundle=archive(m,{'release/index.mjs':'export default()=>{}'});
+  try {
+    await assert.rejects(f.installer.preview(bundle),/repair or remove/i);
+    assert(!fs.existsSync(path.join(f.e.dir,'extensions',m.id)));
+    assert.equal(fs.readFileSync(path.join(dir,'package.json'),'utf8'),'{');
+  } finally { await f.installer.close(); }
+});
+test('a mismatched package name cannot redirect an app upgrade to a second directory', async () => {
+  const f=fixture(), m={schemaVersion:1,id:'ashub-project-management'};
+  const dir=installed(f,'team-tools',m);
+  fs.writeFileSync(path.join(dir,'package.json'),JSON.stringify({name:'wrong-name',version:'1.0.0'}));
+  const bundle=archive(m,{'release/index.mjs':'export default()=>{}'});
+  try {
+    await assert.rejects(f.installer.preview(bundle),/repair or remove/i);
+    assert(!fs.existsSync(path.join(f.e.dir,'extensions',m.id)));
+  } finally {await f.installer.close();}
+});
+test('replacing and uninstalling a supplied extension preserves its choices across discovery and explicit restore',async()=>{
+  const f=fixture(), id='ashub-project-management';
+  const bundled=f.catalog.pluginCatalog(f.file).find(app=>app.manifest?.id===id);
+  const data=path.join(f.e.dir,'hub-sessions','plugin-data',bundled.id,'evidence.json');
+  fs.mkdirSync(path.dirname(data),{recursive:true});fs.writeFileSync(data,'retained');
+  fs.writeFileSync(f.file,JSON.stringify({projectNotes:{saved:true},'ashub.plugins.autoApprove':[bundled.id]}));
+  const m={schemaVersion:1,id},bytes=archive(m,{'release/index.mjs':'export default()=>{}'});
+  try {
+    const preview=await f.installer.preview(bytes);
+    assert.equal((await done(f.installer,f.installer.confirm(preview.token).id)).state,'succeeded');
+    const copies=()=>f.catalog.pluginCatalog(f.file).filter(app=>app.manifest?.id===id);
+    const [manual]=copies();
+    assert.equal(copies().length,1);assert(!manual.bundled && !manual.enabled);
+    assert(!JSON.parse(fs.readFileSync(f.file))['ashub.plugins.autoApprove'].includes(bundled.id));
+    assert.equal(f.catalog.restorableApps(f.file).length,0);
+    f.catalog.setPluginEnabled(f.file,manual.id,true);
+    f.installer.uninstall(manual.id);assert.equal(copies().length,0);
+    assert.deepEqual(Array.from(f.catalog.restorableApps(f.file),app=>app.id),[id]);
+    f.installer.restore(id);
+    assert(copies()[0].bundled && !copies()[0].enabled && copies()[0].id===bundled.id);
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.file)).projectNotes,{saved:true});assert.equal(fs.readFileSync(data,'utf8'),'retained');
+    assert.throws(()=>f.installer.restore(id),/not available/);
+  } finally {await f.installer.close();}
+});
+test('offline reinstall clears stale activation and grant without overwriting other profile preferences',async()=>{
+  const f=fixture(), name='ashub-project-management';
+  const original=f.catalog.pluginCatalog(f.file).find(p=>p.manifest?.id===name);
+  fs.writeFileSync(f.file,JSON.stringify({
+    [f.catalog.BUNDLED_REMOVED]:[name], [f.catalog.BUNDLED_ENABLED]:[original.id,'keep'],
+    'ashub.plugins.autoApprove':[original.id,'keep'], projectNotes:{saved:true},
+  }));
+  try {
+    assert(!f.catalog.pluginCatalog(f.file).some(p=>p.id===original.id));
+    f.installer.restore(name);
+    const next=f.catalog.pluginCatalog(f.file).find(p=>p.id===original.id);
+    assert(next && !next.enabled,'explicit reinstall must start disabled even for a partially restored profile');
+    const settings=JSON.parse(fs.readFileSync(f.file));
+    assert.deepEqual(settings['ashub.plugins.autoApprove'],['keep']);
+    assert.deepEqual(settings[f.catalog.BUNDLED_ENABLED],['keep']);assert.deepEqual(settings.projectNotes,{saved:true});
+  } finally {await f.installer.close();}
 });
 test('setup cannot change approved v2 scopes, capabilities or UI metadata', async () => {
   const f = fixture(async (script, _args, cwd) => {

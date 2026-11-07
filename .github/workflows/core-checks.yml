@@ -60,3 +60,4 @@ jobs:
       - run: npm run test:scheduled-tasks:ui
       - run: npm run test:personal-assistant:ui
       - run: npm run test:updater:ui
+      - run: npm run test:browser:ui

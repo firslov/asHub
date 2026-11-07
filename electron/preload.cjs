@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onBackgroundSettings: (cb) => onChannel('desktop:background:changed', cb),
   onOpenMobileAccess: (cb) => onChannel('desktop:open-mobile', cb),
   notifyDesktopReady: () => ipcRenderer.send('desktop:ready'),
+  browserStatus: id => ipcRenderer.invoke('desktop:browser-status', id),
+  browserLayout: (id, bounds) => ipcRenderer.send('desktop:browser-layout', id, bounds),
+  browserControl: (id, action, pageId) => ipcRenderer.send('desktop:browser-control', id, action, pageId),
+  onBrowserChanged: cb => onChannel('desktop:browser-changed', cb),
   fileAction: (request) => ipcRenderer.invoke("desktop:file", request),
   pickDirectory: () => ipcRenderer.invoke("pick-directory"),
   checkForUpdate: () => ipcRenderer.invoke("check-for-update"),
@@ -50,3 +54,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onSuspend: (cb) => onChannel("app:suspend", cb),
   onResume: (cb) => onChannel("app:resume", cb),
 });
+
+// Keep macOS window controls centered when title-bar preferences change.
+if (process.platform === 'darwin') {
+  window.addEventListener('DOMContentLoaded', () => {
+    const titleBar = document.querySelector('.title-bar');
+    if (!titleBar) return;
+    const sync = () => ipcRenderer.send('desktop:titlebar-height', titleBar.getBoundingClientRect().height);
+    const observer = new ResizeObserver(sync);
+    observer.observe(titleBar);
+    window.addEventListener('resize', sync);
+    window.addEventListener('pagehide', () => observer.disconnect(), { once: true });
+    sync();
+  }, { once: true });
+}

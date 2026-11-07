@@ -58,7 +58,7 @@ app.whenReady().then(async () => {
         }
         json({ namespace: 'fixture-settings', config: stored, revision }); return;
       }
-      if (url.pathname === '/api/plugins') { json({ plugins: [] }); return; }
+      if (url.pathname === '/api/plugins') { json({ plugins: [{ id: 'fixture-bound-id', name: 'Fixture UI', enabled: true, configNamespaces: ['fixture-settings'] }] }); return; }
       if (url.pathname.startsWith('/api/')) { json({ providers: [], plugins: [], installed: [], skills: [] }); return; }
       const file = path.join(root, url.pathname === '/' ? 'index.html' : url.pathname);
       if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); res.end(); return; }
@@ -79,7 +79,12 @@ app.whenReady().then(async () => {
       await import('/js/plugins-panel.js'); await import('/js/composer.js');
       await import('/js/prefs.js');
       await import('/js/extensions/feature-state.js').then(m=>m.featuresReady());`);
-    await wait(`document.querySelectorAll('#features-list [data-feature-id]').length === 6`, 'feature controls');
+    await run(`document.getElementById('plugins-toggle').click()`);
+    await wait(`document.querySelectorAll('#plugins-overlay [data-feature-id]').length === 6`, 'feature controls');
+    assert.equal(await js(`document.querySelector('[data-feature-id="fixture-ui"]').closest('.plugin-bound-features')?.dataset.pluginId`), 'fixture-bound-id',
+      'installed feature controls belong to their local extension');
+    assert.equal(await js(`document.querySelectorAll('#features-list [data-feature-id]').length`), 5);
+    await run(`document.getElementById('plugins-close').click()`);
     assert.equal(await js(`document.querySelectorAll('.extension-menu').length`), 3);
     assert.equal(await js(`Boolean(window.pwned)`), false);
     await run(`document.getElementById('mobile-access-toggle').click()`);

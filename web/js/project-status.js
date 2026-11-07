@@ -13,3 +13,13 @@ export function sharesActiveWorkspace(session, sessions, workspaces = {}) {
   return sessions.some(other => other.instanceId !== session.instanceId && other.isProcessing
     && (workspaces[other.cwd]?.root || other.cwd) === root);
 }
+
+// A subscribed background tab can receive an error without setting the host's unread bit.
+export function sessionAttention(session, activeId, seenAt, openedAt) {
+  const status = projectSessionStatus(session);
+  if (status === 'approval') return status;
+  if (status !== 'failed' || session.instanceId === activeId) return '';
+  const failedAt = session.lastTurnErrorAt;
+  if (seenAt && failedAt && failedAt <= seenAt) return '';
+  return session.hasUnread || failedAt > openedAt ? 'failed' : '';
+}

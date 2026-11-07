@@ -1,3 +1,5 @@
+import { sessionAttention } from './project-status.js';
+import { directoryLabels } from './directory-labels.js';
 import { networkPolicy, saveNetworkPolicy } from "./network-settings.js";
 import { initSidebarSearch } from "./sidebar-search.js";
 import { initSidebarViewPicker } from "./sidebar-view-picker.js";
@@ -103,15 +105,8 @@ const persistCollapsed = () => {
   try { localStorage.setItem(LS_WORKSPACE_COLLAPSED, JSON.stringify([...collapsedWorkspaces])); } catch {}
 };
 
-const shortenCwd = (cwd) => {
-  if (!cwd) return "";
-  let path = cwd;
-  const home = homeDir.value;
-  if (home && path.startsWith(home)) path = "~" + path.slice(home.length);
-  const parts = path.split("/").filter(Boolean);
-  if (parts.length <= 2) return path;
-  return (path.startsWith("~") ? "~/…/" : "…/") + parts.slice(-2).join("/");
-};
+let sessionLabels = new Map();
+const shortenCwd = cwd => sessionLabels.get(cwd) ?? directoryLabels([cwd]).get(cwd) ?? '';
 
 // ── Unified sidebar item anatomy ─────────────────────────────────────
 // All four views share: [icon slot (.side-icon)] [title + meta (.side-body)]
@@ -135,7 +130,7 @@ const sideEmpty = (iconHtml, text) => {
 };
 
 /** Shared title + meta (cwd / relative time) markup for sidebar items. */
-const sideBody = (titleText, { cwd, ts } = {}) => {
+const sideBody = (titleText, { cwd, ts, location } = {}) => {
   const title = escape(titleText);
   const timeText = ts ? `<span class="side-time" title="${escape(new Date(ts).toLocaleString())}">${escape(relativeTime(ts))}</span>` : "";
   // No cwd → single-line: title (ellipsis) + inline time, so rows that only
@@ -143,10 +138,21 @@ const sideBody = (titleText, { cwd, ts } = {}) => {
   if (!cwd) {
     return `<span class="side-body side-body-row"><span class="side-title" title="${title}">${title}</span>${timeText}</span>`;
   }
-  const cwdText = `<span class="side-cwd" title="${escape(cwd)}">${escape(shortenCwd(cwd))}</span>`;
+  const cwdText = `<span class="side-cwd" title="${escape(cwd)}">${escape(location ?? shortenCwd(cwd))}</span>`;
   return `<span class="side-body"><span class="side-title" title="${title}">${title}</span><span class="side-meta">${cwdText}${timeText}</span></span>`;
 };
 
+const openedAt = Date.now();
+const seenErrors = new Map();
+const attentionFor = s => sessionAttention(s, activeSessionId.peek(), seenErrors.get(s.instanceId), openedAt);
+function sessionTimeLabel(session) {
+  const ts = session.lastModified ?? session.startedAt;
+  const status = attentionFor(session);
+  const attention = !!status;
+  if (!attention && !ts) return '';
+  const text = attention ? t(status === 'approval' ? 'projects.status.approval' : 'sidebar.needsAttention') : relativeTime(ts);
+  return `<span class="session-time${attention ? ' needs-attention' : ''}" title="${ts ? escape(new Date(ts).toLocaleString()) : ''}">${escape(text)}</span>`;
+}
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 
 const bucketKey = (ts) => {
@@ -166,7 +172,7 @@ const BUCKET_ORDER = ["today", "yesterday", "thisweek", "thismonth", "older"];
 const relativeTime = (ts) => {
   if (!ts) return "";
   const sec = Math.floor((Date.now() - ts) / 1000);
-  if (sec < 60) return "now";
+  if (sec < 60) return t("tree.time.now");
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min}m`;
   const hr = Math.floor(min / 60);
@@ -305,8 +311,7 @@ const renderSessionItem = (s, isPinned = false) => {
   });
   const title = escape(hasTitle ? s.title : t("untitled"));
   const cwdText = s.cwd ? `<span class="session-cwd" title="${escape(s.cwd)}">${escape(shortenCwd(s.cwd))}</span>` : "";
-  const ts = s.lastModified ?? s.startedAt;
-  const timeText = ts ? `<span class="session-time" title="${escape(new Date(ts).toLocaleString())}">${escape(relativeTime(ts))}</span>` : "";
+  const timeText = sessionTimeLabel(s);
   a.innerHTML = `<span class="session-title" title="${title}">${title}</span><span class="session-meta">${cwdText}${timeText}</span>`;
   li.appendChild(a);
 
@@ -514,8 +519,7 @@ const renderSessionItem = (s, isPinned = false) => {
       const hasTitle = s.title && s.title !== s.instanceId;
       const title = escape(hasTitle ? s.title : t("untitled"));
       const cwdText = s.cwd ? '<span class="session-cwd" title="' + escape(s.cwd) + '">' + escape(shortenCwd(s.cwd)) + '</span>' : "";
-      const ts = s.lastModified ?? s.startedAt;
-      const timeText = ts ? '<span class="session-time" title="' + escape(new Date(ts).toLocaleString()) + '">' + escape(relativeTime(ts)) + '</span>' : "";
+      const timeText = sessionTimeLabel(s);
       a.innerHTML = '<span class="session-title" title="' + title + '">' + title + '</span><span class="session-meta">' + cwdText + timeText + '</span>';
     }
     li.className = "";
@@ -577,9 +581,14 @@ const renderSessions = async (force = false, opts = null) => {
     // invalidates this early return even when the session list is unchanged.
     const fullHash = JSON.stringify([filterQuery(), list.map((s) => [
       s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt, s.kind ?? "agent", s.projectId,
-      s.projectExternal, s.model, s.provider, s.thinkingLevel, s.waitingApproval, s.queuedCount, s.lastTurnError, s.readOnlyContext, s.supportsCwdChange,
+      s.projectExternal, s.model, s.provider, s.thinkingLevel, s.waitingApproval, s.queuedCount, s.lastTurnError, s.lastTurnErrorAt, s.readOnlyContext, s.supportsCwdChange,
     ])]);
     if (!force && fullHash === fullHashCache) return;
+    const live = new Set(list.filter(s => s.lastTurnError).map(s => s.instanceId));
+    for (const id of seenErrors.keys()) if (!live.has(id)) seenErrors.delete(id);
+    const activeError = list.find(s => s.lastTurnErrorAt && s.instanceId === activeSessionId.peek());
+    if (activeError) seenErrors.set(activeError.instanceId, activeError.lastTurnErrorAt);
+    sessionLabels = directoryLabels(list.map(s => s.cwd));
 
     // Content-level gate for the store: replacing the Map wakes every
     // allSessions subscriber (tab strip, workspace/terminal views), so only
@@ -587,7 +596,7 @@ const renderSessions = async (force = false, opts = null) => {
     // turn end; those are synced into the cached objects in place instead.
     const contentHash = JSON.stringify(list.map((s) => [
       s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.kind ?? "agent", s.projectId,
-      s.projectExternal, s.model, s.provider, s.thinkingLevel, s.waitingApproval, s.queuedCount, s.lastTurnError, s.readOnlyContext, s.supportsCwdChange,
+      s.projectExternal, s.model, s.provider, s.thinkingLevel, s.waitingApproval, s.queuedCount, s.lastTurnError, s.lastTurnErrorAt, s.readOnlyContext, s.supportsCwdChange,
     ]));
     let storeInSync = !force && contentHash === storeContentHash;
     if (storeInSync) {
@@ -639,7 +648,7 @@ const renderSessions = async (force = false, opts = null) => {
       : agentList;
 
     const hash = JSON.stringify([query, visibleList.map((s) => [
-      s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread,
+      s.instanceId, s.title, s.cwd, sessionLabels.get(s.cwd), s.isProcessing, s.hasUnread, attentionFor(s),
       pinIds.has(s.instanceId), s.lastModified ?? s.startedAt,
     ])]);
     if (hash === sessionsHash) return;
@@ -692,7 +701,7 @@ const renderSessions = async (force = false, opts = null) => {
     const newChildren = [];
     // Unified empty state — no sessions at all, or no filter matches.
     if (buildOrder.length === 0) {
-      newChildren.push(sideEmpty("◌", query ? t("filter.no.match") : t("no.session")));
+      newChildren.push(sideEmpty("◌", query ? t("filter.no.match") : t("sidebar.noConversations")));
     }
     // Walk in order, updating or creating DOM nodes.
     // Reuse rows, then move only those whose sorted position changed.
@@ -831,7 +840,7 @@ const renderWorkspaces = () => {
   groups.sort((a, b) => b.lastModified - a.lastModified);
 
   const hash = JSON.stringify([filterQuery(), groups.map((g) => [
-    g.cwd, g.items.map((s) => [s.instanceId, s.title, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt]),
+    g.cwd, sessionLabels.get(g.cwd), g.items.map((s) => [s.instanceId, s.title, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt]),
   ])]);
   if (hash === workspacesHash) return;
   workspacesHash = hash;
@@ -942,7 +951,7 @@ const renderTerminals = () => {
     .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
 
   const hash = JSON.stringify(items.map((s) => [
-    s.instanceId, s.title, s.cwd, s.isProcessing, s.lastModified ?? s.startedAt,
+    s.instanceId, s.title, s.cwd, s.cwd && sessionLabels.get(s.cwd), s.isProcessing, s.lastModified ?? s.startedAt,
   ]));
   if (hash === terminalsHash) return;
   terminalsHash = hash;
@@ -1037,6 +1046,7 @@ const renderArchive = async () => {
       archiveList.appendChild(sideEmpty(ARCHIVE_ICON_SVG, query ? t("filter.no.match") : t("archive.empty")));
       return;
     }
+    const archivedLabels = directoryLabels(visible.map(item => item.cwd));
     for (const item of visible) {
       const li = document.createElement("li");
       li.dataset.sessionId = item.id;
@@ -1045,7 +1055,7 @@ const renderArchive = async () => {
       a.href = `/${item.id}`;
       a.innerHTML =
         `<span class="archive-icon side-icon">${ARCHIVE_ICON_SVG}</span>` +
-        sideBody(item.title || t("untitled"), { cwd: item.cwd, ts: item.startedAt });
+        sideBody(item.title || t("untitled"), { cwd: item.cwd, location: archivedLabels.get(item.cwd), ts: item.startedAt });
       li.appendChild(a);
 
       const restoreBtn = document.createElement("button");
@@ -1168,6 +1178,12 @@ effect(() => {
     const match = li.dataset.sessionId === active;
     li.classList.toggle("current", match);
     if (match) activeLi = li;
+  }
+  const opened = lastSessionsList?.find(s => s.instanceId === active);
+  if (opened?.lastTurnErrorAt && seenErrors.get(active) !== opened.lastTurnErrorAt) {
+    seenErrors.set(active, opened.lastTurnErrorAt);
+    fullHashCache = '';
+    void renderSessions(false, { fromCache: true });
   }
   if (activeLi) {
     const titleSpan = activeLi.querySelector(".session-title");

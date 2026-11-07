@@ -31,20 +31,20 @@ const pickQuery = (btn) => {
 const SESSION_CONTENT_SELECTOR =
   ".turn-sep, .agent-box, .tool-row, .thinking-block, .shell-block";
 
-// Submit only to the session returned by this exact creation request.
+// Seed a draft only in the session returned by this exact creation request.
 // If the user navigates away, preserve their current conversation and draft.
-const submitQueryWhenReady = (query, sessionId, timeoutMs = 15000) => {
+const fillDraftWhenReady = (query, sessionId, timeoutMs = 15000) => {
   const stop = () => { clearInterval(check); clearTimeout(timer); };
   const check = setInterval(() => {
     if (activeSessionId.peek() !== sessionId) { stop(); return; }
     const input = document.getElementById("query");
     const sv = activeSession.peek();
     if (!input || input.disabled || !sv || sv.id !== sessionId || sv.state?.replaying) return;
-    if (sv.streamEl?.querySelector(SESSION_CONTENT_SELECTOR) || input.value.trim()) { stop(); return; }
+    if (sv.streamEl?.querySelector(SESSION_CONTENT_SELECTOR) || input.value) { stop(); return; }
     stop();
     input.value = query;
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.form?.requestSubmit();
+    input.focus();
   }, 100);
   const timer = setTimeout(stop, timeoutMs);
 };
@@ -54,9 +54,9 @@ panel?.querySelectorAll(".stream-empty-prompt.template").forEach((btn) => {
     const query = pickQuery(btn);
     if (!query) return;
     const id = await createSession({ navigate: false });
-    if (!id) return;
+    if (!id || (activeSessionId.peek() && activeSessionId.peek() !== id)) return;
     openTab(id);
-    submitQueryWhenReady(query, id);
+    fillDraftWhenReady(query, id);
   });
 });
 

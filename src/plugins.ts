@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { updateSettingsFile } from './settings-store.js';
 import { settingsValidationError } from './config-validation.js';
@@ -7,10 +8,19 @@ import { readPluginManifest, pluginCompatibility, validatePluginNamespace, valid
 export { validatePluginNamespace, PLUGIN_ENTRY_FILES } from './extensions/manifest.js';
 
 export const PLUGIN_DISABLED = 'ashub.plugins.disabled';
+export const BUNDLED_ENABLED = 'ashub.plugins.bundledEnabled';
+export const BUNDLED_REMOVED = 'ashub.plugins.bundledRemoved';
+const bundledRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../examples/extensions');
+const bundledApps = new Map(['kimi-coding-plan', 'project-management', 'browser-automation'].map(name => ['ashub-' + name, name]));
+export function includedPackageIds(entry: PluginEntry): string[] {
+  return [...new Set([entry.manifest?.id, entry.packageName, entry.specifier, entry.damagedAppId]
+    .filter((id): id is string => !!id && bundledApps.has(id)))];
+}
+export const bundledPluginId = (name: string) => createHash('sha256').update('ashub-bundled:' + name).digest('hex').slice(0, 24);
 const scripts = ['.js', '.mjs', '.ts', '.tsx', '.mts'];
 export interface PluginEntry {
   id: string; name: string; source: string; enabled: boolean; specifier: string;
-  directoryNames: string[]; version?: string; configNamespaces?: string[]; packageRoot?: string; packageName?: string;
+  bundled?: boolean; includedApp?: boolean; damagedAppId?: string; description?: string; directoryNames: string[]; configuredSpecs?: string[]; version?: string; configNamespaces?: string[]; packageRoot?: string; packageName?: string;
   manifest?: NormalizedPluginManifest; compatibility?: PluginCompatibility; compatibilityError?: string;
   sessionEnabled: boolean; sessionSpecifier?: string; applicationSpecifier?: string;
 }
@@ -53,7 +63,7 @@ export function readPluginSettings(file: string): Record<string, any> {
   catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw e; }
   const data = JSON.parse(raw);
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid settings object');
-  for (const key of ['extensions', 'disabledExtensions', PLUGIN_DISABLED]) {
+  for (const key of ['extensions', 'disabledExtensions', PLUGIN_DISABLED, BUNDLED_ENABLED, BUNDLED_REMOVED]) {
     if (data[key] !== undefined && (!Array.isArray(data[key]) || !data[key].every((s: unknown) => typeof s === 'string'))) throw new Error(`Invalid ${key}`);
   }
   return data;
@@ -81,12 +91,15 @@ function pluginPackageRoot(resolved: string, extensionsRoot: string): string | u
 export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): PluginEntry[] {
   const settings = readPluginSettings(file), root = path.join(path.dirname(file), 'extensions');
   const entries = new Map<string, PluginEntry>();
-  const explicitIds = new Set<string>();
-  const add = (spec: string, directoryName?: string) => {
+  const explicitIds = new Map<string, string[]>();
+  const add = (spec: string, directoryName?: string, bundledId?: string) => {
     let resolved = spec, packageRoot: string | undefined;
     let manifest: NormalizedPluginManifest | undefined, compatibility: PluginCompatibility | undefined;
-    let metadata: { name?: string; version?: string; configNamespaces?: string[]; packageName?: string } = {};
-    const local = spec.startsWith('.') || path.isAbsolute(spec) || (spec.includes('/') && !spec.startsWith('@'));
+    let damagedAppId: string | undefined;
+    let metadata: { name?: string; description?: string; version?: string; configNamespaces?: string[]; packageName?: string } = {};
+    // Backslashes and drive prefixes are Windows paths even when the first directory starts with @.
+    const windowsPath = path.sep === '\\' && (spec.includes('\\') || /^[A-Za-z]:/.test(spec));
+    const local = spec.startsWith('.') || path.isAbsolute(spec) || windowsPath || (spec.includes('/') && !spec.startsWith('@'));
     if (local) {
       resolved = path.resolve(spec);
       packageRoot = pluginPackageRoot(resolved, root);
@@ -95,6 +108,7 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
           const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
           if (typeof pkg.name === 'string') metadata.packageName = pkg.name;
           if (typeof pkg.version === 'string' && pkg.version.length < 80) metadata.version = pkg.version;
+          if (typeof pkg.description === 'string') metadata.description = pkg.description.trim().slice(0, 300);
           manifest = readPluginManifest(packageRoot, pkg.name);
           if (manifest?.schemaVersion === 1 && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
             // Legacy explicit files retain their original identity and entry,
@@ -110,14 +124,22 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
           }
         }
       } catch (error) {
+        // A partial upgrade may leave the package and manifest naming different
+        // apps. Keep both identities reserved without trusting the broken code.
+        if (packageRoot && !bundledId) {
+          let declaredId: unknown;
+          try { declaredId = JSON.parse(fs.readFileSync(path.join(packageRoot, 'ashub-plugin.json'), 'utf8')).id; } catch {}
+          if (typeof declaredId === 'string' && bundledApps.has(declaredId)) damagedAppId = declaredId;
+          else if (!metadata.packageName && directoryName && bundledApps.has(directoryName)) damagedAppId = directoryName;
+        }
         compatibility = { compatible: false, errors: [error instanceof Error ? error.message : String(error)] };
       }
       if (!manifest) {
         try { if (fs.statSync(resolved).isDirectory()) resolved = PLUGIN_ENTRY_FILES.map(entry => path.join(resolved, entry)).find(p => fs.existsSync(p)) ?? path.join(resolved, 'index.mjs'); } catch {}
       }
     }
-    const id = createHash('sha256').update(resolved).digest('hex').slice(0, 24);
-    if (!directoryName) explicitIds.add(id);
+    const id = bundledId ? bundledPluginId(bundledId) : createHash('sha256').update(resolved).digest('hex').slice(0, 24);
+    if (!directoryName && !bundledId) explicitIds.set(id, [...(explicitIds.get(id) ?? []), spec]);
     const existing = entries.get(id);
     const directoryNames = [...new Set([...(existing?.directoryNames ?? []), ...(directoryName ? [directoryName] : [])])];
     if (existing) {
@@ -130,11 +152,11 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
     const base = path.basename(resolved).replace(/\.(tsx?|m?js|mts)$/, '');
     const sessionSpecifier = manifest ? (manifest.entries.session ? path.join(packageRoot!, manifest.entries.session) : undefined) : resolved;
     entries.set(id, { id, name: metadata.name ?? (base === 'index' ? path.basename(path.dirname(resolved)) : base),
-      version: metadata.version, configNamespaces: metadata.configNamespaces, packageRoot, packageName: metadata.packageName, manifest, compatibility,
+      version: metadata.version, description: metadata.description, configNamespaces: metadata.configNamespaces, packageRoot, packageName: metadata.packageName, manifest, compatibility,
       compatibilityError: compatibility?.compatible === false ? compatibility.errors.join('; ') : undefined,
       sessionEnabled: !!sessionSpecifier && compatibility?.compatible !== false, sessionSpecifier,
       applicationSpecifier: manifest?.entries.application ? path.join(packageRoot!, manifest.entries.application) : undefined,
-      source: resolved, specifier: resolved, directoryNames, enabled: true });
+      source: resolved, specifier: resolved, directoryNames, enabled: true, ...(bundledId ? { bundled: true } : {}), ...(damagedAppId ? { damagedAppId } : {}) });
   };
   for (const spec of settings.extensions ?? []) add(spec);
   let children: fs.Dirent[] = [];
@@ -148,8 +170,17 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
     if (dir && fs.existsSync(path.join(full, 'ashub-plugin.json'))) add(full, entry.name);
     else if (index || (!dir && scripts.some(ext => entry.name.endsWith(ext)))) add(index ?? full, entry.name.replace(/\.[^.]+$/, ''));
   }
+  // A user's installed copy keeps its original identity, toggle and consent.
+  const installed = new Set([...entries.values()].flatMap(includedPackageIds));
+  for (const [id, name] of bundledApps) {
+    const dir = path.join(bundledRoot, name);
+    if (!installed.has(id) && !(settings[BUNDLED_REMOVED] ?? []).includes(id) && fs.existsSync(path.join(dir, 'ashub-plugin.json'))) add(dir, undefined, id);
+  }
   for (const entry of entries.values()) {
+    if (includedPackageIds(entry).length) entry.includedApp = true;
+    entry.configuredSpecs = explicitIds.get(entry.id);
     const explicit = explicitIds.has(entry.id);
+    if (entry.bundled) { entry.enabled = (settings[BUNDLED_ENABLED] ?? []).includes(entry.id); continue; }
     entry.enabled = !(settings[PLUGIN_DISABLED] ?? []).includes(entry.id) && (explicit || !entry.directoryNames.some(n => (settings.disabledExtensions ?? []).includes(n)));
   }
   // Reject duplicate extension IDs and cycles before runtime imports anything.
@@ -184,10 +215,35 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
   }
   return [...entries.values()];
 }
+// Only an explicit reinstall clears an uninstall marker. The application
+// resources remain read-only, and a manual installation always takes priority.
+export function restorableApps(file: string, catalog = pluginCatalog(file)): { id: string; name: string }[] {
+  const removed: string[] = readPluginSettings(file)[BUNDLED_REMOVED] ?? [];
+  const present = new Set(catalog.flatMap(includedPackageIds));
+  return removed.flatMap(id => {
+    const folder = bundledApps.get(id);
+    if (!folder || present.has(id)) return [];
+    try {
+      const manifest = readPluginManifest(path.join(bundledRoot, folder), id);
+      return manifest ? [{ id, name: manifest.name ?? id }] : [];
+    } catch { return []; }
+  });
+}
 export function setPluginEnabled(file: string, id: string, enabled: boolean): void {
   const plugin = pluginCatalog(file).find(p => p.id === id);
   if (!plugin) throw new Error('Plugin no longer installed; refresh the list');
+  if (enabled && plugin.includedApp && plugin.compatibilityError) throw new Error(plugin.compatibilityError);
   updateSettingsFile(file, data => {
+    if (plugin.bundled) {
+      const selected = new Set<string>(data[BUNDLED_ENABLED] ?? []);
+      if (enabled) selected.add(id); else selected.delete(id);
+      data[BUNDLED_ENABLED] = [...selected];
+      return data;
+    }
+    if (!enabled && plugin.includedApp) {
+      const bundledIds = new Set(includedPackageIds(plugin).map(bundledPluginId));
+      if (data[BUNDLED_ENABLED]) data[BUNDLED_ENABLED] = data[BUNDLED_ENABLED].filter((value: string) => !bundledIds.has(value));
+    }
     const disabled = new Set<string>(data[PLUGIN_DISABLED] ?? []);
     if (enabled) disabled.delete(id); else disabled.add(id);
     data[PLUGIN_DISABLED] = [...disabled];

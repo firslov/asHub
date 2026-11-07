@@ -342,7 +342,7 @@ export class RemoteConnector {
     if (op === 'cancel') return this.local(`/${session.instanceId}/cancel`, {});
     if (op === 'permission') {
       if (!['approved', 'denied'].includes(args.outcome) || typeof args.requestId !== 'string') throw error('审批参数无效');
-      return this.local('/api/permission/decide', { sessionId: session.instanceId, requestId: args.requestId, outcome: args.outcome, sessionWide: false });
+      return this.local('/api/permission/decide', { sessionId: session.instanceId, requestId: args.requestId, outcome: args.outcome, sessionWide: false, onceOnly: true });
     }
     if (op === 'model') {
       if (session.isProcessing) throw error('请等待本轮回复结束', 409);

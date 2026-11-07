@@ -36,3 +36,34 @@ test('closing Windows terminal ignores its later exit callback',async()=>{
  terminal.onClose(()=>closed++);await terminal.ready();terminal.close();exit({exitCode:0});terminal.close();
  assert.equal(killed,1);assert.equal(closed,1);assert.equal(terminal.proc,null);
 });
+
+test('configured relative Windows extension path resolves independently from npm names',()=>{
+ const win=require('node:path').win32,fs=require('node:fs');
+ const spec='团队 工具\\审阅 #1.mjs', expected=win.resolve('C:\\工作',spec);
+ const atPath='@team\\工具.mjs', drive='C:扩展.mjs', unc='\\\\server\\share\\工具 #1.mjs';
+ const settings='C:\\配置\\settings.json';
+ const fakeFS={...fs,existsSync:()=>false,
+   readFileSync(file){if(file===settings)return JSON.stringify({extensions:[spec,'@scope/example',atPath,drive,unc,'@scope/example/entry']});throw Object.assign(Error('not found'),{code:'ENOENT'});},
+   readdirSync:()=>[],statSync(){return {isFile:()=>true,isDirectory:()=>false}}};
+ const e=env({globals:{process:{...process,platform:'win32'}},modules:{'node:path':{...win,resolve:(...parts)=>win.resolve('C:\\工作',...parts)},'node:fs':fakeFS}});
+ const [local,npm,at,driveLocal,network,subpath]=e.load('src/plugins.ts').pluginCatalog(settings);
+ assert.equal(local.sessionSpecifier,expected);
+ assert.equal(at.sessionSpecifier,win.resolve('C:\\工作',atPath));
+ assert.equal(driveLocal.sessionSpecifier,win.resolve('C:\\工作',drive));
+ assert.equal(network.sessionSpecifier,unc);
+ assert.equal(npm.sessionSpecifier,'@scope/example');
+ assert.equal(subpath.sessionSpecifier,'@scope/example/entry');
+});
+
+test('ACP on Windows uses an argv-aware launcher for shims and paths containing spaces',()=>{
+ const command='C:\\Program Files\\测试\\agent.cmd', args=['--label','A & B',''];
+ let invocation;const sentinel=Error('fixture stopped before spawn');
+ const e=env({globals:{process:{...process,platform:'win32'}},modules:{
+  'node:module':{createRequire:()=>id=>{assert.equal(id,'cross-spawn');return (...values)=>{invocation=values;throw sentinel;};}},
+  'node:child_process':{spawn(){throw Error('raw shell launch');}}
+ }});
+ const {AcpBridge}=e.load('src/bridges/acp.ts');
+ assert.throws(()=>new AcpBridge({cwd:e.dir,extra:{command,args}}),err=>err===sentinel);
+ assert.equal(invocation[0],command);assert.deepEqual(invocation[1],args);
+ assert(!invocation[2].shell);assert.equal(invocation[2].cwd,e.dir);
+});

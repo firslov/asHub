@@ -353,7 +353,6 @@
 }
 
 /* Balance / location chips: quiet hover only. */
-.usage-strip .usage-location:hover,
 .usage-strip .usage-balance:hover {
   background: var(--bg-elevated);
   border-color: var(--border-mid);

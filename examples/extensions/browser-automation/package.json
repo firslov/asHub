@@ -1,0 +1,16 @@
+{
+  "name": "ashub-browser-automation",
+  "version": "0.1.2",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "在会话中阅读网页并经授权操作网页控件",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "files": [
+    "index.mjs",
+    "ashub-plugin.json",
+    "README.md"
+  ]
+}

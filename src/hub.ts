@@ -47,7 +47,8 @@ import { DEEPSEEK_MODELS } from "./providers/deepseek.js";
 import { codexStatus } from "./providers/codex.js";
 import * as http from "node:http";
 import { settingsValidationError } from "./config-validation.js";
-import { pluginCatalog, builtinPluginCatalog, getPluginConfig, savePluginConfig, PluginConfigConflict, PLUGIN_DISABLED } from "./plugins.js";
+import { PLUGIN_AUTO_APPROVE, pluginAutoApprovalIds, setPluginAutoApproval } from "./plugin-approvals.js";
+import { pluginCatalog, builtinPluginCatalog, getPluginConfig, savePluginConfig, PluginConfigConflict, restorableApps, BUNDLED_REMOVED, BUNDLED_ENABLED, PLUGIN_DISABLED } from "./plugins.js";
 import { updateSettingsFile } from "./settings-store.js";
 import { createAccessGuard } from "./http-auth.js";
 import * as fs from "node:fs";
@@ -58,7 +59,7 @@ import { isDeepStrictEqual } from "node:util";
 import { execFile } from "node:child_process";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
-import type { Bridge, BridgeFactory, BusEvent, ContextSnapshot, SessionKind } from "./bridges/types.js";
+import type { Bridge, BridgeFactory, BusEvent, ContextSnapshot, SessionKind, PermissionOutcome } from "./bridges/types.js";
 import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
 import { listAllProviders, resolveApiKey, anyProviderConfigured, reloadKeysFile, KEYS_PATH } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
@@ -68,6 +69,7 @@ import { createCompactionStrategy } from "./history/compaction-strategy.js";
 import { invalidateGlobalSkillsCache } from "agent-sh/skills";
 
 export interface HubOpts {
+  enableBrowserPages?: (plugin: string, signal: AbortSignal) => void;
   conversationAccess?: (id: string) => ConversationAccess;
   hostAccess?: (id: string) => HostAccess;
   collaboration?: CollaborationTasks;
@@ -83,7 +85,7 @@ export interface HubOpts {
 
 
 const AUTO_APPROVE_KEY = "ashub.permissions.autoApprove";
-const independentlySavedSettings = [AUTO_APPROVE_KEY, "ashub.network", PLUGIN_DISABLED, "subagentModels", "subagentBudgets", "ashub.features.disabled"];
+const independentlySavedSettings = [AUTO_APPROVE_KEY, "ashub.network", BUNDLED_REMOVED, BUNDLED_ENABLED, PLUGIN_DISABLED, PLUGIN_AUTO_APPROVE, "subagentModels", "subagentBudgets", "ashub.features.disabled"];
 
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;
@@ -404,6 +406,7 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
   for (const s of allSessions) {
     s.collaboration?.stopSession(s.id);
     s._closing = true;
+    s.bridge?.settlePermissions?.();
     s._cancelRestore?.();
     for (const res of s.sseClients) {
       try { res.end(); } catch {}
@@ -429,9 +432,12 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
     await Promise.allSettled(
       Array.from(sessions.values()).map(async (s) => {
         try { s.bridge?.cancel?.(); } catch {}
+        s.bridge?.settlePermissions?.();
         try { await withContextLock(s, async () => { await s.capture?.flush(); }); } catch (err) { console.error("[hub] shutdown capture failed:", err); }
         flushSegment(s);
         await s.store?.seal();
+        // The child may request approval while the asynchronous history flush runs.
+        s.bridge?.settlePermissions?.();
         s._closed = true;
         try { await s.bridge?.close?.(); } catch {}
       })
@@ -840,7 +846,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     // Committed installs must become visible without an installer panel polling
     // metadata. The installer records notification failure separately from success.
     await extensions.refresh();
-    extensionSnapshot();
+    extensionSnapshot(true);
   });
   const operations = new HostOperations(path.join(SESSIONS_DIR, "operation-receipts"));
   opts.hostAccess = id => hostAccess(id, sessions, projects, opts, operations, projects.isDeleting);
@@ -848,10 +854,10 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   const access = createAccessGuard(opts.host);
   const mobile = new MobileAccessExtension(new RemoteConnector({ store: opts.remoteSecretStore, dataDir: path.join(SESSIONS_DIR, "remote"), localToken: access.token }));
   let knownExtensions = '';
-  const extensionSnapshot = () => {
+  const extensionSnapshot = (pluginCatalogChanged = false) => {
     const snapshot = extensions.snapshot();
     const fingerprint = JSON.stringify(snapshot);
-    if (knownExtensions !== fingerprint) {
+    if (pluginCatalogChanged || knownExtensions !== fingerprint) {
       knownExtensions = fingerprint;
       hostEvents.publish('extensions');
     }
@@ -900,7 +906,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   }, lifecycle.signal);
   const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action), background);
   extensions = new ApplicationExtensionRegistry({ settingsFile: settingsPath(), capabilities: HOST_PLUGIN_CAPABILITIES,
-    discover: () => installedApplicationDefinitions(settingsPath(), { bindServices: (id, context) => ({
+    discover: () => installedApplicationDefinitions(settingsPath(), { enableBrowserPages: opts.enableBrowserPages, bindServices: (id, context) => ({
       background: background.bind(id, context.signal), messages: extensionMessages.bind(id, context.signal), interactions: interactions.bind(id, context.signal),
     }), services: {
       host: Object.freeze({ capabilities: () => JSON.parse(JSON.stringify(HOST_CAPABILITIES)), snapshot: () => JSON.parse(JSON.stringify(hostSnapshot())),
@@ -948,6 +954,13 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         if (req.method === 'POST' && query.get('action') === 'preview') {
           if (req.headers['content-type']?.split(';')[0] !== 'application/zip') throw Error('Select a ZIP archive');
           result = await pluginInstaller.preview(await readLimitedBody(req, MAX_PLUGIN_ZIP));
+        } else if (req.method === 'POST' && query.get('action') === 'restore') {
+          const body = JSON.parse((await readLimitedBody(req, 1024)).toString('utf8'));
+          if (typeof body?.id !== 'string') throw Error('Invalid extension id');
+          pluginInstaller.restore(body.id);
+          await extensions.refresh();
+          extensionSnapshot(true);
+          result = { ok: true };
         } else if (req.method === 'POST' && query.get('action') === 'confirm') {
           const body = JSON.parse((await readLimitedBody(req, 1024)).toString('utf8'));
           if (!body || typeof body.token !== 'string') throw Error('Invalid installation token');
@@ -982,28 +995,54 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     }
     if (url === "/api/plugins") {
       try {
-        if (req.method === "PUT") {
+        if (req.method === "DELETE") {
           const input = JSON.parse(await readBody(req));
-          if (!input || typeof input.id !== "string" || typeof input.enabled !== "boolean") throw new Error("Invalid plugin update");
-          try { await extensions.setPluginEnabled(input.id, input.enabled); }
+          if (!input || typeof input.id !== "string") throw new Error("Invalid plugin");
+          const id = input.id;
+          const checkIdle = () => {
+            for (const session of sessions.values()) {
+              const plugin = session.bridge?.getPluginStatus?.().find(p => p.id === id);
+              if (plugin && (plugin.state === 'loading' || (plugin.state === 'loaded' && session.isProcessing)))
+                throw Object.assign(new Error("Finish tasks using this plugin before uninstalling"), { status: 409 });
+            }
+          };
+          await extensions.uninstallPlugin(id, checkIdle, () => {
+            pluginInstaller.uninstall(id);
+            for (const session of sessions.values()) session.bridge?.uninstallPlugin?.(id);
+          });
+          extensionSnapshot(true);
+        } else if (req.method === "PUT") {
+          const input = JSON.parse(await readBody(req));
+          if (!input || typeof input.id !== "string"
+            || (typeof input.enabled !== "boolean" && typeof input.autoApprove !== "boolean")
+            || (Object.hasOwn(input, 'enabled') && Object.hasOwn(input, 'autoApprove'))) throw new Error("Invalid plugin update");
+          let saved = false;
+          try {
+            if (typeof input.autoApprove === "boolean") setPluginAutoApproval(settingsPath(), input.id, input.autoApprove);
+            else await extensions.setPluginEnabled(input.id, input.enabled);
+            saved = true;
+          }
           catch (error) {
             // Preserve the legacy plugin-manager validation status; the new
             // feature API independently uses 404 for missing contributions.
             if ((error as { status?: number }).status === 404) throw new Error(error instanceof Error ? error.message : String(error));
             throw error;
-          } finally { extensionSnapshot(); }
+          } finally { extensionSnapshot(saved); }
         } else if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
-        const catalog = [...pluginCatalog(settingsPath()).map(({ specifier, directoryNames, ...plugin }) => plugin), ...builtinPluginCatalog(settingsPath())];
+        const local = pluginCatalog(settingsPath());
+        const catalog = [...local.map(({ specifier, directoryNames, configuredSpecs, ...plugin }) => plugin), ...builtinPluginCatalog(settingsPath())];
         const livePluginStatus = [...sessions.values()].filter(s => !s._closed && !s._closing).flatMap(s =>
           (s.bridge?.getPluginStatus?.() ?? []).map(p => ({ ...p, sessionId: s.id, title: s.title || s.id })));
+        const automatic = new Set(pluginAutoApprovalIds(settingsPath()));
         const plugins = catalog.map(plugin => ({
           ...plugin,
+          ...(!('builtin' in plugin) ? { autoApprove: automatic.has(plugin.id) } : {}),
           sessions: livePluginStatus.filter(p => p.id === plugin.id).map(p => ({
             sessionId: p.sessionId, title: p.title, state: p.state, error: p.error, configNamespaces: p.configNamespaces,
           })),
         }));
         res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-        res.end(JSON.stringify({ plugins }));
+        res.end(JSON.stringify({ plugins, restorable: restorableApps(settingsPath(), local) }));
       } catch (err) { res.writeHead((err as { status?: number }).status ?? (req.method === "GET" ? 500 : 400)); res.end(err instanceof Error ? err.message : String(err)); }
       return;
     }
@@ -1248,7 +1287,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       const address = server.address();
       if (address && typeof address !== "string") mobile.start(address.port);
       extensionMessages.start();
-      void extensions.start().then(extensionSnapshot, error => {
+      void extensions.start().then(() => extensionSnapshot(), error => {
         extensionSnapshot(); console.error("[hub] extension startup failed:", error);
       });
       console.error(`asHub listening on http://${opts.host}:${opts.port}/`);
@@ -1912,10 +1951,16 @@ function routeEvent(session: Session, e: BusEvent): void {
   }
 
   if (e.name === "permission:request") {
-    const p = e.payload as { requestId: string; expiresAt?: number };
-    (session.pendingPermissions ??= new Map()).set(p.requestId, { expiresAt: p.expiresAt ?? Date.now() + 30_000 });
+    const p = e.payload as { requestId: string; expiresAt?: number; scope?: string; requiresDesktop?: boolean };
+    (session.pendingPermissions ??= new Map()).set(p.requestId, {
+      expiresAt: p.expiresAt ?? Date.now() + 30_000,
+      requiresDesktop: p.requiresDesktop === true || p.scope === "site" || p.scope === "daily7",
+    });
   } else if (e.name === "permission:resolved") {
-    session.pendingPermissions?.delete((e.payload as { requestId: string }).requestId);
+    const { requestId, outcome } = e.payload as { requestId: string; outcome: PermissionOutcome };
+    const pending = session.pendingPermissions?.get(requestId);
+    if (pending) pending.outcome = outcome;
+    session.pendingPermissions?.delete(requestId);
   }
 
   // ── Activity heartbeat ──────────────────────────────────────────
@@ -2199,9 +2244,13 @@ function pushFrame(session: Session, name: string, frame: string, opts?: { trans
   // recreate the deleted replay file as an orphan.
   if (session._closed) return;
   if (["agent:processing-start", "agent:processing-done", "agent:error", "agent:cancelled"].includes(name)) session.lastRequestStatus = undefined;
-  if (name === "agent:processing-start") session.lastTurnError = false;
+  if (name === "agent:processing-start" || name === "agent:cancelled") {
+    session.lastTurnError = false;
+    session.lastTurnErrorAt = undefined;
+  }
   if (name === "agent:error") {
     session.lastTurnError = true;
+    session.lastTurnErrorAt = Date.now();
     try { session.collaboration?.event(session.id, name, JSON.parse(frame.split("data: ")[1]!).payload); } catch {}
   }
   if (name === "agent:cancelled") session.collaboration?.event(session.id, name, {});
@@ -2343,6 +2392,7 @@ async function archiveSessionById(sessions: Map<string, Session>, id: string): P
     await session._restorePromise?.catch(() => {});
     stopIdleWatchdog(session);
     try { session.bridge?.cancel(); } catch {}
+    session.bridge?.settlePermissions?.();
     try {
       await withContextLock(session, async () => { await session.capture?.flush(); });
       flushSegment(session);
@@ -2360,6 +2410,8 @@ async function archiveSessionById(sessions: Map<string, Session>, id: string): P
       throw err;
     }
     await session.store?.seal();
+    // Persist terminal approvals received during the final history flush.
+    session.bridge?.settlePermissions?.();
     session._closed = true;
     try { session.bridge?.cancel(); } catch {}
     try { session.bridge?.close(); } catch {}
@@ -4345,7 +4397,7 @@ async function unpinSession(req: http.IncomingMessage, res: http.ServerResponse)
 async function decidePermission(req: http.IncomingMessage, res: http.ServerResponse, sessions: Map<string, Session>): Promise<void> {
   try {
     const body = await readBody(req);
-    const { requestId, outcome, sessionId, sessionWide } = JSON.parse(body) as Record<string, unknown>;
+    const { requestId, outcome, sessionId, sessionWide, onceOnly } = JSON.parse(body) as Record<string, unknown>;
     if (!requestId || !outcome || !sessionId) {
       res.writeHead(400);
       res.end("missing parameters");
@@ -4357,6 +4409,7 @@ async function decidePermission(req: http.IncomingMessage, res: http.ServerRespo
       res.end("session not found");
       return;
     }
+    if (session._closing || session._closed) { res.writeHead(409); res.end("permission expired or already handled"); return; }
     // Ensure bridge is created — restored sessions are lazy-loaded.
     try { await session._ensureBridge?.(); } catch (err) {
       console.error(`[hub] decidePermission _ensureBridge failed:`, err);
@@ -4364,6 +4417,7 @@ async function decidePermission(req: http.IncomingMessage, res: http.ServerRespo
       res.end("failed to restore session");
       return;
     }
+    if (session._closing || session._closed) { res.writeHead(409); res.end("permission expired or already handled"); return; }
     if (!session.bridge?.decidePermission) {
       res.writeHead(404);
       res.end("permission not supported");
@@ -4371,11 +4425,23 @@ async function decidePermission(req: http.IncomingMessage, res: http.ServerRespo
     }
     if (outcome !== "approved" && outcome !== "denied") { res.writeHead(400); res.end("invalid outcome"); return; }
     const pending = session.pendingPermissions?.get(String(requestId));
-    if (!pending || pending.expiresAt <= Date.now()) { res.writeHead(409); res.end("permission expired or already handled"); return; }
-    session.bridge.decidePermission(String(requestId), String(outcome), !!sessionWide);
-    routeEvent(session, { name: "permission:resolved", payload: { requestId, outcome } });
+    if (!pending || pending.deciding || pending.expiresAt <= Date.now()) { res.writeHead(409); res.end("permission expired or already handled"); return; }
+    if (onceOnly === true && outcome === "approved" && pending.requiresDesktop) {
+      res.writeHead(403); res.end("此请求需要在电脑端确认"); return;
+    }
+    pending.deciding = true;
+    let decisionResult: void | PermissionOutcome;
+    try {
+      decisionResult = await session.bridge.decidePermission(String(requestId), String(outcome), !!sessionWide && onceOnly !== true);
+    } finally {
+      pending.deciding = false;
+    }
+    // A bridge can settle synchronously with a different outcome (deadline or ACP option).
+    // Do not overwrite that result with the button the client pressed.
+    const settled = pending.outcome ?? decisionResult ?? (session._closed ? "unconfirmed" : outcome);
+    if (!pending.outcome) routeEvent(session, { name: "permission:resolved", payload: { requestId, outcome: settled } });
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true }));
+    res.end(JSON.stringify({ ok: true, outcome: settled }));
   } catch {
     res.writeHead(400);
     res.end("invalid request");

@@ -22,13 +22,19 @@ async function fixture(t, {sessionOnly=false, canStop=()=>true, stop=()=>{}}={})
  const catalog=pluginCatalog(file),base=catalog.find(p=>p.manifest.id==='base-example'),child=catalog.find(p=>p.manifest.id==='child-example');
  return {registry,file,base,child,events,live};
 }
+function assertActivePair(f) {
+ for(const id of [f.base.id,f.child.id]) {
+  const feature=f.registry.snapshot().features.find(p=>p.pluginId===id);
+  assert(feature?.enabled && feature.state==='active');
+ }
+}
 test('package disable checks busy transitive dependents before persisting any flag',async t=>{
  let busy=true;const f=await fixture(t,{canStop:()=>!busy}),before=JSON.parse(fs.readFileSync(f.file));
  assert.equal(f.registry.isPluginBusy(f.base.id),true);
  await assert.rejects(f.registry.setPluginEnabled(f.base.id,false),e=>e.status===409);
- assert.deepEqual(JSON.parse(fs.readFileSync(f.file)),before);assert(f.registry.snapshot().features.every(p=>p.enabled&&p.state==='active'));
+ assert.deepEqual(JSON.parse(fs.readFileSync(f.file)),before);assertActivePair(f);
  busy=false;await f.registry.setPluginEnabled(f.base.id,false);assert.equal(pluginCatalog(f.file).find(p=>p.id===f.base.id).enabled,false);
- await f.registry.setPluginEnabled(f.base.id,true);assert(f.registry.snapshot().features.every(p=>p.enabled&&p.state==='active'));
+ await f.registry.setPluginEnabled(f.base.id,true);assertActivePair(f);
 });
 test('session-only dependency packages also protect their busy application dependents',async t=>{
  const f=await fixture(t,{sessionOnly:true,canStop:()=>false}),before=JSON.parse(fs.readFileSync(f.file));
@@ -51,7 +57,7 @@ test('new calls cannot enter the package closure during an asynchronous stop',as
 test('a late busy rejection restores only the affected flags and leaves live instances unchanged',async t=>{
  let checks=0;const f=await fixture(t,{canStop:()=>++checks===1}),before=JSON.parse(fs.readFileSync(f.file));
  await assert.rejects(f.registry.setPluginEnabled(f.base.id,false),e=>e.status===409);
- assert.deepEqual(JSON.parse(fs.readFileSync(f.file)),before);assert(f.registry.snapshot().features.every(p=>p.enabled&&p.state==='active'));
+ assert.deepEqual(JSON.parse(fs.readFileSync(f.file)),before);assertActivePair(f);
 });
 
 for (const broken of ['base-example', 'child-example']) test(`failed ${broken} cleanup keeps disabled state and isolates unrelated installed features`, async t => {

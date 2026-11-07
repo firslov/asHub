@@ -141,7 +141,12 @@ app.whenReady().then(async () => {
         },
       });
       await win.loadURL(url);
-      win.showInactive();
+      // Native input and child-view restoration require a visible active window.
+      // showInactive() can leave a replacement window occluded on macOS runners.
+      win.show();
+      win.focus();
+      win.webContents.focus();
+      await until(() => win.isVisible() && win.webContents.executeJavaScript('!document.hidden'), 'test window visible');
     }
     await openWindow(base);
     const js = (code) => win.webContents.executeJavaScript(code);
@@ -380,6 +385,9 @@ app.whenReady().then(async () => {
           },true);
         }`);
       for (const move of [true, false]) {
+        // sendInputEvent requires the owning BrowserWindow to be focused.
+        win.focus(); win.webContents.focus();
+        await until(() => win.isFocused() && js('document.hasFocus()'), 'native input focus');
         const rect = await js("document.querySelector('.browser-divider').getBoundingClientRect().toJSON()");
         const right = await js("document.querySelector('.browser-pane').getBoundingClientRect().right");
         const x = Math.round(rect.x + 2), y = Math.round(rect.y + 40);
@@ -390,7 +398,12 @@ app.whenReady().then(async () => {
           () => js("document.querySelector('.browser-pane').classList.contains('resizing')"),
           'pointer capture',
         );
-        if (move) win.webContents.sendInputEvent({ type: 'mouseMove', x: releaseX, y, modifiers: ['leftButtonDown'] });
+        // Let the IPC unmount finish before injecting input into that region.
+        await until(() => !view(), 'native guest detached during drag');
+        if (move) {
+          win.webContents.sendInputEvent({ type: 'mouseMove', x: releaseX, y, modifiers: ['leftButtonDown'] });
+          await until(() => js(`Math.abs(document.querySelector('.browser-pane').offsetWidth - ${expected}) <= 1`), 'pointer move applied');
+        }
         win.webContents.sendInputEvent({ type: 'mouseUp', x: releaseX, y, button: 'left', clickCount: 1 });
         await until(
           () => js("!document.querySelector('.browser-pane').classList.contains('resizing')"),

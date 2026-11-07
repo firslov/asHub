@@ -37,7 +37,8 @@ app.whenReady().then(async () => {
         win.show();
         const resize = async (width, height) => {
             win.setContentSize(width, height);
-            await wait(`innerWidth === ${width} && innerHeight === ${height}`);
+            // macOS may clamp height to the display work area; this suite asserts width.
+            await wait(`innerWidth === ${width}`);
             await js(`document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))`);
         };
         await resize(1180, 900);

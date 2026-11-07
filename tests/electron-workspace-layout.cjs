@@ -147,12 +147,15 @@ app.whenReady().then(async () => {
         },
       });
       await win.loadURL(url);
-      // Native input and child-view restoration require a visible active window.
-      // showInactive() can leave a replacement window occluded on macOS runners.
+      // Use an active window for the native input checks below.
       win.show();
       win.focus();
       win.webContents.focus();
       await until(() => win.isVisible() && win.webContents.executeJavaScript('!document.hidden'), 'test window visible');
+      // macOS clamps the constructor bounds to the runner's display. Request
+      // the test viewport after showing, as the responsive checks below do.
+      win.setContentSize(1440, 850);
+      await until(() => win.webContents.executeJavaScript('innerWidth === 1440'), 'initial test viewport');
     }
     await openWindow(base);
     const js = (code) => win.webContents.executeJavaScript(code);

@@ -17,7 +17,7 @@ Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The 
 
 ## Highlights
 
-**New in v0.21.1:** a refreshed workspace and app identity, more reliable history and live updates, and plugin support for authorized scheduled conversation tasks.
+**New in v0.21.3:** optional Kimi Coding Plan, Project Management and Conversation Browser extensions included with the app; scoped browser permissions, manual takeover and refined plugin controls.
 
 | Capability | Experience |
 | --- | --- |
@@ -28,7 +28,7 @@ Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The 
 | Models & context | Codex sign-in, model search and native thinking levels; inspect context and reported cache usage |
 | Reviewable actions | Permission prompts, change previews, session-wide approval and background notifications |
 | Project tools | PTY terminals, file browsing, image input and a skills marketplace |
-| Plugins | Import trusted plugin ZIPs, review setup, and manage extensions and configuration |
+| Plugins | Enable included extensions or import trusted ZIPs; configure, disable, uninstall and restore |
 | Background mode | Keep tasks and remote access running when windows close; reopen or quit from the tray |
 | Proxy controls | Choose a global proxy default and override it per conversation |
 | Persistent work | Saved conversations, branches, rewind, Markdown export and downloadable workspace results |
@@ -107,7 +107,9 @@ Project views, task receipts, result downloads and thinking controls require des
 
 Open **Plugins** in the right toolbar to import a trusted plugin ZIP, review its setup and manage configuration. Optional features use the same menus and design as the app. Some kernel extensions take effect when a conversation next starts.
 
-In **Plugins → Local extensions**, enable **Kimi Coding Plan**, **Project management** or the **Conversation browser**. Uninstalling an included extension keeps it removed across updates; use its reinstall button to bring it back disabled without a ZIP. All three ship with asHub and start disabled. Existing manual installations keep their settings and take precedence. Start a new conversation to load enabled tools. Use `/kimi-login` for Kimi web sign-in.
+In **v0.21.3+**, open **Plugins → Local extensions** to enable **Kimi Coding Plan**, **Project management** or the **Conversation browser**. Uninstalling an included extension keeps it removed across updates; use its reinstall button to bring it back disabled without a ZIP. All three ship with asHub and start disabled. Existing manual installations keep their settings and take precedence. Start a new conversation to load enabled tools. Use `/kimi-login` for Kimi web sign-in.
+
+The Conversation Browser opens a page beside the conversation, with separate site login spaces and manual takeover for sign-in. Operations require approval by default; automatic approval is an explicit per-plugin option. Persistent browser grants must be approved on the desktop; the phone can decline them. Browser automation requires the Electron desktop app.
 
 The [scheduled-tasks plugin](examples/extensions/scheduled-tasks) requires **v0.21.1+**. After explicit approval, it delivers a message to an existing conversation once or on a recurring schedule. Keep asHub running and the computer awake; tool permissions still apply.
 

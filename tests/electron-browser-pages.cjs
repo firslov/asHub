@@ -281,6 +281,11 @@ app
       });
       await win.loadURL(local);
       const ui = (js) => win.webContents.executeJavaScript(js);
+      // The native guest intentionally stays detached when the shell is hidden
+      // or showing Chat in compact mode. Establish the split-view test surface.
+      win.show();
+      win.setContentSize(1440, 750);
+      await until(() => ui('!document.hidden && innerWidth === 1440'));
       await until(() => win.contentView.children.length > 0);
       assert(await ui("document.querySelector('.browser-origin').textContent==='https://portal.example'"));
       const shape = await ui(

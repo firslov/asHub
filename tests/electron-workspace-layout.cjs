@@ -620,7 +620,23 @@ app.whenReady().then(async () => {
             'saved pin on fresh window',
           );
           await assertRetiredEntryAbsent();
-          await until(() => view() === guest, 'browser restored on fresh window');
+          try {
+            await until(() => view() === guest, 'browser restored on fresh window');
+          } catch (error) {
+            console.error('RESTORE STATE', JSON.stringify({ delayedUnload, page: pages.status(id),
+              guestDestroyed: guest.isDestroyed(), visible: win.isVisible(), focused: win.isFocused(),
+              children: win.contentView.children.length,
+              renderer: await js(`(async()=>{
+                const {activeSessionId}=await import('/js/store.js');
+                const pane=document.querySelector('.browser-pane');
+                return {active:activeSessionId.peek(),hidden:document.hidden,paneHidden:pane.hidden,layout:pane.dataset.layout,view:pane.dataset.view,
+                  viewport:pane.querySelector('.browser-viewport').getBoundingClientRect().toJSON(),
+                  blockers:[...document.querySelectorAll('dialog[open],:popover-open,.img-lightbox,.model-dropdown:not([hidden]),.p-drawer:not([hidden]),[aria-modal="true"]:not([hidden]),.quick-create-overlay:not([hidden])')].map(e=>({id:e.id,class:e.className})),
+                  sidebarBackdrop:document.getElementById('sidebar-backdrop')?.getClientRects().length};
+              })()`),
+            }));
+            throw error;
+          }
           if (delayedUnload) {
             const unloaded = new Promise(resolve => {
               const listener = (event, sessionId, bounds) => {

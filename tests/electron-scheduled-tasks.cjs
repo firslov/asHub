@@ -32,6 +32,15 @@ app.whenReady().then(async () => {
                 return;
             await new Promise(r => setTimeout(r, 25));
         } throw Error('Timed out: ' + code); };
+        // Native macOS window resizing is asynchronous. Measure only after the
+        // renderer has received the requested viewport and painted it.
+        win.show();
+        const resize = async (width, height) => {
+            win.setContentSize(width, height);
+            await wait(`innerWidth === ${width} && innerHeight === ${height}`);
+            await js(`document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))`);
+        };
+        await resize(1180, 900);
         await js(`(async()=>{localStorage.setItem('ash.lang','zh');(await import('/js/i18n.js')).setLang('zh')})()`);
         await wait(`!!document.querySelector('.extension-menu')`);
         assert.equal(await js(`(()=>{const items=[...document.querySelector('#toolbar').children],entry=document.querySelector('.extension-menu');return items.indexOf(entry)<items.indexOf(document.querySelector('#config-toggle'))&&items.indexOf(entry)<items.indexOf(document.querySelector('.toolbar-sep'))})()`),true,'plugin entry belongs to the main tool group');
@@ -72,23 +81,23 @@ app.whenReady().then(async () => {
         }
         await js(`document.querySelector('.app').classList.add('sidebar-collapsed')`);
         for (const width of [390,320]) {
-            win.setContentSize(width,850);
-            await new Promise(r=>setTimeout(r,150));
+            await resize(width,850);
             assert.equal(await js(`(()=>{const panel=document.querySelector('.extension-panel'),buttons=[...panel.querySelectorAll('.extension-resource-menu-actions button')],rects=buttons.map(b=>b.getBoundingClientRect());return buttons.length===5&&panel.scrollWidth<=panel.clientWidth+1&&Math.abs(rects[0].width-rects[1].width)<1&&Math.abs(rects[0].top-rects[1].top)<1&&rects[2].top>rects[0].top})()`),true,'task actions form a contained two-column grid at '+width);
             if(shots)fs.writeFileSync(path.join(shots,'scheduled-tasks-actions-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
         }
-        win.setContentSize(1180,900);
+        await resize(1180,900);
         await js(`const menu=document.querySelector('.extension-resource-menu');menu.open=true;Array.from(menu.querySelectorAll('button')).find(b=>b.textContent==='编辑').click()`);
         await wait(`!!document.querySelector('.extension-resource-form')`);
-        await js(`document.querySelector('.app').classList.add('sidebar-collapsed')`);
+        await js(`document.querySelector('.app').classList.add('sidebar-collapsed');const style=document.createElement('style');style.textContent='.extension-body{overflow-y:scroll}.extension-body::-webkit-scrollbar{width:16px}';document.head.append(style);`);
         for (const width of [390, 320]) {
-            win.setContentSize(width, 850);
-            await new Promise(r => setTimeout(r, 120));
-            assert.equal(await js(`(()=>{const p=document.querySelector('.extension-panel');return p.scrollWidth<=p.clientWidth+1&&p.getBoundingClientRect().left>=-1})()`), true, 'no horizontal overflow at ' + width);
+            await resize(width, 850);
+            assert.equal(await js(`(()=>{const p=document.querySelector('.extension-panel');return p.scrollWidth<=p.clientWidth+1&&p.getBoundingClientRect().left>=-1})()`), true, 'no horizontal overflow at ' + width + ' ' + JSON.stringify(await js(`(()=>{const p=document.querySelector('.extension-panel');return {viewport:innerWidth,panel:p.getBoundingClientRect().toJSON(),width:p.clientWidth,scroll:p.scrollWidth,overflow:[...p.querySelectorAll('*')].filter(e=>e.scrollWidth>e.clientWidth+1||e.getBoundingClientRect().right>p.getBoundingClientRect().right+1).map(e=>({tag:e.tagName,cls:e.className,type:e.type,sw:e.scrollWidth,cw:e.clientWidth,rect:e.getBoundingClientRect().toJSON()}))}})()`)));
         }
         await js(`(()=>{const s=document.querySelectorAll('.extension-resource-form select')[1];s.value='once';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
         assert.equal(await js(`document.querySelector('.extension-resource-form input[type=time]').closest('label').hidden`), true);
         assert.equal(await js(`document.querySelector('.extension-resource-form input[type=datetime-local]').closest('label').hidden`), false);
+        await js(`document.querySelector('.extension-resource-advanced').open=true`);
+        assert.equal(await js(`(()=>{const body=document.querySelector('.extension-body');return body.scrollWidth<=body.clientWidth+1&&[...document.querySelectorAll('.extension-resource-form input,.extension-resource-form select,.extension-resource-form textarea')].filter(el=>el.getClientRects().length).every(el=>el.getBoundingClientRect().right<=body.getBoundingClientRect().right-1)})()`),true,'expanded date/time fields stay within the narrow scrollable form');
         if (shots)
             fs.writeFileSync(path.join(shots, 'scheduled-tasks-mobile.png'), (await win.webContents.capturePage()).toPNG());
         // A no-op action may return an unchanged view; its reused buttons must recover.

@@ -1,3 +1,4 @@
+import { hydrateImages } from './stream/reply.js';
 import { resetActivity, disposeActivity, activityEvent, beginActivityFrame } from "./stream/activity.js";
 import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
 import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
@@ -321,7 +322,11 @@ class SessionView extends HTMLElement {
       while (batch.childNodes.length < BATCH && frag.firstChild) {
         batch.appendChild(frag.firstChild);
       }
-      if (batch.childNodes.length > 0) streamEl.appendChild(batch);
+      if (batch.childNodes.length > 0) {
+        const imageRoots = Array.from(batch.children);
+        streamEl.appendChild(batch);
+        for (const root of imageRoots) hydrateImages(this, [], root);
+      }
       if (frag.firstChild) {
         const schedule = typeof requestIdleCallback === "function"
           ? (fn) => requestIdleCallback(fn, { timeout: 100 })

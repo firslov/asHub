@@ -30,9 +30,13 @@ export interface TaskSupplement {
   mode: "queue" | "steer"; state: SupplementState;
 }
 const supplementStates = ["pending", "consumed", "modified", "dropped", "rejected", "interrupted", "uncertain"];
+export interface TaskSignal {
+  requestKey: string; message: string; text: string; queueId: string;
+  mode: "steer" | "turn" | "queue"; state: SupplementState; createdAt: number;
+}
 export interface CollaborationTask {
   id: string; sourceId: string; recipientId: string; message: string; query: string;
-  revision?: number; delivery?: TaskDelivery; supplements?: TaskSupplement[]; queueId?: string;
+  revision?: number; signals?: TaskSignal[]; delivery?: TaskDelivery; supplements?: TaskSupplement[]; queueId?: string;
   state: TaskState; createdAt: number; updatedAt: number; text: string; error?: string;
 }
 const taskStates: TaskState[] = ["queued", "running", "completed", "failed", "cancelled", "interrupted"];
@@ -48,6 +52,10 @@ function validReceipt(task: unknown): task is CollaborationTask {
       value.supplements.every(u => u && ["requestKey", "message", "text", "queueId"].every(k => typeof u[k] === "string") &&
         ["queue", "steer"].includes(u.mode) && supplementStates.includes(u.state)) &&
       new Set(value.supplements.map(u => u.requestKey)).size === value.supplements.length))
+    && (value.signals === undefined || (Array.isArray(value.signals) && value.signals.length <= 8 &&
+      value.signals.every(u => u && ["requestKey", "message", "text", "queueId"].every(k => typeof u[k] === "string") &&
+        ["steer", "turn", "queue"].includes(u.mode) && supplementStates.includes(u.state) && Number.isFinite(u.createdAt) && u.createdAt >= 0) &&
+      new Set(value.signals.map(u => u.requestKey)).size === value.signals.length))
     && (value.delivery === undefined || validDelivery(value.delivery))
     && (value.error === undefined || typeof value.error === "string");
 }
@@ -70,7 +78,7 @@ export class CollaborationTasks {
         if (!validReceipt(task) || task.id + ".json" !== name) throw new Error("Invalid collaboration receipt");
         this.tasks.set(task.id, task);
         let pending = false;
-        for (const update of task.supplements ?? []) if (update.state === "pending" || update.state === "uncertain") {
+        for (const update of [...(task.supplements ?? []), ...(task.signals ?? [])]) if (update.state === "pending" || update.state === "uncertain") {
           update.state = "interrupted"; pending = true;
         }
         if (!taskTerminal(task.state)) {
@@ -126,6 +134,30 @@ export class CollaborationTasks {
     if (query !== undefined) task.query = query;
     this.save(task);
   }
+  signalReceipt(id: string, requestKey: string) {
+    const task = this.get(id), notice = task.signals?.find(n => n.requestKey === requestKey);
+    return notice ? {taskId:id, requestKey, state:notice.state, mode:notice.mode, taskState:task.state} : null;
+  }
+  prepareSignal(id: string, notice: TaskSignal) {
+    const task = this.get(id), all = task.signals ?? [];
+    if (all.some(n => n.requestKey === notice.requestKey)) throw new Error("Duplicate notification key");
+    if (all.length >= 8) throw new Error("Task notification limit reached (8)");
+    if (all.some(n => n.state === "pending" || n.state === "uncertain")) throw new Error("A notification is still pending; inspect its receipt");
+    if (all.some(n => notice.createdAt - n.createdAt < 60000)) throw new Error("Wait 60 seconds before a different notification");
+    const recent = this.list().filter(t => t.sourceId === task.sourceId).flatMap(t => t.signals ?? []).filter(n => notice.createdAt - n.createdAt < 60000);
+    if (recent.length >= 6) throw new Error("Coordinator notification limit reached (6 per minute)");
+    const next = {...task, signals:[...all, notice], revision:(task.revision ?? 0)+1, updatedAt:Date.now()};
+    this.save(next); Object.assign(task,next);
+  }
+  updateSignal(id: string, requestKey: string, patch: Partial<Pick<TaskSignal, "state" | "mode" | "queueId">>) {
+    const task=this.get(id), notice=task.signals?.find(n=>n.requestKey===requestKey);
+    if (!notice) throw new Error("Notification not found");
+    // Never resurrect synchronous consumption/drop when submit returns later.
+    if (notice.state !== "pending" && notice.state !== "uncertain") return this.signalReceipt(id,requestKey);
+    const next={...task, signals:task.signals!.map(n=>n===notice?{...n,...patch}:n)};
+    this.save(next);Object.assign(task,next);this.notify();return this.signalReceipt(id,requestKey);
+  }
+  wakeSignalWaiters() { this.notify(); }
   start(id: string) {
     const task = this.get(id);
     if (taskTerminal(task.state)) return;
@@ -145,12 +177,29 @@ export class CollaborationTasks {
     this.notify();
   }
   stopSession(id: string) {
+    this.event(id, "agent:cancelled", {});
     for (const t of this.tasks.values()) if (t.recipientId === id && !taskTerminal(t.state)) this.finish(t.id, "cancelled");
     // Lifecycle callers mark/remove the session immediately after stopSession.
     // Recheck waiting callers once those flags are visible, including senders.
     void Promise.resolve().then(() => this.notify());
   }
   event(sessionId: string, name: string, payload: any) {
+    if (["agent:steer-submit", "agent:queued-submit", "agent:query", "agent:cancelled", "agent:error", "agent:queued-done"].includes(name)) {
+      for (const task of this.tasks.values()) {
+        if (task.sourceId !== sessionId) continue;
+        for (const n of task.signals ?? []) {
+          if (n.state !== "pending" && n.state !== "uncertain") continue;
+          const cancelled = name === "agent:cancelled" || (name === "agent:error" && n.mode === "steer");
+          const match = payload?.queueId === n.queueId || (!payload?.queueId && payload?.query === n.text) ||
+            (n.mode === "turn" && typeof payload?.query === "string" && payload.query.includes(n.text));
+          if (!cancelled && (!match || (name === "agent:queued-done" && !payload?.dropped))) continue;
+          const state = cancelled || payload?.dropped ? "dropped" :
+            typeof payload?.query === "string" && payload.query.includes(n.text) ? "consumed" : "modified";
+          try { this.updateSignal(task.id,n.requestKey,{state, ...(name === "agent:steer-submit" ? {mode:"steer" as const} : name === "agent:queued-submit" ? {mode:"queue" as const} : {})}); }
+          catch(e) { console.error("[collaboration] notification receipt save failed",e); }
+        }
+      }
+    }
     if (name === "agent:steer-submit" || name === "agent:queued-submit" || (name === "agent:queued-done" && payload?.dropped)) {
       for (const task of this.tasks.values()) {
         if (task.recipientId !== sessionId) continue;
@@ -210,7 +259,7 @@ export class CollaborationTasks {
   }
   /** Wait for any unseen terminal result; no model wakeups for streamed progress. */
   async waitMany(targets: TaskWatch[], ms = 120000, signal?: AbortSignal,
-    validate: () => void = () => {}, subscribeInvalidation?: (check: () => void) => (() => void)) {
+    validate: () => void = () => {}, subscribeInvalidation?: (check: () => void) => (() => void), attentionFor?: string, canAttend: (id: string) => boolean = () => true) {
     if (!Array.isArray(targets) || !targets.length || targets.length > 16 ||
         targets.some(t => !t || typeof t.id !== "string" || !t.id ||
           (t.afterRevision !== undefined && (!Number.isSafeInteger(t.afterRevision) || t.afterRevision < 0)) ||
@@ -232,10 +281,17 @@ export class CollaborationTasks {
       const changed = statuses.filter((s, i) => s.terminal &&
         (watched[i]!.afterRevision === undefined || s.revision > watched[i]!.afterRevision! ||
           (watched[i]!.afterState !== undefined && watched[i]!.afterState !== s.state)));
-      return { statuses, changed, settled: statuses.every(s => s.terminal) };
+      // A coordinator may be waiting for a different member when an urgent
+      // notification arrives. Release that wait too, without exposing content
+      // or acknowledging results outside the requested cursor set.
+      const attention = attentionFor === undefined ? [] : this.list().flatMap(task =>
+        task.sourceId === attentionFor && canAttend(task.id) ? (task.signals ?? [])
+          .filter(n => n.mode === "steer" && n.state === "pending")
+          .map(n => ({taskId:task.id, requestKey:n.requestKey, state:n.state, mode:n.mode})) : []).slice(0,16);
+      return { statuses, changed, attention, settled: statuses.every(s => s.terminal) };
     };
     let snapshot = inspect();
-    if (ms && !snapshot.changed.length && !snapshot.settled) {
+    if (ms && !snapshot.changed.length && !snapshot.attention.length && !snapshot.settled) {
       await new Promise<void>((resolve, reject) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let unsubscribe: (() => void) | undefined;
@@ -246,7 +302,7 @@ export class CollaborationTasks {
           if (error !== undefined) reject(error); else resolve();
         };
         const check = () => {
-          try { const s = inspect(); if (s.changed.length || s.settled) finish(); }
+          try { const s = inspect(); if (s.changed.length || s.attention.length || s.settled) finish(); }
           catch (e) { finish(e); }
         };
         const abort = () => finish(signal?.reason ?? new Error("Cancelled"));
@@ -277,7 +333,8 @@ export class CollaborationTasks {
     const delivered = new Set(results.map(r => r.id));
     const unseen = new Set(snapshot.changed.map(s => s.id));
     return {
-      reason: snapshot.changed.length ? "changed" : snapshot.settled ? "settled" : "timeout",
+      ...(snapshot.attention.length ? {attention:snapshot.attention} : {}),
+      reason: snapshot.attention.length ? "attention" : snapshot.changed.length ? "changed" : snapshot.settled ? "settled" : "timeout",
       results, hasMore: results.length < snapshot.changed.length,
       statuses: snapshot.statuses,
       cursors: snapshot.statuses.map((status, i) => {

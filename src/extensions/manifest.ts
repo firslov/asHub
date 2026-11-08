@@ -3,7 +3,7 @@ import path from 'node:path';
 import { satisfies, valid, validRange } from 'semver';
 
 export const HOST_PLUGIN_API_VERSION = '1.0.0';
-export const HOST_PLUGIN_CAPABILITIES = ['session-extensions', 'application-lifecycle', 'plugin-resources', 'authorized-messages', 'plugin-data', 'background-services', ...(process.versions.electron ? ['browser-pages'] : [])] as const;
+export const HOST_PLUGIN_CAPABILITIES = ['session-extensions', 'application-lifecycle', 'plugin-resources', 'authorized-messages', 'plugin-data', 'background-services', 'image-resources', ...(process.versions.electron ? ['browser-pages'] : [])] as const;
 /** Match the client's JSON.stringify(ui).length limit (UTF-16 code units, not bytes). */
 export const MAX_PLUGIN_UI_JSON_CHARS = 262144;
 export const PLUGIN_ENTRY_FILES = ['index.js', 'index.mjs', 'index.ts', 'index.tsx', 'index.mts'];

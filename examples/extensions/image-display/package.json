@@ -1,0 +1,1 @@
+{"name":"ashub-image-display","version":"0.1.0","description":"图文展示：在回复中呈现图片、图表与截图","type":"module","main":"index.mjs","license":"MIT","files":["index.mjs","ashub-plugin.json","README.md"],"scripts":{"test":"node --test tests/*.mjs"}}

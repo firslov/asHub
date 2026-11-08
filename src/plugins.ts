@@ -11,7 +11,7 @@ export const PLUGIN_DISABLED = 'ashub.plugins.disabled';
 export const BUNDLED_ENABLED = 'ashub.plugins.bundledEnabled';
 export const BUNDLED_REMOVED = 'ashub.plugins.bundledRemoved';
 const bundledRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../examples/extensions');
-const bundledApps = new Map(['kimi-coding-plan', 'project-management', 'browser-automation'].map(name => ['ashub-' + name, name]));
+const bundledApps = new Map(['kimi-coding-plan', 'project-management', 'browser-automation', 'image-display'].map(name => ['ashub-' + name, name]));
 export function includedPackageIds(entry: PluginEntry): string[] {
   return [...new Set([entry.manifest?.id, entry.packageName, entry.specifier, entry.damagedAppId]
     .filter((id): id is string => !!id && bundledApps.has(id)))];

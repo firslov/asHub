@@ -69,6 +69,26 @@ export default function activate(ctx) {
 项目成员使用项目根目录；外部已有对话原目录不变。成员职责作为对话说明保存，不授予新权限。创建不会启动任务。用户授权开展工作后，可通过现有 conversation_list/read/send/task 与同项目成员协作；不要擅自移动当前对话到其他项目。
 已有对话的修改使用 project_management_update_conversation；移出项目、归档、永久删除分别使用 detach/archive/delete_conversation 工具。先查询 catalog 中 conversations 的真实 ID 和当前配置。所有变更交由宿主校验授权；用户可在插件配置中开启自动批准，此时以宿主执行结果为准。默认逐次确认，不能以对话中的要求或工具参数代替授权设置。不得更改忙碌对话，不得归档或删除发起操作的当前对话。工作目录和职责说明不在本版修改范围。
 工具返回 completed 才表示操作完成；failed/interrupted 可能已部分生效，必须报告并核查，不得盲目重试。永久删除不可撤销；用户只要求移出项目时不得删除或归档。`);
+  if (ctx.list().includes('ashub:collaboration:signal')) {
+    register('project_management_blocked', '当前协作任务遇到必须由原协调者决策的阻塞时发送一次通知。普通进度和正常交付不能使用。忙碌时在下一次模型请求前送达，空闲时正常唤醒；不取消现有请求，不提供新授权。', {
+      id:{type:'string',description:'当前收到的 Task ID，不是对话 ID'}, requestKey,
+      question:{type:'string',minLength:1,maxLength:600,description:'需要协调者决定的具体问题'},
+      evidence:{type:'string',minLength:1,maxLength:600,description:'已检查的事实、缺失材料或冲突；简短引用即可'},
+      recommendation:{type:'string',minLength:1,maxLength:400,description:'推荐方案及必要的备选，不扩大用户授权'},
+    }, ['id','requestKey','question','evidence','recommendation'], (args,signal)=>{
+      for (const [key,max] of [['question',600],['evidence',600],['recommendation',400]])
+        if(typeof args[key]!=='string'||!args[key].trim()||args[key].length>max)throw Error('Invalid '+key);
+      const message=JSON.stringify({question:args.question.trim(),evidence:args.evidence.trim(),recommendation:args.recommendation.trim()});
+      if(message.length>2000)throw Error('通知过长，请压缩内容');
+      return ctx.call('ashub:collaboration:signal',{id:args.id,requestKey:args.requestKey,message,signal});
+    });
+    register('project_management_blocked_status', '只读查询阻塞通知回执，不再次发送。consumed 不等于已决策；modified 需核对用户编辑；rejected/dropped/interrupted/uncertain 不自动换 key 重发。', {
+      id:{type:'string',description:'原 Task ID'},requestKey,
+    },['id','requestKey'],(args,signal)=>ctx.call('ashub:collaboration:signal',{id:args.id,requestKey:args.requestKey,signal}),true);
+    ctx.agent.registerInstruction('project-management-blockers', `项目协作采用三条通道：独立任务用 conversation_send 排队，当前任务的纠正用 project_management_supplement，正常成果用 conversation_deliver。只有缺少关键材料、要求冲突或必须决策的风险确实阻碍当前任务时，执行成员才用 project_management_blocked 通知原协调者；普通进度、可自行恢复的工具错误和催问禁止使用。
+通知必须关联当前 Task，简述问题、已核对证据和推荐方案；不复制大段上下文。一个问题只通知一次，使用稳定 requestKey；报错后先查 blocked_status，不通过更换 key 绕过去重或限流。pending/consumed 不代表对方已经理解、同意或解决。通知后继续可独立进行的工作；确实无法推进时，在 unresolved 中写清问题并提交当前交付、结束任务，不互相等待。
+协调者收到通知先核对任务最新状态和用户授权，只有需要纠正时才向仍在执行的原任务补充；已结束的任务在核查后再决定后续工作。不自动回一句“收到”，不重复派发原任务。conversation_wait 返回 attention 时表示已有通知等待当前轮次接收，并不表示任务完成；先处理该通知再继续等待。`);
+  }
   if (ctx.list().includes('ashub:collaboration:supplement')) {
     register('project_management_supplement', '向自己派发的已有任务补充约束或纠正方向，不是派发新任务。排队任务在原位置追加；运行任务在下一次模型请求前接收；已结束任务不会重启。同一 requestKey 重试必须保持相同内容。仅用于用户已授权的工作，不重复催问。', {
       id: { type: 'string', description: 'Original taskId returned by conversation_send, not a conversation ID' },

@@ -55,7 +55,7 @@ test('included apps are opt-in, retain settings, and give precedence to a manual
   const f=fixture();
   const catalog=()=>pluginCatalog(f.file);
   const bundled=catalog().filter(p=>p.bundled);
-  assert.equal(bundled.length,3);
+  assert.equal(bundled.length,4);
   for(const plugin of bundled) {
     assert(!plugin.enabled && plugin.includedApp);
     assert(fs.existsSync(plugin.sessionSpecifier));
@@ -803,4 +803,68 @@ for (const supported of [false,true]) test(`project supplements use only the pub
   }
  }finally{runtime.close();}
  assert(!tool('project_management_supplement'));assert(!tool('project_management_supplement_status'));
+});
+
+test('image resources require a declared capability and stop on disable or runtime disposal',async()=>{
+ const f=fixture();const folder=path.join(f.root,'extensions','images');fs.cpSync(new URL('../examples/extensions/image-display/',import.meta.url),folder,{recursive:true});
+ const {ctx}=await makeContext();let count=0,waiting=false,started;
+ const runtime=new PluginRuntime(f.file,undefined,undefined,undefined,{publish:async(_path,signal)=>{
+   count++;if(waiting)return new Promise((resolve,reject)=>{started();signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});
+   return{ref:'ashub-image:'+'a'.repeat(64)+'/1x1',width:1,height:1};
+ }});
+ await runtime.load(ctx);const tool=ctx.agent.getTools().find(t=>t.name==='display_images');assert(tool,'opt-in image tool is registered');
+ const args={images:[{path:'test.png',caption:'测试'}]};assert.equal((await tool.execute(args)).isError,false);
+ const plugin=pluginCatalog(f.file).find(p=>p.manifest?.id==='ashub-image-display');setPluginEnabled(f.file,plugin.id,false);
+ assert.equal((await tool.execute(args)).isError,true);assert.equal(count,1,'disabled plugin cannot publish through a stale tool');
+ setPluginEnabled(f.file,plugin.id,true);waiting=true;
+ const begun=new Promise(resolve=>started=resolve);const pending=tool.execute(args);await begun;runtime.close();
+ const outcome=await pending.catch(e=>({isError:true}));assert(outcome.isError);assert(!ctx.agent.getTools().some(t=>t.name==='display_images'));
+});
+
+test('image resource service is absent without the manifest capability declaration',async()=>{
+ const f=fixture('export default ctx => ctx.define("image-surface", () => !!ctx.services.imageResources);');
+ const {ctx}=await makeContext(),runtime=new PluginRuntime(f.file,undefined,undefined,undefined,{publish:async()=>{throw Error('must not be called')}});
+ await runtime.load(ctx);assert.equal(await ctx.call('image-surface'),false);runtime.close();
+});
+
+test('project blockers use the generic notification handler, retain cancellation and unregister cleanly',async()=>{
+ const f=fixture(fs.readFileSync(new URL('../examples/extensions/project-management/index.mjs',import.meta.url),'utf8'),'project-management.mjs');
+ const {core,ctx}=await makeContext(),runtime=new PluginRuntime(f.file),calls=[];
+ core.handlers.define('ashub:catalog',()=>({}));core.handlers.define('ashub:execute',()=>({}));
+ core.handlers.define('ashub:collaboration:signal',p=>{calls.push(p);return {taskId:p.id,requestKey:p.requestKey,state:'pending',mode:'steer'}});
+ await runtime.load(ctx);const tool=ctx.agent.getTools().find(t=>t.name==='project_management_blocked');assert(tool);
+ const signal=new AbortController().signal;
+ const r=await tool.execute({id:'task',requestKey:'blocker-001',question:'Need decision',evidence:'Checked source',recommendation:'Use verified version'},undefined,{signal});assert.equal(r.isError,false);assert.equal(calls[0].signal,signal);
+ const status=ctx.agent.getTools().find(t=>t.name==='project_management_blocked_status');assert(status.readOnly);await status.execute({id:'task',requestKey:'blocker-001'});assert.equal(calls[1].message,undefined);
+ runtime.close();assert(!ctx.agent.getTools().some(t=>t.name.startsWith('project_management_blocked')));
+});
+
+
+test('image display ships in Local extensions and registers only after opt-in',async()=>{
+ const f=fixture(), id='ashub-image-display';
+ const image=()=>pluginCatalog(f.file).find(p=>p.manifest?.id===id);
+ const supplied=image();assert(supplied,'image display must ship without a ZIP installation');
+ assert(supplied.bundled && supplied.includedApp && !supplied.enabled && supplied.sessionEnabled);
+ const config=fs.readFileSync(new URL('../electron-builder.yml',import.meta.url),'utf8');
+ assert(config.includes('examples/extensions/image-display/{*.mjs,ashub-plugin.json,package.json}'),'release packages must include the plugin entry and metadata');
+ const {ctx}=await makeContext();
+ const resources={publish:async()=>({ref:'ashub-image:'+'a'.repeat(64)+'/1x1',width:1,height:1})};
+ let runtime=new PluginRuntime(f.file,undefined,undefined,undefined,resources);
+ try {await runtime.load(ctx);assert(!ctx.agent.getTools().some(t=>t.name==='display_images'));}
+ finally {runtime.close();}
+ setPluginEnabled(f.file,supplied.id,true);
+ runtime=new PluginRuntime(f.file,undefined,undefined,undefined,resources);
+ try {
+  await runtime.load(ctx);
+  const tools=ctx.agent.getTools().filter(t=>t.name==='display_images');assert.equal(tools.length,1);
+  const result=await tools[0].execute({images:[{path:'chart.png',caption:'Chart'}]});assert.equal(result.isError,false);
+ } finally {runtime.close();}
+ assert(!ctx.agent.getTools().some(t=>t.name==='display_images'));
+ setPluginEnabled(f.file,supplied.id,false);assert(!image().enabled);
+ const manual=path.join(f.root,'extensions','my-images');fs.mkdirSync(manual);
+ for(const name of ['package.json','ashub-plugin.json','index.mjs'])fs.copyFileSync(path.join(supplied.packageRoot,name),path.join(manual,name));
+ const copies=()=>pluginCatalog(f.file).filter(p=>p.manifest?.id===id);
+ assert.equal(copies().length,1);assert(!image().bundled && image().includedApp);
+ setPluginEnabled(f.file,image().id,false);assert(!image().enabled);
+ fs.rmSync(manual,{recursive:true});assert.equal(image().id,supplied.id);assert(!image().enabled);
 });

@@ -30,6 +30,7 @@ import { mobileReplayStart, mobileReplayFrame } from "./remote/replay.js";
 import { readNetworkPolicy, writeNetworkPolicy } from "./network-policy.js";
 import { CollaborationTasks } from "./collaboration.js";
 import { serveArtifact, openArtifact } from "./artifacts.js";
+import { ImageResources } from "./image-resources.js";
 /**
  * Hub: spawns and supervises Bridges (one per session), exposes them
  * through the web UI on a single port. Path-based routing
@@ -71,6 +72,7 @@ import { invalidateGlobalSkillsCache } from "agent-sh/skills";
 export interface HubOpts {
   enableBrowserPages?: (plugin: string, signal: AbortSignal) => void;
   conversationAccess?: (id: string) => ConversationAccess;
+  imageResources?: (id: string) => import("./image-resources.js").ImageResourceAccess;
   hostAccess?: (id: string) => HostAccess;
   collaboration?: CollaborationTasks;
   port: number;
@@ -224,6 +226,8 @@ async function loadFrameSeq(): Promise<void> {
 async function ensureSessionsDir(): Promise<void> {
   await fs.promises.mkdir(SESSIONS_DIR, { recursive: true });
 }
+
+const imageResources = new ImageResources(path.join(SESSIONS_DIR, "image-resources"));
 
 const ARCHIVED_PATH = path.join(SESSIONS_DIR, "archived.json");
 const PINNED_PATH = path.join(SESSIONS_DIR, "pinned.json");
@@ -528,6 +532,7 @@ async function unlinkIfExists(file: string): Promise<void> {
 
 async function deleteSessionFiles(id: string): Promise<void> {
   _replayWriters.delete(id);
+  await imageResources.remove(id);
   const files = [".meta.json.tmp", ".meta.json", ".replay.jsonl", ".replay.jsonl.tmp", ".replay-state.json", ".replay-state.json.tmp", ".messages.json", ".jsonl", ".jsonl.leaf"];
   const results = await Promise.allSettled(files.map(ext => unlinkIfExists(path.join(SESSIONS_DIR, `${id}${ext}`))));
   try {
@@ -838,6 +843,12 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   featureServicesBySessions.set(sessions, featureServices);
   opts.collaboration = new CollaborationTasks(path.join(SESSIONS_DIR, "collaboration"));
   opts.conversationAccess = id => conversationAccess(id, sessions, projects, opts.collaboration);
+  opts.imageResources = id => imageResources.bind(id, () => {
+    lifecycle.signal.throwIfAborted();
+    const session = sessions.get(id);
+    if (!session || session.kind !== 'agent' || session._closing || session._closed) throw Object.assign(new Error('Conversation is unavailable'), {status:409});
+    return session.cwd;
+  });
   let extensions: ApplicationExtensionRegistry;
   const pluginInstaller = new PluginInstaller(settingsPath(), undefined, process.platform, target => {
     const ids = new Set(pluginCatalog(settingsPath()).filter(p => (p.packageRoot ?? path.dirname(p.source)) === target).map(p => p.id));
@@ -1102,6 +1113,11 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       if (!session) { res.statusCode = 404; res.end("no session"); return; }
       if (session._closing || session._closed || (session._hostOperation && req.method !== "GET" && req.method !== "HEAD")) { res.writeHead(409); res.end("session busy or closing"); return; }
       if (req.method === "GET" || req.method === "HEAD") {
+        const resource = rest.match(/^\/image-resources\/([a-f0-9]{64})$/);
+        if (resource) return imageResources.serve(req, res, id, resource[1]!, () => {
+          lifecycle.signal.throwIfAborted();
+          if (sessions.get(id) !== session || session._closing || session._closed) throw Object.assign(new Error('Conversation is unavailable'), {status:409});
+        });
         if (rest === "/artifacts") {
           const params = new URLSearchParams(rawRest.split("?")[1] ?? "");
           return serveArtifact(req, res, session.cwd, params.get("path") ?? "");

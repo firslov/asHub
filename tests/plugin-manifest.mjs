@@ -254,8 +254,8 @@ test('a mismatched package name cannot redirect an app upgrade to a second direc
     assert(!fs.existsSync(path.join(f.e.dir,'extensions',m.id)));
   } finally {await f.installer.close();}
 });
-test('replacing and uninstalling a supplied extension preserves its choices across discovery and explicit restore',async()=>{
-  const f=fixture(), id='ashub-project-management';
+for (const id of ['ashub-project-management','ashub-image-display']) test(`replacing and uninstalling ${id} preserves its choices across discovery and explicit restore`,async()=>{
+  const f=fixture();
   const bundled=f.catalog.pluginCatalog(f.file).find(app=>app.manifest?.id===id);
   const data=path.join(f.e.dir,'hub-sessions','plugin-data',bundled.id,'evidence.json');
   fs.mkdirSync(path.dirname(data),{recursive:true});fs.writeFileSync(data,'retained');

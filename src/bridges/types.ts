@@ -18,6 +18,7 @@ export interface BusEvent {
 export type SessionKind = "agent" | "terminal" | "ash-terminal";
 
 export interface ConversationAccess {
+  signal?(id: string, requestKey: string, message?: string, signal?: AbortSignal): Promise<unknown>;
   supplement?(id: string, requestKey: string, message?: string, signal?: AbortSignal): Promise<unknown>;
   waitTasks(targets: import("../collaboration.js").TaskWatch[], waitMs?: number, signal?: AbortSignal): Promise<unknown>;
   deliver(id: string, delivery: import("../collaboration.js").TaskDelivery, signal?: AbortSignal): Promise<unknown>;
@@ -36,6 +37,7 @@ export interface BridgeOpts {
     run(request: unknown, signal?: AbortSignal): Promise<unknown>;
     close(): void;
   };
+  imageResources?: import("../image-resources.js").ImageResourceAccess;
   hostAccess?: import("../host-operations.js").HostAccess;
   instructions?: string;
   cwd?: string;

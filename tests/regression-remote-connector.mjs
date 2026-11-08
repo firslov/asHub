@@ -318,3 +318,18 @@ test('project pins preserve desktop order without exposing unshared or nonmember
   connector.config.enabled = false;
   await assert.rejects(connector.groups(0), /移动访问授权已变更/);
 });
+
+test('image resources recheck authorization after reads and reject forged IDs or offsets',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-images-remote-'));let socket;
+ const native=globalThis.WebSocket;globalThis.WebSocket=class{static OPEN=1;constructor(){socket=this}close(){}};
+ const config={deviceId:'desktop',deviceToken:'secret',username:'alice',roots:[fs.realpathSync(dir)],deviceName:'Desktop'};
+ const c=new RemoteConnector({dataDir:dir,store:{read:()=>JSON.stringify(config),write(){}}});
+ t.after(()=>{c.close();globalThis.WebSocket=native;fs.rmSync(dir,{recursive:true,force:true})});c.start(1);
+ let allowed=true,release,waiting=false;const routes=[];
+ c.local=async route=>{routes.push(route);if(route==='/sessions')return allowed?[{instanceId:'abcdef',kind:'agent',cwd:dir}]:[];if(waiting)return new Promise(r=>release=r);return {version:'a'.repeat(64),size:1};};
+ const args={session:'abcdef',id:'a'.repeat(64)};
+ assert.equal((await c.execute('image-resource',args)).size,1);
+ await assert.rejects(c.execute('image-resource',{...args,id:'../secret'}));await assert.rejects(c.execute('image-resource',{...args,offset:-1}));
+ waiting=true;const pending=c.execute('image-resource',args);await waitFor(()=>release);allowed=false;release({data:'private'});await assert.rejects(pending);
+ assert(routes.some(r=>r.includes('/image-resources/')));
+});

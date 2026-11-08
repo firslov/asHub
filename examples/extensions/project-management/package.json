@@ -1,6 +1,6 @@
 {
   "name": "ashub-project-management",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "项目管理：按用户授权创建成员、修改配置、移出项目、归档和删除",
   "type": "module",
   "main": "index.mjs",

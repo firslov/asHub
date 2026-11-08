@@ -171,3 +171,25 @@ validation, cancellation, receipts and page checks still apply.
 Pending manual requests retain their existing approval and expiry.
 
 Uninstalling an installed plugin removes its registration, session tools and automatic approval. Settings and plugin data are retained. Discovered packages are moved to `plugin-install/backups` under the agent home; explicitly configured external sources are unregistered in place. Installed dependents must be removed first.
+
+## Session image resources
+
+Optional session extensions declaring `image-resources` in `requires.capabilities` receive `ctx.services.imageResources.publish(path, signal?)`. This generic service is bound to the requesting conversation; a plugin cannot supply another conversation ID or widen its filesystem scope. Missing capability means the host is too old. The service returns `{id, ref, mimeType, width, height, size, name}`. It does not call a model or provide image interpretation.
+
+```js
+const image = await ctx.services.imageResources.publish('output/chart.png', signal);
+// Return this reference to the model; it can include it in the final answer.
+const markdown = `![Chart](${image.ref})`;
+```
+
+`ref` is `ashub-image:<sha256>/<width>x<height>`. Rendering resolves it against the owning reply's conversation (and remote device), never the currently selected conversation. The shared Markdown renderer reserves space, loads bounded image bytes lazily, opens the existing preview surface and cleans up requests/object URLs when the reply is removed. The optional `examples/extensions/image-display` plugin owns the tool, captions and guidance about when images are useful; it adds no dedicated core menu or model policy.
+
+Publication enforces current workspace containment, regular files, source stability during copying, static PNG/JPEG/WebP, 8 MiB / 32 megapixels / 16,384 pixels per side, and 200 images / 256 MiB per conversation. Publication is serialized with deletion. The resource service is revoked on plugin disposal and checks enablement before every call. Published snapshots persist across source changes, restarts and plugin disable/uninstall, and are deleted with their conversation. Existing conversation branches share that conversation's snapshots.
+
+The desktop resource endpoint `GET|HEAD /<session>/image-resources/<id>` uses existing local authentication, returns no-store/nosniff attachment headers and never serves HTML or SVG. `?meta=1` and `?offset=<bytes>` provide bounded metadata and 256 KiB chunks. The remote gateway exposes only authenticated, device-owned, current-directory-authorized reads through `image-resource`; it revalidates authorization after asynchronous reads. Resources are not added to the PWA shell cache. The endpoint is a renderer transport, not an unbound plugin filesystem API.
+
+Regression commands: `npm run test:images`, `npm run test:images:ui`; lifecycle coverage also resides in `tests/plugins.mjs`, connector authorization in `tests/regression-remote-connector.mjs`, and separate gateway integration in `remote/test.mjs`.
+
+## Task-bound notifications
+
+Session handlers may expose `ashub:collaboration:signal({id, requestKey, message?, signal?})`. `id` is an existing collaboration task, not a conversation ID. Only its currently executing recipient can send a bounded notification to its original sender in the same current project; omitting `message` reads a prior receipt without waking a model. The host supplies identity, durable deduplication, rate limits, safe-boundary steering or idle submission, and restart/queue-state accounting. The plugin supplies domain-specific notification policy. `conversation_wait` can return `reason: "attention"` to release the current wait for a pending steering notice; this is not task completion. See [Task notifications](task-notifications.md) for delivery guarantees, limits and failure states.

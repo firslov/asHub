@@ -61,7 +61,7 @@ app.whenReady().then(async () => {
       return response.json();
     }
     const fresh = (await request('/api/plugins')).plugins.filter(plugin => plugin.includedApp);
-    assert.equal(fresh.length,3);
+    assert.equal(fresh.length,4);
     assert(fresh.every(plugin => plugin.bundled && !plugin.enabled && !plugin.autoApprove));
     const bundledBrowser = fresh.find(plugin => plugin.manifest.id === 'ashub-browser-automation');
     const bundledOwner = pages.bind('bundled-test-session', bundledBrowser.id, async () => false);

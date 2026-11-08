@@ -1,3 +1,4 @@
+import { artifactLink } from '../links.js';
 import { mdToHtml, highlightWithin, renderMathIn, stripAnsi } from "../utils.js";
 import { append } from "./tool-group.js";
 import { maybeScroll } from "./scroll.js";
@@ -82,6 +83,7 @@ const _blockContentEqual = (live, fresh) => {
   // Normalize rendered math placeholders back to their pristine form so
   // substituted KaTeX HTML doesn't count as a content change.
   const clone = live.cloneNode(true);
+  globalThis.AsHubImageResources?.normalize(clone);
   for (const m of clone.querySelectorAll(".math-tex")) {
     m.innerHTML = "";
     m.classList.remove("math-error");
@@ -178,7 +180,9 @@ const flushReply = (session) => {
 
   const tmp = document.createElement("div");
   tmp.innerHTML = mdToHtml(r.text);
+  resolveReplyImages(tmp, session.id);
 
+  const retainedImages = globalThis.AsHubImageResources?.preserve(r.current) ?? [];
   const newBlocks = Array.from(tmp.children);
   const prevCount = r._renderedBlockCount ?? 0;
   const newStructKey = _structKey(newBlocks);
@@ -279,6 +283,7 @@ const flushReply = (session) => {
     r._lastHighlightAt = now;
   }
 
+  hydrateImages(session, retainedImages);
   maybeScroll(session);
 };
 
@@ -318,14 +323,17 @@ export const fillFinalReply = (session, text) => {
   // Final payload wins over accumulated chunks — heals gaps from SSE reopens.
   r.text = full;
   r._lastStructKey = "";
+  const retainedImages = globalThis.AsHubImageResources?.preserve(r.current) ?? [];
   r.current.replaceChildren();
   const tmp = document.createElement("div");
   tmp.innerHTML = mdToHtml(r.text);
+  resolveReplyImages(tmp, session.id);
   const blockCount = tmp.children.length;
   while (tmp.firstChild) r.current.appendChild(tmp.firstChild);
   r._renderedLen = full.length;
   r._renderedBlockCount = blockCount;
   renderMathIn(r.current);
+  hydrateImages(session, retainedImages);
 };
 
 export const closeReply = (session) => {
@@ -364,3 +372,29 @@ export const cancelReply = (session) => {
     el.appendChild(stamp);
   }
 };
+
+export function hydrateImages(session, retainedImages = [], root = session.reply?.current) {
+  const id = session.id;
+  // Replay replies are built off-DOM. Initialize after the batch is mounted,
+  // otherwise the shared removal observer disposes a not-yet-mounted image.
+  if (!root?.isConnected) return;
+  globalThis.AsHubImageResources?.hydrate(root, {
+    scope: id, current: () => session.isConnected && session.id === id,
+    resolve: image => `/${id}/image-resources/${image}`,
+    lang: document.documentElement.lang || 'zh',
+    open: (url,name,current) => globalThis.AsHubFilePreview?.open({url,name,current,lang:document.documentElement.lang || 'zh',pdfBase:'/vendor/pdfjs/'}),
+  }, retainedImages.filter(node => !root.contains(node)));
+}
+
+// Relative images belong to the reply's conversation, not the active tab URL.
+function resolveReplyImages(root, id) {
+  for (const image of root.querySelectorAll('img[src]')) {
+    try {
+      const file = artifactLink(image.getAttribute('src'), `${location.origin}/${id}/`);
+      if (file) {
+        image.setAttribute('src', file.pathname + file.search);
+        if (!image.closest('a')) { image.setAttribute('role', 'button'); image.tabIndex = 0; }
+      }
+    } catch { /* Keep malformed sources inert/broken rather than guessing a path. */ }
+  }
+}

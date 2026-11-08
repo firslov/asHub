@@ -119,6 +119,12 @@ try {
     await assert.rejects(bridge.core.handlers.call('ashub:collaboration:supplement', {id:'missing', requestKey:'update-001', message:'No dispatch', signal:controller.signal}));
     await assert.rejects(bridge.core.handlers.call('ashub:collaboration:supplement', {id:'missing', requestKey:'update-001'}), /Task not found/);
   });
+  await check('task notification handler is discoverable and rejects invalid task access', async () => {
+    assert(bridge.extCtx.list().includes('ashub:collaboration:signal'));
+    const controller=new AbortController();controller.abort();
+    await assert.rejects(bridge.core.handlers.call('ashub:collaboration:signal',{id:'missing',requestKey:'notice-001',message:'No dispatch',signal:controller.signal}));
+    await assert.rejects(bridge.core.handlers.call('ashub:collaboration:signal',{id:'missing',requestKey:'notice-001'}),/Task not found/);
+  });
   await check('built-in plugin status reflects live registrations without exposing credentials', async () => {
     const plugins = bridge.getPluginStatus();
     assert.equal(plugins.find(p => p.id === 'builtin:agent').state, 'loaded');

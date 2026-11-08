@@ -1,0 +1,9 @@
+/* Bound both the flex surface and its intrinsic image; never let aspect-ratio
+   plus a minimum height widen a Markdown table or a narrow conversation. */
+.image-resource{display:block;width:min(100%,680px);min-width:0;max-width:100%;margin:18px 0 22px;line-height:1.5}
+.image-resource .image-resource-surface{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:420px;min-height:64px;margin:0;padding:0;overflow:hidden;border:1px solid var(--line,var(--border,#8883));border-radius:12px;background:var(--soft,var(--bg2,#8881));color:var(--muted,var(--text-muted,#888));font:inherit;font-size:12px;cursor:zoom-in;box-shadow:none}
+.image-resource .image-resource-surface:disabled{opacity:1;cursor:default}
+.image-resource .image-resource-surface:focus-visible{outline:2px solid var(--accent,#9d8d65);outline-offset:3px}
+.image-resource .image-resource-surface img{display:block;width:auto;min-width:0;max-width:100%;height:auto;max-height:418px;object-fit:contain;margin:0;border:0;border-radius:0}
+.image-resource .image-resource-caption{display:block;margin-top:8px;color:var(--muted,var(--text-muted,#888));font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+@media(max-width:600px){.image-resource{margin:14px 0 18px}.image-resource .image-resource-surface,.image-resource .image-resource-surface img{max-height:300px}.image-resource .image-resource-surface{border-radius:10px}.image-resource .image-resource-surface img{max-height:298px}}

@@ -482,3 +482,105 @@ test('manual edits to a supplemental message are reported separately from exact 
  f.routeEvent(f.b,{name:'agent:steer-submit',payload:{query:'A user edited correction',queueId:f.steers[0].queueId}});
  assert.equal((await f.access.supplement(f.id,'update-001')).state,'modified');
 });
+
+async function notificationFixture(t,busy=true) {
+ const f=await supplementFixture(t);f.notices=[];f.a.isProcessing=busy;f.a.bridge.isProcessing=()=>busy;f.a.bridge.supportsQueue=true;
+ f.a.bridge.steer=(text,queueId)=>{f.notices.push({text,queueId});return true};
+ f.child=f.b.bridge.opts.conversationAccess;
+ return f;
+}
+test('task notifications steer only to the original coordinator, deduplicate, wake waits and preserve task ownership',async t=>{
+ const f=await notificationFixture(t);let returned=false;
+ const wait=f.access.waitTasks([{id:f.id}],120000).then(r=>{returned=true;return r});await tick();assert.equal(returned,false);
+ const [a,b]=await Promise.all([f.child.signal(f.id,'blocker-001','Need missing input'),f.child.signal(f.id,'blocker-001','Need missing input')]);
+ assert.deepEqual(a,b);assert.equal(a.mode,'steer');assert.equal(a.state,'pending');assert.equal(f.notices.length,1);
+ const w=await wait;assert.equal(w.reason,'attention');assert.equal(w.results.length,0);assert.equal(w.attention[0].taskId,f.id);
+ assert.equal(f.tasks.list().length,1);assert.equal(f.tasks.get(f.id).state,'running');
+ const duplicate=await f.child.signal(f.id,'another-key','Need missing input');assert.equal(duplicate.duplicate,true);assert.equal(duplicate.requestKey,'blocker-001');
+ await assert.rejects(f.child.signal(f.id,'blocker-001','Different'),/different content/);
+ await assert.rejects(f.child.signal(f.id,'blocker-002','Other'),/pending/);
+ const n=f.notices[0];f.routeEvent(f.a,{name:'agent:steer-submit',payload:{query:n.text,queueId:n.queueId}});
+ assert.equal((await f.child.signal(f.id,'blocker-001')).state,'consumed');assert.equal(f.tasks.get(f.id).state,'running');
+ assert.equal((await f.access.waitTasks(w.cursors,0)).reason,'timeout');
+ f.tasks.finish(f.id,'completed');const final=await f.access.waitTasks(w.cursors,0);assert.equal(final.results[0].state,'completed');
+ assert.equal((await f.child.signal(f.id,'after-end','New issue')).state,'task_ended');
+});
+test('idle notification starts one normal turn, keeps the original task, and a status read never starts another',async t=>{
+ const f=await notificationFixture(t,false);let calls=0;
+ f.a.bridge.submit=text=>{calls++;f.notices.push(text);return new Promise(()=>{})};
+ const a=await f.child.signal(f.id,'blocker-001','Need a decision');assert.equal(a.mode,'turn');assert.equal(a.state,'consumed');assert.equal(calls,1);
+ assert.equal((await f.child.signal(f.id,'blocker-001')).state,'consumed');assert.equal(calls,1);assert.equal(f.tasks.list().length,1);
+ assert.equal(f.tasks.get(f.id).recipientId,f.b.id);assert.equal(f.tasks.get(f.id).state,'running');
+});
+test('notification validation enforces participant, active task, membership, cancellation and stopped coordinator',async t=>{
+ const f=await notificationFixture(t);
+ await assert.rejects(f.access.signal(f.id,'blocker-001','Wrong direction'),/recipient/);
+ await assert.rejects(f.child.signal(f.id,'short','Bad key'),/requestKey/);
+ await assert.rejects(f.child.signal(f.id,'blocker-001','x'.repeat(2001)),/2000/);
+ await assert.rejects(f.child.signal(f.id,'blocker-001','Cancelled',AbortSignal.abort()));assert.equal(f.notices.length,0);
+ f.a._cancelled=true;await assert.rejects(f.child.signal(f.id,'blocker-001','Stopped'),/stopped/);f.a._cancelled=false;
+ const old=f.tasks.get(f.id);f.tasks.start(f.tasks.create(f.a.id,f.b.id,'another','another').id);
+ await assert.rejects(f.child.signal(f.id,'blocker-001','Obsolete turn'),/currently running/);
+ assert.equal(old.signals,undefined);
+ f.projects.update({action:'members',id:f.project.id,remove:[f.b.id]},()=>true);
+ await assert.rejects(f.child.signal(f.id,'blocker-001','No longer same project'),/project/);
+});
+test('notification rejected, uncertain, edited, dropped and restarted receipts never silently resend',async t=>{
+ for(const action of ['reject','throw','edit','drop','restart']){
+  const f=await notificationFixture(t);
+  if(action==='reject')f.a.bridge.steer=()=>false;
+  if(action==='throw')f.a.bridge.steer=()=>{throw Error('ambiguous')};
+  const first=await f.child.signal(f.id,'blocker-001','Issue');
+  if(action==='reject'){assert.equal(first.state,'rejected');assert.equal(f.a.queuedItems.size,0);}
+  if(action==='throw')assert.equal(first.state,'uncertain');
+  if(action==='edit'||action==='drop'){
+   const n=f.notices[0];f.routeEvent(f.a,{name:action==='edit'?'agent:steer-submit':'agent:queued-done',payload:{queueId:n.queueId,query:action==='edit'?'Changed by user':n.text,...(action==='drop'?{dropped:true}:{})}});
+   assert.equal((await f.child.signal(f.id,'blocker-001')).state,action==='edit'?'modified':'dropped');
+  }
+  if(action==='restart'){const reloaded=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));assert.equal(reloaded.signalReceipt(f.id,'blocker-001').state,'interrupted');}
+  const count=f.notices.length;await f.child.signal(f.id,'blocker-001','Issue');assert.equal(f.notices.length,count);
+ }
+});
+test('notification limits bound new issues, suppress coordinator storms, and failures to persist prevent dispatch',async t=>{
+ const f=await notificationFixture(t);
+ await f.child.signal(f.id,'blocker-001','First');const n=f.notices[0];f.routeEvent(f.a,{name:'agent:steer-submit',payload:{query:n.text,queueId:n.queueId}});
+ await assert.rejects(f.child.signal(f.id,'blocker-002','Second'),/60 seconds/);
+ f.e.clock(161000);await f.child.signal(f.id,'blocker-002','Second');assert.equal(f.notices.length,2);
+ const store=f.tasks;
+ for(let i=0;i<5;i++){const task=store.create(f.a.id,'worker-'+i,'work','work');store.prepareSignal(task.id,{requestKey:'notice-key',message:'issue',text:'issue',queueId:'id-'+i,mode:'steer',state:'consumed',createdAt:161000});}
+ const last=store.create(f.a.id,'last','work','work');assert.throws(()=>store.prepareSignal(last.id,{requestKey:'notice-key',message:'issue',text:'issue',queueId:'last',mode:'steer',state:'pending',createdAt:161000}),/6 per minute/);
+ const another=await notificationFixture(t);const save=another.tasks.save;another.tasks.save=()=>{throw Error('Disk full')};
+ await assert.rejects(another.child.signal(another.id,'blocker-001','Cannot save'),/Disk full/);assert.equal(another.notices.length,0);another.tasks.save=save;
+});
+
+test('notifications recheck membership after lazy restore and preserve a coordinator own active task',async t=>{
+ const f=await notificationFixture(t);let resume;
+ f.a._ensureBridge=()=>new Promise(r=>resume=r);
+ const pending=f.child.signal(f.id,'blocker-001','Need input');await tick();
+ f.projects.update({action:'members',id:f.project.id,remove:[f.b.id]},()=>true);resume();await assert.rejects(pending,/project/);assert.equal(f.notices.length,0);
+ f.projects.update({action:'members',id:f.project.id,add:[f.b.id]},()=>true);delete f.a._ensureBridge;
+ const parent=f.tasks.create('grandparent',f.a.id,'Coordinate','Coordinate');f.tasks.start(parent.id);
+ f.tasks.deliver(parent.id,f.a.id,delivery('Keep this result'));
+ await f.child.signal(f.id,'blocker-001','Need input');const n=f.notices[0];f.routeEvent(f.a,{name:'agent:steer-submit',payload:{query:n.text,queueId:n.queueId}});
+ assert.equal(f.tasks.get(parent.id).state,'running');assert(f.tasks.get(parent.id).delivery);assert.equal(f.tasks.get(f.id).state,'running');
+ f.a._ensureBridge=()=>{throw Error('Receipt reads must not restore a bridge')};assert.equal((await f.child.signal(f.id,'blocker-001')).state,'consumed');
+});
+test('idle-to-busy race queues a single notification and consumes the matching queue ID',async t=>{
+ const f=await notificationFixture(t,false);
+ // The first lock observes idle. The submit lock sees the newly started user turn.
+ const original=f.tasks.prepareSignal.bind(f.tasks);f.tasks.prepareSignal=(...args)=>{original(...args);f.a.bridge.isProcessing=()=>true;f.a.isProcessing=true;};
+ f.a.bridge.submit=async()=>({stopReason:'queued'});
+ const receipt=await f.child.signal(f.id,'blocker-001','Decision needed');assert.equal(receipt.mode,'queue');assert.equal(receipt.state,'pending');await tick();
+ const notice=f.tasks.get(f.id).signals[0];assert(f.a.queuedItems.has(notice.queueId));
+ f.routeEvent(f.a,{name:'agent:error',payload:{message:'Previous unrelated turn failed'}});
+ assert.equal((await f.child.signal(f.id,'blocker-001')).state,'pending','a prior turn error must not drop a queued notification');
+ f.routeEvent(f.a,{name:'agent:queued-submit',payload:{query:notice.text,queueId:notice.queueId}});
+ assert.equal((await f.child.signal(f.id,'blocker-001')).state,'consumed');assert.equal(f.tasks.list().length,1);
+});
+
+test('a blocker wakes a coordinator waiting for another task without acknowledging that task',async t=>{
+ const f=await notificationFixture(t),other=f.tasks.create(f.a.id,f.b.id,'Future task','Future task');
+ const pending=f.access.waitTasks([{id:other.id}],120000);await tick();
+ await f.child.signal(f.id,'blocker-001','Requires decision');const result=await pending;
+ assert.equal(result.reason,'attention');assert.equal(result.attention[0].taskId,f.id);assert.equal(result.cursors.length,1);assert.equal(result.cursors[0].id,other.id);assert.equal(result.results.length,0);
+});

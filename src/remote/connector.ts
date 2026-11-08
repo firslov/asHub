@@ -301,7 +301,7 @@ export class RemoteConnector {
   private async executeRequest(op: string, args: any): Promise<any> {
     if (!this.config || this.config.enabled === false || this.stopped) throw error('移动访问已关闭', 403);
     const epoch = this.generation;
-    if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, thinking: true, queue: true, steering: true, queueActions: true };
+    if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, imageResources: true, thinking: true, queue: true, steering: true, queueActions: true };
     if (op === 'project-groups') return this.groups(epoch);
     if (op === 'project-tasks') return this.projectTasks(args, epoch);
     if (op === 'sessions') { const result = await this.sessions(); this.current(epoch); return result; }
@@ -321,6 +321,16 @@ export class RemoteConnector {
     const session = await this.session(args.session);
     // Disabling or rebinding advances the generation while session lookup may be awaiting the Hub.
     if (epoch !== this.generation || this.stopped) throw error('移动访问授权已变更，请重新确认', 403);
+    if (op === 'image-resource') {
+      if (typeof args.id !== 'string' || !/^[a-f0-9]{64}$/.test(args.id)) throw error('Invalid image resource');
+      if (args.version !== undefined && args.version !== args.id) throw error('Image version mismatch',409);
+      if (args.offset !== undefined && (!Number.isSafeInteger(args.offset) || args.offset < 0)) throw error('Invalid image offset');
+      const route = `/${session.instanceId}/image-resources/${args.id}?` + (args.offset === undefined ? 'meta=1' : 'offset='+args.offset);
+      const result = await this.local(route); this.current(epoch);
+      // Recheck directory authorization after the image read, including rebind/revoke.
+      await this.session(session.instanceId); this.current(epoch);
+      return result;
+    }
     if (op === 'artifact') return this.artifact(args, session, epoch);
     if (op === 'queue') return this.local(`/${session.instanceId}/queue`);
     if (op === 'queue-update') {

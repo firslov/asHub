@@ -1566,6 +1566,10 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
   50%      { opacity: 0.85; }
 }
 
+/* Legacy Markdown images also need a bounded thumbnail; the optional image
+   resource renderer has its own, more specific surface styles. */
+.agent-reply img { display: block; width: auto; max-width: min(100%, 680px); height: auto; max-height: 420px; object-fit: contain; }
+.agent-reply img[src^="/"]:not([src^="//"]) { cursor: zoom-in; }
 .agent-reply p { margin: 0; line-height: 1.75; }
 .agent-reply p + p { margin-top: 1.1rem; }
 .agent-reply > *:first-child { margin-top: 0; }

@@ -453,6 +453,9 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
       const access = this.opts.conversationAccess;
+      if (access.signal) core.handlers.define("ashub:collaboration:signal", (p: {id:string; requestKey:string; message?:string; signal?:AbortSignal}) => {
+        this.assertOpen(); return access.signal!(p.id,p.requestKey,p.message,p.signal);
+      });
       if (access.supplement) core.handlers.define("ashub:collaboration:supplement", (p: { id: string; requestKey: string; message?: string; signal?: AbortSignal }) => {
         this.assertOpen(); return access.supplement!(p.id, p.requestKey, p.message, p.signal);
       });
@@ -544,7 +547,7 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     this.plugins = new PluginRuntime(path.join(CONFIG_DIR, "settings.json"), undefined, this.opts.bindBrowserPages
       ? id => this.opts.bindBrowserPages!(id, (preview, signal) => this.requestPluginApproval(preview, signal, id))
-      : undefined, defineOwned);
+      : undefined, defineOwned, this.opts.imageResources);
     const userNames = await this.plugins.load(extCtx);
     // Hot reload cannot safely replace tools in an in-flight turn. New kernels
     // load current settings; existing conversations apply changes after restart.

@@ -1,3 +1,4 @@
+import { notifyTaskSource } from "./conversation-signals.js";
 import { supplementTask } from "./conversation-updates.js";
 import { randomUUID } from "node:crypto";
 import { CollaborationTasks } from "../collaboration.js";
@@ -42,6 +43,20 @@ export function createConversationAccess(sourceId: string, runtime: Conversation
     if (!p?.sessionIds.includes(task.sourceId) || !p.sessionIds.includes(task.recipientId)) throw new Error("Task outside this project");
   };
   return {
+    async signal(id, requestKey, message, signal) {
+      const store = registry();
+      const validate = () => {
+        signal?.throwIfAborted(); checkTask(id);
+        if (store.get(id).recipientId !== sourceId) throw new Error("Only the task recipient can notify its sender");
+        return target(store.get(id).sourceId);
+      };
+      const coordinator = validate();
+      // Receipt-only reads must not initialize or wake a model.
+      if (message !== undefined) await coordinator._ensureBridge?.();
+      return notifyTaskSource(coordinator,store,id,requestKey,message,signal,()=>{
+        if (validate() !== coordinator) throw new Error("Coordinator changed");
+      },runtime);
+    },
     async supplement(id, requestKey, message, signal) {
       signal?.throwIfAborted(); checkTask(id);
       const task = registry().get(id);
@@ -58,7 +73,9 @@ export function createConversationAccess(sourceId: string, runtime: Conversation
       const watched = Array.isArray(targets) ? targets.map(t => t && ({ id: t.id, afterRevision: t.afterRevision, afterState: t.afterState })) : targets;
       return registry().waitMany(watched, waitMs, signal, () => {
         source(); for (const target of watched) checkTask(target.id);
-      }, check => projects.subscribe(check));
+      }, check => projects.subscribe(check), sourceId, id => {
+        try { checkTask(id); return true; } catch { return false; }
+      });
     },
     async deliver(id, delivery, signal) {
       signal?.throwIfAborted(); checkTask(id);

@@ -1,0 +1,6 @@
+{
+  "schemaVersion":2,"id":"ashub-image-display","name":"图文展示","minNode":"22.12.0",
+  "entries":{"session":"index.mjs"},
+  "requires":{"hostApi":"^1.0.0","capabilities":["session-extensions","image-resources"]},
+  "permissions":["读取当前对话工作目录内的 PNG、JPEG、WebP，保存图片快照并在回复中展示。图片通过该对话已授权的桌面与远控连接提供，不读取目录外文件，不访问外网。停用后保留历史图片。"]
+}

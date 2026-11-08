@@ -53,6 +53,17 @@ async function downloadArtifact(a, url) {
 }
 
 document.addEventListener("click", (ev) => {
+  // Ordinary workspace Markdown images predate the optional display plugin.
+  // Reuse the same authorized file preview as result links, without navigating.
+  const image = ev.target.matches?.('.agent-reply img') ? ev.target : null;
+  if (image && !ev.defaultPrevented && !image.closest('a, .image-resource') && globalThis.AsHubFilePreview) {
+    try {
+      const sid = image.closest('session-view')?.getAttribute('session-id');
+      const file = artifactLink(image.getAttribute('src') || '', sid ? location.origin + '/' + sid + '/' : location.href);
+      if (file) { ev.preventDefault(); void previewArtifact(file); }
+    } catch { /* Invalid image paths remain subject to the existing server checks. */ }
+    return;
+  }
   const a = ev.target.closest?.("a");
   if (!a) return;
   if (ev.defaultPrevented || downloads.has(a)) return;
@@ -80,5 +91,13 @@ document.addEventListener("click", (ev) => {
     window.electronAPI.openExternal(href).catch(() => {});
   } else {
     window.open(href, "_blank", "noopener,noreferrer");
+  }
+});
+
+// The bounded legacy image remains reachable without a pointing device.
+document.addEventListener('keydown', ev => {
+  const image = ev.target.matches?.('.agent-reply img[role="button"]') ? ev.target : null;
+  if (!ev.defaultPrevented && image && !image.closest('a, .image-resource') && (ev.key === 'Enter' || ev.key === ' ')) {
+    ev.preventDefault(); image.click();
   }
 });

@@ -329,7 +329,8 @@ export class PluginRuntime {
   readonly status: PluginStatus[] = [];
   constructor(private file: string, private timeout = 10_000,
     private bindBrowser?: (plugin: string) => ReturnType<NonNullable<import('./bridges/types.js').BridgeOpts['bindBrowserPages']>>,
-    private defineOwned?: ScopedDefine) {}
+    private defineOwned?: ScopedDefine,
+    private imageResources?: import("./image-resources.js").ImageResourceAccess) {}
   async load(ctx: Context): Promise<string[]> {
     let entries, settings: Record<string, any>;
     try { entries = pluginCatalog(this.file).filter(p => p.enabled); settings = readPluginSettings(this.file); }
@@ -356,8 +357,16 @@ export class PluginRuntime {
       // No conversation contents, application services or credentials are exposed.
       const browserPages = plugin.manifest?.requires.capabilities.includes('browser-pages') ? this.bindBrowser?.(plugin.id) : undefined;
       if (browserPages) scope.ctx.onDispose(() => browserPages.close());
+      const lifetime = new AbortController();
+      scope.ctx.onDispose(() => lifetime.abort());
+      const imageResources = plugin.manifest?.requires.capabilities.includes('image-resources') && this.imageResources
+        ? {publish: async (path: string, signal?: AbortSignal) => {
+          lifetime.signal.throwIfAborted();
+          if (!pluginCatalog(this.file).some(p => p.id === plugin.id && p.enabled && p.sessionEnabled && !p.compatibilityError)) throw new Error('Plugin is disabled');
+          return this.imageResources!.publish(path, signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal);
+        }} : undefined;
       Object.defineProperty(scope.ctx, 'services', { value: Object.freeze({ dataDirectory: pluginDataDirectory(this.file, plugin.id),
-        ...(browserPages ? {browserPages} : {}) }), enumerable: true });
+        ...(browserPages ? {browserPages} : {}), ...(imageResources ? {imageResources} : {}) }), enumerable: true });
       // Snapshot per kernel: new kernels see saved edits without resetting the
       // process-wide kernel settings cache or changing running conversations.
       scope.ctx.getExtensionSettings = (namespace, defaults) => {

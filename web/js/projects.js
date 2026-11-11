@@ -126,6 +126,9 @@ function render() {
       const path = el('div', 'project-directory', [workspaces[primaryCwd]?.branch, primaryCwd].filter(Boolean).join(' · '));
       path.title = path.textContent; block.append(path);
     }
+    if (Array.isArray(p.activities)) for (const a of p.activities) {
+      const hint = el("small", "project-activity", a.label); hint.title = a.label; block.append(hint);
+    }
     const actions = el("div", "project-group-actions"); actions.append(createChat, history); block.append(actions);
     if (!collapsed.has(p.id)) {
       if (!members.length) block.append(button(t("projects.add"), () => edit(p), "project-empty"));

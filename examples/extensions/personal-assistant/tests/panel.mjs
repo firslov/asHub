@@ -37,7 +37,7 @@ test('memory inspection preserves pagination and forgetting without manual manag
  for(let i=0;i<65;i++)a.store.add({title:'记录'+i,content:'内容'+i,kind:'fact',scope:'personal'},{type:'user'},'active');
  const middle=p.listing('active',30);assert.equal(middle.rows.length,30);assert.equal(middle.actions.length,4);assert(!middle.actions.some(a=>a.id==='memory-options'));
  const next=middle.actions.find(x=>x.label==='下一页');assert.equal(p.prepare(next.id,next.values).execute().rows.length,5);
- const row=a.store.list()[0];assert.deepEqual(p.details(row).actions.map(x=>x.id),['memories','forget']);
+ const row=a.store.list()[0];assert.deepEqual(p.details(row).actions.map(x=>x.id),['memories','edit','forget']);
  const forget=p.prepare('forget',{id:row.id,revision:row.revision});assert(forget.preview);forget.execute();assert.equal(a.store.get(row.id).state,'forgotten');
 });
 test('re-authorization enables a paused assistant only after confirmation and preserves configured exclusions',t=>{

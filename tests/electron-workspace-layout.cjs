@@ -89,10 +89,10 @@ app.whenReady().then(async () => {
       assert.notEqual(j.state, 'failed', j.error);
       return j.state === 'succeeded';
     }, 'install');
-    // The project extension has session tools and no declarative toolbar entry.
+    // Install the current project extension, including its application entry.
     const projectRoot = path.join(root, 'examples/extensions/project-management');
     const projectZip = process.env.ASHUB_PROJECT_TEST_ZIP ? fs.readFileSync(process.env.ASHUB_PROJECT_TEST_ZIP) :
-      zip(Object.fromEntries(['package.json','ashub-plugin.json','index.mjs','work.mjs','README.md'].map(f=>[f,fs.readFileSync(path.join(projectRoot,f),'utf8')])));
+      zip(Object.fromEntries(['package.json','ashub-plugin.json','index.mjs','work.mjs','continuation.mjs','README.md'].map(f=>[f,fs.readFileSync(path.join(projectRoot,f),'utf8')])));
     const projectPreview = await request('/api/plugins/install?action=preview','POST',projectZip);
     assert(projectPreview.canInstall);
     const projectJob = await request('/api/plugins/install?action=confirm','POST',{token:projectPreview.token});
@@ -161,7 +161,7 @@ app.whenReady().then(async () => {
     const js = (code) => win.webContents.executeJavaScript(code);
     await js("localStorage.setItem('ash.lang','zh')");
     await win.loadURL(base);
-    await until(() => js("!!document.querySelector('.extension-menu')"), 'extension menu');
+    await until(() => js("!!document.querySelector('.extension-menu[aria-label=资料]')"), 'extension menu');
     const browserInstallId = (await request('/api/plugins')).plugins.find(p=>p.manifest?.id==='ashub-browser-automation').id;
     const browserFeatureId = 'plugin-'+browserInstallId;
     const retiredKey = 'extension-'+browserFeatureId.length+'-'+browserFeatureId+'-panel-7-browser';
@@ -271,7 +271,7 @@ app.whenReady().then(async () => {
       );
       await request('/' + created[0].instanceId + '/', 'DELETE');
       await win.loadURL(base);
-      await until(() => js("!!document.querySelector('.extension-menu')"), 'empty shell restored');
+      await until(() => js("!!document.querySelector('.extension-menu[aria-label=资料]')"), 'empty shell restored');
     }
     const folders = ['课程设计/教材', '课程审校/教材', '资料核查'],
       ids = [];
@@ -602,7 +602,7 @@ app.whenReady().then(async () => {
       );
       await until(() => !view(), 'native guest hidden beneath popover');
       await js(
-        "window.pinFocusId=document.querySelector('.extension-menu').id; document.querySelector('#rail-tool-menu [data-tool='+CSS.escape(window.pinFocusId)+'] [aria-pressed]').focus(); document.querySelector('.extension-menu').title+=' '",
+        "window.pinFocusId=document.querySelector('.extension-menu[aria-label=资料]').id; document.querySelector('#rail-tool-menu [data-tool='+CSS.escape(window.pinFocusId)+'] [aria-pressed]').focus(); document.querySelector('.extension-menu[aria-label=资料]').title+=' '",
       );
       await sleep(50);
       assert(
@@ -611,16 +611,16 @@ app.whenReady().then(async () => {
         ),
         'menu refresh retains keyboard focus',
       );
-      await js("document.querySelector('#rail-tool-menu > div:last-child [aria-pressed]').click()");
-      const pluginId = await js("document.querySelector('.extension-menu').id");
+      await js("document.querySelector('#rail-tool-menu [data-tool='+CSS.escape(window.pinFocusId)+'] [aria-pressed]').click()");
+      const pluginId = await js("document.querySelector('.extension-menu[aria-label=资料]').id");
       assert(
         await js(
           'document.getElementById(' + JSON.stringify(pluginId) + ").classList.contains('rail-unpinned')",
         ),
       );
-      await js("document.querySelector('#rail-tool-menu > div:last-child button').click()");
-      await until(() => js("!document.querySelector('.extension-panel').hidden"), 'unpinned tool opened');
-      await js("document.querySelector('.extension-panel .p-icon-btn').click()");
+      await js("document.querySelector('#rail-tool-menu [data-tool='+CSS.escape(window.pinFocusId)+'] button').click()");
+      await until(() => js("!document.getElementById(document.querySelector('.extension-menu[aria-label=资料]').getAttribute('aria-controls')).hidden"), 'unpinned tool opened');
+      await js("document.getElementById(document.querySelector('.extension-menu[aria-label=资料]').getAttribute('aria-controls')).querySelector('.p-icon-btn').click()");
       const saved = await js("localStorage.getItem('ash.browser.width-ratio')");
       for (const delayedUnload of [false, true]) {
         const oldWindow = win;
@@ -629,7 +629,7 @@ app.whenReady().then(async () => {
         try {
           await openWindow(base + '/' + id + '/');
           await until(
-            () => js("!!document.querySelector('.extension-menu.rail-unpinned')"),
+            () => js("!!document.querySelector('.extension-menu[aria-label=资料].rail-unpinned')"),
             'saved pin on fresh window',
           );
           await assertRetiredEntryAbsent();
@@ -751,16 +751,16 @@ app.whenReady().then(async () => {
     await until(()=>js("!!document.querySelector("+JSON.stringify(toolsRow+' .plugin-entry-toggle')+")"),'other plugin keeps its placement control');
     assert(await js("document.querySelector('#plugins-list').contains(document.querySelector("+JSON.stringify(browserRow)+"))"),'browser appears in Local extensions');
     assert(await js("!!document.querySelector('#features-list [data-feature-id=mobile-access]') && document.querySelectorAll("+JSON.stringify(browserRow)+").length===1"),'no duplicate browser row');
-    assert(!await js("!!document.querySelector('.plugin-bound-features[data-plugin-id=\""+projectPlugin.id+"\"] .plugin-entry-toggle')"));
+    assert.equal(await js("!!document.querySelector('.plugin-bound-features[data-plugin-id=\""+projectPlugin.id+"\"] .plugin-entry-toggle')"),!!projectPlugin.manifest.ui?.panels?.length);
     await js("document.querySelector("+JSON.stringify(toolsRow+' .plugin-entry-toggle')+").click()");
-    await until(()=>js("!document.querySelector('.extension-menu').classList.contains('rail-unpinned')"),'plugin entry pin without granting consent');
+    await until(()=>js("!document.querySelector('.extension-menu[aria-label=资料]').classList.contains('rail-unpinned')"),'plugin entry pin without granting consent');
     assert(!((await request('/api/plugins')).plugins.find(p=>p.id===toolsPlugin.id).autoApprove));
     assert(!((await request('/api/plugins')).plugins.find(p=>p.id===browserPlugin.id).autoApprove));
     await js("document.querySelector("+JSON.stringify(toolsRow+' .plugin-entry-toggle')+").click();document.querySelector("+JSON.stringify(browserRow+' .plugin-approval')+").scrollIntoView({block:'center'})");
 
     await js("window.initialStorageWrite=Storage.prototype.setItem; Storage.prototype.setItem=function(k,v){if(k==='ash.toolbar.unpinned')throw Error('storage full');return window.initialStorageWrite.call(this,k,v)};true");
     await js("document.querySelector("+JSON.stringify(toolsRow+' .plugin-entry-toggle')+").click()");
-    assert(await js("!document.querySelector('.extension-menu').classList.contains('rail-unpinned')"),'placement still works in this window if saving is unavailable');
+    assert(await js("!document.querySelector('.extension-menu[aria-label=资料]').classList.contains('rail-unpinned')"),'placement still works in this window if saving is unavailable');
     await js("Storage.prototype.setItem=window.initialStorageWrite;document.querySelector("+JSON.stringify(toolsRow+' .plugin-entry-toggle')+").click()");
     await theme('light');
     await capture('plugins-light');
@@ -783,7 +783,7 @@ app.whenReady().then(async () => {
       await js("document.querySelector("+JSON.stringify(restoreSelector)+").click()");
       await until(async()=>(await request('/api/plugins')).plugins.some(p=>p.manifest?.id==='ashub-browser-automation' && p.bundled && !p.enabled && !p.autoApprove),'offline restore stays disabled');
       await assertRetiredEntryAbsent();
-      assert(await js("!!document.querySelector('.extension-menu.rail-unpinned')"),'uninstall preserves unrelated plugin');
+      assert(await js("!!document.querySelector('.extension-menu[aria-label=资料].rail-unpinned')"),'uninstall preserves unrelated plugin');
       await js(
         "document.getElementById('plugins-close').click();document.querySelector('.rail-more').click()",
       );
@@ -802,7 +802,7 @@ app.whenReady().then(async () => {
         return j.state === 'succeeded';
       }, 'reinstall');
       await until(
-        () => js("!!document.querySelector('.extension-menu.rail-unpinned')"),
+        () => js("!!document.querySelector('.extension-menu[aria-label=资料].rail-unpinned')"),
         'unrelated tool retains saved placement',
       );
     }

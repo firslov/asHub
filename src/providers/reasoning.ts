@@ -12,10 +12,10 @@ const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "m
 // backend reasoning.effort values are valid for asHub's single model request.
 // Read metadata only; do not expose or read authentication files here.
 let cacheStamp = "", cachedModels: Record<string, unknown>[] = [];
-function codexModels(): Record<string, unknown>[] {
+export function codexModels(): Record<string, unknown>[] {
   const file = path.join(os.homedir(), ".codex", "models_cache.json");
   try {
-    const stat = fs.statSync(file), stamp = `${file}:${stat.mtimeMs}:${stat.size}`;
+    const stat = fs.statSync(file), stamp = `${file}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}`;
     if (stamp !== cacheStamp) {
       const data = JSON.parse(fs.readFileSync(file, "utf8"));
       cachedModels = Array.isArray(data?.models) ? data.models.filter((m: unknown) => m && typeof m === "object") : [];

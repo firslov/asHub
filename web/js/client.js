@@ -36,6 +36,7 @@ import "./version.js";
 import "./updater.js";
 import "./browser-pane.js";
 import "./sidebar.js";
+import "./extensions/conversation-entries.js";
 import "./tabs.js";
 import "./sse.js";
 

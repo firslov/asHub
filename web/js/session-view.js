@@ -1,3 +1,5 @@
+import { effect } from '../vendor/signals-core.js';
+import { conversationEntries } from './extensions/entry-state.js';
 import { hydrateImages } from './stream/reply.js';
 import { resetActivity, disposeActivity, activityEvent, beginActivityFrame } from "./stream/activity.js";
 import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
@@ -85,6 +87,17 @@ class SessionView extends HTMLElement {
     scanI18n(this);
     this.streamEl = this.querySelector(".session-stream");
     this.emptyStateEl = this.querySelector(".stream-empty");
+    this.entryCopyDispose?.();
+    this.entryCopyDispose=effect(()=>{
+      const entry=conversationEntries.value.find(e=>e.sessionId===this.id);
+      lang.value;
+      for(const [selector,key,value] of [['.welcome-title','welcome.title',entry?.label],['.welcome-description','welcome.description',entry?.description]]){
+        const el=this.emptyStateEl?.querySelector(selector);if(!el)continue;
+        if(value){el.removeAttribute('data-i18n');el.textContent=value;}
+        else{el.setAttribute('data-i18n',key);el.textContent=t(key);}
+      }
+      this.emptyStateEl?.classList.toggle('plugin-conversation-empty',!!entry);
+    });
     this.loadingEl = this.querySelector(".stream-loading");
     this.pillEl = this.querySelector(".scroll-pill");
     this.usageStripEl = this.querySelector(".usage-strip");
@@ -217,6 +230,7 @@ class SessionView extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this.entryCopyDispose?.();
     disposeActivity(this);
     discardPendingThinking(this);
     if (this.replayFlushTimer) clearTimeout(this.replayFlushTimer);

@@ -3,8 +3,8 @@ import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 export interface ApprovalItem { title: string; fields: Array<{ label: string; value: string }> }
-export interface ApprovalPreview { title: string; items: ApprovalItem[]; scope?: 'once' | 'site' | 'daily7';
-  browser?: { action: 'open' | 'click' | 'fill'; origin: string }; sourceName?: string }
+export interface ApprovalPreview { manualOnly?: boolean; title: string; items: ApprovalItem[]; scope?: 'once' | 'site' | 'daily7';
+  browser?: { action: 'open' | 'click' | 'fill' | 'write' | 'upload' | 'download'; origin: string }; sourceName?: string }
 export type Approve = (preview: ApprovalPreview, signal?: AbortSignal) => Promise<boolean>;
 export interface HostAccess {
   catalog(signal?: AbortSignal): Promise<unknown>;

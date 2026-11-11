@@ -110,7 +110,7 @@ app
       assert.equal(installer.status(job.id).state, 'succeeded', installer.status(job.id).error);
       const projectDir = path.join(root,'examples/extensions/project-management');
       const projectZip = process.env.ASHUB_PROJECT_TEST_ZIP ? fs.readFileSync(process.env.ASHUB_PROJECT_TEST_ZIP) :
-        zip(Object.fromEntries(['package.json','index.mjs','work.mjs','ashub-plugin.json','README.md'].map(f=>[f,fs.readFileSync(path.join(projectDir,f),'utf8')])));
+        zip(Object.fromEntries(['package.json','index.mjs','work.mjs','continuation.mjs','ashub-plugin.json','README.md'].map(f=>[f,fs.readFileSync(path.join(projectDir,f),'utf8')])));
       const projectPreview = await installer.preview(projectZip);
       assert(projectPreview.canInstall);
       const projectJob = installer.confirm(projectPreview.token);
@@ -159,7 +159,7 @@ app
             projects,operations:new HostOperations(path.join(temp,'receipts')),deleting:()=>false,
             expandHome:value=>value,version:()=>({epoch:'test',revision:1}),describe:s=>({id:s.id,title:s.title})
           }),
-          bindBrowserPages: (plugin, approve) => service.bind(id, plugin, approve),
+          bindBrowserPages: (plugin, approve) => service.bind(id, plugin, approve, temp),
         });
         bridges.push(b);
         await b.ready();
@@ -950,6 +950,33 @@ app
       assert.deepEqual(await clickCounts(), ['2', '1']);
       console.log('PASS daily targets: independent daily quotas and manual vs automatic consent');
 
+      // Exercise the delivered ZIP through the real registry/AshBridge approval gateway.
+      decision = () => true;
+      page = await ok('browser_open', { url: host + '/form' });
+      const longSource = 'installed source '.repeat(400);
+      fs.writeFileSync(path.join(temp, 'browser-source.txt'), longSource);
+      const written = await ok('browser_write', { ref: item(page, '说明'), sourcePath: 'browser-source.txt' });
+      assert.equal(written.status, 'verified');
+      assert.equal(await guest().executeJavaScript("document.querySelector('#description').value"), longSource);
+      assert.equal(events.at(-1).browser.action, 'write');
+      assert.equal(events.at(-1).scope, 'once');
+      await guest().executeJavaScript(`
+        const label=document.createElement('label');label.textContent='文件上传';
+        const field=document.createElement('input');field.type='file';label.append(field);document.body.append(label);
+        const button=document.createElement('button');button.textContent='下载成果';
+        button.onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['installed result']));a.download='output.txt';a.click()};
+        document.body.append(button);void 0;
+      `);
+      page = await ok('browser_observe', {});
+      const selected = await ok('browser_upload', {ref:item(page,'文件上传'),sourcePath:'browser-source.txt'});
+      assert.equal(selected.status,'verified');assert.equal(events.at(-1).browser.action,'upload');
+      page = await ok('browser_observe', {});
+      const downloaded = await ok('browser_download', {ref:item(page,'下载成果')});
+      assert.equal(downloaded.status,'completed');assert.equal(events.at(-1).manualOnly,true);assert.equal(downloaded.triggerVerified,false);
+      assert.equal(fs.readFileSync(downloaded.path,'utf8'),'installed result');
+      console.log('PASS installed browser ZIP: real AshBridge write/upload/download tools, scoped approval, cwd binding and completed artifact');
+
+
       decision = () => true;
       await ok('browser_open', { url: host + '/form' });
       page = await ok('browser_observe', {});
@@ -962,7 +989,7 @@ app
       assert.equal(service.status('aaaaaa'), null);
       await until(() => win.contentView.children.length === 0);
       const visible = a.core.bus.emitPipe('agent:tools:visible', { tools: a.extCtx.agent.getTools() }).tools;
-      assert(!visible.some((t) => t.name === 'browser_open'));
+      assert(!visible.some((t) => ['browser_open','browser_write','browser_upload','browser_download'].includes(t.name)));
       assert.equal(a.core.handlers.call('instruction:browser-automation'), '');
       assert((await call(a, 'browser_open', { url: host + '/docs' })).isError);
       console.log(

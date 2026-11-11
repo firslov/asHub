@@ -1,3 +1,6 @@
+import { effect } from '../../vendor/signals-core.js';
+import { conversationEntries } from './entry-state.js';
+import { openTab } from '../session-manager.js';
 import { mountResource } from './resource-view.js';
 import { validateDeclarativeUI, fieldDefaultValue, panelKey } from './declarative-schema.js';
 import { registerPanel, unregisterPanel } from '../panel-manager.js';
@@ -33,6 +36,8 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
     svg.append(shape); trigger.append(svg);
     trigger.type = 'button'; trigger.id = `${key}-toggle`; trigger.title = `${feature.name} · ${definition.title}`;
     trigger.setAttribute('aria-label', definition.title);
+    // Named conversation entries own their settings affordance; avoid a duplicate toolbar app.
+    disposers.push(effect(()=>{trigger.hidden=conversationEntries.value.some(e=>e.pluginId===feature.pluginId&&e.resource===definition.id);}));
     const panel = node('section', 'p-drawer extension-panel'); panel.id = `${key}-panel`; panel.hidden = true;
     const head = node('header', 'p-head');
     const heading = node('h2', 'p-title', definition.title); heading.id = `${key}-title`; panel.setAttribute('aria-labelledby', heading.id);
@@ -41,7 +46,7 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
     const fields = [];
     for (const component of definition.components) {
       if (component.type === 'resource') {
-        const resource = node('div', 'extension-resource-host');body.append(resource);disposers.push(mountResource(resource, feature, component.id));
+        const resource = node('div', 'extension-resource-host');body.append(resource);disposers.push(mountResource(resource, feature, component.id, {openConversation:openTab}));
       } else if (component.type === 'text' || component.type === 'status') {
         const block = node('p', component.type === 'text' ? 'extension-text' : `extension-status tone-${component.tone || 'neutral'}`, component.text);
         if (component.type === 'status') block.setAttribute('role', 'status'); body.append(block);

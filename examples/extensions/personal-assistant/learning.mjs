@@ -21,8 +21,9 @@ export class Learning {
   constructor(assistant) { this.a = assistant; this.db = assistant.store; this.api = assistant.services.background; this.busy = false; this.stopped = false; this.error = ''; this.controller = new AbortController(); }
   config() { return this.db.state('learning') ?? { enabled: false, grantId: null, excludedIds: [], dailyCalls: 4 }; }
   access(id) {
+    if (this.a.dedicated && id !== this.a.conversationId()) return false;
     const c = this.config(); if (!c.enabled || !c.grantId || !this.api) return false;
-    try { return this.api.targets(c.grantId).some(t => t.id === id); } catch { return false; }
+    try { const g=this.api.status(c.grantId); if(this.a.dedicated && (g.includedIds?.length!==1 || g.includedIds[0]!==id))return false; return this.api.targets(c.grantId).some(t => t.id === id); } catch { return false; }
   }
   exclusions() {
     const c = this.config();
@@ -38,6 +39,7 @@ export class Learning {
       const enabled = c.enabled && this.api && c.grantId;
       const live = new Set(enabled ? this.api.targets(c.grantId).map(t => t.id) : []), checked = new Map();
       return row => {
+        if (!this.a.visible(row)) return false;
         const s = row.source;
         const refs = [...(s.refs ?? []), ...(s.feedback ?? [])];
         const ids = [s.conversationId, s.context?.conversationId, ...refs.map(r => r.conversationId)].filter(Boolean);
@@ -62,7 +64,8 @@ export class Learning {
   valid(row) { return this.validator()(row); }
   configure(grantId, values) {
     if (!grantId) throw Error('缺少宿主授权');
-    this.api.status(grantId);
+    const grant=this.api.status(grantId);
+    if (this.a.dedicated && (grant.includedIds?.length!==1 || grant.includedIds[0]!==this.a.conversationId())) throw Error('助手仅允许读取专属对话');
     this.cancel(); this.db.setState('learning', { ...values, grantId, enabled: true });
     this.error = ''; void this.tick();
   }
@@ -77,10 +80,12 @@ export class Learning {
   status() { const c = this.config(); let quota = ''; try { const g = this.api?.status(c.grantId); if (g) quota = ` · 今日 ${g.day === new Date().toISOString().slice(0,10) ? g.calls : 0}/${g.dailyCalls} 次整理`; } catch {} return (c.enabled ? (this.db.profile().enabled ? '后台学习已开启' : '后台学习已暂停 · 记忆功能暂停') : '后台学习未开启') + quota + (this.error ? '\n' + this.error : ''); }
   async tick() {
     if (this.busy || this.stopped || !this.api) return;
+    if (this.a.dedicated && this.config().modelSessionId !== this.a.conversationId()) return false;
     const c = this.config(); if (!c.enabled || !c.grantId || !this.db.profile().enabled) return;
+    if (this.a.dedicated && !this.access(this.a.conversationId())) return;
     this.busy = true; const signal = this.controller.signal;
     try {
-      const targets = this.api.targets(c.grantId).filter(t => !t.busy);
+      const targets = this.api.targets(c.grantId).filter(t => !t.busy && (!this.a.dedicated || t.id === this.a.conversationId()));
       // Oldest checked conversation first prevents a busy project starving others.
       targets.sort((a,b) => (this.db.state('scan:' + a.id)?.checked ?? 0) - (this.db.state('scan:' + b.id)?.checked ?? 0));
       for (const target of targets.slice(0, 20)) {
@@ -116,6 +121,7 @@ export class Learning {
         if (!records.some(e => e.role === 'user' && e.text.trim().length >= 4)) {
           this.db.setState(stateKey, { cursor, grantId: c.grantId, checked: Date.now() }); continue;
         }
+        if (this.a.dedicated && Date.now() - Math.max(...records.map(r=>r.at)) < 90000) continue;
         await this.processBatch(c, target, records, signal);
         this.db.setState(stateKey, { cursor, grantId: c.grantId, checked: Date.now() }); this.error = '';
         // One batch per minute, no unbounded self-reflection loop.
@@ -151,7 +157,7 @@ export class Learning {
       if (item.legacyId !== undefined) {
         const old=legacy.find(r=>r.id===item.legacyId);
         if (old) this.db.adoptLegacy(old.id,old.revision,checked.value,checked.source);
-      } else if (!legacyOnly) this.db.learn(checked.value,checked.source);
+      } else if (!legacyOnly) this.db.learn(checked.value,checked.source,{priorValid:this.validator()});
     }
     if (!legacyOnly && Array.isArray(value.evaluations) && value.evaluations.length<=6) for (const evaluation of value.evaluations) {
       if (!existing.some(r=>r.id===evaluation?.memoryId && ['procedure','experience'].includes(r.kind))) continue;
@@ -215,6 +221,6 @@ export class Learning {
     const aliases = item.aliases.filter(a => typeof a === 'string' && a.length <= 60 && !sensitive.test(a));
     const project = this.a.snapshot().projects.find(p => p.id === target.projectId);
     const context = memoryContext(scope, { type:'learned', certainty:item.certainty, refs, context: { ...( ['user','assistant','project','other'].includes(item.subject) ? {subject:item.subject} : {}), conversationId:target.id, ...(target.projectId ? {projectId:target.projectId, projectName:project?.name} : {}) } });
-    return { value, source: { context, type:'learned', topic:item.topic.trim().toLowerCase(), certainty:item.certainty, refs, aliases, grantId, at:Date.now(), mode:'observed' } };
+    return { value, source: { context, ...(this.a.dedicated?{namespace:'assistant-v4'}:{}), type:'learned', topic:item.topic.trim().toLowerCase(), certainty:item.certainty, refs, aliases, grantId, at:Date.now(), mode:'observed' } };
   }
 }

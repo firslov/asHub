@@ -115,3 +115,5 @@
 .project-removal-option .project-option-body small { white-space:normal; line-height:1.6; }
 .project-chat-confirm.danger { color:var(--error); background:transparent; border-color:var(--error-border); }
 .project-chat-confirm.danger:hover:not(:disabled) { color:var(--on-error); background:var(--error); }
+
+.project-activity { display:block; padding:0 8px 8px 26px; font-size:var(--fs-xs); line-height:1.5; color:var(--text-muted); overflow-wrap:anywhere; }

@@ -1,3 +1,4 @@
+const { readSource, stageUpload, downloadGrant, MAX_TEXT, hash } = require('./browser-files.cjs');
 const { createHash } = require('node:crypto');
 const { isIP, BlockList } = require('node:net');
 const nonPublic4 = new BlockList();
@@ -53,12 +54,12 @@ function publicURL(raw) {
   return url;
 }
 
-function configureSession(session, origin, resolvePublic) {
+function configureSession(session, origin, resolvePublic, onDownload) {
   session.setPermissionRequestHandler((_wc, _perm, answer) => answer(false));
   session.setPermissionCheckHandler(() => false);
   session.setDevicePermissionHandler(() => false);
   session.setDisplayMediaRequestHandler((_request, answer) => answer({}));
-  session.on('will-download', (event) => event.preventDefault());
+  session.on('will-download', onDownload);
   session.webRequest.onBeforeRequest(async (request, answer) => {
     try {
       if (request.resourceType !== 'mainFrame' && /^(data|blob):/.test(request.url)) return answer({});
@@ -95,6 +96,8 @@ function createBrowserPages({
   };
   function remove(p) {
     if (!p || pages.get(p.id) !== p) return;
+    p.download?.cancel();
+    for (const upload of p.uploads) void upload.dispose().catch(() => {});
     pages.delete(p.id);
     p.revision++;
     p.refs.clear();
@@ -112,7 +115,11 @@ function createBrowserPages({
         .digest('hex');
     const session = electron.session.fromPartition(partition);
     if (!configured.has(session)) {
-      configureSession(session, origin, resolvePublic);
+      configureSession(session, origin, resolvePublic, (event, item, contents) => {
+        const page = pages.get(id);
+        if (page?.contents === contents && page.download) page.download.accept(event, item, contents);
+        else event.preventDefault();
+      });
       configured.add(session);
     }
     const view = new electron.WebContentsView({
@@ -135,6 +142,9 @@ function createBrowserPages({
       view,
       contents,
       manual: false,
+      uploads: [],
+      download: null,
+      downloadNeedsReset: false,
       revision: 0,
       hasLoadedPage: false,
       viewport: 'initial',
@@ -163,7 +173,13 @@ function createBrowserPages({
       p.refs.clear();
       notify(id);
     };
-    contents.on('did-navigate', navigated);
+    contents.on('did-navigate', () => {
+      // A committed document cannot inherit an outstanding grant from its predecessor.
+      // did-start-navigation is insufficient: a legitimate file download starts
+      // navigation without committing a replacement document.
+      p.download?.cancel();
+      navigated();
+    });
     contents.on('did-navigate-in-page', (_event, _url, main) => {
       if (main) navigated();
     });
@@ -256,7 +272,7 @@ function createBrowserPages({
       { once: true },
     );
   }
-  function bind(id, plugin, approve) {
+  function bind(id, plugin, approve, cwd) {
     let pending;
     let disposed = false;
     const owner = {
@@ -274,8 +290,8 @@ function createBrowserPages({
       },
       async run(request, signal) {
         if (!request || typeof request !== 'object') throw Error('Invalid browser request.');
-        const { op, ref, url, value, daily, references } = request;
-        const req = { op, ref, url, value, daily, references };
+        const { op, ref, url, value, daily, references, sourcePath, editor } = request;
+        const req = { op, ref, url, value, daily, references, sourcePath, editor };
         if (req.op === 'close') {
           owner.close();
           return { closed: true };
@@ -289,17 +305,19 @@ function createBrowserPages({
           activations.get(plugin),
           ...(signal ? [signal] : []),
         ]);
-        const confirm = async (title, fields, browser, scope) => {
+        const confirm = async (title, fields, browser, scope, manualOnly = false, approvalSignal = active) => {
           active.throwIfAborted();
+          approvalSignal.throwIfAborted();
           const decision = await approve(
             {
-              title, browser, scope,
-              items: [{ title: 'Browser', fields: fields.map(([label, value]) => ({ label, value: String(value) })) }],
+              title, browser, scope, manualOnly,
+              items: [{ title: manualOnly ? title : 'Browser', fields: fields.map(([label, value]) => ({ label, value: String(value) })) }],
             },
-            active,
+            approvalSignal,
           );
           active.throwIfAborted();
-          if (decision !== true && decision !== 'automatic') throw Error('Browser permission denied or expired.');
+          approvalSignal.throwIfAborted();
+          if ((manualOnly && decision !== true) || (decision !== true && decision !== 'automatic')) throw Error('Browser permission denied or expired.');
           return decision;
         };
         try {
@@ -312,6 +330,7 @@ function createBrowserPages({
             if (
               !p ||
               p.origin !== url.origin ||
+              p.downloadNeedsReset ||
               (p.contents.getURL() !== url.href && p.lastOpen !== url.href)
             ) {
               await confirm('打开网页 · Open website', [
@@ -320,10 +339,11 @@ function createBrowserPages({
                   '权限 / Access',
                   '读取此站点的页面内容，按对话保留登录状态 · Read this site in this conversation',
                 ],
+                ...(p?.downloadNeedsReset ? [['恢复 / Recovery', '丢弃未保存页面状态并重建浏览器，保留持久化站点数据，不重放原操作 · Discard unsaved page state and rebuild; keep persistent site data without replaying the previous action.']] : []),
               ], { action: 'open', origin: url.origin }, 'site');
             }
             if (pages.get(id) !== p) throw Error('Browser was replaced.');
-            if (!p || p.origin !== url.origin) {
+            if (!p || p.origin !== url.origin || p.downloadNeedsReset) {
               remove(p);
               p = create(id, url.origin, owner);
             }
@@ -390,16 +410,28 @@ function createBrowserPages({
           check();
           if (req.op === 'open' || req.op === 'observe')
             return await snapshot(p, check, req.references !== false);
-          if (!['click', 'fill'].includes(req.op)) throw Error('Unsupported browser operation.');
-          const value = req.op === 'fill' ? req.value : '';
-          if (typeof value !== 'string' || value.length > 1000)
+          if (!['click', 'fill', 'write', 'upload', 'download'].includes(req.op)) throw Error('Unsupported browser operation.');
+          if (req.op === 'download' && p.downloadNeedsReset)
+            throw Error('The previous download may still produce additional files. Reopen this page with browser_open before another download; unsaved page edits will be lost.');
+          const writing = req.op === 'fill' || req.op === 'write';
+          if (req.op === 'write' && req.sourcePath !== undefined && req.value !== undefined)
+            throw Error('Specify either text or sourcePath, not both.');
+          const source = (req.op === 'write' && req.sourcePath !== undefined) || req.op === 'upload'
+            ? readSource(cwd, req.sourcePath, req.op === 'write') : null;
+          const value = writing ? (source ? source.text : req.value) : '';
+          if (typeof value !== 'string' || value.length > (req.op === 'fill' ? 1000 : MAX_TEXT) || (writing && value.includes('\0')) || (req.op === 'write' && Buffer.byteLength(value, 'utf8') > MAX_TEXT))
             throw Error('Field value exceeds the allowed length.');
+          if (req.daily && req.op !== 'click') throw Error('Recurring grants are only supported for ordinary clicks.');
+          if (req.op === 'upload' && p.uploads.length >= 32) throw Error('Close and reopen the page before uploading more files.');
+          const action = req.op === 'download' ? 'click' : req.op === 'write' ? (req.editor === true ? 'editor' : 'fill') : req.op;
           const daily = req.daily === true;
+          let download;
           const target = await resolveTarget(p, req.ref, check, daily);
           try {
-            const info = await target.call(req.op, value, null);
+            const info = await target.call(action, value, null);
             check();
             if (info.blocked) throw Error(info.blocked);
+            if (info.changed) throw Error('Editor changed. Observe again.');
             if (daily && (!info.dailyEligible || !target.entry.name))
               throw Error(
                 'Daily approval requires a named standalone button with a unique stable ID, including its component hosts.',
@@ -424,7 +456,12 @@ function createBrowserPages({
               ];
               if (info.checked != null) fields.push(['当前勾选 / Checked', String(info.checked)]);
               if (info.destination) fields.push(['目标地址 / Destination', info.destination]);
-              if (req.op === 'fill') fields.push(['填写 / Fill', value]);
+              if (writing) {
+                fields.push(['填写 / Fill', value.length > 1000 ? value.slice(0, 240).toWellFormed() + `… (${value.length} characters)` : value]);
+                fields.push(['SHA-256', hash(value)]);
+              }
+              if (source) fields.push(['本地文件 / Source', source.file], ['文件大小 / Bytes', source.bytes.length], ['文件 SHA-256', source.sha256]);
+              if (req.op === 'download') fields.push(['保存到 / Save to', cwd || 'No working directory'], ['下载 / Download', '允许此站点下载一个文件，最大 64 MiB · Receive one file from this site, up to 64 MiB; saving requires separate manual confirmation']);
               if (daily) {
                 fields.push(['按钮位置 / Button path', info.dailyPath.join(' → ')]);
                 fields.push([
@@ -433,7 +470,7 @@ function createBrowserPages({
                 ]);
               }
               const decision = await confirm(
-                req.op === 'fill' ? '填写网页 · Fill field' : '点击网页控件 · Click control',
+                writing ? '填写网页 · Write content' : req.op === 'upload' ? '上传文件 · Upload file' : req.op === 'download' ? '下载文件 · Download file' : '点击网页控件 · Click control',
                 fields, { action: req.op, origin: p.origin }, daily ? 'daily7' : 'once',
               );
               automatic = decision === 'automatic';
@@ -459,12 +496,23 @@ function createBrowserPages({
             p.refs.delete(req.ref);
             let result;
             try {
-              result = await target.call(req.op, value, { identity: info.identity, daily }, reserve);
+              result = await target.call(action, value, { identity: info.identity, daily }, () => {
+                reserve();
+                if (req.op === 'download') download = downloadGrant({ page: p, cwd, signal: active,
+                  confirmReceived: async (file, signal) => (await confirm(
+                    '确认收到的文件 / Confirm received file',
+                    [['站点 / Site', file.origin], ['文件 / File', file.name], ['大小 / Bytes', file.bytes], ['SHA-256', file.sha256],
+                     ['来源说明 / Attribution', '无法验证由哪次页面操作触发。请确认此实际文件符合预期，否则拒绝 · The triggering action is not verified. Approve only if this actual file is expected.'],
+                     ['内容预览（不可信） / Untrusted preview', file.preview], ['保存到 / Save to', cwd]],
+                    undefined, 'once', true, signal)) === true,
+                });
+              });
             } catch (error) {
               if (expired && error === expired) throw error;
               throw Error(`Could not confirm action: ${error.message}. Inspect the page before retrying.`);
             }
             if (result?.changed || result?.blocked) {
+              download?.discard();
               // The isolated world explicitly declined before clicking or filling.
               if (daily) {
                 if (previousGrant) p.daily.set(key, previousGrant);
@@ -472,8 +520,19 @@ function createBrowserPages({
               }
               throw Error(result.blocked || 'Page changed during approval. Observe again.');
             }
+            if (req.op === 'upload') {
+              check();
+              const staged = stageUpload(source);
+              p.uploads.push(staged);
+              const files = await target.upload(staged.file);
+              const verified = files?.length === 1 && files[0].size === source.bytes.length && files[0].name === require('node:path').basename(source.file);
+              return { status: verified ? 'verified' : 'unverified', files, sha256: source.sha256 };
+            }
+            if (download) return await download.promise;
+            if (writing) return { status: result?.verified ? 'verified' : 'unverified', characters: result?.actualValue?.length, sha256: typeof result?.actualValue === 'string' ? hash(result.actualValue) : undefined, sourceSha256: source?.sha256, adapter: result?.adapter || 'text-field', message: 'Read-back verifies the editor value, not server-side saving. Submit separately.' };
             return { status: 'performed' };
           } finally {
+            download?.cancel();
             await target.release();
           }
         } finally {

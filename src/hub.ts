@@ -1,7 +1,9 @@
+import { ConversationEntries } from './extensions/conversation-entries.js';
 import { PluginBackground } from './extensions/background.js';
 import { replayEventName } from './history/replay-frame.js';
 import { ReplayWriter } from './history/replay-writer.js';
 import { getSseWriter } from './transport/sse-writer.js';
+import { PluginActivities } from './services/plugin-activities.js';
 import { ExtensionMessages } from './services/extension-messages.js';
 import { PluginInteractions } from './extensions/interactions.js';
 import { SessionLifecycle } from "./services/session-lifecycle.js";
@@ -45,7 +47,7 @@ import { ProjectStore } from "./projects.js";
 import type { ConversationAccess } from "./bridges/types.js";
 import { RemoteConnector, type RemoteSecretStore } from "./remote/connector.js";
 import { DEEPSEEK_MODELS } from "./providers/deepseek.js";
-import { codexStatus } from "./providers/codex.js";
+import { codexCatalogVersion, codexStatus } from "./providers/codex.js";
 import * as http from "node:http";
 import { settingsValidationError } from "./config-validation.js";
 import { PLUGIN_AUTO_APPROVE, pluginAutoApprovalIds, setPluginAutoApproval } from "./plugin-approvals.js";
@@ -878,11 +880,12 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     const features = extensionSnapshot();
     return { version: 1, ...hostEvents.version(), sessions: sessionService.list(projects), projects: projects.list(), extensions: features };
   };
+  const pluginActivities = new PluginActivities((project, id) => !!sessions.get(id) && projects.list().some(p => p.id === project && p.sessionIds.includes(id)), () => hostEvents.publish('projects'));
   const extensionMessages = new ExtensionMessages(path.join(SESSIONS_DIR, 'extension-messages.json'), {
     target: id => {
       const session = sessions.get(id);
       return session && session.kind === 'agent' && !session._closed && !session._closing
-        ? { title: session.title, binding: JSON.stringify([session.id, session.cwd]) } : undefined;
+        ? { title: session.title, binding: JSON.stringify([session.id, session.cwd]), projectId: projects.list().find(p => p.sessionIds.includes(id))?.id } : undefined;
     },
     busy: id => { const s = sessions.get(id); return !s || sessionBusy(s) || !!s._hostOperation; },
     async dispatch(d, before, settled) {
@@ -915,9 +918,37 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       return answer;
     },
   }, lifecycle.signal);
-  const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action), background);
+  const conversationEntries = new ConversationEntries(path.join(SESSIONS_DIR,'plugin-conversations.json'), {
+    exists:id=>!!sessions.get(id) && !sessions.get(id)?._closed && !sessions.get(id)?._closing,
+    models:async()=>{
+      const result=new Map<string,{provider:string;model:string}>();
+      for(const [model,providers] of modelToProviders())for(const provider of providers)result.set(provider+'/'+model,{provider,model});
+      for(const s of sessions.values()){
+        if(s.model&&s.provider)result.set(s.provider+'/'+s.model,{provider:s.provider,model:s.model});
+        if(s.kind==='agent' && s.bridge?.getModels)try{for(const {model,provider} of (await s.bridge.getModels()).models)if(model&&provider)result.set(provider+'/'+model,{provider,model});}catch{}
+      }
+      return [...result.values()];
+    },
+    create:async(id,spec,input)=>{const s=await createSession(sessions,opts,spec.cwd,undefined,'agent',{instanceId:id,model:input.model,provider:input.provider});await setSessionTitle(s,spec.label,true);},
+    changed:()=>hostEvents.publish('extensions'),
+  });
+  const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action), background, conversationEntries);
   extensions = new ApplicationExtensionRegistry({ settingsFile: settingsPath(), capabilities: HOST_PLUGIN_CAPABILITIES,
     discover: () => installedApplicationDefinitions(settingsPath(), { enableBrowserPages: opts.enableBrowserPages, bindServices: (id, context) => ({
+      activities: pluginActivities.bind(id, context.signal),
+      collaboration: Object.freeze({
+        snapshot: (owner: string) => {
+          context.signal.throwIfAborted();
+          const project = projects.list().find(p => p.sessionIds.includes(owner));
+          if (!project || !sessions.has(owner)) return [];
+          return opts.collaboration!.snapshot(owner).filter(t => project.sessionIds.includes(t.recipientId) && sessions.has(t.recipientId));
+        },
+        subscribe: (listener: () => void) => {
+          context.signal.throwIfAborted(); const dispose = opts.collaboration!.subscribe(listener);
+          context.onDispose(dispose); return dispose;
+        },
+      }),
+      conversations: conversationEntries.bind(id, context.signal),
       background: background.bind(id, context.signal), messages: extensionMessages.bind(id, context.signal), interactions: interactions.bind(id, context.signal),
     }), services: {
       host: Object.freeze({ capabilities: () => JSON.parse(JSON.stringify(HOST_CAPABILITIES)), snapshot: () => JSON.parse(JSON.stringify(hostSnapshot())),
@@ -949,13 +980,15 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       extensionSnapshot();
       return;
     }
+    if (req.method === 'GET' && url === '/api/plugin-resource-catalog') {res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','application/json');res.end(JSON.stringify(interactions.catalog()));return;}
+    if (req.method === 'GET' && url === '/api/plugin-conversations') { res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','application/json');res.end(JSON.stringify(conversationEntries.list()));return; }
     if (await interactions.handle(req, res, async request => (await readLimitedBody(request, 65536)).toString('utf8'))) return;
     if (handleHostQuery(req, res, { events: hostEvents, signal: lifecycle.signal,
       snapshot: hostSnapshot })) return;
     if (await handleFeatureRequest(req, res, featureServices, extensions)) return;
     if (url === "/api/mobile" || url.startsWith("/api/mobile/")) return mobile.handle(req, res);
 
-    if (await handleProjectRequest(req, res, { sessions, projects, collaboration: opts.collaboration!, worktreesDirectory: path.join(SESSIONS_DIR, "worktrees"), readBody,
+    if (await handleProjectRequest(req, res, { sessions, projects, activities: id => pluginActivities.list(id), collaboration: opts.collaboration!, worktreesDirectory: path.join(SESSIONS_DIR, "worktrees"), readBody,
       create: cwd => createSession(sessions, opts, cwd), saveSessionMetaDebounced, setSessionTitle })) return;
     if (url.split('?')[0] === '/api/plugins/install') {
       res.setHeader('Cache-Control', 'no-store');
@@ -1240,6 +1273,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         return autocomplete(res, session, params.get("buffer") ?? "");
       }
       if (req.method === "POST" && rest === "/cancel") {
+        try { extensionMessages.stopTarget(session.id); } catch (e) { console.error("[hub] message authorization persistence failed", e); }
         const wasProcessing = session.bridge.isProcessing?.() ?? false;
         try { session.bridge.cancel(); } catch (err) { console.error("[hub] cancel:", err); }
         // If the bridge was not actually processing (e.g. restored session
@@ -1326,6 +1360,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     },
     shutdown: () => {
       stopping = true;
+      extensionMessages.prepareShutdown();
       lifecycle.abort();
       return shutdownTask ??= Promise.allSettled([Promise.resolve().then(() => extensionMessages.close()), restoring, extensions.close(), pluginInstaller.close(), featureServices.skills.close(), featureServices.balance.close()])
         .then(async results => {
@@ -1398,7 +1433,7 @@ async function getModels(
   sessions: Map<string, Session>,
 ): Promise<void> {
   const raw = req.url!.split("/api/models")[1] ?? "";
-  const status = JSON.stringify(codexStatus());
+  const status = codexCatalogVersion();
   if (status !== _codexModelStatus) {
     _codexModelStatus = status;
     invalidateServerModelCache();
@@ -1832,7 +1867,7 @@ const sessionLifecycle = new SessionLifecycle({
 async function createSession(
   sessions: Map<string, Session>, opts: HubOpts, cwd: string,
   existing?: RestoredSession, spawnKind: SessionKind = "agent",
-  setup?: { instructions?: string; model?: string; provider?: string; proxyEnabled?: boolean | null },
+  setup?: { instanceId?: string; instructions?: string; model?: string; provider?: string; proxyEnabled?: boolean | null },
 ): Promise<Session> {
   return sessionLifecycle.create(sessions, opts, cwd, existing, spawnKind, setup);
 }

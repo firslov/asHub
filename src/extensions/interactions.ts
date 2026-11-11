@@ -1,3 +1,4 @@
+import { ConversationEntries, type EntryInput } from './conversation-entries.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readBodyWithSignal } from '../transport/body-reader.js';
@@ -13,9 +14,11 @@ export interface ResourcePlan {
     };
     authorization?: MessageGrant;
     backgroundAuthorization?: BackgroundGrantInput;
+    entryAuthorization?: EntryInput;
     execute(grantId?: string): unknown | Promise<unknown>;
 }
 export interface PluginResource {
+    remote?: { conversationId(): string | null; actions: string[] };
     view(): unknown | Promise<unknown>;
     prepare(action: string, values: Record<string, unknown>): ResourcePlan | Promise<ResourcePlan>;
 }
@@ -35,12 +38,13 @@ export class PluginInteractions {
     }>();
     private pending = new Map<string, {
         key: string;
+        context: string;
         entry: object;
         expires: number;
         run: () => Promise<unknown>;
         result?: Promise<unknown>;
     }>();
-    constructor(private messages: ExtensionMessages, private requireActive: (pluginId: string) => void, private signal: AbortSignal, private run: <T>(pluginId: string, action: () => T | Promise<T>) => Promise<T> = async (_id, action) => action(), private background?: PluginBackground) { }
+    constructor(private messages: ExtensionMessages, private requireActive: (pluginId: string) => void, private signal: AbortSignal, private run: <T>(pluginId: string, action: () => T | Promise<T>) => Promise<T> = async (_id, action) => action(), private background?: PluginBackground, private conversations?: ConversationEntries) { }
     bind(pluginId: string, signal: AbortSignal) {
         return Object.freeze({ register: (id: string, resource: PluginResource) => {
                 signal.throwIfAborted();
@@ -59,6 +63,7 @@ export class PluginInteractions {
                 return dispose;
             } });
     }
+    catalog() { return [...this.entries.values()].filter(e=>!e.signal.aborted && e.resource.remote).map(e=>({pluginId:e.pluginId,resourceId:[...this.entries.entries()].find(([,v])=>v===e)![0].split('/')[1],sessionId:e.resource.remote!.conversationId()})); }
     async handle(req: IncomingMessage, res: ServerResponse, read: (req: IncomingMessage) => Promise<string>) {
         const parts = (req.url ?? '').split('?')[0].split('/');
         if (parts[1] !== 'api' || parts[2] !== 'plugin-resources')
@@ -72,9 +77,20 @@ export class PluginInteractions {
             const entry = this.entries.get(key);
             if (!entry)
                 throw Error('Plugin resource unavailable');
-            const guard = () => { this.signal.throwIfAborted(); entry.signal.throwIfAborted(); this.requireActive(entry.pluginId); if (this.entries.get(key) !== entry)
+            const remoteSession = new URL(req.url ?? '/', 'http://localhost').searchParams.get('remoteSession');
+            const context = remoteSession === null ? 'desktop' : 'remote:' + remoteSession;
+            const guard = () => { if(remoteSession !== null && (!remoteSession || entry.resource.remote?.conversationId() !== remoteSession)) throw Error('Remote resource outside authorized conversation'); this.signal.throwIfAborted(); entry.signal.throwIfAborted(); this.requireActive(entry.pluginId); if (this.entries.get(key) !== entry)
                 throw Error('Plugin resource changed'); };
             guard();
+            const adapt = (value: any) => {
+              if(remoteSession === null || !value?.view)return value;
+              const view=clone(value.view),allowed=entry.resource.remote!.actions;let omitted=false;
+              const filter=(actions:any[])=>actions.filter(a=>{if(allowed.includes(a.id))return true;omitted=true;return false;});
+              view.actions=filter(view.actions??[]);for(const row of view.rows??[])row.actions=filter(row.actions??[]);
+              if(view.form && !allowed.includes(view.form.action)){delete view.form;omitted=true;}
+              if(omitted)view.note=(view.note??'')+'\n授权与首次设置请在桌面端完成';
+              return {...value,view};
+            };
             let result: unknown;
             if (req.method === 'GET')
                 result = { view: clone(await entry.resource.view()) };
@@ -91,7 +107,7 @@ export class PluginInteractions {
                         this.pending.delete(id);
                 if (input.confirm) {
                     const p = this.pending.get(input.confirm);
-                    if (!p || p.key !== key || p.entry !== entry || p.expires < Date.now())
+                    if (!p || p.key !== key || p.context !== context || p.entry !== entry || p.expires < Date.now())
                         throw Error('Confirmation expired; review again');
                     p.result ??= Promise.resolve().then(p.run);
                     result = await p.result;
@@ -99,22 +115,27 @@ export class PluginInteractions {
                 else {
                     if (!identifier(input.action) || !input.values || typeof input.values !== 'object' || Array.isArray(input.values))
                         throw Error('Invalid action');
+                    if (remoteSession !== null && !entry.resource.remote?.actions.includes(input.action)) throw Error('请在桌面端完成此操作');
                     const plan = await entry.resource.prepare(input.action, clone(input.values));
                     guard();
                     if (!plan || typeof plan.execute !== 'function')
                         throw Error('Invalid action plan');
+                    if (remoteSession !== null && (plan.authorization || plan.backgroundAuthorization || plan.entryAuthorization)) throw Error('请在桌面端确认授权');
+                    if ([plan.authorization,plan.backgroundAuthorization,plan.entryAuthorization].filter(Boolean).length > 1) throw Error('Conflicting authorizations');
+                    const conversation = plan.entryAuthorization ? await this.conversations?.prepare(entry.pluginId,plan.entryAuthorization) : undefined;
+                    if (plan.entryAuthorization && !conversation) throw Error('Conversation entries unavailable');
                     const authorization = plan.authorization ? this.messages.prepare(entry.pluginId, plan.authorization) : undefined;
                     if (plan.authorization && plan.backgroundAuthorization) throw Error('Conflicting authorizations');
                     if (plan.backgroundAuthorization && !this.background) throw Error('Background services unavailable');
                     const background = plan.backgroundAuthorization ? this.background!.prepare(entry.pluginId, plan.backgroundAuthorization) : undefined;
                     const run = () => this.run(entry.pluginId, async () => {
                         guard();
-                        const grantId = authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : undefined;
+                        const grantId = conversation ? await this.conversations!.approve(entry.pluginId,conversation) : authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : undefined;
                         try {
                             return { view: clone(await plan.execute(grantId)) };
                         }
                         catch (error) {
-                            if (grantId)
+                            if (grantId && !conversation)
                                 try {
                                     if (background) this.background!.bind(entry.pluginId, entry.signal).revoke(grantId);
                                     else this.messages.revoke(entry.pluginId, grantId);
@@ -123,7 +144,7 @@ export class PluginInteractions {
                             throw error;
                         }
                     });
-                    if (plan.preview || authorization || background) {
+                    if (plan.preview || authorization || background || conversation) {
                         if (this.pending.size >= 100)
                             throw Error('Too many pending confirmations');
                         const preview = clone(plan.preview ?? { title: '授权消息投递 / Authorize messages', fields: [] });
@@ -131,8 +152,12 @@ export class PluginInteractions {
                             throw Error('Invalid approval preview');
                         preview.fields.push(...authorization?.fields ?? []);
                         preview.fields.push(...background?.fields ?? []);
+                        // Only the host can collapse its authorization diagnostics.
+                        delete preview.details;
+                        if (background?.details) preview.details = background.details;
+                        preview.fields.push(...conversation?.fields ?? []);
                         const id = randomUUID();
-                        this.pending.set(id, { key, entry, expires: Date.now() + 300000, run });
+                        this.pending.set(id, { key, context, entry, expires: Date.now() + 300000, run });
                         result = { confirmation: { id, preview } };
                     }
                     else
@@ -145,7 +170,7 @@ export class PluginInteractions {
                 return true;
             }
             guard();
-            res.end(JSON.stringify(result));
+            res.end(JSON.stringify(adapt(result)));
         }
         catch (e) {
             res.statusCode = 409;

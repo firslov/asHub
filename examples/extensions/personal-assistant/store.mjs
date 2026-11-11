@@ -94,6 +94,8 @@ export class MemoryStore {
     if (state === 'all') return this.db.prepare("SELECT * FROM memories WHERE state!='forgotten' ORDER BY updated DESC,id LIMIT 31 OFFSET ?").all(offset).map(parsed);
     return this.db.prepare('SELECT * FROM memories WHERE state=? ORDER BY updated DESC,id LIMIT 31 OFFSET ?').all(state, offset).map(parsed);
   }
+  memoryTargets() { return this.db.prepare("SELECT * FROM memories WHERE state IN ('active','candidate')").all().map(parsed); }
+  memoryIds() { return this.db.prepare("SELECT id FROM memories WHERE state!='forgotten'").all().map(r=>r.id); }
   activeMemories() { return this.db.prepare("SELECT * FROM memories WHERE state='active' ORDER BY updated DESC,id LIMIT 1000").all().map(parsed); }
   counts() { return Object.fromEntries(this.db.prepare('SELECT state,count(*) as n FROM memories GROUP BY state').all().map(r => [r.state, r.n])); }
   check(id, revision) { const row = this.get(id); if (!row || row.state === 'forgotten' || row.revision !== revision) throw Error('记忆已变化，请重新查看'); return row; }
@@ -142,18 +144,26 @@ export class MemoryStore {
       this.record(this.get(id), 'approve'); return this.get(id);
     });
   }
+  evidenceIds(row) {
+    // User corrections are authoritative, but forgetting must still exclude the
+    // original messages. Recover IDs from retained versions for older edits.
+    const sources = [row.source, ...this.history(row.id).map(v => v.value.source)];
+    const refs = sources.flatMap(s => [...(s.refs ?? []), ...(s.originRefs ?? [])]);
+    return [...new Map(refs.filter(r => typeof r.id === 'string' && typeof r.conversationId === 'string')
+      .map(r => [JSON.stringify([r.conversationId, r.id]), { id:r.id, conversationId:r.conversationId }])).values()];
+  }
   edit(id, revision, input) {
     const value = this.normalize(input);
     return this.transaction(() => {
       const row = this.check(id, revision);
       if (row.state !== 'active') throw Error('只能编辑正式记忆');
-      this.db.prepare('UPDATE memories SET title=?,content=?,kind=?,scope=?,source=?,revision=revision+1,updated=? WHERE id=?').run(value.title, value.content, value.kind, value.scope, JSON.stringify({ type: 'user-edit', at: Date.now(), context: value.scope === row.scope ? row.source.context : memoryContext(value.scope, {type:'user-edit'}), topic: row.source.topic }), Date.now(), id);
+      this.db.prepare('UPDATE memories SET title=?,content=?,kind=?,scope=?,source=?,revision=revision+1,updated=? WHERE id=?').run(value.title, value.content, value.kind, value.scope, JSON.stringify({ type: 'user-edit', at: Date.now(), context: value.scope === row.scope ? row.source.context : memoryContext(value.scope, {type:'user-edit'}), topic: row.source.topic, ...(row.source.namespace ? {namespace:row.source.namespace} : {}), originRefs:this.evidenceIds(row) }), Date.now(), id);
       this.record(this.get(id), 'edit'); return this.get(id);
     });
   }
   forgottenCopy(row) {
     const id = this.state('forgotten-content:' + fingerprint(memoryIdentity(row)));
-    return id ? this.get(id) : undefined;
+    return id && !row.source?.renewedFrom?.includes(id) ? this.get(id) : undefined;
   }
   forget(id, revision) {
     return this.transaction(() => {
@@ -165,7 +175,7 @@ export class MemoryStore {
         if (!this.state(key)) this.setState(key, old.id);
       }
       this.setState('forgotten-content:' + fingerprint(memoryIdentity(old)), old.id);
-      if (old.source.type === 'learned') for (const ref of old.source.refs ?? []) {
+      for (const ref of this.evidenceIds(old)) {
         const key = 'ignored:' + ref.conversationId;
         this.setState(key, [...new Set([...(this.state(key) ?? []), ref.id])]);
       }
@@ -210,7 +220,7 @@ export class MemoryStore {
     });
   }
   learnedTopics(scope, visible = () => true) { return this.db.prepare("SELECT * FROM memories WHERE state IN ('active','candidate') AND json_extract(source,'$.type')='learned' ORDER BY updated DESC").all().map(parsed).filter(r => (r.scope === scope || ['user','assistant'].includes(r.source.context.subject)) && visible(r)).slice(0,12).map(r => ({ id:r.id, topic:r.source.topic, title:r.title, content:previewText(r.content,100), scope:r.scope, context:r.source.context, kind:r.kind, state:r.state })); }
-  learn(input, source) {
+  learn(input, source, { explicitRequest = false, priorValid = () => true } = {}) {
     const value = this.normalize(input);
     source = { ...source, context: memoryContext(value.scope, source) };
     const key = topicKey(source);
@@ -219,18 +229,28 @@ export class MemoryStore {
       // key on first update, preserving edits and forgotten-topic tombstones.
       const oldKey = 'topic:' + value.scope + ':' + source.topic;
       const legacyId = this.state(oldKey), legacy = legacyId ? this.get(legacyId) : null;
-      const priorId = this.state(key) ?? (legacy && (legacy.state === 'forgotten' || topicKey(legacy.source) === key) ? legacy.id : null);
-      const prior = priorId ? this.get(priorId) : this.db.prepare("SELECT * FROM memories WHERE json_extract(source,'$.topic')=? ORDER BY updated DESC").all(source.topic).map(parsed).find(r => topicKey(r.source) === key);
+      const priorId = this.state(key) ?? (!source.namespace && legacy && (legacy.state === 'forgotten' || topicKey(legacy.source) === key) ? legacy.id : null);
+      let prior = priorId ? this.get(priorId) : this.db.prepare("SELECT * FROM memories WHERE json_extract(source,'$.topic')=? ORDER BY updated DESC").all(source.topic).map(parsed).find(r => topicKey(r.source) === key);
       if (prior) this.setState(key, prior.id);
+      // Carry only a host-validated explicit renewal forward during later updates.
+      if (prior?.source.renewedFrom) source = { ...source, renewedFrom:prior.source.renewedFrom };
       const forgotten = this.forgottenCopy({ ...value, source });
-      if (forgotten && (!prior || prior.source.type === 'learned')) return forgotten;
+      const blocked = [prior?.state === 'forgotten' ? prior : null, forgotten].filter(Boolean);
+      const renewed = explicitRequest && (!prior || prior.state === 'forgotten') && source.certainty === 'explicit' && blocked.length > 0
+        && source.refs?.length > 0 && source.refs.every(ref => blocked.every(row => ref.at > row.updated)
+          && !(this.state('ignored:' + ref.conversationId) ?? []).includes(ref.id));
+      if (renewed) { source = { ...source, renewedFrom:[...new Set(blocked.map(row => row.id))] }; prior = undefined; }
+      else if (forgotten && (!prior || prior.source.type === 'learned')) return forgotten;
       // User edits and explicit forgetting always outrank automatic learning.
       if (prior && (['forgotten','retired'].includes(prior.state) || prior.source.type !== 'learned' || this.state('blocked:' + prior.id))) return prior;
+      // A rewound live source cannot support the new version. Keep the record
+      // identity/history, but rebuild evidence and qualification from this batch.
+      const evidencePrior = prior && priorValid(prior) ? prior : null;
       // For a global user/assistant topic, scope records provenance rather than
       // a different conclusion. Independent projects can corroborate it too.
-      const sameGlobalTopic = prior && ['user','assistant'].includes(source.context.subject) && topicKey(prior.source) === key;
-      const unchanged = prior && ['title','content','kind'].every(k => prior[k] === value[k]) && (prior.scope === value.scope || sameGlobalTopic);
-      if (prior?.source.type === 'learned' && observedAt({ source }) < observedAt(prior)) {
+      const sameGlobalTopic = evidencePrior && ['user','assistant'].includes(source.context.subject) && topicKey(evidencePrior.source) === key;
+      const unchanged = evidencePrior && ['title','content','kind'].every(k => evidencePrior[k] === value[k]) && (evidencePrior.scope === value.scope || sameGlobalTopic);
+      if (evidencePrior?.source.type === 'learned' && observedAt({ source }) < observedAt(evidencePrior)) {
         if (!unchanged) return prior;
         // Older independent evidence may support the same conclusion, but must
         // not replace newer content, provenance, aliases or feedback metadata.
@@ -243,7 +263,7 @@ export class MemoryStore {
       const qualified = source.certainty === 'explicit' || support >= 2;
       let state = (['procedure','experience'].includes(value.kind) ? false : qualified) ? 'active' : 'candidate';
       if (unchanged && prior?.state === 'active') state = 'active';
-      if (prior?.state === 'active' && state === 'candidate') return prior;
+      if (evidencePrior?.state === 'active' && state === 'candidate') return prior;
       source = { ...source, refs, ...(unchanged && prior?.source.feedback ? { feedback:prior.source.feedback } : {}), mode: unchanged && prior?.source.mode === 'feedback-supported' ? 'feedback-supported' : state === 'active' ? (source.certainty === 'explicit' ? 'explicit' : 'supported') : 'hypothesis' };
       if (unchanged && JSON.stringify(prior.source.refs) === JSON.stringify(refs) && prior.state === state) return prior;
       const counts = this.counts();
@@ -251,7 +271,7 @@ export class MemoryStore {
       if (!prior && Object.values(counts).reduce((a,b) => a+b,0) >= 10000) throw Error('记忆容量已满');
       const now = Date.now(), id = prior?.id ?? randomUUID();
       if (prior) this.db.prepare('UPDATE memories SET title=?,content=?,kind=?,scope=?,source=?,state=?,revision=revision+1,updated=? WHERE id=?').run(value.title,value.content,value.kind,value.scope,JSON.stringify(source),state,now,id);
-      else this.db.prepare('INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,value.title,value.content,value.kind,value.scope,state,JSON.stringify(source),1,now,now,null,null,fingerprint(['learning',key]));
+      else this.db.prepare('INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,value.title,value.content,value.kind,value.scope,state,JSON.stringify(source),1,now,now,null,null,fingerprint(renewed ? ['learning',key,source.refs.map(ref=>[ref.conversationId,ref.id])] : ['learning',key]));
       this.setState(key,id); const row = this.get(id); this.record(row, prior ? 'learn-update' : 'learn'); return row;
     });
   }

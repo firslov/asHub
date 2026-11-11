@@ -351,3 +351,75 @@ test('messages submitted during provider preparation keep FIFO order and image p
   assert.equal(delivered[1].images[0].data,'fixture');
   assert.equal(b.isProcessing(),false);
 });
+
+function changingCodexCatalog() {
+  const providers=new Map();let activations=0,closes=0,events=0;
+  let x;
+  x=setup({'agent-sh/extensions':{BUILTIN_EXTENSIONS:[{name:'codex-provider',load:async()=>async ctx=>{
+    activations++;
+    const configured=ctx.getExtensionSettings('codex-provider',{models:[]}).models;
+    const models=configured.length?configured.map(id=>({id})):JSON.parse(fs.readFileSync(cache,'utf8')).models.filter(m=>m.visibility==='list').map(m=>({id:m.slug}));
+    ctx.onDispose(()=>closes++);
+    ctx.onDispose(ctx.agent.providers.register({id:'codex',apiKey:'fixture-only',baseURL:'http://127.0.0.1:12345/v1',models,defaultModel:models[0].id}));
+  }}]}});
+  const cache=path.join(x.e.os.homedir(),'.codex','models_cache.json');fs.mkdirSync(path.dirname(cache),{recursive:true});
+  const writeModels=slugs=>fs.writeFileSync(cache,JSON.stringify({models:slugs.map(slug=>({slug,visibility:'list',context_window:500000,input_modalities:['text','image']}))}));
+  writeModels(['old-model']);x.write(credentials);
+  const host=new x.module.CodexProviderHost({call:()=>null,list:()=>[],registerCommand(){},bus:{emit(){events++;}},
+    getExtensionSettings:(_name,defaults)=>({...defaults,...(x.e.settings.getSettings()['codex-provider']??{})}),
+    agent:{providers:{register(reg){providers.set(reg.id,reg);return()=>providers.delete(reg.id);}}}});
+  return {x,cache,host,providers,writeModels,counts:()=>({activations,closes,events})};
+}
+
+test('Codex cache updates refresh existing models without closing the active proxy',async()=>{
+ const f=changingCodexCatalog();try{
+  await f.host.sync();const endpoint=f.providers.get('codex').baseURL;
+  f.writeModels(['new-model','new-model-mini']);await f.host.sync();
+  assert.deepEqual(Array.from(f.providers.get('codex').models,m=>m.id),['new-model','new-model-mini']);
+  assert.equal(f.providers.get('codex').baseURL,endpoint);assert.equal(f.counts().activations,1);assert.equal(f.counts().closes,0);
+  assert.equal(f.providers.get('codex').models[0].contextWindow,500000);
+  fs.writeFileSync(f.cache,'partial write');await f.host.sync();assert.equal(f.providers.get('codex').models.length,2,'temporary malformed cache keeps last good list');
+ }finally{f.host.close();}assert.equal(f.providers.size,0);
+});
+
+test('Codex identity changes invalidate a warm hub catalog; token renewal does not',async()=>{
+ const f=changingCodexCatalog();try{
+  const h=f.x.e.load('src/hub.ts','export const audit={getModels};').audit;let reads=0;
+  const sessions=new Map([['one',{kind:'agent',bridge:{getModels:async()=>({models:[{provider:'codex',model:'model-'+(++reads)}]})}}]]);
+  const get=async()=>{const r=new Res();await h.getModels({url:'/api/models'},r,sessions);return r.json();};
+  await get();f.x.write({...credentials,access:'renewed-token',expires:2});await get();assert.equal(reads,1);
+  f.x.write({...credentials,accountId:'different-account'});await get();assert.equal(reads,2,'same configured=true must not preserve old account catalog');
+  f.writeModels(['new-cache-entry']);await get();assert.equal(reads,3,'cache change invalidates before TTL');
+ }finally{f.host.close();}
+});
+
+
+test('Codex catalog observer refreshes idle sessions and releases its timer on close',async()=>{
+ const f=changingCodexCatalog();try{
+  await f.host.sync();
+  const poll=[...f.x.e.timers.values()].find(t=>t.ms===2000);assert(poll);
+  const tick=async()=>{poll.fn();await new Promise(resolve=>setImmediate(resolve));};
+  f.writeModels(['background-model']);await tick();
+  assert.deepEqual(Array.from(f.providers.get('codex').models,m=>m.id),['background-model']);
+  const events=f.counts().events;
+  f.x.write({...credentials,access:'rotated-access'});await tick();assert.equal(f.counts().events,events);
+  f.x.write({...credentials,accountId:'new-account'});await tick();assert.equal(f.counts().events,events+1,'identity changes notify the renderer even with the same catalog');
+  assert.equal(f.counts().activations,1);assert.equal(f.counts().closes,0);
+  f.host.close();assert(![...f.x.e.timers.values()].some(t=>t.ms===2000));
+  f.writeModels(['after-close']);await tick();assert.equal(f.providers.size,0);
+ }finally{f.host.close();}
+});
+
+test('Codex catalog refresh respects an explicit model list and atomic cache replacement',async()=>{
+ const f=changingCodexCatalog();try{
+  f.x.settings({'codex-provider':{models:['custom-model']}});await f.host.sync();
+  f.writeModels(['unwanted-cached-model']);await f.host.sync();
+  assert.deepEqual(Array.from(f.providers.get('codex').models,m=>m.id),['custom-model']);
+  f.x.settings({});await f.host.sync();
+  const replacement=f.cache+'.tmp';
+  fs.writeFileSync(replacement,JSON.stringify({models:[{slug:'replacement-model',visibility:'list'},{slug:'hidden-model',visibility:'hide'}]}));
+  fs.renameSync(replacement,f.cache);await f.host.sync();
+  assert.deepEqual(Array.from(f.providers.get('codex').models,m=>m.id),['replacement-model']);
+  assert.equal(f.counts().activations,2,'only the explicit settings change restarts the provider');
+ }finally{f.host.close();}
+});

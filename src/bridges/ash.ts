@@ -420,7 +420,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   private requestPluginApproval(preview: import("../host-operations.js").ApprovalPreview, signal?: AbortSignal, pluginId = currentPluginIdentity()): Promise<boolean | "automatic"> {
     this.assertOpen();
     if (signal?.aborted) return Promise.resolve(false);
-    if (canAutoApprovePlugin(path.join(CONFIG_DIR, "settings.json"), pluginId)) return Promise.resolve("automatic");
+    if (!preview.manualOnly && canAutoApprovePlugin(path.join(CONFIG_DIR, "settings.json"), pluginId)) return Promise.resolve("automatic");
     const sourceName = this.plugins?.status.find(plugin => plugin.id === pluginId)?.name;
     return this.explicitApprovals.request({ ...preview, sourceName }, signal);
   }

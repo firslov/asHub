@@ -80,7 +80,7 @@ test('oversized declarative-only ZIP is rejected before installation and staging
 });
 test('legacy v1 and manifestless agent-sh packages retain session discovery and stable identities', async () => {
   const f = fixture();
-  const raw = JSON.parse(fs.readFileSync(new URL('../examples/extensions/project-management/ashub-plugin.json', import.meta.url)));
+  const raw = { schemaVersion: 1, id: 'legacy-project-management', name: 'Legacy project management' };
   const parsed = f.manifest.parsePluginManifest(raw, raw.id, 'index.ts');
   assert.equal(parsed.schemaVersion, 1); assert.equal(parsed.entries.session, 'index.ts');
   const legacyExtras = f.manifest.parsePluginManifest({ ...raw, ui: { html: '<script>unvalidated</script>' }, configSchema: { providers: {} } }, raw.id);

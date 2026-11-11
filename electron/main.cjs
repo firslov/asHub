@@ -755,7 +755,7 @@ async function startServer() {
       webRoot,
       makeBridge: (opts) => opts.kind === "terminal" ? new TerminalBridge(opts) : new AshBridge({
         ...opts, bindBrowserPages: opts.kind === 'agent' && opts.sessionId
-          ? (plugin, approve) => browserPages.bind(opts.sessionId, plugin, approve) : undefined,
+          ? (plugin, approve) => browserPages.bind(opts.sessionId, plugin, approve, opts.cwd) : undefined,
       }),
     };
     const hub = startHub(hubOptions);

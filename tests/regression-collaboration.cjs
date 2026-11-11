@@ -584,3 +584,10 @@ test('a blocker wakes a coordinator waiting for another task without acknowledgi
  await f.child.signal(f.id,'blocker-001','Requires decision');const result=await pending;
  assert.equal(result.reason,'attention');assert.equal(result.attention[0].taskId,f.id);assert.equal(result.cursors.length,1);assert.equal(result.cursors[0].id,other.id);assert.equal(result.results.length,0);
 });
+
+test('task event subscribers see terminal receipts without starting a model and unsubscribe cleanly', () => {
+ const e=env();const {CollaborationTasks}=e.load('src/collaboration.ts');const tasks=new CollaborationTasks(path.join(e.dir,'events'));
+ const task=tasks.create('owner','member','private input','private query');let notices=0;
+ const off=tasks.subscribe(()=>{notices++;});tasks.subscribe(()=>{throw Error('broken observer')});tasks.start(task.id);tasks.finish(task.id,'completed');
+ assert.equal(notices,2);const list=tasks.snapshot('owner');assert.equal(list[0].terminal,true);assert.equal(list[0].state,'completed');assert.equal('message' in list[0],false);assert.equal('text' in list[0],false);assert.equal(tasks.snapshot('other').length,0);off();tasks.wakeSignalWaiters();assert.equal(notices,2);
+});

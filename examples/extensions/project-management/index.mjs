@@ -64,6 +64,7 @@ export default function activate(ctx) {
     ['delete', '永久删除空闲对话及其历史和上传附件，不删除工作目录文件。不可撤销，不能删除当前发起操作的对话。由宿主按用户的授权设置批准，不可用来代替移出项目或归档。'],
   ]) register(`project_management_${action}_conversation`, description, { requestKey, id: conversationId }, ['requestKey', 'id'],
     (args, signal) => executeExisting(`conversation.${action}`, args, signal));
+  ctx.agent.registerInstruction('project-continuation', '项目管理面板可由用户为已有工作流开启自动接续；不能自行开启或扩大授权。收到项目接续消息先查询 project_work_status，核查新交付并 review，再派发已就绪的既定后继。没有实际验收或派发进展时说明阻塞，不能用汇报代替推进。未开启时，派发后继续使用 conversation_wait 等待；不得声称结束回复后会自动继续。工作流完成后停止，不自动创建下一工作流。');
   ctx.agent.registerInstruction('project-management', `项目管理插件可根据用户需求规划不同职责的项目成员。先用 project_management_catalog 查询真实项目和模型能力，再向用户说明简洁的分工方案。
 需要新项目时使用 project_management_create_project；现有项目直接使用 project_management_create_members。不得声称已获授权来绕过宿主授权接口，不得在拒绝或超时后自动重试。
 项目成员使用项目根目录；外部已有对话原目录不变。成员职责作为对话说明保存，不授予新权限。创建不会启动任务。用户授权开展工作后，可通过现有 conversation_list/read/send/task 与同项目成员协作；不要擅自移动当前对话到其他项目。

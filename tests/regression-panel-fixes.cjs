@@ -101,13 +101,13 @@ function keydown(file,context){
   const html=fs.readFileSync(path.join(root,'web/index.html'),'utf8');
   assert(html.includes('os-mac"><kbd>Ctrl+⇧Tab')&&html.includes('os-mac"><kbd>Ctrl+Tab'),'wrong Mac tab key help');
  });
- for(const [mobile,target] of [[true,'.project-chat'],[false,'.project-chat'],[true,'.project-manage']])await check('PANEL '+(mobile?'narrow':'desktop')+' project navigation '+target+' preserves sidebar intent',()=>{
+ for(const [mobile,target] of [[true,'.project-chat'],[false,'.project-chat'],[true,'.project-manage'],[true,'.conversation-entry-open'],[false,'.conversation-entry-open'],[true,'.conversation-entry-manage']])await check('PANEL '+(mobile?'narrow':'desktop')+' project navigation '+target+' preserves sidebar intent',()=>{
   const u=ui(),app=u.doc.querySelector('.app'),writes=[];u.e.context.window.matchMedia=()=>({matches:mobile});
   u.e.context.localStorage={getItem:()=>null,setItem:(...x)=>writes.push(x),removeItem(){}};
   u.e.load('web/js/prefs.js');app.classList.remove('sidebar-collapsed');writes.length=0;
   // A click on a label inside the link bubbles to the sidebar delegate.
   u.doc.getElementById('sidebar').dispatchEvent({type:'click',target:{closest:selector=>selector.split(',').some(s=>s.trim()===target)?{}:null}});
-  assert(app.classList.contains('sidebar-collapsed')===(mobile&&target==='.project-chat'),'project navigation left the wrong sidebar state');
+  assert(app.classList.contains('sidebar-collapsed')===(mobile&&['.project-chat','.conversation-entry-open'].includes(target)),'project navigation left the wrong sidebar state');
   assert(!writes.some(x=>x[0]==='ash.sidebar-collapsed'),'project navigation changed the saved desktop preference');
  });
  for(const overlay of ['#sidebar-view-menu:popover-open','dialog[open]'])await check('PANEL narrow Escape defers to '+overlay,()=>{

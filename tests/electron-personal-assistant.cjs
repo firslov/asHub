@@ -63,18 +63,29 @@ app.whenReady().then(async () => {
     await wait('!document.querySelector(".conversation-welcome")');
     assert.equal(await js('document.querySelector(".terminal-wrap").inert'),false);
     assert.equal((await call('/sessions')).length,1);
+    // Use the actual narrow-screen entry path rather than manually hiding the
+    // sidebar after navigation; the workspace must be reachable immediately.
+    win.setContentSize(320,800);await wait('innerWidth===320');
+    // Make the real collapse fade outlast two frames even on fast CI runners.
+    await js('document.documentElement.style.setProperty("--dur-fast","400ms");document.querySelector(".app").classList.remove("sidebar-collapsed")');
+    await wait('getComputedStyle(document.getElementById("sidebar")).visibility==="visible"');
     await js('document.querySelector(".conversation-entry-open").click()');
     await wait('!!document.querySelector(".conversation-welcome .extension-resource-form select")');
+    assert(await js('document.querySelector(".app").classList.contains("sidebar-collapsed")'),'opening the assistant on a narrow screen must close the sidebar');
     const shots=process.env.ASHUB_UI_SCREENSHOTS;if(shots)fs.mkdirSync(shots,{recursive:true});
     for(const width of [320,1280]){
       await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');win.setContentSize(width,800);
       await wait('innerWidth==='+width);await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
       await wait('document.querySelector(".conversation-welcome").clientWidth >= '+(width<600?width-64:440));
+      // Collapse deliberately delays visibility until its fade completes. Two
+      // animation frames only confirm layout, not that the overlay stopped hit-testing.
+      if(width<600)await wait('getComputedStyle(document.getElementById("sidebar")).visibility==="hidden"');
       if(shots)fs.writeFileSync(path.join(shots,'assistant-welcome-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
       const hit=await js(`(()=>{const e=document.querySelector('.conversation-welcome select'),r=e.getBoundingClientRect(),p=document.querySelector('.conversation-welcome');return {width:innerWidth,scroll:p.scrollWidth,client:p.clientWidth,rect:r.toJSON(),target:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML,clickable:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===e}})()`);
       assert(hit.scroll<=hit.client+1&&hit.clickable,JSON.stringify(hit));
     }
 
+    await js('document.documentElement.style.removeProperty("--dur-fast")');
     assert.equal(await js('document.querySelectorAll(".conversation-welcome .extension-resource-form > label").length'),1);
     assert.equal(await js('document.querySelector(".extension-panel").hidden'),true,'first use belongs in the chat canvas');
     const welcomeSubmit=()=>js('document.querySelector(".conversation-welcome .extension-resource-form").requestSubmit()');
@@ -111,7 +122,9 @@ app.whenReady().then(async () => {
     for(let i=0;i<3;i++)await js('document.querySelector(".conversation-entry-open").click()');
     assert.equal((await call('/sessions')).length,2,'repeated entry uses same assistant');
     await win.loadURL(base);await wait('!!document.querySelector(".conversation-entry-open")');
-    await js('document.querySelector(".conversation-entry-open").click()');
+    win.setContentSize(320,800);await wait('innerWidth===320');
+    await js('document.querySelector(".app").classList.remove("sidebar-collapsed");document.querySelector(".conversation-entry-open").click()');
+    assert(await js('document.querySelector(".app").classList.contains("sidebar-collapsed")'),'an existing assistant entry also closes mobile navigation');
     await wait('(async()=> (await import("/js/session-manager.js")).activeSessionId.value === '+JSON.stringify(assistantId)+')()');
     assert.equal((await call('/sessions')).length,2,'reload reuses persisted assistant');
     await wait('getComputedStyle(document.getElementById("page-loader")).visibility==="hidden" && Number(getComputedStyle(document.querySelector(".terminal-wrap")).opacity) > .99');

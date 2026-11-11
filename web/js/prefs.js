@@ -111,7 +111,7 @@ document.getElementById("sidebar-backdrop")?.addEventListener("click", () => {
 // Keep the desktop preference intact when merely navigating on mobile.
 document.getElementById("sidebar")?.addEventListener("click", (ev) => {
   if (!window.matchMedia?.("(max-width: 700px)").matches) return;
-  if (!ev.target.closest(".session-list a, .workspace-children a, .project-chat, .terminal-list a, #new-session, #new-terminal")) return;
+  if (!ev.target.closest(".session-list a, .workspace-children a, .project-chat, .terminal-list a, .conversation-entry-open, #new-session, #new-terminal")) return;
   setSidebarCollapsed(true, false);
 });
 // The mobile navigation overlays the workspace, so Escape closes it before

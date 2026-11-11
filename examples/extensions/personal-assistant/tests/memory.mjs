@@ -189,7 +189,7 @@ test('application stop revokes existing session tools and a late disposal cannot
     bus: { onPipe() {} },
     agent: { registerTool: t => tools.set(t.name, t), registerInstruction() {}, adviseInstruction() {} }, advise: (...v) => advices.push(v),
   });
-  assert.equal(tools.size, 4);
+  assert.equal(tools.size, 8);
   assert.throws(() => start(f.services), /运行/);
   active.dispose(); assert.equal(current(f.dir), undefined);
   return tools.get('assistant_memory_search').execute({ query: '周报' }).then(result => {

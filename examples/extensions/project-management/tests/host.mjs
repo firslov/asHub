@@ -55,6 +55,7 @@ test(
     for (const name of [
       "index.mjs",
       "work.mjs",
+      "continuation.mjs",
       "package.json",
       "ashub-plugin.json",
     ])

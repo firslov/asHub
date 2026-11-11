@@ -1,9 +1,9 @@
 {
   "name": "ashub-personal-assistant",
-  "version": "0.3.6",
+  "version": "0.4.2",
   "type": "module",
   "private": true,
-  "description": "A local, reviewable personal memory assistant for asHub",
+  "description": "A persistent assistant conversation with automatic, source-backed long-term memory",
   "license": "MIT",
   "engines": {
     "node": ">=22.13.0"

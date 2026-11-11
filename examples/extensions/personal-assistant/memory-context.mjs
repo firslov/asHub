@@ -12,7 +12,7 @@ export function memoryContext(scope, source = {}) {
 export function topicKey(source) {
   const c=source.context ?? {};
   const domain=c.subject==='user' || c.subject==='assistant' ? c.subject : c.projectId ? 'project:'+c.projectId : c.conversationId ? 'origin:'+c.conversationId : 'general';
-  return 'topic:global:'+domain+':'+source.topic;
+  return 'topic:global:'+(source.namespace ? source.namespace+':' : '')+domain+':'+source.topic;
 }
 export function observedAt(row) {
   const refs=row.source.refs ?? [];

@@ -13,7 +13,7 @@ const timeout = setTimeout(() => { console.error('Assistant UI timeout'); app.ex
 app.whenReady().then(async () => {
   try {
     modules['./extensions/installed.js'] = await import(pathToFileURL(path.join(root, 'dist/extensions/installed.js')).href);
-    hub = e.hub().startHub({ host: '127.0.0.1', port: 0, webRoot: path.join(root, 'web'), makeBridge: options => (bridge = new Bridge(options)) });
+    hub = e.hub().startHub({ host: '127.0.0.1', port: 0, webRoot: path.join(root, 'web'), makeBridge: options => {bridge=new Bridge(options);const b=bridge;setTimeout(()=>b.emit('event',{name:'agent:info',payload:{model:'tiny',provider:'mock'}}),0);return b;} });
     if (!hub.server.listening) await once(hub.server, 'listening');
     const base = 'http://127.0.0.1:' + hub.server.address().port;
     const call = async (route, body, headers) => {
@@ -32,36 +32,101 @@ app.whenReady().then(async () => {
     for (let i = 0; i < 150; i++) { feature = (await call('/api/extensions')).features.find(f => f.name === '个人助手'); if (feature?.state === 'active') break; await new Promise(r => setTimeout(r, 20)); }
     assert.equal(feature?.state, 'active', JSON.stringify(feature));
     const resource = '/api/plugin-resources/' + encodeURIComponent(feature.pluginId) + '/assistant';
-    win = new BrowserWindow({ show: false, width: 1280, height: 900, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+    win = new BrowserWindow({ show: true, width: 1280, height: 800, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
     win.webContents.on('console-message', event => { if(event.level==='error') console.error('renderer:',event.message); });
     await win.loadURL(base);
     const js = async code => {try{return await win.webContents.executeJavaScript(code);}catch(e){console.error('Renderer expression:',code);throw e;}};
     const wait = async code => { for (let i = 0; i < 160; i++) { if (await js(code)) return; await new Promise(r => setTimeout(r, 25)); } throw Error('Timed out: ' + code); };
     const click = label => js('(()=>{const b=Array.from(document.querySelectorAll(".extension-resource button")).find(b=>b.textContent===' + JSON.stringify(label) + ');if(!b)throw Error("Button missing");if(b.closest("details"))b.closest("details").open=true;b.click()})()');
     await js('(async()=>{localStorage.setItem("ash.lang","zh");(await import("/js/i18n.js")).setLang("zh")})()');
-    await wait('!!document.querySelector(".extension-menu")'); await js('document.querySelector(".extension-menu").click()');
-    await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("开启助手")');
-    assert.equal(await js('document.querySelectorAll(".extension-resource-actions > button").length'),2);
-    assert.deepEqual(await js('(()=>{const s=document.querySelector(".extension-menu svg");return [s?.getAttribute("viewBox"),s?.getAttribute("stroke-width"),s?.getAttribute("width")]})()'),['0 0 14 14','1.3','18']);
-    const seed=await call(resource,{action:'save',values:{title:'报告格式',content:'用简洁中文表达 先给结论 再列证据',kind:'preference',scope:'personal'}});
-    await call(resource,{confirm:seed.confirmation.id});
-    await click('开启助手'); await wait('!!document.querySelector(".extension-resource-form select")');
-    assert.equal(await js('document.querySelectorAll(".extension-resource-form > label").length'),1,'only model selection is exposed');
-    assert.equal(await js('document.querySelector(".extension-resource-advanced").open'),false);
-    await js('document.querySelector(".extension-resource-form").requestSubmit()');
-    await wait('!!document.querySelector(".extension-resource-review")');
-    assert.match(await js('document.querySelector(".extension-resource-review").textContent'),/成本上限/);
-    assert(!(await call(resource)).view.note.includes('后台学习已开启'));
-    await click('取消'); await wait('!!document.querySelector(".extension-resource-form select")');
-    await js('document.querySelector(".extension-resource-form").requestSubmit()'); await wait('!!document.querySelector(".extension-resource-review")');
-    await click('确认'); await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("暂停助手")');
+    await wait('!!document.querySelector(".conversation-entry-open")');
+    await wait('document.querySelector(".extension-menu")?.hidden===true');
+    // Dedicated entries use the sidebar type scale, even when labels are long.
+    const entryStyle=await js(`(()=>{const b=document.querySelector('.conversation-entry-open'),row=b.parentElement,more=row.querySelector('.conversation-entry-manage');const label=b.textContent;b.textContent='个人助手 · 很长的专属对话名称'.repeat(6);const style=getComputedStyle(b),r=row.getBoundingClientRect(),m=more.getBoundingClientRect();const result={size:style.fontSize,reference:getComputedStyle(document.querySelector('.sidebar-new-btn')).fontSize,weight:Number(style.fontWeight),fits:row.scrollWidth<=row.clientWidth+1,manageVisible:m.right<=r.right+1&&m.width>=32};b.textContent=label;return result;})()`);
+    assert.equal(entryStyle.size,entryStyle.reference,'entry matches sidebar typography');
+    assert(entryStyle.weight<=500&&entryStyle.fits&&entryStyle.manageVisible,JSON.stringify(entryStyle));
+    if(process.env.ASHUB_UI_SCREENSHOTS){
+      fs.mkdirSync(process.env.ASHUB_UI_SCREENSHOTS,{recursive:true});
+      for(const theme of ['light','dark']){
+        await js('document.documentElement.dataset.theme='+JSON.stringify(theme));
+        await new Promise(r=>setTimeout(r,300)); // Let theme color transitions settle before capture.
+        await wait('getComputedStyle(document.getElementById("page-loader")).visibility==="hidden"');
+        await js('document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))');
+        fs.writeFileSync(path.join(process.env.ASHUB_UI_SCREENSHOTS,'assistant-entry-'+theme+'.png'),(await win.webContents.capturePage()).toPNG());
+      }
+      await js('document.documentElement.dataset.theme="light"');
+    }
+    // A late first-use read must not pull the user back from another chat.
+    await js(`(()=>{const original=window.fetch;window.fetch=async(...args)=>{const response=await original(...args);if(String(args[0]).endsWith('/welcome')&&!args[1]?.body)await new Promise(resolve=>window.releaseWelcome=resolve);return response;};window.restoreWelcomeFetch=()=>window.fetch=original;document.querySelector('.conversation-entry-open').click();})()`);
+    await wait('typeof window.releaseWelcome === "function"');
+    await js('(async()=>{(await import("/js/session-manager.js")).openTab('+JSON.stringify(id)+');window.restoreWelcomeFetch();window.releaseWelcome();})()');
+    await wait('!document.querySelector(".conversation-welcome")');
+    assert.equal(await js('document.querySelector(".terminal-wrap").inert'),false);
+    assert.equal((await call('/sessions')).length,1);
+    await js('document.querySelector(".conversation-entry-open").click()');
+    await wait('!!document.querySelector(".conversation-welcome .extension-resource-form select")');
     const shots=process.env.ASHUB_UI_SCREENSHOTS;if(shots)fs.mkdirSync(shots,{recursive:true});
+    for(const width of [320,1280]){
+      await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');win.setContentSize(width,800);
+      await wait('innerWidth==='+width);await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
+      await wait('document.querySelector(".conversation-welcome").clientWidth >= '+(width<600?width-64:440));
+      if(shots)fs.writeFileSync(path.join(shots,'assistant-welcome-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
+      const hit=await js(`(()=>{const e=document.querySelector('.conversation-welcome select'),r=e.getBoundingClientRect(),p=document.querySelector('.conversation-welcome');return {width:innerWidth,scroll:p.scrollWidth,client:p.clientWidth,rect:r.toJSON(),target:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML,clickable:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===e}})()`);
+      assert(hit.scroll<=hit.client+1&&hit.clickable,JSON.stringify(hit));
+    }
+
+    assert.equal(await js('document.querySelectorAll(".conversation-welcome .extension-resource-form > label").length'),1);
+    assert.equal(await js('document.querySelector(".extension-panel").hidden'),true,'first use belongs in the chat canvas');
+    const welcomeSubmit=()=>js('document.querySelector(".conversation-welcome .extension-resource-form").requestSubmit()');
+    // Scope controls to the visible workspace, not the offscreen settings resource.
+    const welcomeClick=label=>js('(()=>{const b=[...document.querySelectorAll(".conversation-welcome button")].find(b=>b.textContent==='+JSON.stringify(label)+');if(!b)throw Error("Missing welcome action");b.click()})()');
+    await welcomeSubmit();await wait('!!document.querySelector(".conversation-welcome .extension-resource-review")');
+    await welcomeClick('取消');await wait('!!document.querySelector(".conversation-welcome .extension-resource-form select")');
+    assert.equal((await call('/sessions')).length,1,'cancel creates no chat');
+    await welcomeSubmit();await wait('!!document.querySelector(".conversation-welcome .extension-resource-review")');await welcomeClick('确认');
+    await wait('document.querySelector(".conversation-welcome .extension-resource-actions")?.textContent.includes("开启记忆并开始聊天")');
+    const assistantId=(await call('/api/plugin-conversations'))[0].sessionId;assert(assistantId);assert.notEqual(assistantId,id);
+    await welcomeClick('开启记忆并开始聊天');await wait('!!document.querySelector(".conversation-welcome .extension-resource-review")');assert.match(await js('document.querySelector(".conversation-welcome .extension-resource-review").textContent'),/仅整理.*不读取其他对话/);
+    assert.equal(await js('document.querySelectorAll(".conversation-welcome .extension-resource > .extension-resource-review > dt").length'),3);
+    assert.equal(await js('document.querySelector(".extension-authorization-details").open'),false);
+    assert(!(await js('document.querySelector(".conversation-welcome .extension-resource > .extension-resource-review").textContent')).includes(assistantId));
+    const beforeConsent=(await call('/sessions')).length;
+    for(const width of [320,1280]){
+      win.setContentSize(width,800);await wait('innerWidth==='+width);await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');
+      await wait('document.querySelector(".conversation-welcome").clientWidth >= '+(width<600?width-64:440));
+      for(const expanded of [false,true]){
+        await js('document.querySelector(".extension-authorization-details").open='+expanded);
+        assert(await js('(()=>{const p=document.querySelector(".conversation-welcome");return p.scrollWidth<=p.clientWidth+1})()'),'authorization never overflows');
+        if(expanded){const detail=await js('document.querySelector(".extension-authorization-details").textContent');assert.match(detail,/16000.*4096/);assert(!detail.includes(assistantId));assert(!/观察范围|历史范围|排除对话/.test(detail));}
+        if(shots){await js('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');fs.writeFileSync(path.join(shots,'consent-'+width+'-'+expanded+'.png'),(await win.webContents.capturePage()).toPNG());}
+      }
+    }
+    assert.equal((await call('/sessions')).length,beforeConsent,'expanding details has no side effects');
+    await js('document.querySelector(".extension-authorization-details").open=false');
+    await welcomeClick('确认');
+    await wait('(async()=> (await import("/js/session-manager.js")).activeSessionId.value === '+JSON.stringify(assistantId)+')()');
+    assert.equal(await js('!!document.querySelector(".conversation-welcome")'),false);
+    assert.equal(await js('document.querySelector(".terminal-wrap").inert'),false);
+    await wait('document.querySelector("session-view[session-id="+CSS.escape('+JSON.stringify(assistantId)+')+"] .welcome-title")?.textContent === "个人助手"');
+    for(let i=0;i<3;i++)await js('document.querySelector(".conversation-entry-open").click()');
+    assert.equal((await call('/sessions')).length,2,'repeated entry uses same assistant');
+    await win.loadURL(base);await wait('!!document.querySelector(".conversation-entry-open")');
+    await js('document.querySelector(".conversation-entry-open").click()');
+    await wait('(async()=> (await import("/js/session-manager.js")).activeSessionId.value === '+JSON.stringify(assistantId)+')()');
+    assert.equal((await call('/sessions')).length,2,'reload reuses persisted assistant');
+    await wait('getComputedStyle(document.getElementById("page-loader")).visibility==="hidden" && Number(getComputedStyle(document.querySelector(".terminal-wrap")).opacity) > .99');
+    await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
+    if(shots)fs.writeFileSync(path.join(shots,'assistant-chat.png'),(await win.webContents.capturePage()).toPNG());
+    await js('document.querySelector(".conversation-entry-manage").click()');
+    await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("暂停记忆")');
     for(const theme of ['light','dark']){
       await js('document.documentElement.dataset.theme='+JSON.stringify(theme));
       for(const width of [1280,390,320]){
         await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');
-        win.setContentSize(width,900);
-        await wait('innerWidth === '+width+' && innerHeight === 900');
+        win.setContentSize(width,800);
+        await wait('innerWidth === '+width+' && innerHeight === 800');
+        await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');
+        await new Promise(r=>setTimeout(r,500));
         // Native resize and viewport-unit style invalidation need not finish in
         // the same task on CI. Measure after Chromium has painted the new size,
         // rather than after a fixed sleep that can still see the previous vw.
@@ -72,24 +137,24 @@ app.whenReady().then(async () => {
         if(shots)fs.writeFileSync(path.join(shots,'assistant-'+theme+'-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
       }
     }
-    await click('查看记忆');await wait('document.querySelector(".extension-resource-row h3")?.textContent==="报告格式"');
-    assert.equal(await js('document.querySelectorAll(".extension-resource-actions > button").length'),2);
-    await click('查看');await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("忘记")');
-    assert.equal(await js('document.querySelectorAll(".extension-resource-actions > button").length'),2);
-    await click('忘记');await wait('!!document.querySelector(".extension-resource-review")');await click('取消');
-    await click('返回');await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("搜索")');
-    await click('返回');await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("暂停助手")');
-    await click('暂停助手');await wait('!!document.querySelector(".extension-resource-review")');await click('确认');
-    await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("继续运行")');
-    assert.match((await call(resource)).view.note,/已暂停/);
-    await click('继续运行');await wait('!!document.querySelector(".extension-resource-review")');await click('确认');
-    await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("暂停助手")');
-    const pending=await call(resource,{action:'save',values:{title:'未保存',content:'不要保存',kind:'fact',scope:'personal'}});
+    await click('查看记忆');await wait('document.querySelector(".extension-resource-note")?.textContent.includes("与你有关")');
+    assert.equal(await js('document.querySelectorAll(".extension-resource-row").length'),4);
+    await click('返回');await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("暂停记忆")');
+    await click('暂停记忆');await wait('!!document.querySelector(".extension-resource-review")');await click('确认');await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("开启记忆")');
     await call('/api/extensions/'+feature.id+'/enabled',{enabled:false});
-    const rejected=await fetch(base+resource,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:pending.confirmation.id})});assert.equal(rejected.status,409);
-    await call('/api/extensions/'+feature.id+'/enabled',{enabled:true});
-    assert.equal((await call(resource,{action:'memories',values:{}})).view.rows.length,1,'restart preserves memory and does not commit cancelled actions');
-    console.log('PASS assistant minimal UI: install, SVG stroke, two controls, first-use authorization, pause/resume, memory inspection, cancel forget, restart and six theme/width combinations');
-    win.destroy(); await hub.shutdown(); clearTimeout(timeout); app.exit(0);
-  } catch (error) { console.error(error); win?.destroy(); try { await hub?.shutdown(); } catch {} clearTimeout(timeout); app.exit(1); }
+    await wait('document.querySelector(".conversation-entries")?.hidden===true');
+    await call('/api/extensions/'+feature.id+'/enabled',{enabled:true});await wait('document.querySelector(".conversation-entries")?.hidden===false');
+    assert.equal((await call('/api/plugin-conversations'))[0].sessionId,assistantId);
+    await js(`(async()=>{
+      const {mountResource}=await import('/js/extensions/resource-view.js');
+      const host=document.createElement('div');document.body.append(host);const navigated=[];
+      const view={actions:[{id:'go',label:'Go',values:{}}],rows:[],openConversation:'abcdef'};
+      let release;const dispose=mountResource(host,{pluginId:'test'},'start',{request:async body=>body?new Promise(r=>release=()=>r({view})):{view},onComplete:id=>navigated.push(id)});
+      await new Promise(r=>setTimeout(r,20));if(navigated.length)throw Error('Passive GET navigated');
+      host.querySelector('button').click();await new Promise(r=>setTimeout(r,20));dispose();release();await new Promise(r=>setTimeout(r,20));
+      if(navigated.length)throw Error('Disposed resource navigated');host.remove();
+    })()`);
+    console.log('PASS dedicated assistant UI: ZIP install, explicit creation/grant, one persistent entry, in-app navigation, pause, themes, disable/re-enable and 1280/390/320 layouts');
+    win.destroy();await hub.shutdown();clearTimeout(timeout);app.exit(0);
+  }catch(error){console.error(error);win?.destroy();try{await hub?.shutdown();}catch{}clearTimeout(timeout);app.exit(1);}
 });

@@ -1,3 +1,4 @@
+import { conversationEntries } from './extensions/entry-state.js';
 import { sessionAttention } from './project-status.js';
 import { directoryLabels } from './directory-labels.js';
 import { networkPolicy, saveNetworkPolicy } from "./network-settings.js";
@@ -636,7 +637,7 @@ const renderSessions = async (force = false, opts = null) => {
       editingId = null; // A removed/filtered row must not strand reconciliation.
     }
     fullHashCache = fullHash;
-    const agentList = list.filter((s) => (s.kind ?? "agent") === "agent" && !s.projectId)
+    const agentList = list.filter((s) => (s.kind ?? "agent") === "agent" && !s.projectId && !conversationEntries.peek().some(e=>e.sessionId===s.instanceId))
       .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
     const pinIds = pinnedIds.peek();
 
@@ -1121,8 +1122,9 @@ function updateFilter(value) {
 }
 
 effect(() => {
+  conversationEntries.value;
   const v = sidebarView.value;
-  if (v === "sessions") renderSessions();
+  if (v === "sessions") renderSessions(true);
   else if (v === "workspaces") renderWorkspaces();
   else if (v === "terminals") renderTerminals();
   else if (v === "archive") renderArchive();

@@ -9,7 +9,7 @@ export default function activate(ctx) {
     try { return !!current(ctx.services.dataDirectory)?.scope(id); }
     catch { return false; }
   };
-  const toolNames = new Set(['assistant_memory_status', 'assistant_memory_search', 'assistant_memory_read', 'assistant_memory_propose']);
+  const toolNames = new Set(['assistant_memory_status', 'assistant_memory_search', 'assistant_memory_read', 'assistant_memory_propose','assistant_memory_remember','assistant_memory_forget','assistant_history_search','assistant_history_read']);
   // Keep ordinary conversations free of unused tool schemas. Visibility is
   // evaluated per request so associating/pausing a conversation takes effect.
   ctx.bus.onPipe('agent:tools:visible', view => {
@@ -20,15 +20,15 @@ export default function activate(ctx) {
     name, description, readOnly, modifiesFiles: false,
     input_schema: { type: 'object', properties, required, additionalProperties: false },
     async execute(args, _chunk, execution) {
-      try { execution?.signal?.throwIfAborted(); const value = run(manager(), args); return { content: JSON.stringify(value), exitCode: 0, isError: false }; }
+      try { execution?.signal?.throwIfAborted(); const value = await run(manager(), args); return { content: JSON.stringify(value), exitCode: 0, isError: false }; }
       catch (error) { return { content: String(error), exitCode: 1, isError: true }; }
     },
   });
-  register('assistant_memory_status', '查看个人助手是否可用；记忆属于当前用户的全局库，不直接读取其他对话历史。', {}, [], a => {
+  register('assistant_memory_status', '查看专属个人助手的记忆状态；不会读取普通对话历史。', {}, [], a => {
     const scope = a.scope(id);
     return { connected: !!scope, scopes: scope ? ['global'] : [], automatic: a.learning.access(id), note: a.learning.access(id) ? '后台自动整理已授权对话，不需要逐条确认；只依据已注入记忆或搜索/read的实际结果声称记忆已保存。后台受预算限制，整理可能延后。' : '可读取此前授权的记忆。新的自动学习尚未开启；如需开启，请使用个人助手面板的开启助手按钮。不要要求用户逐条确认记忆。' };
   });
-  register('assistant_memory_search', '搜索当前用户的全局长期记忆，支持跨对话检索和中文。重要事实请核对来源和时间，未命中不代表不存在。', {
+  register('assistant_memory_search', '搜索个人助手的长期记忆，支持中文。重要事实请核对来源和时间，未命中不代表不存在。', {
     query: { type: 'string', maxLength: 500 }, limit: { type: 'integer', minimum: 1, maximum: 12 },
   }, ['query'], (a, args) => a.search(id, args.query, args.limit ?? 8));
   register('assistant_memory_read', '按搜索结果中的真实 ID 读取可用记忆及其来源、范围和修订号。', { id: { type: 'string' } }, ['id'], (a, args) => a.read(id, args.id));
@@ -39,6 +39,10 @@ export default function activate(ctx) {
     reason: { type: 'string', maxLength: 1000, description: 'Why this is worth retaining; distinguish user statements from model inference. Not proof of original text.' },
     replaces: { type: 'string' }, replacesRevision: { type: 'integer', minimum: 1 },
   }, ['title', 'content', 'kind', 'scope', 'reason'], (a, args) => a.propose(id, args), false);
+  register('assistant_history_search','搜索个人助手专属对话的授权原文；未找到记忆时用于追溯。',{query:{type:'string',maxLength:300}},['query'],(a,args)=>a.historySearch(id,args.query));
+  register('assistant_history_read','分段读取搜索命中的原始记录，核对事实和时间。',{id:{type:'string'},offset:{type:'integer',minimum:0}},['id'],(a,args)=>a.historyRead(id,args.id,args.offset??0));
+  register('assistant_memory_remember','记录用户明确表达的事实、偏好或纠正。必须引用当前专属对话的真实用户原文；不是根据模型猜测写入。重新保存已忘记的内容，需要最新用户直接要求「请重新记住：完整内容」，quote 引用完整内容或整条请求；引用旧指令、疑问和否定不算授权。',{title:{type:'string'},content:{type:'string'},kind:{type:'string',enum:['fact','preference','principle','experience','procedure']},topic:{type:'string'},quote:{type:'string',maxLength:300},scope:{type:'string',enum:['personal','local']}},['title','content','kind','topic','quote'],(a,args)=>a.remember(id,args),false);
+  register('assistant_memory_forget','仅当最新用户直接要求「忘记……」或「不要记……」时，按真实记忆 ID 与版本删除；quote 引用完整请求或完整目标内容。目标必须对应这条记忆的标题、完整内容、来源原文或 ID；有重名时使用 ID 或记忆面板。「不要忘记」、引用旧指令或询问不算删除授权。',{id:{type:'string'},revision:{type:'integer'},quote:{type:'string',maxLength:200}},['id','revision','quote'],(a,args)=>a.forgetFromChat(id,args),false);
   ctx.agent.registerInstruction('personal-assistant', [
     '个人助手插件提供当前用户的全局长期记忆。来源对话和项目是背景信息，不是检索边界。请求中已注入的记忆也是有效召回；涉及用户背景、偏好或过去决定时，若现有记忆不足，回答不知道之前先用 assistant_memory_search 查询一次，未命中不代表不存在。不为无关问题主动展示个人信息。',
     '后台学习由用户在个人助手面板开启，未开启时不自动读取新历史。不要引导用户逐条审批或手动关联；用户纠正优先于历史记忆，不保存账号密码。',
@@ -46,9 +50,12 @@ export default function activate(ctx) {
     '能力扩展使用当前真正可用的插件工具。项目管理、定时任务、桌面控制各走自身授权流程；不要另造任务调度、会话或插件安装机制。此版本不自动执行长期委托、不自行修改代码或安装插件。',
   ].join('\n'));
   ctx.agent.adviseInstruction('personal-assistant', next => {
-    if (!connected()) return '';
+    if (!connected()) {
+      const a=current(ctx.services.dataDirectory);
+      return a?.dedicated && a.conversationId()===id ? '你是用户的常驻个人助手。当前长期记忆未开启，只依据当前对话中实际可见的信息交流，不声称已保存或召回长期记忆。如用户询问，说明可从个人助手入口旁的更多菜单开启记忆。不要每轮提示设置，也不要请求逐条确认记忆。' : '';
+    }
     if (!manager().learning.access(id)) return next();
-    return '个人助手后台会自动整理授权对话，优先用户明确偏好、纠正和重要决定，无需逐条要求用户确认。不要主动要求关联对话或反复提出记忆审批。已注入的记忆和 assistant_memory_search/read 的真实结果都可以使用。记忆是当前用户的全局库，不受来源对话限制。询问用户背景、偏好或过去决定时，现有记忆不足则在回答不知道之前先搜索一次；未命中不代表不存在。不为无关问题主动展示个人信息。\n记忆是带主体、项目背景、记录时间和证据的历史参考，当前用户纠正优先；自动整理不保证判断正确，不代表新的权限或已验证任务成功。按需使用 status/search/read。经验与流程需独立后续用户反馈支持，不能把助手自己的输出或用户沉默当成正面证据。使用项目管理、定时任务和桌面控制等插件时，继续遵循它们各自的授权流程。';
+    return '你是用户的常驻个人助手，仅学习这段专属对话。用户明确说记住或纠正时，用 assistant_memory_remember 引用真实用户原文及时记录；用户要求忘记时先搜索定位，再用 assistant_memory_forget。不必逐条要求人工审核。回忆不足时先搜索记忆，再用 assistant_history_search/read 查原文，不把未命中当作从未说过。临时状态保留日期，不推断稳定身份。能力扩展遵循其他插件本身的授权。\n个人助手后台会自动整理授权对话，优先用户明确偏好、纠正和重要决定，无需逐条要求用户确认。不要主动要求关联对话或反复提出记忆审批。已注入的记忆和 assistant_memory_search/read 的真实结果都可以使用。记忆仅在这段专属助手对话中使用，继承的旧记忆也只是参考资料。询问用户背景、偏好或过去决定时，现有记忆不足则在回答不知道之前先搜索一次；未命中不代表不存在。不为无关问题主动展示个人信息。\n记忆是带主体、项目背景、记录时间和证据的历史参考，当前用户纠正优先；自动整理不保证判断正确，不代表新的权限或已验证任务成功。按需使用 status/search/read。经验与流程需独立后续用户反馈支持，不能把助手自己的输出或用户沉默当成正面证据。使用项目管理、定时任务和桌面控制等插件时，继续遵循它们各自的授权流程。';
   });
   ctx.advise('conversation:prepare', (next, messages) => {
     const prepared = next(messages), a = current(ctx.services.dataDirectory);

@@ -8,6 +8,8 @@ import { once } from 'node:events';
 const watchdog = setTimeout(() => { console.error('Codex integration timed out'); process.exit(1); }, 30000);
 const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ashub-codex-audit-'));
 process.env.AGENT_SH_HOME = dir;
+process.env.HOME = dir;
+process.env.USERPROFILE = dir;
 process.env.ASHUB_TOKEN = 'isolated-audit-token';
 if (process.platform !== 'win32') {
  const shell=path.join(dir,'clean-bash');
@@ -34,6 +36,7 @@ globalThis.fetch = createPolicyFetch(recordRoute('proxy'), recordRoute('direct')
 const upstreamBodies = [];
 const upstreamSessions = [];
 let cachedTokens = 5;
+let holdResponse;
 const upstream = http.createServer(async (req, res) => {
   let raw=''; for await (const part of req) raw += part;
   upstreamBodies.push(JSON.parse(raw));
@@ -52,6 +55,7 @@ const upstream = http.createServer(async (req, res) => {
     res.end('data: [DONE]\n\n');
     return;
   }
+  if (holdResponse) await holdResponse();
   res.writeHead(200, {'content-type':'text/event-stream'});
   for (const ev of [
     {type:'response.output_text.delta',delta:'CODEX_PROXY_OK'},
@@ -236,6 +240,36 @@ try {
   console.log('PASS optional Codex failure isolates API sessions, permits switching away and recovers after repair');
   independent.close();
   late.close();
+
+  // Exercise live cache refresh through the real provider while a request waits
+  // for headers. Only isolated credentials and a local mock upstream are used.
+  const cache=path.join(os.homedir(),'.codex','models_cache.json');
+  assert.equal(os.homedir(),dir);await fs.mkdir(path.dirname(cache),{recursive:true});
+  const writeCatalog=ids=>fs.writeFile(cache,JSON.stringify({models:ids.map(slug=>({slug,visibility:'list',context_window:500000,input_modalities:['text','image']}))}));
+  await writeCatalog(['audit-codex-model']);
+  updateSettings({defaultProvider:'codex','codex-provider':{models:[]}});
+  const live=new AshBridge({cwd:dir});bridges.push(live);await live.ready();
+  await live.execCommand('/model','audit-codex-model@codex');
+  const before=live.core.handlers.call('agent:resolve-endpoint',{provider:'codex',id:'audit-codex-model'});
+  let releaseResponse,startedResponse;
+  const blocked=new Promise(resolve=>releaseResponse=resolve);
+  const startedRequest=new Promise(resolve=>startedResponse=resolve);
+  holdResponse=()=>{startedResponse();return blocked;};
+  const responsePending=live.submit('Keep this request alive during model refresh');
+  await startedRequest;
+  const changed=new Promise(resolve=>{
+    const off=live.onEvent(e=>{if(e.name==='agent:providers:changed'){off();resolve();}});
+  });
+  try {
+    await writeCatalog(['audit-codex-model','new-account-model']);
+    await changed; // Automatic observer; no manual getModels call triggers it.
+    assert((await live.getModels()).models.some(m=>m.provider==='codex'&&m.model==='new-account-model'));
+    const after=live.core.handlers.call('agent:resolve-endpoint',{provider:'codex',id:'audit-codex-model'});
+    assert.equal(after.baseURL,before.baseURL);assert.equal(after.apiKey,before.apiKey);
+  } finally {holdResponse=undefined;releaseResponse();await responsePending;}
+  assert(JSON.stringify((await live.snapshot()).messages).includes('CODEX_PROXY_OK'));
+  console.log('PASS automatic Codex catalog refresh preserves the live proxy and in-flight response');
+  live.close();
 } finally {
   for(const b of bridges)b.close();
   await hub.shutdown(); upstream.closeAllConnections(); await new Promise(r=>upstream.close(r));

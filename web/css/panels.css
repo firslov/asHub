@@ -419,3 +419,10 @@ kbd {
 .extension-resource-form label[hidden] { display:none; }
 .extension-resource-link { display:inline-block; margin-top:8px; color:var(--accent); font-size:var(--fs-sm); text-decoration:none; }
 .extension-resource-link:hover { text-decoration:underline; }
+
+/* Technical grant diagnostics stay secondary, without another framed card. */
+.extension-authorization-details { margin-top:18px; color:var(--text-dim); font-size:var(--fs-sm); }
+.extension-authorization-details > summary { cursor:pointer; width:fit-content; padding:6px 0; }
+.extension-authorization-details > summary:focus-visible { outline:2px solid var(--accent-border); outline-offset:3px; }
+.extension-authorization-details[open] > .extension-resource-review { margin:10px 0 16px; padding-left:12px; border-left:1px solid var(--border-light); }
+.extension-authorization-details .extension-resource-review dd { font-size:var(--fs-sm); color:var(--text-dim); }

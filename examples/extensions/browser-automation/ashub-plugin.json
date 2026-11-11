@@ -10,10 +10,11 @@
     "hostApi": "^1.0.0",
     "capabilities": [
       "session-extensions",
-      "browser-pages"
+      "browser-pages",
+      "browser-files"
     ]
   },
   "permissions": [
-    "读取经授权的 HTTPS 页面。点击和填写由宿主授权；默认逐次确认，用户可在插件配置中开启自动批准。单独授权的独立按钮可每天点击一次。"
+    "读取经授权的 HTTPS 页面；点击、长文本/代码写入、本地文件上传和下载均经过宿主授权。文件来源限当前对话工作目录；下载最大 64 MiB。登录空间按对话和站点隔离。用户可在插件配置中开启自动批准。"
   ]
 }

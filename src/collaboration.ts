@@ -69,6 +69,12 @@ export class CollaborationTasks {
   private active = new Map<string, string>();
   private chunks = new Set<string>();
   private listeners = new Set<() => void>();
+  private observers = new Set<() => void>();
+  /** Metadata only; durable receipts remain the source of truth after reconnect. */
+  snapshot(sourceId: string) {
+    return this.list().filter(t => t.sourceId === sourceId).map(t => this.status(t.id));
+  }
+  subscribe(listener: () => void) { this.observers.add(listener); return () => { this.observers.delete(listener); }; }
   constructor(private directory: string) {
     if (!fs.existsSync(directory)) return;
     for (const name of fs.readdirSync(directory)) {
@@ -366,5 +372,8 @@ export class CollaborationTasks {
     });
     signal?.throwIfAborted();
   }
-  private notify() { for (const listener of [...this.listeners]) listener(); }
+  private notify() {
+    for (const listener of [...this.listeners]) listener();
+    for (const listener of [...this.observers]) { try { listener(); } catch { /* Extensions cannot interrupt task completion. */ } }
+  }
 }

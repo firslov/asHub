@@ -13,7 +13,7 @@ export function presentApproval(card, p) {
   const items = Array.isArray(p.items) ? p.items : [];
   const browser = p.browser;
   let heading = p.title || t('approval.operation');
-  if (browser && ['open', 'click', 'fill'].includes(browser.action)) {
+  if (browser && ['open', 'click', 'fill', 'write', 'upload', 'download'].includes(browser.action)) {
     heading = t('approval.' + browser.action, { source, origin: browser.origin });
     // Collapse only the original URL. The destination, submitted values, effects
     // and scope remain visible before the user decides.

@@ -145,3 +145,77 @@ test('broken optional message storage fails closed without throwing from host co
     assert.equal(fs.readFileSync(file, 'utf8'), 'broken');
     assert.throws(() => service.close(), /persistence/);
 });
+
+test('opt-in unstarted messages survive restart but running uncertain turns never replay', async () => {
+ for(const running of [false,true]) {
+  const f=fixture(),g=f.grant({recoverQueued:true,pauseOnStop:true});const r=f.api.submit(f.request(g));
+  if(running)await f.service.pump();
+  f.service.prepareShutdown();f.control.abort();f.service.close();
+  const next=new f.ExtensionMessages(f.file,f.port,()=>1000),control=new AbortController(),api=next.bind('example',control.signal);
+  assert.equal(api.status(r.id).state,running?'interrupted':'queued');await next.pump();assert.equal(f.sent.length,1);next.close();control.abort();
+ }
+});
+test('explicit stop and plugin disable cancel queued continuation without revoking unrelated grants', async () => {
+ const f=fixture(),g=f.grant({pauseOnStop:true,recoverQueued:true}),other=f.grant();const r=f.api.submit(f.request(g));
+ f.service.stopTarget('target');assert.equal(f.api.authorization(g).revoked,true);assert.equal(f.api.authorization(other).revoked,false);
+ await f.service.pump();assert.equal(f.sent.length,0);assert.equal(f.api.status(r.id).state,'cancelled');
+ const enabled=f.grant({pauseOnStop:true,recoverQueued:true}),waiting=f.api.submit(f.request(enabled,'another'));f.control.abort();f.service.close();
+ const next=new f.ExtensionMessages(f.file,f.port,()=>1000),api=next.bind('example',new AbortController().signal);assert.equal(api.status(waiting.id).state,'cancelled');next.close();
+});
+test('project scope is revalidated during delayed bridge admission', async () => {
+ const f=fixture();let project='p';f.port.target=()=>({title:'T',binding:'original',projectId:project});
+ const g=f.grant({projectId:'p'}),r=f.api.submit(f.request(g));f.port.dispatch=async(d,before)=>{project='other';before();};await f.service.pump();await f.service.pump();
+ assert.equal(f.sent.length,0);assert.equal(f.api.status(r.id).state,'cancelled');f.service.close();
+});
+
+test('Stop invalidates older continuation confirmations, including before the first grant',()=>{
+ const f=fixture(),input={targetId:'target',label:'Continue',template:'Continue scoped work',minIntervalMs:0,pauseOnStop:true};
+ const prepared=f.service.prepare('example',input),scheduled=f.service.prepare('example',{...input,pauseOnStop:false});
+ f.service.stopTarget('target');
+ assert.throws(()=>f.service.approve('example',prepared),/stopped|changed|review/i);
+ assert(f.service.approve('example',scheduled),'unrelated scheduled confirmation remains valid');
+ assert(f.service.approve('example',f.service.prepare('example',input)),'fresh user confirmation after Stop can resume');f.service.close();
+});
+
+test('stopping a coordinator revokes every continuation grant in one durable commit',async()=>{
+ const f=fixture(),a=f.grant({pauseOnStop:true,recoverQueued:true}),b=f.grant({pauseOnStop:true,recoverQueued:true});
+ f.api.submit(f.request(a,'first-work'));f.api.submit(f.request(b,'second-work'));
+ const checkpoints=[],save=f.service.save.bind(f.service);f.service.save=()=>{save();checkpoints.push(fs.readFileSync(f.file,'utf8'))};
+ f.service.stopTarget('target');assert(checkpoints.length);
+ // Restore the first durable stop checkpoint, as if the process exited there.
+ fs.writeFileSync(f.file,checkpoints[0]);const recovered=new f.ExtensionMessages(f.file,f.port,()=>1000),api=recovered.bind('example',new AbortController().signal);
+ await recovered.pump();assert.equal(f.sent.length,0,'all workflows sharing the stopped coordinator must stay stopped');
+ assert(api.authorization(a).revoked&&api.authorization(b).revoked);recovered.close();f.service.close();
+});
+
+test('late bridge initialization after shutdown cannot overwrite a recoverable queued receipt',async()=>{
+ for(const restartFirst of [false,true]){
+ const f=fixture(),g=f.grant({pauseOnStop:true,recoverQueued:true}),request=f.request(g);
+ const receipt=f.api.submit(request),dispatch=f.port.dispatch;let release;
+ f.port.dispatch=async(d,before,settled)=>{await new Promise(r=>release=r);before();f.sent.push({d,settled});};
+ const pumping=f.service.pump();assert(release);
+ f.service.prepareShutdown();f.control.abort();f.service.close();
+ // The bridge finishes initialization only after the durable shutdown commit.
+ if(!restartFirst){release();await pumping;assert.equal(f.sent.length,0);}
+ f.port.dispatch=dispatch;
+ const recovered=new f.ExtensionMessages(f.file,f.port,()=>1000),api=recovered.bind('example',new AbortController().signal);
+ assert.equal(api.status(receipt.id).state,'queued','late aborted admission must not change the shutdown checkpoint');
+ await recovered.pump();await recovered.pump();assert.equal(f.sent.length,1);assert.equal(f.sent[0].d.id,receipt.id);
+ if(restartFirst){release();await pumping;assert.equal(JSON.parse(fs.readFileSync(f.file,'utf8')).deliveries[receipt.id].state,'running','old callbacks cannot overwrite the new host receipt');}
+ recovered.close();
+ }
+});
+
+test('shutdown preparation blocks new admission, while ordinary Stop still cancels delayed admission',async()=>{
+ for(const mode of ['shutdown','stop']){
+ const f=fixture(),g=f.grant({pauseOnStop:true,recoverQueued:true}),r=f.api.submit(f.request(g));let release;
+ f.port.dispatch=async(d,before,settled)=>{await new Promise(resolve=>release=resolve);before();f.sent.push({d,settled});};
+ const running=f.service.pump();assert(release);
+ if(mode==='shutdown')f.service.prepareShutdown();else f.service.stopTarget('target');
+ release();await running;assert.equal(f.sent.length,0);await f.service.pump();
+ if(mode==='stop')assert.equal(f.api.status(r.id).state,'cancelled');
+ f.service.close();
+ const recovered=new f.ExtensionMessages(f.file,f.port,()=>1000),api=recovered.bind('example',new AbortController().signal);
+ assert.equal(api.status(r.id).state,mode==='shutdown'?'queued':'cancelled');recovered.close();
+ }
+});

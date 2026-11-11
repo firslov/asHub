@@ -39,7 +39,8 @@ async function initializeSession(
   const { stopIdleWatchdog, releaseClosedReplay } = adapters.runtime;
 
   if (opts.signal?.aborted) throw new Error("Hub shutting down");
-  let id = existing?.id ?? randomBytes(3).toString("hex");
+  let id = existing?.id ?? setup?.instanceId ?? randomBytes(3).toString("hex");
+  if (setup?.instanceId && (!/^[a-f0-9]{12}$/.test(setup.instanceId) || sessions.has(id) || fs.existsSync(sessionMetaPath(id)) || fs.existsSync(path.join(SESSIONS_DIR, `${id}.deleted`)))) throw Error("Reserved conversation ID already exists");
   while (!existing && (sessions.has(id) || fs.existsSync(sessionMetaPath(id)) || fs.existsSync(path.join(SESSIONS_DIR, `${id}.deleted`)))) id = randomBytes(3).toString("hex");
   const kind: SessionKind = existing?.kind ?? spawnKind;
   const isAgent = kind === "agent";

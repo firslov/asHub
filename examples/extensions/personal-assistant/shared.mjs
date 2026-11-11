@@ -3,14 +3,92 @@ import { observedAt } from './memory-context.mjs';
 import { Learning } from './learning.mjs';
 import path from 'node:path';
 import { MemoryStore, text } from './store.mjs';
+// Forgetting and reversing forgetting require a bounded direct command, not
+// keyword matching in a search excerpt. Ordinary first-time learning is unchanged.
+function explicitMemoryIntent(message, quote, action) {
+  const source=message.trim();
+  const command=action==='remember'
+    ? /^(?:(?:请(?:你|帮我)?|麻烦(?:你)?|我(?:希望|想让)你)\s*)?(?:重新|再次)?(?:记住|记下)\s*[:：,，]?\s*/u.exec(source)
+      ?? /^(?:please\s+)?(?:remember|relearn)\b\s*(?:that\s+)?[:：,，]?\s*/iu.exec(source)
+    : /^(?:(?:请(?:你|帮我)?|麻烦(?:你)?|我(?:希望|想让)你)\s*)?(?:忘记|(?:不要|别)(?:再)?(?:记住|记下|记))\s*[:：,，]?\s*/u.exec(source)
+      ?? /^(?:please\s+)?(?:forget|(?:do not|don't|don’t)\s+remember)\b\s*(?:that\s+)?[:：,，]?\s*/iu.exec(source);
+  if(!command || /[?？]$/.test(source))return false;
+  const payload=source.slice(command[0].length);
+  const content=memoryTarget(payload), evidence=memoryTarget(quote.trim()===source ? payload : quote);
+  return content && content===evidence ? content : null;
+}
+function memoryTarget(value) {
+  let s=value.trim().replace(/[。.!！]+$/u,'').trim();
+  for(const [left,right] of [['“','”'],['「','」'],['"','"'],["'","'"]])if(s.startsWith(left)&&s.endsWith(right))s=s.slice(1,-1).trim();
+  return s;
+}
+// Only remove an explicit self-reference, never negation, numbers or qualifiers.
+const targetContent=value=>memoryTarget(value).replace(/^(?:我|用户)(?=喜欢|偏好|希望|要求|认为|不|是|有|叫|从事|任职)/u,'');
+const matchesTarget=(target,row)=>[row.id,row.title,row.content,...(row.source.type==='learned' ? (row.source.refs ?? []).map(ref=>ref.quote) : [])]
+  .some(value=>typeof value==='string' && targetContent(value)===targetContent(target));
 const managers = new Map();
 export function current(directory) { return managers.get(path.resolve(directory)); }
 export class Assistant {
-  constructor(services) { this.services = services; this.store = new MemoryStore(services.dataDirectory); this.stopped = false; this.learning = new Learning(this); }
+  constructor(services) { this.services = services; this.store = new MemoryStore(services.dataDirectory); this.stopped = false; this.learning = new Learning(this);
+    this.dedicated = !!services.conversations;
+    if (this.dedicated && !this.store.state('assistant:v4')) {
+      this.learning.pause();
+      this.store.transaction(()=>{this.store.setState('assistant:v4',{legacyIds:this.store.memoryIds(),imported:[]});
+      for (const b of this.store.bindings()) this.store.unbind(b.id);});
+    }
+  }
+  conversationId() { return this.services.conversations?.get('assistant') ?? null; }
+  visible(row) {
+    if (!row) return false;
+    if (!this.dedicated) return true;
+    const state=this.store.state('assistant:v4');
+    return !state?.legacyIds.includes(row.id) || state.imported.includes(row.id);
+  }
+  topics() {
+    const groups=[['about','关于你'],['preferences','偏好与习惯'],['ongoing','正在关注'],['methods','经验与方法']];
+    const rows=this.store.activeMemories().filter(r=>this.visible(r)&&(!this.learning.config().enabled||this.learning.valid(r)));
+    const group=r=>['preference','principle'].includes(r.kind)?'preferences':['experience','procedure'].includes(r.kind)?'methods':r.scope==='personal'?'about':'ongoing';
+    return groups.map(([id,title])=>({id,title,items:rows.filter(r=>group(r)===id)}));
+  }
+  historySearch(id,query) {
+    this.require(id);const c=this.learning.config();const ignored=new Set(this.store.state('ignored:'+id)??[]);
+    return this.services.background.search(c.grantId,id,query).filter(r=>!ignored.has(r.id));
+  }
+  historyRead(id,sourceId,offset=0) {
+    this.require(id);if((this.store.state('ignored:'+id)??[]).includes(sourceId))throw Error('该来源不再用于记忆');
+    return this.services.background.entry(this.learning.config().grantId,id,sourceId,offset);
+  }
+  remember(id,args) {
+    this.require(id);const c=this.learning.config();
+    const records=this.historySearch(id,args.quote).filter(r=>r.role==='user' && r.text.includes(args.quote));
+    if(!records.length)throw Error('找不到当前授权对话中的原文，请重新搜索核对');
+    const record=records.at(-1),target=this.learning.api.targets(c.grantId).find(t=>t.id===id);
+    const checked=this.learning.check({...args,scope:args.scope??'personal',certainty:'explicit',aliases:[],evidence:[{id:record.id,quote:args.quote}]},records,target,c.grantId);
+    if(!checked)throw Error('记忆来源或格式未通过校验');
+    // Re-learning forgotten content requires a fresh, explicit user request,
+    // never a historical quote, a generated task, or an offline inference.
+    const original=record.id===this.services.background.latestUser(c.grantId,id)
+      ? this.services.background.entry(c.grantId,id,record.id) : null;
+    const renewalTarget=original?.role==='user' && !original.more ? explicitMemoryIntent(original.text,args.quote,'remember') : null;
+    const explicitRequest=!!renewalTarget && targetContent(renewalTarget)===targetContent(checked.value.content);
+    const row=this.store.learn(checked.value,checked.source,{explicitRequest,priorValid:this.learning.validator()});return {id:row.id,state:row.state,revision:row.revision};
+  }
+  forgetFromChat(id,args) {
+    this.require(id);const rows=this.historySearch(id,args.quote).filter(r=>r.role==='user' && r.id===this.services.background.latestUser(this.learning.config().grantId,id) && r.text.includes(args.quote));
+    const original=rows.length ? this.services.background.entry(this.learning.config().grantId,id,rows.at(-1).id) : null;
+    const target=original?.role==='user' && !original.more ? explicitMemoryIntent(original.text,args.quote,'forget') : null;
+    if(!target)throw Error('需要用户明确的遗忘要求');
+    const row=this.store.check(args.id,args.revision);if(!this.visible(row))throw Error('记忆不可用');
+    if(!matchesTarget(target,row))throw Error('遗忘目标与指定记忆不匹配，请明确指定记忆标题或完整内容，或从记忆面板选择');
+    const matching=this.store.memoryTargets().filter(other=>this.visible(other)&&matchesTarget(target,other));
+    if(matching.some(other=>other.id!==row.id))throw Error('遗忘目标匹配多条记忆，请使用具体记忆 ID 或从记忆面板选择');
+    this.store.forget(row.id,row.revision);return {forgotten:true};
+  }
   stop() { if (this.stopped) return; this.stopped = true; this.learning.stop(); this.store.close(); }
   snapshot() { if (this.stopped) throw Error('个人助手已停止'); return this.services.host.snapshot(); }
   sessions() { return this.snapshot().sessions.filter(s => s.kind === 'agent' && !s.readOnlyContext); }
   scope(id) {
+    if (this.dedicated && id !== this.conversationId()) return null;
     try { if (this.learning.exclusions().has(id)) return null; } catch { return null; }
     const session = this.sessions().find(s => s.instanceId === id);
     const binding = this.store.bindings().find(b => b.id === id && b.cwd === session?.cwd);
@@ -20,6 +98,7 @@ export class Assistant {
   }
   require(id) { const access = this.scope(id); if (!access) throw Error('此对话未关联个人助手或记忆已暂停，请在个人助手面板中设置'); return access; }
   validateScope(scope) {
+    if(this.dedicated && scope !== 'personal' && scope !== 'conversation:'+this.conversationId()) throw Error('仅支持个人助手专属记忆');
     const snapshot = this.snapshot();
     if (scope === 'personal') return;
     if (scope.startsWith('conversation:') && snapshot.sessions.some(s => s.instanceId === scope.slice(13) && s.kind === 'agent' && !s.readOnlyContext)) return;
@@ -28,7 +107,7 @@ export class Assistant {
   }
   label(scope) {
     const s = this.snapshot();
-    return scope === 'personal' ? '个人记忆 · 全局可检索' : scope.startsWith('project:')
+    return scope === 'personal' ? this.dedicated ? '个人记忆 · 专属助手' : '个人记忆 · 全局可检索' : scope.startsWith('project:')
       ? '来源项目 · ' + (s.projects.find(p => p.id === scope.slice(8))?.name ?? '已不可用')
       : '来源对话 · ' + (s.sessions.find(p => p.instanceId === scope.slice(13))?.title ?? scope.slice(13));
   }
@@ -52,7 +131,7 @@ export class Assistant {
   }
   read(id, memoryId) {
     this.require(id); const row = this.store.get(memoryId);
-    if (!row || row.state !== 'active' || !this.learning.valid(row)) throw Error('记忆不存在或当前不可用');
+    if (!row || !this.visible(row) || row.state !== 'active' || !this.learning.valid(row)) throw Error('记忆不存在或当前不可用');
     return publicMemory(row);
   }
   search(id, query, limit = 8) {

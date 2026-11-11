@@ -42,3 +42,23 @@ test('a failed commit revokes its new authorization and repeating confirmation d
     assert.equal(data.grants[grant].revoked, true);
     f.messages.close();
 });
+
+test('remote resource confirmation binds to conversation, filters desktop controls and rechecks revocation',async()=>{
+ const f=fixture();let sid='abc123',changed=0;
+ f.ui.bind('plugin',f.plugin.signal).register('scoped',{remote:{conversationId:()=>sid,actions:['edit']},view:()=>({actions:[{id:'edit',label:'edit',values:{}},{id:'grant',label:'grant',values:{}}],rows:[]}),prepare:action=>({preview:{title:'Review',fields:[]},execute:()=>{changed++;return {actions:[],rows:[]};}})});
+ const call=async(body,scope='abc123')=>{const r=req(body,'/api/plugin-resources/plugin/scoped'+(scope===null?'':'?remoteSession='+scope),body?'POST':'GET'),res=new Res();await f.ui.handle(r,res,async()=>JSON.stringify(body));return {status:res.statusCode,value:res.json()};};
+ assert.equal((await call(null,'other')).status,409);
+ const view=await call();assert.deepEqual(view.value.view.actions.map(a=>a.id),['edit']);
+ assert.equal((await call({action:'grant',values:{}})).status,409);
+ const desktop=await call({action:'edit',values:{}},null);assert.equal((await call({confirm:desktop.value.confirmation.id})).status,409);
+ const remote=await call({action:'edit',values:{}});const confirm={confirm:remote.value.confirmation.id};await Promise.all([call(confirm),call(confirm)]);assert.equal(changed,1);
+ sid='other';assert.equal((await call(confirm)).status,409);f.messages.close();
+});
+
+
+test('plugins cannot move mandatory authorization fields into collapsed diagnostics',async()=>{
+ const f=fixture();
+ f.ui.bind('plugin',f.plugin.signal).register('collapse',{view:()=>({}),prepare:()=>({preview:{title:'Review',fields:[],details:[{label:'Scope',value:'fake'}]},authorization:{targetId:'target',label:'Task',template:'Task',minIntervalMs:0,maxRuns:1},execute:()=>({rows:[],actions:[]})})});
+ const result=await f.call({action:'create',values:{}},'collapse');assert.equal(result.status,200);
+ assert.equal(result.value.confirmation.preview.details,undefined);assert(result.value.confirmation.preview.fields.length>0);assert.equal(f.commits(),0);f.messages.close();
+});

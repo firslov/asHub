@@ -1,5 +1,8 @@
 import { registerNetworkEndpoint } from "../network-policy.js";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import { createHash } from "node:crypto";
+import { codexModels } from "./reasoning.js";
 import * as path from "node:path";
 import { CONFIG_DIR, getSettings } from "agent-sh/settings";
 import { BUILTIN_EXTENSIONS } from "agent-sh/extensions";
@@ -28,11 +31,44 @@ export function codexStatus() {
   return { enabled, configured, providerId };
 }
 
+/** Internal invalidation key: no tokens or account identifiers leave the host. */
+export function codexCatalogVersion(): string {
+  const status = codexStatus();
+  let account = "", cache = "";
+  if (status.configured) {
+    try { account = createHash("sha256").update(JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, "codex-provider", "auth.json"), "utf8")).accountId).digest("hex"); } catch {}
+  }
+  try { const s = fs.statSync(path.join(os.homedir(), ".codex", "models_cache.json")); cache = `${s.mtimeMs}:${s.ctimeMs}:${s.size}:${s.ino}`; } catch {}
+  return JSON.stringify([status, account, cache]);
+}
+
+// One lightweight poll for all sessions, including atomic cache/auth replacements
+// on Windows. Token rotation alone does not invalidate models or restart proxies.
+const catalogHosts = new Set<CodexProviderHost>();
+let catalogTimer: ReturnType<typeof setInterval> | undefined, watchedVersion = "";
+function observeCatalog(host: CodexProviderHost): () => void {
+  catalogHosts.add(host);
+  if (!catalogTimer) {
+    watchedVersion = codexCatalogVersion();
+    catalogTimer = setInterval(() => {
+      const version = codexCatalogVersion();
+      if (version === watchedVersion) return;
+      watchedVersion = version;
+      for (const h of catalogHosts) void Promise.resolve().then(() => h.sync()).catch(() => { /* Normal requests report activation errors and can retry. */ });
+    }, 2000);
+    catalogTimer.unref?.();
+  }
+  return () => { catalogHosts.delete(host); if (!catalogHosts.size) { clearInterval(catalogTimer); catalogTimer = undefined; } };
+}
+
 /** Give the upstream built-in a real per-session lifetime and stable commands.
  * Re-activate when another session signs in/out; each session owns its proxy.
  */
 export class CodexProviderHost {
   private closed = false;
+  private stopObserving?: () => void;
+  private catalogVersion = "";
+  private refreshCatalog?: () => void;
   private signature = "";
   private lastRegisteredId?: string;
 
@@ -45,10 +81,19 @@ export class CodexProviderHost {
 
   sync(): Promise<void> {
     if (this.closed) return Promise.resolve();
+    this.stopObserving ??= observeCatalog(this);
     if (this.pending) return this.pending.then(() => this.sync());
     const status = codexStatus();
     const signature = JSON.stringify([status, (getSettings() as unknown as Record<string, unknown>)["codex-provider"]]);
-    if (signature === this.signature) return Promise.resolve();
+    if (signature === this.signature) {
+      this.refreshCatalog?.();
+      const version = codexCatalogVersion();
+      if (version !== this.catalogVersion) {
+        this.catalogVersion = version;
+        this.ctx.bus.emit("agent:providers:changed", {});
+      }
+      return Promise.resolve();
+    }
     const work = this.activate(status.enabled, signature);
     this.pending = work;
     return work.finally(() => { if (this.pending === work) this.pending = null; });
@@ -58,6 +103,7 @@ export class CodexProviderHost {
     // Once the old activation is released, its signature is no longer valid,
     // including when loading the replacement fails and settings are reverted.
     this.signature = "";
+    this.refreshCatalog = undefined;
     this.dispose?.();
     this.dispose = null;
     this.commands.clear();
@@ -99,7 +145,29 @@ export class CodexProviderHost {
           ...agent.providers,
           register: (reg: Parameters<typeof agent.providers.register>[0]) => {
             if (disposed || this.closed) { dispose(); return () => {}; }
-            const unregister = agent.providers.register(reg);
+            let unregister = agent.providers.register(reg);
+            let modelSignature = JSON.stringify(reg.models);
+            this.refreshCatalog = () => {
+              if (disposed || this.closed) return;
+              const configured = (getSettings() as unknown as Record<string, any>)["codex-provider"]?.models;
+              if (Array.isArray(configured) && configured.length) return;
+              const models = codexModels().filter(m => typeof m.slug === "string" && m.visibility === "list").map(m => {
+                const modalities = (Array.isArray(m.input_modalities) ? m.input_modalities.filter(v => v === "text" || v === "image") : ["text", "image"]) as Array<"text" | "image">;
+                return {
+                  id: m.slug as string, reasoning: true, echoReasoning: true,
+                  contextWindow: typeof m.context_window === "number" && m.context_window > 0 ? m.context_window : 272000,
+                  modalities: modalities.length ? modalities : undefined,
+                };
+              });
+              // Cache writers may temporarily remove/truncate the file. Preserve
+              // the last valid registration until a complete catalog is available.
+              if (!models.length || JSON.stringify(models) === modelSignature) return;
+              // Re-register in place: provider id replaces its contribution, while
+              // the same proxy, credentials callback and in-flight requests survive.
+              unregister = agent.providers.register({ ...reg, models, defaultModel: models[0].id });
+              modelSignature = JSON.stringify(models);
+            };
+            this.refreshCatalog();
             this.lastRegisteredId = reg.id;
             const untrackEndpoint = registerCodexEndpoint(reg.baseURL);
             let registered = true;
@@ -132,6 +200,7 @@ export class CodexProviderHost {
       if (this.closed) dispose();
       else {
         this.signature = signature;
+        this.catalogVersion = codexCatalogVersion();
         // Replacing a proxy changes its port and secret. The active LLM client
         // must resolve the new endpoint even when the model id is unchanged.
         if (codexStatus().configured && active?.provider === codexStatus().providerId && active.model) {
@@ -143,6 +212,8 @@ export class CodexProviderHost {
 
   close(): void {
     this.closed = true;
+    this.stopObserving?.();
+    this.refreshCatalog = undefined;
     this.commands.clear();
     this.dispose?.();
   }

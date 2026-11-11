@@ -4,7 +4,7 @@ import { readNetworkPolicy, writeNetworkPolicy } from '../network-policy.js';
 import type { Session } from './session-types.js';
 import { HostEvents } from './host-events.js';
 
-export interface SessionSetup { instructions?: string; model?: string; provider?: string; proxyEnabled?: boolean | null }
+export interface SessionSetup { instanceId?: string; instructions?: string; model?: string; provider?: string; proxyEnabled?: boolean | null }
 interface SessionServiceOptions {
   events?: HostEvents;
   busy(session: Session): boolean;

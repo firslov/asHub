@@ -10,6 +10,8 @@ export function validateResourceView(v) {
         throw Error('Invalid plugin view');
     const action = a => { if (!a || !id(a.id) || !text(a.label, 120) || !a.values || typeof a.values !== 'object' || Array.isArray(a.values))
         throw Error('Invalid plugin action'); };
+    if (v.openConversation !== undefined && (!text(v.openConversation,100) || !/^[-a-zA-Z0-9]+$/.test(v.openConversation)))
+        throw Error('Invalid conversation reference');
     v.actions.forEach(action);
     for (const r of v.rows) {
         if (r.conversationId !== undefined && (!text(r.conversationId, 100) || !/^[-a-zA-Z0-9]+$/.test(r.conversationId)))
@@ -40,7 +42,7 @@ export function validateResourceView(v) {
     return v;
 }
 /** Generic bounded records/forms/actions; all content is text, never plugin HTML. */
-export function mountResource(container, feature, resourceId) {
+export function mountResource(container, feature, resourceId, options = {}) {
     const base = `/api/plugin-resources/${encodeURIComponent(feature.pluginId)}/${encodeURIComponent(resourceId)}`;
     let disposed = false, busy = false, refreshing = true, view, editing = false, epoch = 0;
     const abort = new AbortController();
@@ -55,6 +57,7 @@ export function mountResource(container, feature, resourceId) {
         const timer = deadline ? setTimeout(() => deadline.abort(new Error(local('读取超时，稍后自动重试', 'Read timed out; retrying shortly'))), 15000) : undefined;
         try {
             const signal = deadline ? AbortSignal.any([abort.signal, deadline.signal]) : abort.signal;
+            if(options.request) return await options.request(body,signal);
             const response = await fetch(base, { signal, method: body ? 'POST' : 'GET', headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
             const data = await response.json();
             if (!response.ok)
@@ -75,11 +78,17 @@ export function mountResource(container, feature, resourceId) {
             content.replaceChildren();
             const p = data.confirmation.preview;
             content.append(node('h3', 'extension-resource-title', p.title));
-            const dl = node('dl', 'extension-resource-review');
-            for (const f of p.fields) {
-                dl.append(node('dt', '', f.label), node('dd', '', f.value));
+            const review = fields => {
+                const dl = node('dl', 'extension-resource-review');
+                for (const f of fields) dl.append(node('dt', '', f.label), node('dd', '', f.value));
+                return dl;
+            };
+            content.append(review(p.fields));
+            if (Array.isArray(p.details) && p.details.length) {
+                const details = node('details', 'extension-authorization-details');
+                details.append(node('summary', '', local('授权详情', 'Authorization details')), review(p.details));
+                content.append(details);
             }
-            content.append(dl);
             const actions = node('div', 'extension-resource-actions extension-resource-confirm');
             const yes = node('button', 'p-btn-primary', local('确认', 'Confirm')), no = node('button', 'p-btn', local('取消', 'Cancel'));
             yes.type = no.type = 'button';
@@ -109,6 +118,8 @@ export function mountResource(container, feature, resourceId) {
             const data = await request(body);
             busy = false;
             display(data);
+            if (!disposed && !data.confirmation && data.view?.openConversation && options.onComplete)
+                await options.onComplete(data.view.openConversation);
         }
         catch (e) {
             if (!disposed) {
@@ -199,6 +210,7 @@ export function mountResource(container, feature, resourceId) {
             if (r.conversationId) {
                 const link = node('a', 'extension-resource-link', local('查看对话', 'Open conversation'));
                 link.href = '/' + encodeURIComponent(r.conversationId);
+                if(options.openConversation) link.addEventListener('click',e=>{e.preventDefault();options.openConversation(r.conversationId);});
                 row.append(link);
             }
             const menu = node('details', 'extension-resource-menu');

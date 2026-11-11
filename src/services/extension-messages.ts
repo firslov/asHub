@@ -9,6 +9,10 @@ export interface MessageGrant {
     minIntervalMs: number;
     maxRuns?: number;
     expiresAt?: number;
+    /** Explicit opt-in for event-triggered background work. */
+    pauseOnStop?: boolean;
+    recoverQueued?: boolean;
+    projectId?: string;
 }
 export interface Delivery {
     id: string;
@@ -38,6 +42,7 @@ export interface DeliveryPort {
     target(id: string): {
         title: string;
         binding: string;
+        projectId?: string | null;
     } | undefined;
     busy(id: string): boolean;
     dispatch(delivery: Delivery, before: () => void, settled: (state: 'completed' | 'failed' | 'cancelled', error?: string) => void): Promise<void>;
@@ -55,7 +60,12 @@ export class ExtensionMessages {
     private active = new Map<string, AbortSignal>();
     private timer?: ReturnType<typeof setInterval>;
     private inFlight = new Set<string>();
+    // Confirmation tokens are process-local; stops also invalidate previews
+    // created before any grant exists. Ordinary scheduled grants are unaffected.
+    private stopRevisions = new Map<string, number>();
     private closed = false;
+    private shuttingDown = false;
+    prepareShutdown() { this.shuttingDown = true; }
     private fault: unknown;
     constructor(private file: string, private port: DeliveryPort, private now = Date.now) {
         this.state = { version: 1, grants: {}, deliveries: {} };
@@ -66,7 +76,7 @@ export class ExtensionMessages {
                     throw Error('Invalid extension message store');
                 this.state = data;
                 for (const d of Object.values(this.state.deliveries))
-                    if (['queued', 'running'].includes(d.state)) {
+                    if (['queued', 'running'].includes(d.state) && !(d.state === 'queued' && this.state.grants[d.grantId]?.recoverQueued)) {
                         d.state = 'interrupted';
                         d.error = 'Host restarted; automatic replay is disabled';
                         d.finishedAt = this.now();
@@ -98,7 +108,7 @@ export class ExtensionMessages {
             catch { }
         }
     }
-    private guard(pluginId: string) { if (this.closed || this.fault || this.active.get(pluginId)?.aborted !== false)
+    private guard(pluginId: string) { if (this.closed || this.shuttingDown || this.fault || this.active.get(pluginId)?.aborted !== false)
         throw Error('Plugin message service unavailable'); }
     start() { if (!this.timer && !this.closed) {
         this.timer = setInterval(() => { void this.pump().catch(() => { }); }, 1000);
@@ -113,7 +123,7 @@ export class ExtensionMessages {
                 return;
             this.active.delete(pluginId);
             for (const d of Object.values(this.state.deliveries))
-                if (d.pluginId === pluginId && d.state === 'queued') {
+                if (d.pluginId === pluginId && d.state === 'queued' && !(this.shuttingDown && this.state.grants[d.grantId]?.recoverQueued)) {
                     d.state = 'cancelled';
                     d.error = 'Plugin stopped';
                     d.finishedAt = this.now();
@@ -135,6 +145,13 @@ export class ExtensionMessages {
             status: (id: string) => { guard(); const d = this.state.deliveries[id]; if (!d || d.pluginId !== pluginId)
                 throw Error('Delivery unavailable'); return copy(d); },
             revoke: (id: string) => { guard(); this.revoke(pluginId, id); },
+            authorization: (id: string) => { guard(); const g = this.state.grants[id];
+                if (!g || g.pluginId !== pluginId) return undefined;
+                return { revoked: g.revoked, used: g.used, maxRuns: g.maxRuns, expiresAt: g.expiresAt };
+            },
+            cancel: (key: string) => { guard(); const d = this.state.deliveries[hash([pluginId, key])];
+                if (d?.state === 'queued') { d.state = 'cancelled'; d.finishedAt = this.now(); this.save(); }
+            },
         });
     }
     prepare(pluginId: string, input: MessageGrant) {
@@ -146,13 +163,17 @@ export class ExtensionMessages {
             throw Error('Invalid message authorization');
         if (!Array.isArray(spec.variables ?? []) || (spec.variables ?? []).length > 8 || (spec.variables ?? []).some(v => !/^\w{1,40}$/.test(v)))
             throw Error('Invalid message variables');
+        if ([spec.pauseOnStop, spec.recoverQueued].some(v => v !== undefined && typeof v !== 'boolean')
+            || (spec.projectId !== undefined && !text(spec.projectId, 100))) throw Error('Invalid message lifecycle policy');
         const target = this.port.target(spec.targetId);
-        if (!target)
-            throw Error('Target conversation unavailable');
-        return { spec, binding: target.binding, fields: [
+        if (!target || (spec.projectId !== undefined && target.projectId !== spec.projectId))
+            throw Error('Target conversation unavailable or project changed');
+        return { spec, binding: target.binding, stopRevision: spec.pauseOnStop ? (this.stopRevisions.get(spec.targetId) ?? 0) : undefined, fields: [
                 { label: '目标对话', value: `${target.title} (${spec.targetId})` },
                 { label: '任务内容', value: spec.template },
                 { label: '权限范围', value: '仅提交此消息；工具操作仍遵守原有授权' },
+                ...(spec.pauseOnStop ? [{ label: '停止行为', value: '点击停止将撤销此自动接续授权，需手动恢复' }] : []),
+                ...(spec.recoverQueued ? [{ label: '重启行为', value: '仅恢复尚未开始的消息；已开始但结果未知时不重发' }] : []),
                 { label: '最短提交间隔', value: `${spec.minIntervalMs / 1000}s` },
                 { label: '最多提交', value: String(spec.maxRuns ?? '持续有效，直到撤销') },
                 ...(spec.expiresAt ? [{ label: '授权截止', value: new Date(spec.expiresAt).toISOString() }] : []),
@@ -161,7 +182,7 @@ export class ExtensionMessages {
     /** Called only by the host's confirmed interaction path; not injected into plugins. */
     approve(pluginId: string, prepared: ReturnType<ExtensionMessages['prepare']>) {
         const next = this.prepare(pluginId, prepared.spec);
-        if (next.binding !== prepared.binding)
+        if (next.binding !== prepared.binding || next.stopRevision !== prepared.stopRevision)
             throw Error('Target conversation changed; review again');
         if (Object.keys(this.state.grants).length >= 20000)
             throw Error('Authorization store capacity reached');
@@ -174,13 +195,25 @@ export class ExtensionMessages {
         const g = this.state.grants[id];
         if (!g || g.pluginId !== pluginId)
             throw Error('Authorization unavailable');
-        g.revoked = true;
+        this.revokeGrants([g]);
+    }
+    private revokeGrants(grants: Grant[]) {
+        const ids = new Set(grants.map(g => g.id));
+        for (const g of grants) g.revoked = true;
         for (const d of Object.values(this.state.deliveries))
-            if (d.grantId === id && d.state === 'queued') {
+            if (ids.has(d.grantId) && d.state === 'queued') {
                 d.state = 'cancelled';
                 d.finishedAt = this.now();
             }
         this.save();
+    }
+    /** Explicit user stop revokes only grants which opted into this behavior. */
+    stopTarget(targetId: string) {
+        this.stopRevisions.set(targetId, (this.stopRevisions.get(targetId) ?? 0) + 1);
+        const grants = Object.values(this.state.grants).filter(g => g.targetId === targetId && g.pauseOnStop && !g.revoked);
+        // One durable commit: a stopped coordinator may own multiple workflows.
+        // Never leave a recoverable checkpoint with only some grants revoked.
+        if (grants.length) this.revokeGrants(grants);
     }
     private submit(pluginId: string, input: {
         grantId: string;
@@ -226,7 +259,7 @@ export class ExtensionMessages {
         return copy(d);
     }
     async pump() {
-        if (this.closed || this.fault)
+        if (this.closed || this.shuttingDown || this.fault)
             return;
         const pending: Promise<void>[] = [];
         for (const d of Object.values(this.state.deliveries)) {
@@ -239,7 +272,7 @@ export class ExtensionMessages {
                 this.save();
                 continue;
             }
-            if (!g || g.revoked || !target || target.binding !== g.binding) {
+            if (!g || g.revoked || !target || target.binding !== g.binding || (g.projectId !== undefined && target.projectId !== g.projectId)) {
                 d.state = 'cancelled';
                 d.error = 'Target or authorization unavailable';
                 d.finishedAt = this.now();
@@ -254,7 +287,7 @@ export class ExtensionMessages {
                 try {
                     await this.port.dispatch(copy(d), () => {
                         this.guard(d.pluginId);
-                        if (d.state !== 'queued' || g.revoked || d.expiresAt <= this.now() || this.port.target(d.targetId)?.binding !== g.binding || this.port.busy(d.targetId))
+                        if (d.state !== 'queued' || g.revoked || d.expiresAt <= this.now() || this.port.target(d.targetId)?.binding !== g.binding || (g.projectId !== undefined && this.port.target(d.targetId)?.projectId !== g.projectId) || this.port.busy(d.targetId))
                             throw Object.assign(Error('Delivery admission changed'), { code: 'ADMISSION_CHANGED' });
                         d.state = 'running';
                         d.startedAt = this.now();
@@ -273,6 +306,10 @@ export class ExtensionMessages {
                     });
                 }
                 catch (e) {
+                    // Shutdown owns the final receipt state. A bridge may finish
+                    // initialization after that commit; its aborted admission
+                    // must not turn recoverable queued work into a failed turn.
+                    if (this.closed || this.shuttingDown) return;
                     if (['queued', 'running'].includes(d.state) && (admitted || (e as {
                         code?: string;
                     })?.code !== 'ADMISSION_CHANGED')) {
@@ -287,7 +324,7 @@ export class ExtensionMessages {
         await Promise.allSettled(pending);
     }
     close() { this.closed = true; clearInterval(this.timer); for (const d of Object.values(this.state.deliveries))
-        if (['queued', 'running'].includes(d.state)) {
+        if (['queued', 'running'].includes(d.state) && !(d.state === 'queued' && this.state.grants[d.grantId]?.recoverQueued)) {
             d.state = 'interrupted';
             d.finishedAt = this.now();
         } this.save(); }

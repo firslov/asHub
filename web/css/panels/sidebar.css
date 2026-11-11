@@ -798,3 +798,35 @@
   .sidebar-head .sidebar-icon-btn, .sidebar-search .sidebar-icon-btn { width: 40px; height: 40px; }
   .sidebar-search .sidebar-filter { height: 40px; }
 }
+
+/* Persistent plugin conversation entries share sidebar density and focus treatment. */
+.conversation-entries{flex:none;margin:0 12px 8px;display:grid;gap:4px}
+.conversation-entries[hidden]{display:none}
+.conversation-entry{display:flex;align-items:center;min-width:0;border-radius:var(--radius-sm);color:var(--text-dim);background:transparent}
+.conversation-entry:hover{background:var(--bg3)}
+.conversation-entry[data-active="true"]{background:var(--accent-soft);color:var(--accent-dim)}
+.conversation-entry button{font:inherit;font-size:var(--fs-sm);font-weight:500;line-height:1.5;color:inherit;background:none;border:0;cursor:pointer;min-height:38px;border-radius:var(--radius-sm)}
+.conversation-entry-open{flex:1;min-width:0;padding:8px 12px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conversation-entry .conversation-entry-manage{flex:none;width:32px;min-height:32px;padding:0;margin-right:3px;font-size:var(--fs-md);color:var(--text-faint)}
+.conversation-entry .conversation-entry-manage:hover{background:var(--bg3);color:var(--text)}
+.conversation-entry button:focus-visible{outline:2px solid var(--accent-dim);outline-offset:-2px}
+@media (pointer:coarse){
+  .conversation-entry button{min-height:44px}
+  .conversation-entry .conversation-entry-manage{width:44px;min-height:44px}
+}
+
+/* The first-use resource lives in the reading canvas, not in a settings drawer. */
+.conversation-welcome{position:absolute;inset:0;z-index:21;background:var(--bg);border-radius:inherit;overflow:auto;overscroll-behavior:contain;padding:clamp(40px,6vh,64px) clamp(20px,5vw,64px);box-sizing:border-box;display:grid;align-items:center}
+.conversation-welcome-close{position:absolute;top:16px;right:16px}
+.conversation-welcome-card{width:100%;max-width:440px;min-width:0;margin:auto;padding:24px 0}
+.conversation-welcome h1{font-size:24px;line-height:1.4;letter-spacing:-.02em;font-weight:500;margin:0 0 10px;color:var(--text)}
+.conversation-welcome-subtitle{font-size:var(--fs-md);line-height:1.7;color:var(--text-dim);margin:0 0 24px}
+.conversation-welcome .extension-resource-note{line-height:1.7;color:var(--text-dim);margin:0}
+.conversation-welcome .extension-resource-actions:empty,.conversation-welcome .extension-resource-rows:empty{display:none}
+.conversation-welcome .extension-resource-actions{flex-wrap:wrap;gap:8px}
+.conversation-welcome .extension-resource-form{gap:18px}
+.conversation-welcome .extension-resource-review{overflow-wrap:anywhere}
+.conversation-welcome .extension-resource-form .p-btn-primary{justify-self:start}
+.conversation-welcome :is(button,input,select){min-height:40px}
+
+.plugin-conversation-empty .stream-empty-hints{display:none!important}

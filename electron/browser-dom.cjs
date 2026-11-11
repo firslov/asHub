@@ -1,5 +1,6 @@
 // These functions run in a Chromium isolated world. Plugins never supply page scripts.
 const { randomUUID } = require('node:crypto');
+const { editorOperation, createEditorBinding } = require('./browser-editor.cjs');
 
 function targetOperation(action, value, expected, dailyRequested) {
   const node = this;
@@ -32,6 +33,8 @@ function targetOperation(action, value, expected, dailyRequested) {
     tag === 'textarea' || (tag === 'input' && ['text', 'email', 'search', 'tel', 'url'].includes(node.type));
   const sensitive = (el) =>
     el.type === 'password' || el.type === 'file' || /password|one-time-code|cc-/.test(el.autocomplete || '');
+  if (action === 'upload' && !(tag === 'input' && node.type === 'file' && !node.webkitdirectory))
+    return { blocked: 'Select a visible, single file upload control.' };
   if (action === 'fill' && (!field || node.readOnly || sensitive(node)))
     return { blocked: 'Use manual control for this field.' };
   if (action === 'fill' && node.maxLength >= 0) {
@@ -72,9 +75,9 @@ function targetOperation(action, value, expected, dailyRequested) {
         return { blocked: 'Use manual control for forms containing custom fields.' };
       if (['submit', 'image', 'button', 'reset'].includes(el.type)) continue;
       if (['checkbox', 'radio'].includes(el.type) && !el.checked) continue;
-      if (sensitive(el)) return { blocked: 'Use manual control for this form.' };
+      if (sensitive(el) && el.type !== 'file') return { blocked: 'Use manual control for this form.' };
       const values =
-        el.localName === 'select'
+        el.type === 'file' ? Array.from(el.files || [], f => `${f.name} (${f.size} bytes)`) : el.localName === 'select'
           ? Array.from(el.selectedOptions)
               .filter((option) => !option.matches(':disabled'))
               .map((option) => option.value)
@@ -83,9 +86,9 @@ function targetOperation(action, value, expected, dailyRequested) {
       if (el.type === 'hidden') continue;
       const label = el.labels?.[0]?.innerText || el.name || el.id || el.type;
       for (const val of values) {
-        if (val.length > 1000 || fields.length >= 15)
+        if (val.length > 262144 || fields.length >= 15)
           return { blocked: 'Use manual control for long forms.' };
-        fields.push([label, val]);
+        fields.push([label, val.length > 1000 ? val.slice(0, 240).toWellFormed() + `… (${val.length} characters; full value checked before submission)` : val]);
       }
     }
   }
@@ -123,6 +126,7 @@ function targetOperation(action, value, expected, dailyRequested) {
     dailyPath,
     checked,
     action === 'fill' ? node.value : null,
+    action === 'upload' ? [node.accept, node.multiple, node.webkitdirectory, Array.from(node.files || [], f => [f.name, f.size, f.lastModified])] : null,
     location.href,
     tag,
     node.id,
@@ -186,6 +190,7 @@ function targetOperation(action, value, expected, dailyRequested) {
     if (!(root instanceof ShadowRoot)) break;
     target = root.host;
   }
+  if (action === 'upload') return { ready: true };
   if (action === 'click') node.click();
   else {
     const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -199,6 +204,12 @@ function targetOperation(action, value, expected, dailyRequested) {
       }),
     );
     node.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  if (action === 'fill') {
+    const probe = document.createElement(tag);
+    if (tag === 'input') { probe.type = node.type; probe.multiple = node.multiple; }
+    probe.value = value;
+    return { verified: node.value === probe.value, actualValue: String(node.value).slice(0, 262145) };
   }
   return true;
 }
@@ -267,6 +278,7 @@ async function resolveTarget(page, ref, check, dailyRequested) {
     backendNodeId: entry.node,
     executionContextId: world.executionContextId,
   });
+  let editorObject, editorBinding;
   const call = async (action, value, expected, beforeDispatch) => {
     const { nodes } = await page.command('Accessibility.getPartialAXTree', {
       backendNodeId: entry.node,
@@ -286,11 +298,23 @@ async function resolveTarget(page, ref, check, dailyRequested) {
     )
       throw Error('Control changed. Observe again.');
     check();
+    if (action === 'editor' && !editorObject) {
+      editorObject = (await page.command('DOM.resolveNode', { backendNodeId: entry.node })).object;
+      check();
+      const binding = await page.command('Runtime.callFunctionOn', {
+        objectId: editorObject.objectId, functionDeclaration: createEditorBinding.toString(), returnByValue: false,
+      });
+      editorBinding = binding.result;
+      check();
+      if (binding.exceptionDetails || !editorBinding?.objectId)
+        throw Error('Unsupported code editor. Use a plain text field, file upload or manual control.');
+    }
     beforeDispatch?.();
     const reply = await page.command('Runtime.callFunctionOn', {
-      objectId: object.objectId,
-      functionDeclaration: targetOperation.toString(),
-      arguments: [{ value: action }, { value }, { value: expected }, { value: dailyRequested }],
+      objectId: action === 'editor' ? editorObject.objectId : object.objectId,
+      functionDeclaration: (action === 'editor' ? editorOperation : targetOperation).toString(),
+      arguments: [{ value: action }, { value }, { value: expected }, action === 'editor'
+        ? { objectId: editorBinding.objectId } : { value: dailyRequested }],
       returnByValue: true,
     });
     if (reply.exceptionDetails)
@@ -300,7 +324,18 @@ async function resolveTarget(page, ref, check, dailyRequested) {
   return {
     entry,
     call,
-    release: () => page.command('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {}),
+    async upload(file) {
+      check();
+      await page.command('DOM.setFileInputFiles', { objectId: object.objectId, files: [file] });
+      const reply = await page.command('Runtime.callFunctionOn', { objectId: object.objectId,
+        functionDeclaration: 'function(){return Array.from(this.files || [], f => ({name:f.name,size:f.size}));}', returnByValue: true });
+      check();
+      return reply.result.value;
+    },
+    async release() {
+      for (const objectId of [object.objectId, editorObject?.objectId, editorBinding?.objectId].filter(Boolean))
+        await page.command('Runtime.releaseObject', { objectId }).catch(() => {});
+    },
   };
 }
 

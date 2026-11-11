@@ -75,7 +75,7 @@ test('included apps are opt-in, retain settings, and give precedence to a manual
   } finally { runtime.close(); }
   const manual=path.join(f.root,'extensions','original-folder');
   fs.mkdirSync(manual);
-  for(const file of ['package.json','ashub-plugin.json','index.mjs','work.mjs']) fs.copyFileSync(path.join(project.packageRoot,file),path.join(manual,file));
+  for(const file of ['package.json','ashub-plugin.json','index.mjs','work.mjs','continuation.mjs']) fs.copyFileSync(path.join(project.packageRoot,file),path.join(manual,file));
   const copies=()=>catalog().filter(p=>p.manifest?.id==='ashub-project-management');
   assert.equal(copies().length,1);
   const [original]=copies();assert(!original.bundled && original.includedApp && original.id!==project.id);
@@ -99,7 +99,7 @@ test('broken manual app never falls back to an enabled bundled app', () => {
   setPluginEnabled(f.file,included.id,true);
   const local=path.join(f.root,'extensions',id);
   fs.mkdirSync(local);
-  for(const name of ['package.json','ashub-plugin.json','index.mjs','work.mjs']) fs.copyFileSync(path.join(included.packageRoot,name),path.join(local,name));
+  for(const name of ['package.json','ashub-plugin.json','index.mjs','work.mjs','continuation.mjs']) fs.copyFileSync(path.join(included.packageRoot,name),path.join(local,name));
   const original=pluginCatalog(f.file).find(p=>p.manifest?.id===id);
   setPluginEnabled(f.file,original.id,false);
   for(const broken of ['ashub-plugin.json','package.json']) {
@@ -119,7 +119,7 @@ test('conflicting manual package and manifest names cannot activate either bundl
   const source=originals.find(p=>p.manifest.id===project);
   const dir=path.join(f.root,'extensions','custom-team');
   fs.mkdirSync(dir);
-  for(const name of ['package.json','ashub-plugin.json','index.mjs','work.mjs'])fs.copyFileSync(path.join(source.packageRoot,name),path.join(dir,name));
+  for(const name of ['package.json','ashub-plugin.json','index.mjs','work.mjs','continuation.mjs'])fs.copyFileSync(path.join(source.packageRoot,name),path.join(dir,name));
   const manual=()=>pluginCatalog(f.file).find(p=>p.packageRoot===dir);
   const originalId=manual().id;
   setPluginEnabled(f.file,originalId,false);

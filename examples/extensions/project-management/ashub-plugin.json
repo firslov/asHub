@@ -1,10 +1,44 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "ashub-project-management",
   "name": "项目管理",
   "minNode": "22.12.0",
   "permissions": [
     "创建项目或对话、修改配置、移出项目、归档和永久删除由宿主授权；默认逐次确认，用户可在插件配置中开启自动批准",
-    "在已授权的同项目协作中向原协调者发送关联任务的阻塞通知；忙碌时在安全边界接收，空闲时可启动一轮回复，不授予新操作权限"
-  ]
+    "在已授权的同项目协作中向原协调者发送关联任务的阻塞通知；忙碌时在安全边界接收，空闲时可启动一轮回复，不授予新操作权限",
+    "用户按工作流确认后，可在协调对话空闲时自动处理交付；点击停止撤销接续授权，工具权限不变"
+  ],
+  "entries": {
+    "session": "index.mjs",
+    "application": "continuation.mjs"
+  },
+  "requires": {
+    "hostApi": "^1.0.0",
+    "capabilities": [
+      "session-extensions",
+      "application-lifecycle",
+      "plugin-resources",
+      "authorized-messages",
+      "task-events",
+      "message-lifecycle",
+      "activity-hints"
+    ]
+  },
+  "ui": {
+    "version": 1,
+    "panels": [
+      {
+        "id": "continuation",
+        "title": "项目协作",
+        "icon": "panel",
+        "components": [
+          {
+            "type": "resource",
+            "id": "continuation"
+          }
+        ]
+      }
+    ]
+  },
+  "configNamespaces": []
 }

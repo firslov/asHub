@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { start } from './shared.mjs';
 import { kinds, states, text, previewText } from './store.mjs';
@@ -6,7 +7,7 @@ const action = (id, label, values = {}) => ({ id, label, values });
 const field = (id, label, type, value, extra = {}) => ({ id, label, type, value, ...extra });
 const time = at => new Date(at).toLocaleString('zh-CN', { hour12: false });
 const back = (id = 'overview') => [action(id, '返回')];
-export class AssistantPanel {
+class LegacyMemoryPanel {
   constructor(assistant) { this.a = assistant; this.store = assistant.store; }
   overview() {
     const profile = this.store.profile(), counts = this.store.counts(), config = this.a.learning.config();
@@ -58,6 +59,7 @@ export class AssistantPanel {
   }
   details(row) {
     return { refresh: false, actions: [...back('memories'),
+      ...(row.state==='active'?[action('edit','纠正',{id:row.id,revision:row.revision})]:[]),
       action('forget', '忘记', { id: row.id, revision: row.revision })],
       note: (row.source.type === 'learned' ? (row.state === 'active' ? '正式记忆' : '观察中') : states[row.state]) + ' · ' + kinds[row.kind] + ' · ' + this.a.label(row.scope),
       rows: [
@@ -202,11 +204,76 @@ export class AssistantPanel {
     throw Error('不支持的个人助手操作');
   }
 }
+export class AssistantPanel extends LegacyMemoryPanel {
+  scopes() { return this.a.dedicated ? [{value:'personal',label:'个人记忆'}, {value:'conversation:'+this.a.conversationId(),label:'助手对话'}] : super.scopes(); }
+  overview() {
+    if(!this.a.dedicated)return super.overview();
+    const id=this.a.conversationId(),profile=this.store.profile(),running=!!id&&this.a.learning.access(id)&&profile.enabled;
+    if(!id)return {actions:[action('setup','开启个人助手')],note:'一个专属对话，慢慢了解你',rows:[{title:'从这里开始',detail:'只从你与个人助手的交流中整理记忆，其他对话不受影响',actions:[]}]};
+    return {actions:[action('memories','查看记忆'),action(running?'pause':'authorize',running?'暂停记忆':'开启记忆')],note:(running?'记忆已开启 · 只整理这段专属对话':'记忆已暂停 · 对话和已保存的记忆仍保留')+(this.a.learning.error?'\n整理暂缓：'+this.a.learning.error:''),rows:[{title:profile.name,detail:running?'重要信息会自动整理，需要时轻量回忆':'继续聊天，或开启记忆让助手逐渐了解你',conversationId:id,actions:[action('migration','已有记忆'),action('authorize','更新整理授权')]}]};
+  }
+  async welcome() {
+    const sid=this.a.conversationId();
+    if(!sid) {
+      const plan=await this.prepare('setup');
+      const view=await plan.execute();
+      return {...view,actions:view.form?[]:[action('retry','刷新模型列表')],note:view.form?'先选一个聊天模型，之后随时可以更换。聊过的重要信息会在授权后自动整理，只在这个助手对话中使用':view.note};
+    }
+    const running=this.store.profile().enabled&&this.a.learning.access(sid);
+    return {actions:running?[action('chat','开始聊天')]:[action('authorize','开启记忆并开始聊天'),action('chat','暂不开启，先聊聊')],
+      note:running?'准备好了。从今天的想法聊起，或告诉我一点关于你的事':'最后一步：允许助手在后台整理这段对话。重要信息会自动记住，需要时再回忆，不必逐条确认',rows:[]};
+  }
+  async prepareWelcome(id,values={}) {
+    if(id==='retry')return {execute:()=>this.welcome()};
+    if(id==='chat') {
+      const sid=this.a.conversationId();if(!sid)throw Error('请先创建助手对话');
+      return {execute:()=>{if(this.a.conversationId()!==sid)throw Error('助手对话已变化');return {actions:[],rows:[],openConversation:sid};}};
+    }
+    if(!['create-assistant','authorize'].includes(id))throw Error('不支持的助手准备操作');
+    const plan=await this.prepare(id,values),run=plan.execute;
+    return {...plan,execute:async grant=>{await run(grant);const view=await this.welcome();return id==='authorize'?{...view,openConversation:this.a.conversationId()}:view;}};
+  }
+  listing(state='all',offset=0) {
+    if(!this.a.dedicated)return super.listing(state,offset);
+    if(state!=='all')return super.listing(state,offset);
+    return {actions:[action('search','搜索记忆'),action('overview','返回')],note:'与你有关的重要信息 · 可查看来源、纠正或忘记',rows:this.a.topics().map(t=>({title:t.title,detail:t.items.slice(0,3).map(r=>r.title).join(' · ')||'随着交流逐渐了解',status:t.items.length+' 条记忆',actions:[action('topic','查看',{topic:t.id})]}))};
+  }
+  prepare(id,values={}) {
+    if(!this.a.dedicated)return super.prepare(id,values);
+    if(!['overview','memories','search','find','topic','detail','edit','save','forget','setup','create-assistant','authorize','pause','migration','history','restore'].includes(id))throw Error('不支持的个人助手操作');
+    if(id==='save'){if(!values.id)throw Error('请通过对话告诉助手要记住什么');if(!this.a.visible(this.store.check(values.id,values.revision)))throw Error('记忆不可用');}
+    if(id==='find'){const query=String(values.query??'');return {execute:()=>({refresh:false,actions:back('memories'),note:'搜索结果',rows:this.store.search(query,['personal','conversation:'+this.a.conversationId()],30,r=>this.a.visible(r)&&(!this.a.learning.config().enabled||this.a.learning.valid(r))).map(r=>this.row(r))})};}
+    const simple=view=>({execute:()=>view});
+    if(id==='setup') {
+      return Promise.resolve(this.a.services.conversations.models()).then(models=>!models.length?simple({actions:back(),rows:[],note:'尚无可用模型，请先在设置中配置模型提供商，再返回开启个人助手'}):simple({actions:back(),note:'选择对话模型。创建后开启记忆，仅授权这段对话',rows:[],form:{action:'create-assistant',submit:'创建个人助手',values:{},fields:[field('model','对话模型','select',models.length?JSON.stringify(models[0]):'',{options:models.map(m=>({value:JSON.stringify(m),label:(m.model+' · '+m.provider).slice(0,200)}))})]}}));
+    }
+    if(id==='create-assistant') {
+      const model=JSON.parse(values.model);return {entryAuthorization:{key:'assistant',model:model.model,provider:model.provider},preview:{title:'创建个人助手',fields:[{label:'范围',value:'创建专属对话，不读取其他对话；记忆整理另行确认'}]},execute:()=>this.overview()};
+    }
+    if(id==='authorize') {
+      const sid=this.a.conversationId();if(!sid)throw Error('请先创建助手对话');
+      const profile=this.store.profile();
+      return {backgroundAuthorization:{modelSessionId:sid,includedIds:[sid],excludedIds:[],includeHistory:true,dailyCalls:4},preview:{title:'开启个人助手记忆',fields:[]},execute:grant=>{if(this.store.profile().revision!==profile.revision||this.a.conversationId()!==sid)throw Error('设置已变化');this.store.configure({name:profile.name,enabled:true},profile.revision);this.a.learning.configure(grant,{modelSessionId:sid,includedIds:[sid],excludedIds:[],includeHistory:true,dailyCalls:4});return this.overview();}};
+    }
+    if(id==='pause')return this.review('暂停记忆',[{label:'影响',value:'停止新增学习和召回，保留聊天及记忆。已在当前上下文里的内容不会被移除'}],()=>{this.a.learning.pause();return this.overview()});
+    if(['learning','learning-start','learning-pause','assistant-control','settings','bindings','connect','disconnect','save-binding'].includes(id))throw Error('请使用新版个人助手入口管理专属对话');
+    if(id==='topic') {const t=this.a.topics().find(t=>t.id===values.topic);if(!t)throw Error('主题不存在');const offset=Number.isSafeInteger(values.offset)&&values.offset>=0?values.offset:0;return simple({refresh:false,actions:[...back('memories'),...(offset?[action('topic','上一页',{topic:t.id,offset:Math.max(0,offset-30)})]:[]),...(t.items.length>offset+30?[action('topic','下一页',{topic:t.id,offset:offset+30})]:[])],note:t.title,rows:t.items.slice(offset,offset+30).map(r=>this.row(r))});}
+    if(id==='migration') {
+      const state=this.store.state('assistant:v4');const eligible=state.legacyIds.map(id=>this.store.get(id)).filter(r=>r?.state==='active'&&r.scope==='personal'&&['preference','principle','fact'].includes(r.kind));
+      return this.review('继承已有个人记忆',[{label:'可继承',value:eligible.length+' 条个人事实和偏好；项目细节不迁移'},{label:'范围',value:'只导入已保存的记忆，不重新读取其他对话。原始记忆保留，遗忘条目不恢复'}],()=>{if(JSON.stringify(this.store.state('assistant:v4'))!==JSON.stringify(state)||eligible.some(r=>this.store.get(r.id)?.revision!==r.revision))throw Error('已有记忆已变化，请重新确认');this.store.setState('assistant:v4',{...state,imported:eligible.map(r=>r.id)});return this.listing()});
+    }
+    if(['detail','edit','forget','history','restore','approve'].includes(id)&&!this.a.visible(this.store.check(values.id,values.revision)))throw Error('该旧记忆尚未继承');
+    return super.prepare(id,values);
+  }
+}
 export default function activate(ctx) {
+  if(!ctx.services.conversations)throw Error('请升级 asHub：需要专属对话接口');
   const active = start(ctx.services);
   ctx.onDispose(active.dispose);
+  ctx.onDispose(ctx.services.conversations.register('assistant',{label:'个人助手',resource:'assistant',setupResource:'welcome',description:'从日常交流中，慢慢了解你',cwd:path.join(ctx.services.dataDirectory,'workspace')}));
   const panel = new AssistantPanel(active.assistant);
-  ctx.onDispose(ctx.services.interactions.register('assistant', { view: () => panel.overview(), prepare: (id, values) => panel.prepare(id, values) }));
+  ctx.onDispose(ctx.services.interactions.register('assistant', {view:()=>panel.overview(),prepare:(id,values)=>panel.prepare(id,values),remote:{conversationId:()=>active.assistant.conversationId(),actions:['overview','memories','search','find','topic','detail','edit','save','forget','pause','history','restore']}}));
+  ctx.onDispose(ctx.services.interactions.register('welcome',{view:()=>panel.welcome(),prepare:(id,values)=>panel.prepareWelcome(id,values)}));
   active.assistant.learning.start();
   return { stop: active.dispose };
 }

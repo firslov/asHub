@@ -25,6 +25,7 @@ export class RemoteConnector {
   private attempts = 0;
   private streams = new Map<string, AbortController>();
   private entries: Record<string, Entry> = {};
+  private resourceViews = new Map<string,{epoch:number;expires:number;session:string;pluginId:string;resourceId:string;value:unknown}>();
   private operations = new Map<string, Promise<unknown>>();
   private validating = new Map<string, number>();
   private localUrl = '';
@@ -75,7 +76,7 @@ export class RemoteConnector {
     for (const req of this.requestBodies) req.destroy(error('移动访问请求已取消，请重试', 409));
   }
   private stopConnection() {
-    this.stopped = true; this.generation++; clearTimeout(this.timer); clearTimeout(this.connectionDeadline); this.socket?.close(); this.socket = null;
+    this.stopped = true; this.generation++; this.resourceViews.clear(); clearTimeout(this.timer); clearTimeout(this.connectionDeadline); this.socket?.close(); this.socket = null;
     for (const c of this.streams.values()) c.abort(); this.streams.clear();
   }
   isBusy(): boolean { return !!(this.requests.size || this.operations.size || this.validating.size || this.connecting); }
@@ -204,8 +205,8 @@ export class RemoteConnector {
     ws.send(data);
   }
   private headers(): Record<string, string> { return this.opts.localToken ? { Authorization: `Bearer ${this.opts.localToken}` } : {}; }
-  private async local(route: string, body?: unknown, long = false): Promise<any> {
-    const r = await fetch(this.localUrl + route, { method: body === undefined ? 'GET' : 'POST',
+  private async local(route: string, body?: unknown, long = false, method = body === undefined ? 'GET' : 'POST'): Promise<any> {
+    const r = await fetch(this.localUrl + route, { method,
       headers: { ...this.headers(), 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(long ? 24 * 3600000 : 20000), redirect: 'error' });
     const text = await r.text();
@@ -237,7 +238,8 @@ export class RemoteConnector {
       const sessionIds = p.sessionIds.filter((id: string) => shared.has(id));
       const members = new Set(sessionIds);
       return { id: p.id, name: p.name, sessionIds,
-        pinnedSessionIds: (p.pinnedSessionIds ?? []).filter((id: string) => members.has(id)) };
+        pinnedSessionIds: (p.pinnedSessionIds ?? []).filter((id: string) => members.has(id)),
+        ...(Array.isArray(p.activities) ? { activities: p.activities.filter((a: any) => members.has(a.sessionId)).map((a: any) => ({id:a.id,sessionId:a.sessionId,label:a.label,state:a.state})) } : {}) };
     })
       .filter((p: any) => p.sessionIds.length);
   }
@@ -301,11 +303,16 @@ export class RemoteConnector {
   private async executeRequest(op: string, args: any): Promise<any> {
     if (!this.config || this.config.enabled === false || this.stopped) throw error('移动访问已关闭', 403);
     const epoch = this.generation;
-    if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, imageResources: true, thinking: true, queue: true, steering: true, queueActions: true };
+    if (op === 'capabilities') return { projects: true, tasks: true, artifacts: true, imageResources: true, thinking: true, queue: true, steering: true, queueActions: true, sessionNetwork: true, sessionDelete: true, pluginResources: true };
     if (op === 'project-groups') return this.groups(epoch);
     if (op === 'project-tasks') return this.projectTasks(args, epoch);
     if (op === 'sessions') { const result = await this.sessions(); this.current(epoch); return result; }
     if (op === 'projects') return this.config.roots.map(p => ({ id: this.projectId(p), name: path.basename(p) || p }));
+    if (op === 'plugin-entries') {
+      const list=await this.local('/api/plugin-conversations');this.current(epoch);
+      const shared=await this.sessions();this.current(epoch);
+      return list.filter((e:any)=>e.sessionId && shared.some((s:any)=>s.instanceId===e.sessionId)).map((e:any)=>({pluginId:e.pluginId,key:e.key,label:e.label,resource:e.resource,...(e.description?{description:e.description}:{}),sessionId:e.sessionId}));
+    }
     if (op === 'models') return this.local('/api/models');
     if (op === 'request-status') {
       if (typeof args.requestId !== 'string') throw error('请求 ID 无效');
@@ -318,9 +325,50 @@ export class RemoteConnector {
       return this.once(args.requestId, op, { project: args.project }, () => this.local('/sessions', { cwd: root, kind: 'agent' }));
     }
     if (op === 'submit') return this.submit(args);
+    if (op === 'session-delete') {
+      if (args.confirm !== true || typeof args.session !== 'string' || !idPattern.test(args.session)
+        || typeof args.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(args.requestId)) throw error('请确认删除指定对话');
+      const payload = { session: args.session, confirm: true };
+      const remove = async () => {
+        // Recheck after admission; revocation while lookup is pending cannot delete.
+        const shared = await this.session(args.session); this.current(epoch);
+        await this.local(`/${shared.instanceId}/`, undefined, true, 'DELETE');
+        return { ok: true };
+      };
+      // A completed deletion is no longer in /sessions. Its durable receipt
+      // must still be recoverable, including when the first response was lost.
+      if (this.entries[this.config.deviceId + ':' + args.requestId]) return this.once(args.requestId, op, payload, remove);
+      await this.session(args.session); this.current(epoch);
+      return this.once(args.requestId, op, payload, remove);
+    }
+
     const session = await this.session(args.session);
     // Disabling or rebinding advances the generation while session lookup may be awaiting the Hub.
     if (epoch !== this.generation || this.stopped) throw error('移动访问授权已变更，请重新确认', 403);
+    if (op === 'plugin-resource') {
+      if (![args.pluginId,args.resourceId].every(v=>typeof v==='string' && /^[a-z][a-z0-9-]{0,79}$/.test(v))) throw error('Invalid plugin resource');
+      const check=async()=>{
+        await this.session(session.instanceId);this.current(epoch);
+        const catalog=await this.local('/api/plugin-resource-catalog');this.current(epoch);
+        if(!catalog.some((e:any)=>e.pluginId===args.pluginId && e.resourceId===args.resourceId && e.sessionId===session.instanceId))throw error('Plugin resource unavailable',403);
+      };
+      await check();
+      const route=`/api/plugin-resources/${args.pluginId}/${args.resourceId}?remoteSession=${session.instanceId}`;
+      for(const [key,value] of this.resourceViews)if(value.expires<Date.now() || value.epoch!==epoch)this.resourceViews.delete(key);
+      if(args.receipt !== undefined){
+        const cached=this.resourceViews.get(this.config!.deviceId+':'+args.receipt);
+        if(!cached || cached.session!==session.instanceId || cached.pluginId!==args.pluginId || cached.resourceId!==args.resourceId)throw error('操作结果已过期，请重新打开面板核对',409);
+        await check();return cached.value;
+      }
+      const run=async()=>{await check();const result=await this.local(route,args.body);await check();
+        if(args.body===undefined)return result;
+        if(this.resourceViews.size>=100)this.resourceViews.delete(this.resourceViews.keys().next().value!);
+        this.resourceViews.set(this.config!.deviceId+':'+args.requestId,{epoch,expires:Date.now()+300000,session:session.instanceId,pluginId:args.pluginId,resourceId:args.resourceId,value:result});
+        return {resourceReceipt:args.requestId};
+      };
+      // Keep durable exactly-once receipts, without writing private memory views to the journal.
+      return args.body === undefined ? run() : this.once(args.requestId,op,{session:session.instanceId,pluginId:args.pluginId,resourceId:args.resourceId,body:args.body},run);
+    }
     if (op === 'image-resource') {
       if (typeof args.id !== 'string' || !/^[a-f0-9]{64}$/.test(args.id)) throw error('Invalid image resource');
       if (args.version !== undefined && args.version !== args.id) throw error('Image version mismatch',409);
@@ -332,6 +380,17 @@ export class RemoteConnector {
       return result;
     }
     if (op === 'artifact') return this.artifact(args, session, epoch);
+    if (op === 'session-network' || op === 'set-session-network') {
+      if (op === 'set-session-network' && args.enabled !== null && typeof args.enabled !== 'boolean') throw error('VPN 设置无效');
+      const policy = op === 'session-network' ? await this.local('/api/settings/network')
+        : await this.local('/api/settings/network', { session: session.instanceId, enabled: args.enabled }, false, 'PUT');
+      this.current(epoch);
+      if (typeof policy?.proxyEnabled !== 'boolean' || !policy.sessions || typeof policy.sessions !== 'object') throw error('无法读取 VPN 设置', 502);
+      const enabled = policy.sessions[session.instanceId] ?? null;
+      // Never expose global write access or the policies of other conversations.
+      return { session: session.instanceId, enabled, effective: enabled ?? policy.proxyEnabled, globalEnabled: policy.proxyEnabled };
+    }
+
     if (op === 'queue') return this.local(`/${session.instanceId}/queue`);
     if (op === 'queue-update') {
       if (typeof args.id !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(args.id)) throw error('排队消息 ID 无效');

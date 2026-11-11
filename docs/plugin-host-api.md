@@ -100,7 +100,7 @@ Application plugins may declare the additive `plugin-resources` and `authorized-
 
 `prepare(action, values)` returns `{preview?, authorization?, execute(grantId?)}`. The host renders the preview, appends its own authorization scope, and issues a short-lived, resource-scoped confirmation token. Only confirmation creates a grant and invokes the prepared commit. Duplicate confirmation shares one result. Plugin stop/disposal invalidates pending confirmations. Commits participate in the application registry's in-flight operation tracking; failed commits revoke newly created grants. Plugins must recheck their own revision/version before mutation.
 
-A message authorization has `{targetId, template, variables?, label, minIntervalMs, maxRuns?, expiresAt?}`. It binds a target's identity and directory, the exact message template, allowed bounded substitutions, frequency/usage limits and optional expiry. The plugin receives only:
+A message authorization has `{targetId, template, variables?, label, minIntervalMs, maxRuns?, expiresAt?}`. It binds a target's identity and directory, the exact message template, allowed bounded substitutions, frequency/usage limits and optional expiry. The basic bound message service provides:
 
 - `messages.submit({grantId,key,values?,expiresAt})`: durably reserve an idempotent delivery and return its receipt.
 - `messages.lookup(key)` / `messages.status(id)`: inspect a package-scoped receipt, including recovery after a crash between submission and local receipt storage.
@@ -142,7 +142,7 @@ The personal-assistant example uses this capability for incremental, source-back
 
 ## Desktop browser pages
 
-Electron advertises the optional `browser-pages` capability. Declare it in a v2
+Electron advertises the optional `browser-pages` capability. Hosts with bounded file/editor operations also advertise `browser-files`; plugins requiring these operations must declare both capabilities. Declare it in a v2
 session plugin manifest to receive `ctx.services.browserPages`. Each binding is
 owned by the plugin activation and the host-provided conversation ID. Use
 `available()` for tool visibility. Disabling the feature or disposing the
@@ -153,6 +153,9 @@ session revokes access and closes its native page. CLI hosts omit the capability
 - `open` with an HTTPS `url` opens the conversation's isolated page and returns a snapshot.
 - `observe` returns the URL (without query or fragment), semantic items, and a truncation flag. By default it issues fresh element references. Set `references: false` to inspect text without invalidating existing references.
 - `fill` with `ref` and `value`, or `click` with `ref`, goes through the host permission preview. Bind approvals to the actual control and recheck identity, page and form fields before dispatch. For a stable standalone button the caller may explicitly request a seven-day, once-per-calendar-day grant with `daily: true`. A reserved attempt is never automatically repeated. Form submissions require one-time approval.
+- `write` with `ref` and exactly one of `sourcePath` / `value` replaces up to 256 KiB of UTF-8 source in a text field. `editor: true` selects fixed Monaco/Ace/CodeMirror 5 adapters (only exposed instances). Authorization previews include source path, length, digest and a bounded excerpt. The editor instance and document object, as well as current content, are checked again before dispatch; the response reports read-back verification, not server-side saving.
+- `upload` with `ref` and `sourcePath` selects a single file (up to 32 MiB) in a visible native file input. Sources must resolve inside the conversation working directory. The approved bytes are staged as an immutable snapshot until the page closes, preventing edits during approval from changing the upload. A site may transmit it immediately; submission is a separate action.
+- `download` with `ref` authorizes bounded receipt of one same-origin or blob file, up to 64 MiB and 120 seconds. The file is first staged in a private temporary directory. A separate `manualOnly` approval presents its actual name, size, digest and untrusted preview; plugin auto-approval cannot bypass it. Only approved snapshot bytes are published in a unique `browser-download-*` directory under the revalidated working directory. `completed` means the actual file was confirmed and saved, with `triggerVerified: false` and `attribution: "user-confirmed-file"`; the host cannot establish which page action caused it. Refusal, cancellation or timeout cleans staging without automatic retry. Completed and uncertain downloads quarantine the page (`reopenRequired: true`). `open` requests approval to destroy/rebuild it, retaining persistent site data but discarding unsaved state and callbacks, without replaying any action. Definite pre-dispatch rejection does not quarantine. Navigation, manual takeover, activation and cancellation revoke outstanding receipt/confirmation; extra files are rejected.
 - `close` revokes the open page and its grants. `close()` on the service releases the binding itself. Human takeover suspends all automated reading and mutation.
 
 The host does not expose cookies, arbitrary page JavaScript or raw debugger commands through this interface. Trusted plugin code owns model tools, summaries and post-action verification. Persisted site data is scoped to conversation and origin. The `examples/extensions/browser-automation` package demonstrates the interface.
@@ -168,7 +171,7 @@ package identity for `ctx.call('ashub:execute', ...)`, and browser services bind
 the same identity when created. This setting covers that plugin's supported
 host mutations, including conversation deletion and webpage actions. Existing
 validation, cancellation, receipts and page checks still apply.
-Pending manual requests retain their existing approval and expiry.
+Host previews with `manualOnly: true` always require an explicit decision and cannot use per-plugin automatic consent. This is used for confirmation of an actual received browser file whose triggering action cannot be verified. Pending manual requests retain their existing approval and expiry.
 
 Uninstalling an installed plugin removes its registration, session tools and automatic approval. Settings and plugin data are retained. Discovered packages are moved to `plugin-install/backups` under the agent home; explicitly configured external sources are unregistered in place. Installed dependents must be removed first.
 
@@ -193,3 +196,39 @@ Regression commands: `npm run test:images`, `npm run test:images:ui`; lifecycle 
 ## Task-bound notifications
 
 Session handlers may expose `ashub:collaboration:signal({id, requestKey, message?, signal?})`. `id` is an existing collaboration task, not a conversation ID. Only its currently executing recipient can send a bounded notification to its original sender in the same current project; omitting `message` reads a prior receipt without waking a model. The host supplies identity, durable deduplication, rate limits, safe-boundary steering or idle submission, and restart/queue-state accounting. The plugin supplies domain-specific notification policy. `conversation_wait` can return `reason: "attention"` to release the current wait for a pending steering notice; this is not task completion. See [Task notifications](task-notifications.md) for delivery guarantees, limits and failure states.
+
+
+### Task events and message lifecycle
+
+Application plugins requiring `task-events` receive `services.collaboration.snapshot(ownerId)` and `subscribe(listener)`. Snapshots contain task metadata only (IDs, state, revision, terminal and delivery flags), scoped to a current project owner and its current members. Subscriptions are invalidation signals; read a fresh snapshot and reconcile persistent plugin state. They are removed on deactivation. No model is invoked by observation.
+
+With `message-lifecycle`, an explicitly confirmed message grant may opt into `projectId`, `pauseOnStop` and `recoverQueued`. Project scope is checked at confirmation and again at delivery admission. User Stop revokes grants that opt into pauseOnStop, including pending deliveries, and invalidates older confirmation previews even before a grant exists. Fresh confirmation can authorize work again; unrelated scheduled grants and previews are unchanged. Only queued recoverQueued deliveries survive graceful shutdown or process restart; running/uncertain work remains interrupted and is never automatically replayed. Disabling a plugin cancels its waiting deliveries. The bound message service also exposes `authorization(id)` (revoked, used, maxRuns, expiresAt) and `cancel(key)` (queued only). Grant ownership and existing idempotency checks remain enforced.
+
+With `activity-hints`, `services.activities.replace(records)` publishes up to 100 text-only `{id,projectId,sessionId,label,state}` hints per plugin. Labels are limited to 200 characters and other fields to 100. Hints are validated against current membership, cleared on deactivation, and emitted through the project invalidation channel. Remote catalogs include only hints whose owner conversation is shared. These are presentation metadata, not executable actions or additional authority.
+
+Project DAGs, progress checks, coalescing, continuation policy and authorization UI belong to plugins. Core APIs do not infer task completion or authorize future work from an assistant response.
+
+
+## Named conversation entries and scoped resources
+
+Application plugins can declare `conversation-entries` and receive `services.conversations`:
+
+- `register(key, {label, resource, cwd, setupResource?, description?})` registers a stable, profile/package-scoped sidebar entry until disposal. `resource` identifies its declarative resource panel. Registration never creates a conversation. Optional `setupResource` opens a bounded resource in the central reading canvas before a binding exists; `description` (up to 300 characters) labels its chat welcome. Bound entries always open the persisted conversation. Its matching settings panel remains accessible via the entry’s secondary action rather than a duplicate toolbar button.
+- `get(key)` returns the active bound conversation ID or `null`; `models()` returns configured provider/model choices.
+- A resource plan may request `entryAuthorization: {key, provider, model}`. The host appends the exact model/path to confirmation and passes the resulting conversation ID to `execute`. It persists a reserved ID before creation, serializes concurrent creation and reuses the saved binding. Missing/deleted conversations require a new explicit creation review. This is mutually exclusive with other grant types.
+
+A setup resource may return `openConversation: id` in its completed view. Only a user-initiated action result can navigate; passive reads never do. The workspace rechecks that the ID is this entry’s current binding, and disposal or changing conversations cancels navigation. Other resource mounts ignore this completion hint.
+
+`scoped-history` extends background authorization with optional `includedIds`. When supplied it must be nonempty; the host intersects it with exclusions for every target/read/provenance call. Existing unscoped plugins remain compatible. The assistant always supplies exactly its dedicated conversation. Additional read methods:
+
+- `search(grant, conversationId, query)`: at most 12 matching snippets of 800 characters, with original message ID, role and timestamp.
+- `entry(grant, conversationId, sourceId, offset?)`: at most 3000 characters with `nextOffset` and `more`; rejects invalid UTF-16 boundaries.
+- `latestUser(grant, conversationId)`: the latest authorized user entry ID, allowing plugins to validate fresh user intent.
+
+These methods obey the grant start date, current history branch and plugin lifecycle. Generated cross-conversation messages are marked `generated` in search results, not asserted as human statements.
+
+A registered resource may opt into `remote-resources` with `remote: {conversationId: () => idOrNull, actions: [...]}`. The desktop connector shares it only when that conversation's directory is currently authorized for mobile access. The host binds confirmation tokens to desktop/remote origin and the exact remote conversation, rechecks scope after async work, and rejects creation/background/message authorization from remote. Unsupported controls are removed from remote views.
+
+Remote mutations keep existing persistent idempotent receipts. Private view payloads are stored only in a bounded five-minute memory cache; receipts contain an opaque result reference. Fetching a result rechecks sharing and plugin ownership. Expired/restarted results are reported as unavailable, never automatically re-executed. Plugin authors must put mutations behind `preview` confirmations and retain version checks. The website reuses the desktop declarative resource renderer with a scoped RPC transport; no plugin HTML or scripts are accepted.
+
+Background authorization previews summarize a single model-bound conversation with no exclusions, combining history policy into the visible scope and retaining only per-request technical limits in host-owned `preview.details`. Raw IDs, repeated scope/model fields and empty exclusions are omitted from this compact display. Broader or excluded scopes retain full visible fields. Plugins cannot move mandatory authorization fields into details; this presentation does not alter the stored grant or runtime checks.

@@ -97,3 +97,26 @@ test('background inference uses its selected conversation proxy policy across as
   assert.equal(await withNetworkSession('bbbb',invoke),'direct');
   assert.equal(await (await send('https://provider.invalid/v1')).text(),'proxy');
 });
+
+
+test('compact consent preserves exact grant scope, history policy and quotas',async t=>{
+ const f=fixture(t);await f.store.appendMessages([{role:'user',content:'以前的消息'}]);
+ const input={modelSessionId:'a',includedIds:['a'],excludedIds:[],includeHistory:true,dailyCalls:4};
+ const plan=f.host.prepare('plugin',input);
+ assert.deepEqual(plan.fields.map(x=>x.label),['读取范围','后台模型','使用额度']);
+ assert.match(plan.fields[0].value,/仅整理「A」对话，包括已有聊天记录及后续消息；不读取其他对话/);
+ assert.deepEqual(plan.details.map(x=>x.label),['单次整理上限']);
+ assert(![...plan.fields,...plan.details].some(x=>['观察范围','历史范围','排除对话'].includes(x.label)));
+ assert.match(plan.fields[2].value,/4.*模型费用/);assert.match(plan.fields[2].value,/失败也计入次数/);assert.match(plan.details.at(-1).value,/16000.*4096/);
+ for(const [key,value] of Object.entries(input))assert.deepEqual(plan.grant[key],value);
+ const grant=f.host.approve('plugin',plan);assert.deepEqual(f.api.targets(grant).map(x=>x.id),['a']);assert.equal(f.api.read(grant,'a').entries.length,1);assert.throws(()=>f.api.read(grant,'b'),/outside/);
+ const future=f.host.prepare('plugin',{...input,includeHistory:false});assert.match(future.fields[0].value,/仅包含本次授权后的新消息/);assert(!future.fields[0].value.includes('包括已有'));
+ const next=f.host.approve('plugin',future);assert.equal(f.api.read(next,'a').entries.length,0);
+});
+
+test('broad, multi-conversation and excluded scopes retain full visible disclosures',t=>{
+ const f=fixture(t),base={modelSessionId:'a',excludedIds:[],includeHistory:true,dailyCalls:4};
+ for(const input of [base,{...base,includedIds:['a','b']},{...base,includedIds:['a'],excludedIds:['a']},{...base,includedIds:['b']}]){
+  const plan=f.host.prepare('plugin',input);assert.equal(plan.details,undefined);assert(plan.fields.some(x=>x.label==='观察范围'));assert(plan.fields.some(x=>x.label==='排除对话'));assert(plan.fields.some(x=>x.label==='成本上限'));
+ }
+});

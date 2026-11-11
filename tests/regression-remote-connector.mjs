@@ -147,7 +147,7 @@ for (const change of ['disable', 'rebind']) {
     t.after(() => { connector.close(); fs.rmSync(dir, { recursive: true, force: true }); });
     const effects = [];
     t.mock.method(globalThis, 'fetch', async (url) => { effects.push(String(url)); return new Response('{}', { headers: { 'content-type': 'image/png' } }); });
-    for (const op of ['cancel', 'permission', 'model', 'thinking', 'set-thinking', 'image', 'queue', 'queue-withdraw', 'queue-update']) {
+    for (const op of ['cancel', 'permission', 'model', 'thinking', 'set-thinking', 'image', 'queue', 'queue-withdraw', 'queue-update', 'session-network', 'set-session-network']) {
       connector.config = { ...config }; connector.stopped = false;
       let release;
       connector.local = async route => {
@@ -332,4 +332,92 @@ test('image resources recheck authorization after reads and reject forged IDs or
  await assert.rejects(c.execute('image-resource',{...args,id:'../secret'}));await assert.rejects(c.execute('image-resource',{...args,offset:-1}));
  waiting=true;const pending=c.execute('image-resource',args);await waitFor(()=>release);allowed=false;release({data:'private'});await assert.rejects(pending);
  assert(routes.some(r=>r.includes('/image-resources/')));
+});
+
+test('remote network controls are scoped to the shared conversation and preserve inheritance', async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-remote-network-')),effects=[];
+ const connector=new RemoteConnector({gateway:'http://127.0.0.1/mobile/',dataDir:dir});
+ connector.config={deviceId:'test',deviceToken:'secret',username:'alice',roots:[fs.realpathSync(dir)],deviceName:'Test'};
+ t.after(()=>{connector.close();fs.rmSync(dir,{recursive:true,force:true})});
+ const policy={proxyEnabled:true,sessions:{private:false}};
+ connector.local=async(route,body,long,method)=>{
+  if(route==='/sessions')return [{instanceId:'abcdef',kind:'agent',cwd:dir}];
+  assert.equal(route,'/api/settings/network');
+  if(method==='PUT'){effects.push(body);assert.equal(body.session,'abcdef');if(body.enabled===null)delete policy.sessions.abcdef;else policy.sessions.abcdef=body.enabled;}
+  return policy;
+ };
+ assert.equal((await connector.execute('capabilities',{})).sessionNetwork,true);
+ assert.deepEqual(await connector.execute('session-network',{session:'abcdef'}),{session:'abcdef',enabled:null,effective:true,globalEnabled:true});
+ for(const enabled of [false,true,null]){
+  const result=await connector.execute('set-session-network',{session:'abcdef',enabled});
+  assert.equal(result.enabled,enabled);assert.equal(result.effective,enabled??true);assert.equal('sessions' in result,false);
+ }
+ assert.deepEqual(effects.map(e=>e.enabled),[false,true,null]);assert.equal(policy.proxyEnabled,true);assert.equal(policy.sessions.private,false);
+ for(const enabled of [undefined,'false',0,{}])await assert.rejects(connector.execute('set-session-network',{session:'abcdef',enabled}),e=>e.status===400);
+ await assert.rejects(connector.execute('set-session-network',{session:'bbbbbb',enabled:false}),e=>e.status===403);
+ assert.equal(effects.length,3);
+});
+
+test('confirmed remote deletion is scoped, durable and idempotent after the conversation disappears', async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-remote-delete-'));let deleted=false,calls=0;
+ const connector=new RemoteConnector({gateway:'http://127.0.0.1/mobile/',dataDir:dir});
+ connector.config={deviceId:'test',deviceToken:'secret',username:'alice',roots:[fs.realpathSync(dir)],deviceName:'Test'};
+ t.after(()=>{connector.close();fs.rmSync(dir,{recursive:true,force:true})});
+ connector.local=async(route,body,long,method)=>{
+  if(route==='/sessions')return deleted?[]:[{instanceId:'abcdef',kind:'agent',cwd:dir}];
+  assert.equal(route,'/abcdef/');assert.equal(method,'DELETE');assert.equal(body,undefined);calls++;deleted=true;return {ok:true};
+ };
+ const args={session:'abcdef',requestId:'remote-delete-00001',confirm:true};
+ assert.equal((await connector.execute('capabilities',{})).sessionDelete,true);
+ await assert.rejects(connector.execute('session-delete',{...args,confirm:false}),e=>e.status===400);
+ await assert.rejects(connector.execute('session-delete',{...args,session:'bbbbbb'}),e=>e.status===403);
+ const entry=await connector.execute('session-delete',args);await waitFor(()=>entry.state==='done');
+ assert.equal(calls,1);assert.deepEqual(entry.result,{ok:true});
+ assert.equal(await connector.execute('session-delete',args),entry);assert.equal(calls,1);
+ assert.equal((await connector.execute('request-status',{requestId:args.requestId})).state,'done');
+ await assert.rejects(connector.execute('session-delete',{...args,session:'bbbbbb'}),e=>e.status===409);
+ const receipt=JSON.parse(fs.readFileSync(path.join(dir,'remote-requests.json'),'utf8'))['test:'+args.requestId];assert.equal(receipt.state,'done');
+});
+
+test('remote deletion rechecks authorization before the durable effect starts',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-remote-delete-race-'));let lookups=0,release,effects=0;
+ const connector=new RemoteConnector({gateway:'http://127.0.0.1/mobile/',dataDir:dir});
+ connector.config={deviceId:'test',deviceToken:'secret',username:'alice',roots:[fs.realpathSync(dir)],deviceName:'Test'};
+ t.after(()=>{connector.close();fs.rmSync(dir,{recursive:true,force:true})});
+ const shared=[{instanceId:'abcdef',kind:'agent',cwd:dir}];
+ connector.local=async route=>{if(route==='/sessions'){lookups++;if(lookups===2)return new Promise(r=>release=r);return shared;}effects++;return {ok:true};};
+ const entry=await connector.execute('session-delete',{session:'abcdef',requestId:'remote-delete-race01',confirm:true});
+ assert.equal(typeof release,'function');connector.close();release(shared);await waitFor(()=>entry.state==='unknown');assert.equal(effects,0);
+});
+
+test('project activity hints exclude unshared owners and extra plugin metadata',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-remote-activity-'));const connector=new RemoteConnector({dataDir:dir});
+ connector.config={deviceId:'desk',deviceToken:'test',username:'alice',deviceName:'Desk',roots:[dir]};
+ t.after(()=>{connector.close();fs.rmSync(dir,{recursive:true,force:true})});
+ connector.sessions=async()=>[{instanceId:'aaaaaa'}];
+ connector.local=async()=>[{id:'p',name:'Project',sessionIds:['aaaaaa','bbbbbb'],activities:[{id:'shared',sessionId:'aaaaaa',projectId:'p',label:'Waiting',state:'waiting',private:'not shared'},{id:'hidden',sessionId:'bbbbbb',label:'Hidden',state:'running'}]}];
+ const groups=await connector.groups(0);assert.deepEqual(groups[0].activities,[{id:'shared',sessionId:'aaaaaa',label:'Waiting',state:'waiting'}]);
+});
+
+test('plugin resources preserve exactly-once receipts, isolate shared owners and keep private views out of the journal',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-remote-resource-'));const c=new RemoteConnector({dataDir:dir});c.config={deviceId:'desk',deviceToken:'test',username:'u',deviceName:'Desk',roots:[dir]};
+ t.after(()=>{c.close();fs.rmSync(dir,{recursive:true,force:true});});
+ let shared=true,release,delay=false,calls=0;
+ c.sessions=async()=>shared?[{instanceId:'abcdef'}]:[];
+ c.session=async id=>{if(!shared||id!=='abcdef')throw Error('not shared');return {instanceId:id};};
+ c.local=async(route)=>{
+  if(route==='/api/plugin-conversations')return [{pluginId:'plugin',key:'assistant',resource:'assistant',label:'助手',sessionId:'abcdef'},{pluginId:'other',key:'assistant',resource:'assistant',label:'私有',sessionId:'bbbbbb'}];
+  if(route==='/api/plugin-resource-catalog')return [{pluginId:'plugin',resourceId:'assistant',sessionId:'abcdef'}];
+  assert.equal(route,'/api/plugin-resources/plugin/assistant?remoteSession=abcdef');calls++;
+  if(delay)return new Promise(r=>release=r);return {view:{actions:[],rows:[{title:'private memory'}]}};
+ };
+ assert.equal((await c.execute('plugin-entries',{})).length,1);
+ const args={session:'abcdef',pluginId:'plugin',resourceId:'assistant'};
+ assert.equal((await c.execute('plugin-resource',args)).view.rows[0].title,'private memory');
+ const action={...args,body:{action:'detail',values:{}},requestId:'resource-request-0001'};
+ const write=await c.execute('plugin-resource',action);await waitFor(()=>write.state==='done');const before=calls;await c.execute('plugin-resource',action);assert.equal(calls,before);
+ assert(!JSON.stringify(c.entries).includes('private memory'));assert.equal((await c.execute('plugin-resource',{...args,receipt:write.result.resourceReceipt})).view.rows[0].title,'private memory');
+ await assert.rejects(c.execute('plugin-resource',{...args,pluginId:'other'}));await assert.rejects(c.execute('plugin-resource',{...args,resourceId:'../settings'}));
+ delay=true;const pending=c.execute('plugin-resource',args);await waitFor(()=>release);shared=false;release({view:{rows:[{title:'secret'}],actions:[]}});await assert.rejects(pending,/not shared/);
+ await assert.rejects(c.execute('plugin-resource',{...args,receipt:write.result.resourceReceipt}),/not shared/);
 });

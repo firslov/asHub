@@ -14,6 +14,7 @@ export interface ProjectHttpRuntime {
   sessions: Map<string, Session>;
   projects: ProjectService;
   collaboration: CollaborationTasks;
+  activities?(projectId: string): import('../services/plugin-activities.js').PluginActivity[];
   worktreesDirectory: string;
   readBody(req: http.IncomingMessage): Promise<string>;
   create(cwd: string): Promise<Session>;
@@ -122,6 +123,10 @@ export async function handleProjectRequest(req: http.IncomingMessage, res: http.
         }
         const version = projects.versionOf(Array.isArray(result) ? result : result.projects);
         if (version) res.setHeader("X-asHub-Project-Version", `${version.epoch}:${version.revision}`);
+        const groups = Array.isArray(result) ? result : result.projects;
+        if (runtime.activities) for (const p of groups) {
+          const hints = runtime.activities(p.id); if (hints.length) Object.assign(p, { activities: hints });
+        }
         res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(result));
       } catch (e) { res.writeHead(req.method === "GET" ? 500 : 400); res.end(String(e)); }
       return true;

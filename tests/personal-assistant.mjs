@@ -36,10 +36,12 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
     { instanceId: 'b', title: '普通对话', cwd: home, kind: 'agent', projectId: null },
   ], projects: [] };
   let auto = false;
+  const records=[{id:'source1',role:'user',at:Date.now(),text:'用中文写报告，先给结论 幻灯片使用蓝色'}];
   const registry = new ApplicationExtensionRegistry({ settingsFile: file, definitions: [],
     discover: () => installedApplicationDefinitions(file, { bindServices: (_id, context) => ({
       host: { snapshot: () => structuredClone(snapshot) },
-      background: { status: () => ({}), targets: () => auto ? snapshot.sessions.map(s => ({...s,id:s.instanceId,busy:true})) : [], revoke: () => { auto=false; } },
+      conversations:{register:()=>()=>{},get:()=> 'a',models:()=>[{provider:'mock',model:'tiny'}]},
+      background: {status:()=>({includedIds:['a'],excludedIds:[]}),targets:()=>auto?[{...snapshot.sessions[0],id:'a',busy:true}]:[],search:()=>records,entry:(_g,_sid,id)=>{const row=records.find(r=>r.id===id);if(!row)throw Error('History source unavailable');return {...row,offset:0,nextOffset:row.text.length,more:false};},valid:(_g,_id,ids)=>ids,latestUser:()=>records.at(-1).id,revoke:()=>{auto=false;}},
       interactions: { register: (id, resource) => { resources.set(id, resource); return () => resources.delete(id); } },
     }) }),
   });
@@ -59,28 +61,23 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
   const visible = session => session.core.bus.emitPipe('agent:tools:visible', { tools: session.ctx.agent.getTools() }).tools.map(tool => tool.name);
   const instruction = session => session.core.handlers.call('instruction:personal-assistant');
   assert(!visible(a).some(name => name.startsWith('assistant_memory_')));
-  assert.equal(instruction(a), '');
-  const bind = resource.prepare('bind', { conversationId: 'a', personal: true });
-  assert(bind.preview); bind.execute();
-  assert.equal(visible(a).filter(name => name.startsWith('assistant_memory_')).length, 3);
-  assert.match(instruction(a), /个人助手插件/);
+  assert.match(instruction(a), /常驻个人助手.*长期记忆未开启/);
+  auto=true;const bind=resource.prepare('authorize');assert(bind.preview);bind.execute('grant');
+  assert.equal(visible(a).filter(name => name.startsWith('assistant_memory_')).length, 5);
+  assert.match(instruction(a), /常驻个人助手/);
   assert(!visible(b).some(name => name.startsWith('assistant_memory_')));
   assert.equal(instruction(b), '');
   const invoke = (name, args) => a.tool(name).execute(args);
-  const proposed = JSON.parse((await invoke('assistant_memory_propose', {
-    title: '报告格式', content: '用中文写报告，先给结论', kind: 'preference', scope: 'personal', reason: '用户明确要求',
-  })).content);
-  assert.equal(proposed.state, 'candidate');
-  assert.equal(JSON.parse((await invoke('assistant_memory_search', { query: '报告' })).content).length, 0);
-  const plan = resource.prepare('approve', proposed); assert(plan.preview); plan.execute();
-  assert.equal(JSON.parse((await invoke('assistant_memory_search', { query: '报告' })).content).length, 1);
+  const proposed=JSON.parse((await invoke('assistant_memory_remember',{title:'报告格式',content:'用中文写报告，先给结论',kind:'preference',topic:'reports',quote:'用中文写报告，先给结论'})).content);
+  assert.equal(proposed.state,'active');
+  assert.equal(JSON.parse((await invoke('assistant_memory_search',{query:'报告'})).content).length,1);
   assert((await b.tool('assistant_memory_read').execute({ id: proposed.id })).isError);
   const raw = [{ role: 'system', content: 'unchanged' }, { role: 'user', content: [{ type: 'text', text: '报告' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,fixture' } }] }];
   const prepared = a.core.handlers.call('conversation:prepare', raw);
   assert.equal(prepared[0], raw[0]); assert.match(prepared[1].content[0].text, /用中文写报告/);
   assert.equal(raw[1].content.length, 2);
   assert.deepEqual(b.core.handlers.call('conversation:prepare', raw), raw);
-  resource.prepare('save', { title: '配色方案', content: '幻灯片使用蓝色', kind: 'fact', scope: 'personal' }).execute();
+  await invoke('assistant_memory_remember',{title:'配色方案',content:'幻灯片使用蓝色',kind:'preference',topic:'slides',quote:'幻灯片使用蓝色'});
   const wrapped = wrapTrailingWithDynamicContext([{ role: 'user', content: '幻灯片' }], Array.from({ length: 90 }, (_, i) => 'context' + i).join(' '));
   const recalled = a.core.handlers.call('conversation:prepare', wrapped);
   assert.match(recalled[0].content, /幻灯片使用蓝色/, 'real kernel envelope must not crowd out the user query');
@@ -93,17 +90,12 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
   assert((await invoke('assistant_memory_search', { query: '报告' })).isError);
   assert.deepEqual(a.core.handlers.call('conversation:prepare', raw), raw);
   await registry.setEnabled(featureId, true);
-  assert.equal(visible(a).filter(name => name.startsWith('assistant_memory_')).length, 3);
+  assert.equal(visible(a).filter(name => name.startsWith('assistant_memory_')).length, 5);
   assert.equal(JSON.parse((await invoke('assistant_memory_search', { query: '报告' })).content).length, 1);
-  auto = true;
-  const automatic = resources.get('assistant').prepare('learning-start', { modelSessionId: 'a', dailyCalls: '4', excludedIds: '', includeHistory: false });
-  automatic.execute('fixture-approved-grant');
-  assert.equal(visible(b).filter(name => name.startsWith('assistant_memory_')).length, 3);
-  assert(!visible(b).includes('assistant_memory_propose'));
-  assert.match(instruction(b), /无需逐条/);
-  assert.equal(JSON.parse((await b.tool('assistant_memory_status').execute({})).content).automatic, true);
-  resources.get('assistant').prepare('learning-pause').execute();
-  assert(!visible(b).some(name => name.startsWith('assistant_memory_')));
+  assert(!visible(b).some(name=>name.startsWith('assistant_memory_')));
+  resources.get('assistant').prepare('pause').execute();
+  assert(!visible(a).some(name=>name.startsWith('assistant_memory_')));
+  assert(!visible(b).some(name=>name.startsWith('assistant_memory_')));
   const cancelled = new AbortController(); cancelled.abort();
   assert((await a.tool('assistant_memory_propose').execute({ title: 'bad' }, undefined, { signal: cancelled.signal })).isError);
 });

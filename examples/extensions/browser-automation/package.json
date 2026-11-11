@@ -1,6 +1,6 @@
 {
   "name": "ashub-browser-automation",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "main": "index.mjs",
   "description": "在会话中阅读网页并经授权操作网页控件",

@@ -12,7 +12,7 @@ const file = path.join(home, 'settings.json');
 fs.writeFileSync(file, JSON.stringify({ 'ashub.permissions.autoApprove': true, disabledBuiltins: ['codex-provider'] }));
 const directory = path.join(home, 'extensions', 'project-management');
 fs.mkdirSync(directory, { recursive: true });
-for (const name of ['index.mjs', 'package.json', 'ashub-plugin.json'])
+for (const name of ['package.json','ashub-plugin.json','index.mjs','work.mjs','continuation.mjs'])
   fs.copyFileSync(new URL('../examples/extensions/project-management/' + name, import.meta.url), path.join(directory, name));
 const { AshBridge } = await import('../dist/bridges/ash.js');
 const { pluginCatalog, setPluginEnabled, savePluginConfig, getPluginConfig } = await import('../dist/plugins.js');
@@ -72,4 +72,17 @@ test('plugin-specific consent uses runtime identity, changes live, preserves can
     fs.writeFileSync(file, '{malformed');
     assert.equal(canAutoApprovePlugin(file, plugin.id), false);
   } finally { bridge.close(); }
+});
+
+test('manual-only host approval cannot be bypassed by per-plugin automatic consent',async()=>{
+ fs.writeFileSync(file,JSON.stringify({'ashub.permissions.autoApprove':true,disabledBuiltins:['codex-provider']}));
+ const plugin=pluginCatalog(file)[0];setPluginAutoApproval(file,plugin.id,true);
+ const bridge=new AshBridge({kind:'agent',cwd:home,sessionId:'manual-receipt'});let requests=0,allow=false;
+ try{
+  await bridge.ready();
+  bridge.on('event',event=>{if(event.name==='permission:request'){requests++;assert.equal(event.payload.manualOnly,true);bridge.decidePermission(event.payload.requestId,allow?'approved':'denied',true);}});
+  assert.equal(await bridge.requestPluginApproval({title:'Ordinary',items:[]},undefined,plugin.id),'automatic');assert.equal(requests,0);
+  assert.equal(await bridge.requestPluginApproval({title:'Actual received file',items:[],scope:'once',manualOnly:true},undefined,plugin.id),false);assert.equal(requests,1);
+  allow=true;assert.equal(await bridge.requestPluginApproval({title:'Actual received file',items:[],scope:'once',manualOnly:true},undefined,plugin.id),true);assert.equal(requests,2);
+ }finally{bridge.close();}
 });

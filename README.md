@@ -17,7 +17,7 @@ Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The 
 
 ## Highlights
 
-**New in v0.21.4:** bundled Image Display extension, bounded image previews and reliable history replay; project members can notify their coordinator when a task needs a decision.
+**New in v0.21.5:** a dedicated personal assistant conversation with scoped long-term memory, opt-in project continuation, browser file and code-editor workflows, and refreshed Codex models after switching accounts.
 
 | Capability | Experience |
 | --- | --- |
@@ -111,7 +111,11 @@ In **v0.21.3+**, open **Plugins → Local extensions** to enable **Kimi Coding P
 
 In **v0.21.4+**, **Image Display** is also included as an optional local extension. Enable it to show workspace charts and screenshots inline, with click-to-enlarge previews. Images remain scoped to their conversation and are available through authorized mobile access. Project Management also gains task-bound blocker notifications with deduplication and delivery receipts; routine updates remain in the normal task flow.
 
-The Conversation Browser opens a page beside the conversation, with separate site login spaces and manual takeover for sign-in. Operations require approval by default; automatic approval is an explicit per-plugin option. Persistent browser grants must be approved on the desktop; the phone can decline them. Browser automation requires the Electron desktop app.
+The Conversation Browser opens a page beside the conversation, with isolated per-conversation site logins and manual takeover. In v0.21.5, it supports long text and supported code editors, workspace file uploads and reviewed downloads. Operations require approval by default; automatic approval is a per-plugin option. Download file confirmation and persistent browser grants remain desktop-only. Browser automation requires Electron.
+
+The separately installed [Personal Assistant](examples/extensions/personal-assistant) plugin requires v0.21.5. Its permanent sidebar entry opens one dedicated conversation. After explicit approval, it learns only from that conversation and recalls relevant memories; other chats are not monitored. Mobile uses the same assistant after its workspace directory is shared. Initial setup and memory authorization stay on the desktop.
+
+[Project Management](examples/extensions/project-management) can now resume an explicitly authorized project workflow when member tasks finish. It tracks delivery receipts and recovery state; user stops and approvals remain in effect.
 
 The [scheduled-tasks plugin](examples/extensions/scheduled-tasks) requires **v0.21.1+**. After explicit approval, it delivers a message to an existing conversation once or on a recurring schedule. Keep asHub running and the computer awake; tool permissions still apply.
 

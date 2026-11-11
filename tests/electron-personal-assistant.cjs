@@ -144,12 +144,16 @@ app.whenReady().then(async () => {
     if(shots)fs.writeFileSync(path.join(shots,'assistant-chat.png'),(await win.webContents.capturePage()).toPNG());
     await js('document.querySelector(".conversation-entry-manage").click()');
     await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("暂停记忆")');
+    // macOS can cap native window height to the runner's usable display.
+    // Exercise that constraint locally too: these responsive checks require
+    // exact widths, while height follows the actual available content area.
+    win.setMaximumSize(2000,720);
     for(const theme of ['light','dark']){
       await js('document.documentElement.dataset.theme='+JSON.stringify(theme));
       for(const width of [1280,390,320]){
         await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');
         win.setContentSize(width,800);
-        await wait('innerWidth === '+width+' && innerHeight === 800');
+        await wait('innerWidth === '+width+' && innerHeight > 0 && innerHeight <= 720');
         await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');
         await new Promise(r=>setTimeout(r,500));
         // Native resize and viewport-unit style invalidation need not finish in

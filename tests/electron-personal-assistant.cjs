@@ -66,12 +66,24 @@ app.whenReady().then(async () => {
     // Use the actual narrow-screen entry path rather than manually hiding the
     // sidebar after navigation; the workspace must be reachable immediately.
     win.setContentSize(320,800);await wait('innerWidth===320');
-    // Make the real collapse fade outlast two frames even on fast CI runners.
-    await js('document.documentElement.style.setProperty("--dur-fast","400ms");document.querySelector(".app").classList.remove("sidebar-collapsed")');
+    // Hold the fade open long enough to test interaction while the overlay still paints.
+    await js('document.documentElement.style.setProperty("--dur-fast","10s");document.querySelector(".app").classList.remove("sidebar-collapsed")');
     await wait('getComputedStyle(document.getElementById("sidebar")).visibility==="visible"');
     await js('document.querySelector(".conversation-entry-open").click()');
     await wait('!!document.querySelector(".conversation-welcome .extension-resource-form select")');
     assert(await js('document.querySelector(".app").classList.contains("sidebar-collapsed")'),'opening the assistant on a narrow screen must close the sidebar');
+    // A transparent/collapsing navigation layer must stop intercepting input
+    // immediately, including scroll containers and hover-enabled action buttons.
+    await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
+    await wait('(()=>{const r=document.querySelector(".conversation-welcome select").getBoundingClientRect();return r.width>0&&r.left>=0&&r.bottom<=innerHeight&&document.querySelector(".conversation-welcome").clientWidth>=256})()');
+    const collapsedHit=await js(`(()=>{const s=document.getElementById('sidebar'),e=document.querySelector('.conversation-welcome select'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {rect:r.toJSON(),visibility:getComputedStyle(s).visibility,clickable:hit===e,target:hit?.outerHTML,interactive:[s,...s.querySelectorAll('*')].filter(n=>getComputedStyle(n).pointerEvents!=='none').map(n=>n.id||n.className).slice(0,8)}})()`);
+    assert(collapsedHit.clickable&&collapsedHit.interactive.length===0,JSON.stringify(collapsedHit));
+    // Reopening must restore hit-testing; closing again must release the form.
+    await js('document.getElementById("sidebar-toggle").click()');
+    const reopened=await js(`(()=>{const b=document.querySelector('.conversation-entry-open'),r=b.getBoundingClientRect();return !document.querySelector('.app').classList.contains('sidebar-collapsed')&&b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()`);
+    assert(reopened,'reopened sidebar entry must remain clickable');
+    await js('document.querySelector(".conversation-entry-open").click();document.documentElement.style.removeProperty("--dur-fast")');
+    await wait('!!document.querySelector(".conversation-welcome select")');
     const shots=process.env.ASHUB_UI_SCREENSHOTS;if(shots)fs.mkdirSync(shots,{recursive:true});
     for(const width of [320,1280]){
       await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');win.setContentSize(width,800);
@@ -81,7 +93,7 @@ app.whenReady().then(async () => {
       // animation frames only confirm layout, not that the overlay stopped hit-testing.
       if(width<600)await wait('getComputedStyle(document.getElementById("sidebar")).visibility==="hidden"');
       if(shots)fs.writeFileSync(path.join(shots,'assistant-welcome-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
-      const hit=await js(`(()=>{const e=document.querySelector('.conversation-welcome select'),r=e.getBoundingClientRect(),p=document.querySelector('.conversation-welcome');return {width:innerWidth,scroll:p.scrollWidth,client:p.clientWidth,rect:r.toJSON(),target:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML,clickable:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===e}})()`);
+      const hit=await js(`(()=>{const e=document.querySelector('.conversation-welcome select'),r=e.getBoundingClientRect(),p=document.querySelector('.conversation-welcome');return {width:innerWidth,scroll:p.scrollWidth,client:p.clientWidth,rect:r.toJSON(),sidebar:{className:document.querySelector(".app").className,visibility:getComputedStyle(document.getElementById("sidebar")).visibility,pointerEvents:getComputedStyle(document.getElementById("sessions")).pointerEvents},target:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML,clickable:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===e}})()`);
       assert(hit.scroll<=hit.client+1&&hit.clickable,JSON.stringify(hit));
     }
 

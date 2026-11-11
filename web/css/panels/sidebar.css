@@ -580,6 +580,14 @@
     visibility 0s var(--dur-fast);
 }
 
+/* Closing navigation must release the workspace immediately, not when its
+   fade/visibility transition finishes. Include descendants because hover and
+   focus rules re-enable pointer events on individual row actions. */
+.app.sidebar-collapsed .sidebar,
+.app.sidebar-collapsed .sidebar * {
+  pointer-events: none !important;
+}
+
 /* ── View-switch fade + scroll fade masks ─────────────────────────── */
 /* Lists are shown/hidden via the [hidden] attribute; display none→block
    restarts this animation, giving each view switch a light entrance.

@@ -113,3 +113,17 @@ test('remote predeployment fails closed without an independent baseline and can 
   assert(checks.steps.some(s => s.args.includes('remote/render-scroll-webkit.cjs')));
   assert.equal(checks.steps.some(s => s.args.some(a => /deploy|ssh|scp/.test(a))), false);
 });
+
+
+test('COS resync is isolated from release publication and shares its upload lock', () => {
+  const sync = workflow('sync-cos');
+  assert.equal(sync.permissions.contents, 'read');
+  assert.equal(sync.concurrency.group, workflow('release').concurrency.group);
+  assert.equal(sync.concurrency['cancel-in-progress'], false);
+  assert.deepEqual(sync.on.push.tags, ['cos-sync-v*']);
+  assert.deepEqual(workflow('release-on-tag').on.push.tags, ['v*']);
+  assert(sync.jobs.sync.steps.some(s => s.run === 'node --test tests/cos-release.cjs'));
+  const command = sync.jobs.sync.steps.find(s => s.run === 'node scripts/resync-cos.cjs');
+  assert.equal(command.env.RELEASE_VERSION, '${{ steps.version.outputs.version }}');
+  assert.doesNotMatch(JSON.stringify(sync), /action-gh-release|gh release delete|git tag|electron-builder/);
+});

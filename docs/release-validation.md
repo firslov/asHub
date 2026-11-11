@@ -59,3 +59,17 @@ protocol-only diagnostic and does **not** complete browser acceptance.
 The command never connects to the deployment server or publishes files. Deploy
 only the validated remote source after the full command passes, and retain the
 baseline version and candidate commit in the deployment record.
+
+## Reupload an existing release to COS
+
+Run **Sync release to COS** with an existing version, or push an operational tag
+`cos-sync-vX.Y.Z-YYYYMMDDHHMMSS`. This task uses the existing GitHub Release;
+it does not build installers or replace release tags/assets. It shares the
+`ashub-release` concurrency group with publishing.
+
+Only the latest stable release can update the shared updater metadata. All 14
+installer, blockmap and update-metadata files must be present. Downloaded bytes
+are checked against GitHub asset sizes and SHA-256 digests. Each COS upload is
+downloaded and checked again; `latest*.yml` is uploaded only after every payload
+passes and the source release is rechecked. Missing credentials or mismatched
+bytes fail the job rather than reporting a successful skipped upload.

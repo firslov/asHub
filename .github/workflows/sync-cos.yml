@@ -1,0 +1,67 @@
+name: Sync release to COS
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Existing stable release version, e.g. 0.21.5'
+        required: true
+        type: string
+  push:
+    tags: ['cos-sync-v*']
+
+permissions:
+  contents: read
+
+# Serialize with publishing so latest*.yml cannot race a new release.
+concurrency:
+  group: ashub-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Resolve existing version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="$INPUT_VERSION"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [[ "$GITHUB_REF_NAME" =~ ^cos-sync-v([0-9]+\.[0-9]+\.[0-9]+)-[0-9]{14}$ ]]; then
+              version="${BASH_REMATCH[1]}"
+            else
+              echo "::error::Invalid COS synchronization tag"
+              exit 1
+            fi
+          fi
+          ASHUB_RELEASE_VERSION="$version" node scripts/release-version.cjs --check
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Test synchronization safeguards
+        run: node --test tests/cos-release.cjs
+      - name: Configure COS
+        env:
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$COS_SECRET_ID" ] || [ -z "$COS_SECRET_KEY" ]; then
+            echo "::error::COS upload credentials are missing"
+            exit 1
+          fi
+          umask 077
+          pip install --quiet coscmd
+          coscmd config -a "$COS_SECRET_ID" -s "$COS_SECRET_KEY" \
+            -b ashub-release-1258678103 -e cos.accelerate.myqcloud.com --retry 10
+      - name: Download, reupload and verify release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/resync-cos.cjs

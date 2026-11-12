@@ -59,3 +59,14 @@ test('direct mode really bypasses a broken environment proxy without changing th
     assert.equal(await response.text(), 'direct'); assert.equal(getGlobalDispatcher(), broken);
   } finally { setGlobalDispatcher(previous); await broken.destroy(); server.closeAllConnections(); await new Promise(r => server.close(r)); }
 });
+
+test('Codex background HTTP requests inherit only the registered owner VPN policy',async()=>{
+ const stop=registerNetworkEndpoint('https://codex.invalid/responses','owner');
+ const send=createPolicyFetch(async()=>new Response('proxy'),async()=>new Response('direct'),()=>({proxyEnabled:true,sessions:{owner:false}}));
+ try{
+  assert.equal(await (await send('https://codex.invalid/responses',{headers:{session_id:'owner:background'}})).text(),'direct');
+  assert.equal(await (await send('https://other.invalid/responses',{headers:{session_id:'owner:background'}})).text(),'proxy');
+  assert.equal(await (await send('https://codex.invalid/responses',{headers:{session_id:'unknown:background'}})).text(),'proxy');
+ }finally{stop();}
+ assert.equal(await (await send('https://codex.invalid/responses',{headers:{session_id:'owner:background'}})).text(),'proxy');
+});

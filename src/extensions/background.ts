@@ -7,7 +7,7 @@ import { unicodeSlice } from '../unicode.js';
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
-export interface BackgroundGrantInput { modelSessionId: string; includeHistory: boolean; excludedIds: string[]; includedIds?: string[]; dailyCalls: number }
+export interface BackgroundGrantInput { modelSessionId: string; includeHistory: boolean; excludedIds: string[]; includedIds?: string[]; dailyCalls: number; followModel?: boolean }
 interface Target { id: string; cwd: string; title: string; model?: string; provider?: string; projectId?: string | null; busy: boolean }
 interface Grant extends BackgroundGrantInput { id: string; pluginId: string; since: number; modelBinding: string; day: string; calls: number }
 export interface BackgroundRuntime {
@@ -25,7 +25,7 @@ export class PluginBackground {
     let state;
     try { state = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { version: 1, grants: [] };
     if (state.version !== 1 || !Array.isArray(state.grants) || state.grants.length > 100) throw Error('Invalid background grants');
-    if (state.grants.some((g: Grant) => !g || typeof g.id !== 'string' || typeof g.pluginId !== 'string' || typeof g.modelBinding !== 'string' || !Number.isSafeInteger(g.since) || !Number.isInteger(g.calls) || g.calls < 0 || !Number.isInteger(g.dailyCalls) || g.dailyCalls < 1 || g.dailyCalls > 24 || !Array.isArray(g.excludedIds) || (g.includedIds !== undefined && (!Array.isArray(g.includedIds) || !g.includedIds.length || g.includedIds.some(id=>typeof id!=='string'||!/^[-a-zA-Z0-9]+$/.test(id)))))) throw Error('Invalid background grant');
+    if (state.grants.some((g: Grant) => !g || typeof g.id !== 'string' || typeof g.pluginId !== 'string' || typeof g.modelBinding !== 'string' || (g.followModel !== undefined && typeof g.followModel !== 'boolean') || !Number.isSafeInteger(g.since) || !Number.isInteger(g.calls) || g.calls < 0 || !Number.isInteger(g.dailyCalls) || g.dailyCalls < 1 || g.dailyCalls > 24 || !Array.isArray(g.excludedIds) || (g.includedIds !== undefined && (!Array.isArray(g.includedIds) || !g.includedIds.length || g.includedIds.some(id=>typeof id!=='string'||!/^[-a-zA-Z0-9]+$/.test(id)))))) throw Error('Invalid background grant');
     this.grants = state.grants;
     } catch (error) { this.fault = error; this.grants = []; }
     signal.addEventListener('abort', () => { for (const c of this.running.values()) c.abort(); }, { once: true });
@@ -43,6 +43,8 @@ export class PluginBackground {
     if (!input || typeof input.modelSessionId !== 'string' || typeof input.includeHistory !== 'boolean'
       || !Number.isInteger(input.dailyCalls) || input.dailyCalls < 1 || input.dailyCalls > 24
       || !Array.isArray(input.excludedIds) || input.excludedIds.length > 1000 || input.excludedIds.some(id => typeof id !== 'string' || !/^[-a-zA-Z0-9]+$/.test(id))) throw Error('Invalid background authorization');
+    if (input.followModel !== undefined && typeof input.followModel !== 'boolean') throw Error('Invalid model policy');
+    if (input.followModel && (input.includedIds?.length !== 1 || input.includedIds[0] !== input.modelSessionId || input.excludedIds.length)) throw Error('Following a model requires one dedicated conversation');
     if (input.includedIds !== undefined && (!Array.isArray(input.includedIds) || !input.includedIds.length || input.includedIds.length > 100 || input.includedIds.some(id => typeof id !== 'string' || !/^[-a-zA-Z0-9]+$/.test(id)))) throw Error('Invalid history scope');
     if (input.includedIds?.some(id => !this.runtime.targets().some(t => t.id === id))) throw Error('History target unavailable');
     const model = this.runtime.targets().find(t => t.id === input.modelSessionId);
@@ -60,7 +62,7 @@ export class PluginBackground {
     const compact = input.includedIds?.length === 1 && input.includedIds[0] === model.id && input.excludedIds.length === 0;
     const fields = compact ? [
       { label: '读取范围', value: `仅整理「${model.title || '此对话'}」对话，${input.includeHistory ? '包括已有聊天记录及后续消息' : '仅包含本次授权后的新消息'}；不读取其他对话` },
-      { label: '后台模型', value: `${model.model} · ${model.provider}` },
+      { label: '后台模型', value: input.followModel ? `跟随此对话当前选择的模型与 VPN，包括今后切换的模型服务；当前 ${model.model} · ${model.provider}` : `${model.model} · ${model.provider}` },
       { label: '使用额度', value: `每天最多 ${input.dailyCalls} 次整理，失败也计入次数；可能产生模型费用，不执行工具` },
     ] : details;
     return { grant, previous: this.grants.find(g => g.pluginId === pluginId)?.id, fields, ...(compact ? { details: [{ label: '单次整理上限', value: '输入最多 16000 字符，输出预算 4096 tokens' }] } : {}) };
@@ -94,6 +96,7 @@ export class PluginBackground {
       return rows;
     };
     return Object.freeze({
+      supportsFollowModel: true,
       status: (id: string) => { const g = get(id); return { ...copy(g), modelBinding: undefined }; },
       targets: (id: string) => { const g = get(id); return this.runtime.targets().filter(t => !g.excludedIds.includes(t.id) && (!g.includedIds || g.includedIds.includes(t.id))).map(t => ({ ...t })); },
       revoke: (id: string) => { get(id); this.running.get(pluginId)?.abort(); this.grants = this.grants.filter(g => g.id !== id); this.save(); },
@@ -136,7 +139,7 @@ export class PluginBackground {
       infer: async (id: string, messages: Array<{role: string; content: string}>, cancellation?: AbortSignal) => {
         const g = get(id), model = this.runtime.targets().find(t => t.id === g.modelSessionId);
         if (!model) throw Error('后台模型不可用');
-        if (this.binding(model) !== g.modelBinding) throw Error('后台模型配置已变化，请重新授权');
+        if (g.followModel ? JSON.stringify([model.id,model.cwd]) !== JSON.stringify(JSON.parse(g.modelBinding).slice(0,2)) : this.binding(model) !== g.modelBinding) throw Error('后台模型配置已变化，请重新授权');
         if (model.busy || this.running.has(pluginId)) throw Error('后台模型忙碌，稍后重试');
         if (!Array.isArray(messages) || !messages.length || messages.length > 8 || messages.some(m => !m || !['system','user'].includes(m.role) || typeof m.content !== 'string') || JSON.stringify(messages).length > 16000) throw Error('Background request exceeds input limits');
         const day = new Date().toISOString().slice(0, 10);
@@ -144,7 +147,8 @@ export class PluginBackground {
         if (g.calls >= g.dailyCalls) throw Error('今日后台整理额度已用完');
         const c = new AbortController(), combined = AbortSignal.any([this.signal, signal, c.signal, ...(cancellation ? [cancellation] : [])]);
         combined.throwIfAborted(); this.running.set(pluginId, c);
-        try { g.calls++; this.save(); const result = await this.runtime.complete(model.id, messages, combined); combined.throwIfAborted(); get(id); return result; }
+        const binding = this.binding(model);
+        try { g.calls++; this.save(); const result = await this.runtime.complete(model.id, messages, combined); combined.throwIfAborted(); get(id); const current=this.runtime.targets().find(t=>t.id===model.id); if(!current || this.binding(current)!==binding) throw Error('后台模型已切换，本次结果未保存'); return result; }
         finally { if (this.running.get(pluginId) === c) this.running.delete(pluginId); }
       },
     });

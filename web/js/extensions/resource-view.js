@@ -13,6 +13,8 @@ export function validateResourceView(v) {
     if (v.openConversation !== undefined && (!text(v.openConversation,100) || !/^[-a-zA-Z0-9]+$/.test(v.openConversation)))
         throw Error('Invalid conversation reference');
     v.actions.forEach(action);
+    if (v.toggle !== undefined && (!v.toggle || !text(v.toggle.label,120) || typeof v.toggle.checked !== 'boolean' || !id(v.toggle.action)))
+        throw Error('Invalid resource toggle');
     for (const r of v.rows) {
         if (r.conversationId !== undefined && (!text(r.conversationId, 100) || !/^[-a-zA-Z0-9]+$/.test(r.conversationId)))
             throw Error('Invalid conversation reference');
@@ -45,12 +47,15 @@ export function validateResourceView(v) {
 export function mountResource(container, feature, resourceId, options = {}) {
     const base = `/api/plugin-resources/${encodeURIComponent(feature.pluginId)}/${encodeURIComponent(resourceId)}`;
     let disposed = false, busy = false, refreshing = true, view, editing = false, epoch = 0;
+    let reviewDialog = null;
+    const closeReview = () => { const d=reviewDialog; reviewDialog=null; if(d?.contains(feedback))container.append(feedback); d?.remove(); };
     const abort = new AbortController();
     const feedback = node('p', 'plugins-message');
     feedback.setAttribute('role', 'status');
     feedback.setAttribute('aria-live', 'polite');
     const content = node('div', 'extension-resource');
     container.append(content, feedback);
+    if(options.inlineToggle)container.classList.add('resource-toggle-host');
     const request = async (body) => {
         // Only reads get a deadline: an uncertain mutation must never be retried as a read.
         const deadline = body ? null : new AbortController();
@@ -75,31 +80,40 @@ export function mountResource(container, feature, resourceId, options = {}) {
         feedback.textContent = '';
         if (data.confirmation) {
             editing = true;
-            content.replaceChildren();
+            let target=content;
+            if(options.inlineToggle){
+                closeReview();
+                const d=node('dialog','resource-toggle-confirm');reviewDialog=d;
+                target=node('div','extension-resource');d.append(target,feedback);document.body.append(d);
+                d.addEventListener('keydown',event=>event.stopPropagation());
+                d.addEventListener('cancel',event=>{event.preventDefault();if(!busy){closeReview();editing=false;render(view);}});
+                d.showModal();
+            } else content.replaceChildren();
             const p = data.confirmation.preview;
-            content.append(node('h3', 'extension-resource-title', p.title));
+            target.append(node('h3', 'extension-resource-title', p.title));
             const review = fields => {
                 const dl = node('dl', 'extension-resource-review');
                 for (const f of fields) dl.append(node('dt', '', f.label), node('dd', '', f.value));
                 return dl;
             };
-            content.append(review(p.fields));
+            target.append(review(p.fields));
             if (Array.isArray(p.details) && p.details.length) {
                 const details = node('details', 'extension-authorization-details');
                 details.append(node('summary', '', local('授权详情', 'Authorization details')), review(p.details));
-                content.append(details);
+                target.append(details);
             }
             const actions = node('div', 'extension-resource-actions extension-resource-confirm');
             const yes = node('button', 'p-btn-primary', local('确认', 'Confirm')), no = node('button', 'p-btn', local('取消', 'Cancel'));
             yes.type = no.type = 'button';
             yes.addEventListener('click', () => void send({ confirm: data.confirmation.id }));
-            no.addEventListener('click', () => { editing = false; render(view); });
+            no.addEventListener('click', () => { closeReview(); editing = false; render(view); });
             actions.append(no, yes);
-            content.append(actions);
+            target.append(actions);
             yes.focus();
             return;
         }
         const next = validateResourceView(data.view);
+        closeReview();
         if (!editing && view && JSON.stringify(next) === JSON.stringify(view))
             return;
         view = next;
@@ -112,7 +126,7 @@ export function mountResource(container, feature, resourceId, options = {}) {
         ++epoch;
         feedback.textContent = '';
         content.setAttribute('aria-busy', 'true');
-        for (const e of content.querySelectorAll('button,input,select,textarea'))
+        for (const e of [...content.querySelectorAll('button,input,select,textarea'),...(reviewDialog?.querySelectorAll('button,input,select,textarea')??[])])
             e.disabled = true;
         try {
             const data = await request(body);
@@ -131,8 +145,8 @@ export function mountResource(container, feature, resourceId, options = {}) {
             busy = false;
             content.removeAttribute('aria-busy');
             // An unchanged response may reuse the DOM; restore only applicable controls.
-            for (const el of content.querySelectorAll('button,input,select,textarea'))
-                el.disabled = !!el.closest('label[hidden]');
+            for (const el of [...content.querySelectorAll('button,input,select,textarea'),...(reviewDialog?.querySelectorAll('button,input,select,textarea')??[])])
+                el.disabled = el.dataset.unavailable === 'true' || (!!reviewDialog && content.contains(el)) || !!el.closest('label[hidden]');
         }
     };
     const render = v => {
@@ -140,6 +154,19 @@ export function mountResource(container, feature, resourceId, options = {}) {
             return;
         content.replaceChildren();
         editing = !!v.form || v.refresh === false;
+        if(options.inlineToggle){
+            if(v.toggle){
+                const a=v.actions.find(a=>a.id===v.toggle.action),b=node('button','resource-inline-toggle');
+                b.type='button';b.setAttribute('role','switch');b.setAttribute('aria-label',v.toggle.label);b.setAttribute('aria-checked',String(v.toggle.checked));
+                b.disabled=!a;b.dataset.unavailable=String(!a);
+                b.title=v.toggle.label+' · '+local(v.toggle.checked?'已开启':'已关闭',v.toggle.checked?'On':'Off')+(!a?' · '+(v.note||local('当前不可更改','Currently unavailable')):'');
+                b.addEventListener('click',()=>{if(a)void send({action:a.id,values:a.values});});
+                content.append(b);
+            }else{
+                const b=node('button','resource-inline-setup','···');b.type='button';b.setAttribute('aria-label',local('设置对话','Set up conversation'));b.onclick=()=>options.onManage?.();content.append(b);
+            }
+            return;
+        }
         const actions = node('div', 'extension-resource-actions');
         for (const [index, a] of v.actions.entries()) {
             const control = button(a);
@@ -251,5 +278,5 @@ export function mountResource(container, feature, resourceId, options = {}) {
         display(data); }).catch(e => { if (!disposed && initial === epoch)
         feedback.textContent = e.message; }).finally(() => { refreshing = false; });
     const timer = setInterval(() => void refresh(), 5000);
-    return () => { disposed = true; ++epoch; abort.abort(); clearInterval(timer); content.remove(); feedback.remove(); };
+    return () => { disposed = true; ++epoch; abort.abort(); clearInterval(timer); closeReview(); content.remove(); feedback.remove(); };
 }

@@ -16,7 +16,7 @@ function fixture(t, seed) {
   const targets=[{id:sid,cwd:dir,title:'助手',model:'mock',provider:'test',busy:true},{id:'bb0011223344',cwd:dir,title:'普通对话',model:'mock',provider:'test',busy:true}];
   const history=new SessionStore(path.join(dir,'history.jsonl'),{create:{sessionId:sid,cwd:dir}});
   const host=new PluginBackground(path.join(dir,'grants.json'),{targets:()=>targets,store:()=>history,complete:async(_id,m)=>{calls++;return reply?.(JSON.parse(m[1].content))??'{}';}},signal.signal);
-  const services={dataDirectory:dir,conversations:{get:()=>sid,models:()=>[{provider:'test',model:'mock'}]},host:{snapshot:()=>({sessions:targets.map(s=>({...s,instanceId:s.id,kind:'agent'})),projects:[]})},background:host.bind('assistant',signal.signal)};
+  const services={dataDirectory:dir,conversations:{canConfigureModel:true,get:()=>sid,models:()=>[{provider:'test',model:'mock'}]},host:{snapshot:()=>({sessions:targets.map(s=>({...s,instanceId:s.id,kind:'agent'})),projects:[]})},background:host.bind('assistant',signal.signal)};
   if(seed){const db=new MemoryStore(dir);seed(db);db.close();}
   const a=new Assistant(services),p=new AssistantPanel(a);
   const authorize=()=>{const plan=p.prepare('authorize');const grant=host.approve('assistant',host.prepare('assistant',plan.backgroundAuthorization));plan.execute(grant);return grant;};
@@ -55,12 +55,12 @@ test('new messages wait for idle; oversized history and surrogate pairs are safe
  const first=f.services.background.entry(grant,f.targets[0].id,source);assert(first.text.isWellFormed());assert.equal(first.nextOffset,2999);
  const second=f.services.background.entry(grant,f.targets[0].id,source,first.nextOffset);assert(second.text.startsWith('😀'));assert(second.text.isWellFormed());assert.throws(()=>f.services.background.entry(grant,f.targets[0].id,source,3000),/offset/);
 });
-test('legacy data remains preserved and isolated until explicit migration; old learning grants stop',async t=>{
+test('legacy data remains preserved and isolated without a manual migration interface',async t=>{
  let old;
  const f=fixture(t,db=>{old=db.add({title:'旧偏好',content:'喜欢蓝色的幻灯片',kind:'preference',scope:'personal'},{type:'user',at:1},'active');db.add({title:'旧猜测',content:'不能自行升级',kind:'fact',scope:'personal'},{type:'model-proposal',conversationId:'old',at:2});db.bind('old','/old',true);});
  f.authorize();assert.equal(f.a.store.bindings().length,0);assert.equal(f.a.search(f.targets[0].id,'蓝色').length,0);assert.equal(f.a.visible(f.a.store.list('candidate')[0]),false);
  assert.throws(()=>f.p.prepare('bind',{conversationId:f.targets[1].id,personal:true}));
- const plan=f.p.prepare('migration');assert(plan.preview);assert.equal(f.a.search(f.targets[0].id,'蓝色').length,0);plan.execute();assert.equal(f.a.search(f.targets[0].id,'蓝色').length,1);assert.equal(f.a.store.get(old.id).content,old.content);
+ assert.throws(()=>f.p.prepare('migration'),/不支持/);assert.equal(f.a.search(f.targets[0].id,'蓝色').length,0);assert.equal(f.a.store.get(old.id).content,old.content);
  assert.throws(()=>f.p.prepare('save',{id:old.id,revision:old.revision,title:'x',content:'abcd',kind:'fact',scope:'conversation:'+f.targets[1].id}));
 });
 test('forget requires latest user intent and prevents relearning from the same evidence',async t=>{
@@ -91,11 +91,6 @@ test('a disabled entry cannot create a conversation after its model catalog reso
  const host=new ConversationEntries(path.join(dir,'bindings.json'),{exists:()=>false,models:()=>slow?new Promise(r=>release=r):[{provider:'p',model:'m'}],create:async()=>{creates++;},changed(){}});
  host.bind('plugin',life.signal).register('assistant',{label:'Assistant',resource:'assistant',cwd:dir});
  const plan=await host.prepare('plugin',{key:'assistant',provider:'p',model:'m'});slow=true;const pending=host.approve('plugin',plan);life.abort();release([{provider:'p',model:'m'}]);await assert.rejects(pending);assert.equal(creates,0);
-});
-test('migration confirmation rejects changed records and does not broaden approved content',t=>{
- let old;const f=fixture(t,db=>{old=db.add({title:'偏好',content:'我喜欢简洁的回答',scope:'personal',kind:'preference'},{type:'user',at:1},'active');});
- const plan=f.p.prepare('migration');f.a.store.edit(old.id,old.revision,{title:'偏好',content:'修改后的内容',scope:'personal',kind:'preference'});
- assert.throws(()=>plan.execute(),/变化/);assert.deepEqual(f.a.store.state('assistant:v4').imported,[]);
 });
 test('legacy global grants are revoked during dedicated migration',t=>{
  const f=fixture(t);const grant=f.host.approve('assistant',f.host.prepare('assistant',{modelSessionId:f.targets[0].id,excludedIds:[],includeHistory:true,dailyCalls:4}));
@@ -324,7 +319,7 @@ test('a rewound strategy must earn fresh feedback rather than inherit removed va
 
 test('chat-first welcome uses one model field, explicit scoped consent and a navigation result only after completion',async t=>{
  const f=fixture(t);f.setId(null);
- const initial=await f.p.welcome();assert.equal(initial.form.action,'create-assistant');assert.deepEqual(initial.actions,[]);assert.equal(initial.form.fields.length,1);assert(!initial.openConversation);
+ const initial=await f.p.welcome();assert.equal(initial.form.action,'create-assistant');assert.deepEqual(initial.actions,[]);assert.equal(initial.form.fields.length,2);assert(!initial.openConversation);
  const creation=await f.p.prepareWelcome('create-assistant',{model:JSON.stringify({provider:'test',model:'mock'})});
  assert(creation.entryAuthorization);assert(!creation.backgroundAuthorization);assert.equal(f.a.learning.config().enabled,false);
  f.setId(f.targets[0].id);const after=await creation.execute(f.targets[0].id);assert.equal(after.actions[0].id,'authorize');assert(!after.openConversation);
@@ -349,4 +344,38 @@ test('named entry metadata is bounded and preserves optional setup resources acr
  const api=host.bind('plugin',new AbortController().signal),spec={label:'助手',resource:'assistant',cwd:dir,setupResource:'welcome',description:'长期交流'};
  assert.throws(()=>api.register('bad',{...spec,setupResource:'../secret'}));assert.throws(()=>api.register('bad',{...spec,description:'x'.repeat(301)}));
  api.register('assistant',spec);assert.equal(host.list()[0].setupResource,'welcome');assert.equal(host.list()[0].description,'长期交流');
+});
+
+test('assistant is a conversation with a minimal memory popover, not a settings form',async t=>{
+ const f=fixture(t),view=await f.p.overview();assert.equal(view.form,undefined);assert.equal(view.rows.length,0);
+ assert.deepEqual(view.actions.map(a=>a.id),['authorize']);assert.throws(()=>f.p.prepare('configure-model',{}));
+ f.authorize();assert.deepEqual((await f.p.overview()).actions.map(a=>a.id),['pause']);
+});
+
+test('fresh combined onboarding can explicitly skip memory and enter the created chat',async t=>{
+ const f=fixture(t);f.services.conversations.supportsEntryBackground=true;f.setId(null);
+ const view=await f.p.welcome();assert(view.form.fields.some(x=>x.id==='memory'&&x.type==='checkbox'),'first-use skip control exists');
+ const plan=await f.p.prepareWelcome('create-assistant',{model:JSON.stringify({provider:'test',model:'mock'}),memory:false});assert.equal(plan.entryBackground,undefined);
+ f.setId(f.targets[0].id);const result=await plan.execute(f.targets[0].id);assert.equal(result.openConversation,f.targets[0].id);assert.equal(f.a.learning.config().enabled,false);
+});
+
+
+test('removed memory UI routes reject without changing stored data or authorization',async t=>{
+ const f=fixture(t),id=f.targets[0].id,grant=f.authorize();
+ await f.add('我喜欢蓝色的幻灯片');
+ const row=f.a.remember(id,{title:'颜色',content:'喜欢蓝色的幻灯片',kind:'preference',topic:'color',quote:'我喜欢蓝色的幻灯片'});
+ const config=structuredClone(f.a.learning.config()),stored=f.a.store.get(row.id);
+ for(const route of ['memories','search','find','topic','detail','edit','save','forget','migration','history','restore','settings','bindings','configure'])
+   assert.throws(()=>f.p.prepare(route,{id:row.id,revision:row.revision,query:'蓝色'}),/不支持/);
+ assert.deepEqual(f.a.learning.config(),config);assert.deepEqual(f.a.store.get(row.id),stored);
+ assert.deepEqual(f.services.background.targets(grant).map(t=>t.id),[id]);
+ f.p.prepare('pause').execute();assert.equal(f.a.scope(id),null);assert.equal(f.a.store.get(row.id).state,'active');
+ f.authorize();assert.equal(f.a.search(id,'蓝色').length,1);assert.equal(f.a.scope(f.targets[1].id),null);
+});
+test('old fixed-model grants expose only off and never upgrade without consent',t=>{
+ const f=fixture(t),id=f.targets[0].id;
+ const input={modelSessionId:id,includedIds:[id],excludedIds:[],includeHistory:true,dailyCalls:4};
+ const grant=f.host.approve('assistant',f.host.prepare('assistant',input));f.a.learning.configure(grant,input);
+ assert.deepEqual(f.p.overview().actions.map(a=>a.id),['pause']);
+ assert.notEqual(f.services.background.status(grant).followModel,true);
 });

@@ -40,9 +40,9 @@ app.whenReady().then(async () => {
     const click = label => js('(()=>{const b=Array.from(document.querySelectorAll(".extension-resource button")).find(b=>b.textContent===' + JSON.stringify(label) + ');if(!b)throw Error("Button missing");if(b.closest("details"))b.closest("details").open=true;b.click()})()');
     await js('(async()=>{localStorage.setItem("ash.lang","zh");(await import("/js/i18n.js")).setLang("zh")})()');
     await wait('!!document.querySelector(".conversation-entry-open")');
-    await wait('document.querySelector(".extension-menu")?.hidden===true');
+    await wait('!document.querySelector(".extension-menu") || document.querySelector(".extension-menu").hidden===true');
     // Dedicated entries use the sidebar type scale, even when labels are long.
-    const entryStyle=await js(`(()=>{const b=document.querySelector('.conversation-entry-open'),row=b.parentElement,more=row.querySelector('.conversation-entry-manage');const label=b.textContent;b.textContent='个人助手 · 很长的专属对话名称'.repeat(6);const style=getComputedStyle(b),r=row.getBoundingClientRect(),m=more.getBoundingClientRect();const result={size:style.fontSize,reference:getComputedStyle(document.querySelector('.sidebar-new-btn')).fontSize,weight:Number(style.fontWeight),fits:row.scrollWidth<=row.clientWidth+1,manageVisible:m.right<=r.right+1&&m.width>=32};b.textContent=label;return result;})()`);
+    const entryStyle=await js(`(()=>{const b=document.querySelector('.conversation-entry-open'),row=b.parentElement,more=row.querySelector('.conversation-entry-control');const label=b.textContent;b.textContent='个人助手 · 很长的专属对话名称'.repeat(6);const style=getComputedStyle(b),r=row.getBoundingClientRect(),m=more.getBoundingClientRect();const result={size:style.fontSize,reference:getComputedStyle(document.querySelector('.sidebar-new-btn')).fontSize,weight:Number(style.fontWeight),fits:row.scrollWidth<=row.clientWidth+1,manageVisible:m.right<=r.right+1&&m.width>=32};b.textContent=label;return result;})()`);
     assert.equal(entryStyle.size,entryStyle.reference,'entry matches sidebar typography');
     assert(entryStyle.weight<=500&&entryStyle.fits&&entryStyle.manageVisible,JSON.stringify(entryStyle));
     if(process.env.ASHUB_UI_SCREENSHOTS){
@@ -95,38 +95,24 @@ app.whenReady().then(async () => {
       if(shots)fs.writeFileSync(path.join(shots,'assistant-welcome-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
       const hit=await js(`(()=>{const e=document.querySelector('.conversation-welcome select'),r=e.getBoundingClientRect(),p=document.querySelector('.conversation-welcome');return {width:innerWidth,scroll:p.scrollWidth,client:p.clientWidth,rect:r.toJSON(),sidebar:{className:document.querySelector(".app").className,visibility:getComputedStyle(document.getElementById("sidebar")).visibility,pointerEvents:getComputedStyle(document.getElementById("sessions")).pointerEvents},target:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML,clickable:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===e}})()`);
       assert(hit.scroll<=hit.client+1&&hit.clickable,JSON.stringify(hit));
+      const check=await js(`(()=>{const e=document.querySelector('.conversation-welcome input[type="checkbox"]'),r=e.getBoundingClientRect(),l=e.closest('label').getBoundingClientRect(),before=e.checked;e.closest('label').click();const toggled=e.checked!==before;e.closest('label').click();return {width:r.width,height:r.height,aligned:Math.abs((r.top+r.height/2)-(l.top+l.height/2))<2,toggled,restored:e.checked===before}})()`);
+      assert(check.width<=20&&check.height<=20&&check.aligned&&check.toggled&&check.restored,JSON.stringify(check));
     }
 
     await js('document.documentElement.style.removeProperty("--dur-fast")');
-    assert.equal(await js('document.querySelectorAll(".conversation-welcome .extension-resource-form > label").length'),1);
-    assert.equal(await js('document.querySelector(".extension-panel").hidden'),true,'first use belongs in the chat canvas');
+    assert.equal(await js('document.querySelectorAll(".conversation-welcome .extension-resource-form > label").length'),2);
+    assert.equal(await js('!document.querySelector(".conversation-memory-dialog")'),true,'first use belongs in the chat canvas');
     const welcomeSubmit=()=>js('document.querySelector(".conversation-welcome .extension-resource-form").requestSubmit()');
     // Scope controls to the visible workspace, not the offscreen settings resource.
     const welcomeClick=label=>js('(()=>{const b=[...document.querySelectorAll(".conversation-welcome button")].find(b=>b.textContent==='+JSON.stringify(label)+');if(!b)throw Error("Missing welcome action");b.click()})()');
     await welcomeSubmit();await wait('!!document.querySelector(".conversation-welcome .extension-resource-review")');
     await welcomeClick('取消');await wait('!!document.querySelector(".conversation-welcome .extension-resource-form select")');
     assert.equal((await call('/sessions')).length,1,'cancel creates no chat');
-    await welcomeSubmit();await wait('!!document.querySelector(".conversation-welcome .extension-resource-review")');await welcomeClick('确认');
-    await wait('document.querySelector(".conversation-welcome .extension-resource-actions")?.textContent.includes("开启记忆并开始聊天")');
-    const assistantId=(await call('/api/plugin-conversations'))[0].sessionId;assert(assistantId);assert.notEqual(assistantId,id);
-    await welcomeClick('开启记忆并开始聊天');await wait('!!document.querySelector(".conversation-welcome .extension-resource-review")');assert.match(await js('document.querySelector(".conversation-welcome .extension-resource-review").textContent'),/仅整理.*不读取其他对话/);
-    assert.equal(await js('document.querySelectorAll(".conversation-welcome .extension-resource > .extension-resource-review > dt").length'),3);
-    assert.equal(await js('document.querySelector(".extension-authorization-details").open'),false);
-    assert(!(await js('document.querySelector(".conversation-welcome .extension-resource > .extension-resource-review").textContent')).includes(assistantId));
-    const beforeConsent=(await call('/sessions')).length;
-    for(const width of [320,1280]){
-      win.setContentSize(width,800);await wait('innerWidth==='+width);await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');
-      await wait('document.querySelector(".conversation-welcome").clientWidth >= '+(width<600?width-64:440));
-      for(const expanded of [false,true]){
-        await js('document.querySelector(".extension-authorization-details").open='+expanded);
-        assert(await js('(()=>{const p=document.querySelector(".conversation-welcome");return p.scrollWidth<=p.clientWidth+1})()'),'authorization never overflows');
-        if(expanded){const detail=await js('document.querySelector(".extension-authorization-details").textContent');assert.match(detail,/16000.*4096/);assert(!detail.includes(assistantId));assert(!/观察范围|历史范围|排除对话/.test(detail));}
-        if(shots){await js('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');fs.writeFileSync(path.join(shots,'consent-'+width+'-'+expanded+'.png'),(await win.webContents.capturePage()).toPNG());}
-      }
-    }
-    assert.equal((await call('/sessions')).length,beforeConsent,'expanding details has no side effects');
-    await js('document.querySelector(".extension-authorization-details").open=false');
-    await welcomeClick('确认');
+    await welcomeSubmit();await wait('!!document.querySelector(".conversation-welcome .extension-resource-review")');
+    const consent=await js('document.querySelector(".conversation-welcome .extension-resource-review").textContent');
+    assert.match(consent,/当前及今后/);assert.match(consent,/16000/);assert.match(consent,/4096/);
+    await welcomeClick('确认');await wait('!document.querySelector(".conversation-welcome")');
+    const assistantId=(await call('/api/plugin-conversations'))[0].sessionId;
     await wait('(async()=> (await import("/js/session-manager.js")).activeSessionId.value === '+JSON.stringify(assistantId)+')()');
     assert.equal(await js('!!document.querySelector(".conversation-welcome")'),false);
     assert.equal(await js('document.querySelector(".terminal-wrap").inert'),false);
@@ -142,34 +128,52 @@ app.whenReady().then(async () => {
     await wait('getComputedStyle(document.getElementById("page-loader")).visibility==="hidden" && Number(getComputedStyle(document.querySelector(".terminal-wrap")).opacity) > .99');
     await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
     if(shots)fs.writeFileSync(path.join(shots,'assistant-chat.png'),(await win.webContents.capturePage()).toPNG());
-    await js('document.querySelector(".conversation-entry-manage").click()');
-    await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("暂停记忆")');
-    // macOS can cap native window height to the runner's usable display.
-    // Exercise that constraint locally too: these responsive checks require
-    // exact widths, while height follows the actual available content area.
+    await wait('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="true"');
+    assert.equal(await js('!!document.querySelector(".conversation-memory-dialog")'),false);
+    // Off is immediate; opening memory still requires explicit authorization.
+    await js('document.querySelector(".resource-inline-toggle").click()');
+    await wait('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="false"');
+    assert.equal(await js('!!document.querySelector("dialog[open]")'),false);
+    await js('document.querySelector(".resource-inline-toggle").click()');
+    await wait('!!document.querySelector(".resource-toggle-confirm[open]")');
+    assert.equal(await js('document.querySelector(".resource-inline-toggle").getAttribute("aria-checked")'), 'false');
     win.setMaximumSize(2000,720);
-    for(const theme of ['light','dark']){
+    for(const theme of ['light','dark'])for(const width of [1280,390,320]){
       await js('document.documentElement.dataset.theme='+JSON.stringify(theme));
-      for(const width of [1280,390,320]){
-        await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');
-        win.setContentSize(width,800);
-        await wait('innerWidth === '+width+' && innerHeight > 0 && innerHeight <= 720');
-        await js('document.querySelector(".app").classList.toggle("sidebar-collapsed",'+(width<600)+')');
-        await new Promise(r=>setTimeout(r,500));
-        // Native resize and viewport-unit style invalidation need not finish in
-        // the same task on CI. Measure after Chromium has painted the new size,
-        // rather than after a fixed sleep that can still see the previous vw.
-        await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
-        const bounds = await js('(()=>{const p=document.querySelector(".extension-panel"),r=p.getBoundingClientRect();return {scrollWidth:p.scrollWidth,clientWidth:p.clientWidth,left:r.left,right:r.right,viewport:innerWidth,height:innerHeight,hidden:p.hidden,children:[...p.children].map(n=>({className:n.className,scrollWidth:n.scrollWidth,clientWidth:n.clientWidth,width:n.getBoundingClientRect().width}))}})()');
-        assert(bounds.scrollWidth<=bounds.clientWidth+1&&bounds.left>=-1, JSON.stringify({theme,width,...bounds}));
-        assert.equal(await js('document.querySelectorAll(".extension-resource-actions > button").length'),2);
-        if(shots)fs.writeFileSync(path.join(shots,'assistant-'+theme+'-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
-      }
+      win.setContentSize(width,800);await wait('innerWidth === '+width+' && innerHeight > 0 && innerHeight <= 720');
+      await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
+      const bounds=await js('(()=>{const p=document.querySelector(".resource-toggle-confirm"),r=p.getBoundingClientRect();return {scroll:p.scrollWidth,client:p.clientWidth,left:r.left,right:r.right,viewport:innerWidth}})()');
+      assert(bounds.scroll<=bounds.client+1&&bounds.left>=-1&&bounds.right<=bounds.viewport+1,JSON.stringify({theme,width,...bounds}));
+      if(shots)fs.writeFileSync(path.join(shots,'assistant-consent-'+theme+'-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
     }
-    await click('查看记忆');await wait('document.querySelector(".extension-resource-note")?.textContent.includes("与你有关")');
-    assert.equal(await js('document.querySelectorAll(".extension-resource-row").length'),4);
-    await click('返回');await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("暂停记忆")');
-    await click('暂停记忆');await wait('!!document.querySelector(".extension-resource-review")');await click('确认');await wait('document.querySelector(".extension-resource-actions")?.textContent.includes("开启记忆")');
+    // Escape in the permission dialog must never cancel the running chat.
+    await js(`(async()=>{
+      const {state}=await import('/js/state.js');state.isProcessing=true;
+      const original=window.fetch;window.memoryCancelRequests=0;
+      window.fetch=(...args)=>{if(String(args[0]).endsWith('/cancel')){window.memoryCancelRequests++;return Promise.resolve(new Response('{}',{status:200}));}return original(...args);};
+      window.restoreMemoryFetch=()=>{window.fetch=original;state.isProcessing=false;};
+    })()`);
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});
+    await wait('!document.querySelector(".resource-toggle-confirm")');
+    assert.equal(await js('window.memoryCancelRequests'),0);
+    await js('window.restoreMemoryFetch()');
+    assert.equal(await js('document.querySelector(".resource-inline-toggle").getAttribute("aria-checked")'),'false');
+    await js('document.querySelector(".resource-inline-toggle").click()');await wait('!!document.querySelector(".resource-toggle-confirm[open]")');
+    const beforeShortcut=await js('(async()=> (await import("/js/session-manager.js")).activeSessionId.value)()');
+    await js(`document.querySelector('.resource-toggle-confirm button').dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',ctrlKey:true,bubbles:true,cancelable:true}))`);
+    assert.equal(await js('(async()=> (await import("/js/session-manager.js")).activeSessionId.value)()'),beforeShortcut);
+    await click('取消');assert.equal(await js('document.querySelector(".resource-inline-toggle").getAttribute("aria-checked")'),'false');
+    await js('document.querySelector(".resource-inline-toggle").click()');await wait('!!document.querySelector(".resource-toggle-confirm[open]")');
+    await click('确认');await wait('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="true"');
+    assert.equal(await js('!!document.querySelector("dialog[open]")'),false);
+    // Polling retains the control instead of replacing it or opening settings.
+    await js('window.memorySwitchNode=document.querySelector(".resource-inline-toggle")');await new Promise(r=>setTimeout(r,5500));
+    assert.equal(await js('window.memorySwitchNode===document.querySelector(".resource-inline-toggle")'),true);
+    win.setContentSize(1280,700);await wait('innerWidth===1280');
+    await js('document.querySelector(".app").classList.remove("sidebar-collapsed")');
+    await new Promise(r=>setTimeout(r,400));
+    await js('document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))');
+    if(shots)fs.writeFileSync(path.join(shots,'assistant-inline-switch.png'),(await win.webContents.capturePage()).toPNG());
     await call('/api/extensions/'+feature.id+'/enabled',{enabled:false});
     await wait('document.querySelector(".conversation-entries")?.hidden===true');
     await call('/api/extensions/'+feature.id+'/enabled',{enabled:true});await wait('document.querySelector(".conversation-entries")?.hidden===false');
@@ -182,6 +186,20 @@ app.whenReady().then(async () => {
       await new Promise(r=>setTimeout(r,20));if(navigated.length)throw Error('Passive GET navigated');
       host.querySelector('button').click();await new Promise(r=>setTimeout(r,20));dispose();release();await new Promise(r=>setTimeout(r,20));
       if(navigated.length)throw Error('Disposed resource navigated');host.remove();
+    })()`);
+    await js(`(async()=>{
+      const {mountResource,validateResourceView}=await import('/js/extensions/resource-view.js');
+      let invalid=false;try{validateResourceView({actions:[],rows:[],toggle:{label:'Memory',checked:'yes',action:'enable'}})}catch{invalid=true}if(!invalid)throw Error('Malformed toggle accepted');
+      const host=document.createElement('div');document.body.append(host);let calls=0,release;
+      const view={actions:[{id:'enable',label:'Enable',values:{}}],rows:[],toggle:{label:'Memory',checked:false,action:'enable'}};
+      const dispose=mountResource(host,{pluginId:'test'},'start',{inlineToggle:true,request:async body=>{
+        if(!body)return {view};calls++;if(body.action)return new Promise(r=>release=()=>r({confirmation:{id:'grant',preview:{title:'Permission',fields:[]}}}));throw Error('test confirmation failed');
+      }});
+      const wait=()=>new Promise(r=>setTimeout(r,30));await wait();const b=host.querySelector('[role=switch]');b.click();b.click();if(calls!==1)throw Error('Duplicate toggle request');release();await wait();
+      const d=document.querySelector('.resource-toggle-confirm');d.querySelector('.p-btn-primary').click();await wait();
+      if(!d.textContent.includes('test confirmation failed'))throw Error('Confirmation error hidden behind dialog');
+      if(host.querySelector('[role=switch]').getAttribute('aria-checked')!=='false')throw Error('Failed enable changed visual state');
+      dispose();if(document.querySelector('.resource-toggle-confirm'))throw Error('Disposed control left a permission dialog');host.remove();
     })()`);
     console.log('PASS dedicated assistant UI: ZIP install, explicit creation/grant, one persistent entry, in-app navigation, pause, themes, disable/re-enable and 1280/390/320 layouts');
     win.destroy();await hub.shutdown();clearTimeout(timeout);app.exit(0);

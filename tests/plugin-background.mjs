@@ -120,3 +120,29 @@ test('broad, multi-conversation and excluded scopes retain full visible disclosu
   const plan=f.host.prepare('plugin',input);assert.equal(plan.details,undefined);assert(plan.fields.some(x=>x.label==='观察范围'));assert(plan.fields.some(x=>x.label==='排除对话'));assert(plan.fields.some(x=>x.label==='成本上限'));
  }
 });
+
+test('explicit follow-model grants survive model switches and restart without broadening history',async t=>{
+ const f=fixture(t),id=f.approve({followModel:true,includedIds:['a'],excludedIds:[]});
+ assert.equal(f.api.status(id).followModel,true);
+ f.targets[0].model='next';f.targets[0].provider='other';await f.api.infer(id,[{role:'user',content:'test'}]);
+ const restored=new PluginBackground(path.join(f.dir,'grants.json'),f.runtime,f.shutdown.signal).bind('plugin',f.session.signal);
+ await restored.infer(id,[{role:'user',content:'test'}]);assert.throws(()=>restored.read(id,'b'),/outside/);
+ f.targets[0].cwd='/different';await assert.rejects(restored.infer(id,[{role:'user',content:'test'}]),/配置/);
+ assert.throws(()=>f.approve({followModel:true}),/dedicated/);
+});
+test('follow-model rejects stale inference and preserves existing read access after quota exhaustion',async t=>{
+ const f=fixture(t),id=f.approve({followModel:true,includedIds:['a'],excludedIds:[],dailyCalls:1});let release;
+ f.runtime.complete=()=>new Promise(r=>release=r);
+ const work=f.api.infer(id,[{role:'user',content:'test'}]);f.targets[0].model='next';release('stale');await assert.rejects(work,/未保存/);
+ assert.doesNotThrow(()=>f.api.read(id,'a'));await assert.rejects(f.api.infer(id,[{role:'user',content:'test'}]),/额度/);
+});
+
+test('switching the conversation model aborts a pending background stream immediately',async()=>{
+ class B extends AshBridge {async init(){} }
+ const b=new B({sessionId:'switch-test',cwd:'/tmp'});let active={model:'old',provider:'mock'};
+ const c=new AbortController();b.backgroundControllers.add(c);
+ b.core={handlers:{call:n=>n==='agent:get-models'?[{id:'old',provider:'mock'},{id:'new',provider:'mock'}]:active},bus:{emit:(_n,p)=>{active={model:p.id,provider:p.provider};}}};
+ await b.execCommand('/model','old@mock');assert(!c.signal.aborted,'same model leaves the current background stream intact');
+ await assert.rejects(async()=>b.execCommand('/model','missing@mock'),/Unknown model/);assert(!c.signal.aborted,'invalid selection leaves the stream intact');
+ await b.execCommand('/model','new@mock');assert(c.signal.aborted,'old inference must be cancelled on switch');
+});

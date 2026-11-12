@@ -346,7 +346,7 @@ export class RemoteConnector {
     // Disabling or rebinding advances the generation while session lookup may be awaiting the Hub.
     if (epoch !== this.generation || this.stopped) throw error('移动访问授权已变更，请重新确认', 403);
     if (op === 'plugin-resource') {
-      if (![args.pluginId,args.resourceId].every(v=>typeof v==='string' && /^[a-z][a-z0-9-]{0,79}$/.test(v))) throw error('Invalid plugin resource');
+      if (typeof args.pluginId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(args.pluginId) || typeof args.resourceId !== 'string' || !/^[a-z][a-z0-9-]{0,79}$/.test(args.resourceId)) throw error('Invalid plugin resource');
       const check=async()=>{
         await this.session(session.instanceId);this.current(epoch);
         const catalog=await this.local('/api/plugin-resource-catalog');this.current(epoch);

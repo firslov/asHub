@@ -21,7 +21,7 @@ import { guardImageContext } from "../image-context.js";
 import { RequestMonitor } from "../request-diagnostics.js";
 import { SessionThinking, reasoningProfile, nativeReasoningParams, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
 import { configureDeepSeek } from "../providers/deepseek.js";
-import { guardCodexRetries } from "../providers/codex-retry.js";
+import { guardCodexRetries, withSilentCodexRetries } from "../providers/codex-retry.js";
 import { EventEmitter } from "node:events";
 import { setTimeout as waitForRetry } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
@@ -397,7 +397,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.submit = scoped(this.submit);
     this.execCommand = scoped(this.execCommand);
     this.complete = scoped(this.complete);
-    this.backgroundComplete = scoped(this.backgroundComplete);
+    const backgroundComplete = scoped(this.backgroundComplete);
+    this.backgroundComplete = (...args) => withSilentCodexRetries(() => backgroundComplete(...args));
     this.compact = scoped(this.compact);
     this.drainQueue = scoped(this.drainQueue);
     this.reloadProviders = scoped(this.reloadProviders);
@@ -2297,6 +2298,9 @@ export class AshBridge extends EventEmitter implements Bridge {
       const found = models.find((m) => m.id === id && (!providerHint || m.provider === providerHint));
       if (!this.core || this.closed) throw new Error("backend not ready");
       if (!found) throw new Error(`Unknown model: ${providerHint ?? ""}:${id}`);
+      const previous = this.core.handlers.call("agent:get-model") as {model?: string; provider?: string} | undefined;
+      if(previous?.model !== found.id || previous?.provider !== found.provider)
+        for(const controller of this.backgroundControllers) controller.abort(new Error("Background model changed"));
       this.core.bus.emit("config:switch-model", { id: found.id, provider: found.provider });
       const active = this.core.handlers.call("agent:get-model") as { model?: string; provider?: string } | undefined;
       if (active?.model !== found.id || active?.provider !== found.provider) {

@@ -305,3 +305,11 @@ test('setup cannot change approved v2 scopes, capabilities or UI metadata', asyn
   const result = await done(f.installer, f.installer.confirm(preview.token).id);
   assert.equal(result.state, 'failed'); assert.match(result.error, /manifest changed/); assert(!fs.existsSync(preview.target)); await f.installer.close();
 });
+
+test('conversation-only assistant rejects hosts without resource popovers',()=>{
+ const f=fixture(),raw=JSON.parse(fs.readFileSync(new URL('../examples/extensions/personal-assistant/ashub-plugin.json',import.meta.url),'utf8'));
+ const parsed=f.manifest.parsePluginManifest(raw,'ashub-personal-assistant');
+ const old=f.manifest.HOST_PLUGIN_CAPABILITIES.filter(x=>x!=='conversation-resource-popovers');
+ assert.equal(f.manifest.pluginCompatibility(parsed,{capabilities:old}).compatible,false);
+ assert.equal(f.manifest.pluginCompatibility(parsed).compatible,true);
+});

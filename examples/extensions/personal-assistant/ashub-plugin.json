@@ -17,29 +17,14 @@
       "background-services",
       "conversation-entries",
       "scoped-history",
-      "remote-resources"
-    ]
-  },
-  "ui": {
-    "version": 1,
-    "panels": [
-      {
-        "id": "assistant",
-        "title": "个人助手",
-        "icon": "panel",
-        "components": [
-          {
-            "type": "resource",
-            "id": "assistant"
-          }
-        ]
-      }
+      "remote-resources",
+      "conversation-resource-popovers"
     ]
   },
   "permissions": [
     "只读取个人助手专属对话，经用户授权后进行有额度限制的后台整理",
     "记忆存储在本机，可追溯、纠正和忘记；其他对话默认不参与学习或召回",
-    "已共享的个人助手可在远控端访问与管理记忆，首次启用在桌面确认"
+    "已共享的个人助手可在远控端聊天及关闭长期记忆，开启授权在桌面确认"
   ],
   "configNamespaces": []
 }

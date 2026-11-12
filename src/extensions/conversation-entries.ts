@@ -19,6 +19,7 @@ export class ConversationEntries {
   }
   private save(){if(this.fault)throw this.fault;fs.mkdirSync(path.dirname(this.file),{recursive:true});const tmp=this.file+'.tmp';fs.writeFileSync(tmp,JSON.stringify(this.bindings),{mode:0o600,flush:true});fs.renameSync(tmp,this.file);}
   bind(pluginId:string,signal:AbortSignal){return Object.freeze({
+    supportsEntryBackground:true,
     register:(key:string,spec:Spec)=>{
       signal.throwIfAborted();if(this.fault)throw this.fault;if(!/^[a-z][a-z0-9-]{0,79}$/.test(key)||!spec||typeof spec.label!=='string'||spec.label.length>100||!path.isAbsolute(spec.cwd)||!/^[a-z][a-z0-9-]{0,79}$/.test(spec.resource))throw Error('Invalid conversation entry');
       if(spec.setupResource !== undefined && !/^[a-z][a-z0-9-]{0,79}$/.test(spec.setupResource))throw Error('Invalid setup resource');

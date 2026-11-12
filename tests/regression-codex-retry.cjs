@@ -144,3 +144,12 @@ test('refreshing an equivalent configuration does not interrupt retries',async()
   try {assert.deepEqual(await collect(x.client.stream({model:'original'})),['ok']);assert.equal(calls,2);}
   finally {release();}
 });
+
+test('background retry notices stay silent while concurrent foreground retries remain visible',async()=>{
+ const notices=[];const e=env({modules:{'node:timers/promises':{setTimeout:async()=>{await new Promise(r=>setImmediate(r));}}}});
+ const {guardCodexRetries,withSilentCodexRetries}=e.load('src/providers/codex-retry.ts');
+ const attempts=new Map();const client={async *stream(o){const n=attempts.get(o.id)||0;attempts.set(o.id,n+1);if(!n)throw failure();yield {ok:true};}};
+ guardCodexRetries(client,m=>notices.push(m));
+ await Promise.all([withSilentCodexRetries(()=>collect(client.stream({id:'background'}))),collect(client.stream({id:'foreground'}))]);
+ assert.equal(notices.length,1);assert.equal(attempts.get('background'),2);assert.equal(attempts.get('foreground'),2);
+});

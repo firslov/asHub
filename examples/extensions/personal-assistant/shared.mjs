@@ -79,9 +79,9 @@ export class Assistant {
     const target=original?.role==='user' && !original.more ? explicitMemoryIntent(original.text,args.quote,'forget') : null;
     if(!target)throw Error('需要用户明确的遗忘要求');
     const row=this.store.check(args.id,args.revision);if(!this.visible(row))throw Error('记忆不可用');
-    if(!matchesTarget(target,row))throw Error('遗忘目标与指定记忆不匹配，请明确指定记忆标题或完整内容，或从记忆面板选择');
+    if(!matchesTarget(target,row))throw Error('遗忘目标与指定记忆不匹配，请明确指定记忆标题或完整内容');
     const matching=this.store.memoryTargets().filter(other=>this.visible(other)&&matchesTarget(target,other));
-    if(matching.some(other=>other.id!==row.id))throw Error('遗忘目标匹配多条记忆，请使用具体记忆 ID 或从记忆面板选择');
+    if(matching.some(other=>other.id!==row.id))throw Error('遗忘目标匹配多条记忆，请先澄清要忘记的具体内容，再使用明确指定的记忆 ID');
     this.store.forget(row.id,row.revision);return {forgotten:true};
   }
   stop() { if (this.stopped) return; this.stopped = true; this.learning.stop(); this.store.close(); }
@@ -96,7 +96,7 @@ export class Assistant {
     if (!session || (!binding && !automatic) || !this.store.profile().enabled) return null;
     return { session, scopes: ['conversation:' + id, ...(session.projectId ? ['project:' + session.projectId] : []), ...((binding ? binding.personal : automatic) ? ['personal'] : [])] };
   }
-  require(id) { const access = this.scope(id); if (!access) throw Error('此对话未关联个人助手或记忆已暂停，请在个人助手面板中设置'); return access; }
+  require(id) { const access = this.scope(id); if (!access) throw Error('此对话未关联个人助手或记忆已暂停，请通过个人助手标签右侧的记忆开关开启'); return access; }
   validateScope(scope) {
     if(this.dedicated && scope !== 'personal' && scope !== 'conversation:'+this.conversationId()) throw Error('仅支持个人助手专属记忆');
     const snapshot = this.snapshot();

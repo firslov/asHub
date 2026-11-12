@@ -62,3 +62,16 @@ test('plugins cannot move mandatory authorization fields into collapsed diagnost
  const result=await f.call({action:'create',values:{}},'collapse');assert.equal(result.status,200);
  assert.equal(result.value.confirmation.preview.details,undefined);assert(result.value.confirmation.preview.fields.length>0);assert.equal(f.commits(),0);f.messages.close();
 });
+
+test('combined entry grants reject hidden scope overrides and freeze the displayed budget',async()=>{
+ const f=fixture(),{PluginInteractions}=f.e.load('src/extensions/interactions.ts');let approved;
+ const bg={prepare:(_id,input)=>input,approve:(_id,input)=>{approved=input;return 'grant';},bind:()=>({revoke(){}})};
+ const conversations={prepare:async()=>({fields:[]}),approve:async()=> 'owned'};
+ const ui=new PluginInteractions(f.messages,()=>{},f.life.signal,async(_,run)=>run(),bg,conversations);
+ let config={dailyCalls:4,includeHistory:true,followModel:true,modelSessionId:'other',includedIds:['other']};
+ ui.bind('plugin',f.plugin.signal).register('compound',{view:()=>({actions:[],rows:[]}),prepare:()=>({entryAuthorization:{key:'assistant',model:'m',provider:'p'},entryBackground:config,execute:()=>({actions:[],rows:[]})})});
+ const call=async(body)=>{const res=new Res();await ui.handle(req(body,'/api/plugin-resources/plugin/compound','POST'),res,async()=>JSON.stringify(body));return {status:res.statusCode,...res.json()};};
+ assert.equal((await call({action:'create',values:{}})).status,409,'unshown scopes must be rejected');
+ config={dailyCalls:4,includeHistory:true,followModel:true};const preview=await call({action:'create',values:{}});config.dailyCalls=24;
+ assert.equal((await call({confirm:preview.confirmation.id})).status,200);assert.equal(approved.dailyCalls,4);assert.deepEqual(Array.from(approved.includedIds),['owned']);f.messages.close();
+});

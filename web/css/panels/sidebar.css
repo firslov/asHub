@@ -815,12 +815,9 @@
 .conversation-entry[data-active="true"]{background:var(--accent-soft);color:var(--accent-dim)}
 .conversation-entry button{font:inherit;font-size:var(--fs-sm);font-weight:500;line-height:1.5;color:inherit;background:none;border:0;cursor:pointer;min-height:38px;border-radius:var(--radius-sm)}
 .conversation-entry-open{flex:1;min-width:0;padding:8px 12px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.conversation-entry .conversation-entry-manage{flex:none;width:32px;min-height:32px;padding:0;margin-right:3px;font-size:var(--fs-md);color:var(--text-faint)}
-.conversation-entry .conversation-entry-manage:hover{background:var(--bg3);color:var(--text)}
 .conversation-entry button:focus-visible{outline:2px solid var(--accent-dim);outline-offset:-2px}
 @media (pointer:coarse){
   .conversation-entry button{min-height:44px}
-  .conversation-entry .conversation-entry-manage{width:44px;min-height:44px}
 }
 
 /* The first-use resource lives in the reading canvas, not in a settings drawer. */
@@ -838,3 +835,37 @@
 .conversation-welcome :is(button,input,select){min-height:40px}
 
 .plugin-conversation-empty .stream-empty-hints{display:none!important}
+
+/* Plugin-owned conversation resources stay close to the conversation. */
+.conversation-memory-dialog{margin:auto;padding:0;width:min(440px,calc(100vw - 32px));max-height:80dvh;box-sizing:border-box;border:1px solid var(--border-mid);border-radius:20px;background:var(--bg);color:var(--text);box-shadow:var(--shadow-lg);overflow:auto}
+.conversation-memory-dialog::backdrop{background:rgb(0 0 0 / 24%)}
+.conversation-memory-dialog .p-head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:0}
+.conversation-memory-dialog .p-body{padding:4px 20px 20px}
+.conversation-memory-dialog .extension-resource-note{padding-bottom:0;border-bottom:0}
+@media(max-width:600px){.conversation-memory-dialog{margin:auto 0 0;width:100%;max-height:85dvh;border-radius:20px 20px 0 0;padding-bottom:env(safe-area-inset-bottom)}}
+
+.conversation-welcome .plugin-config-label:has(input[type="checkbox"]){display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px;min-height:40px}
+.conversation-welcome input[type="checkbox"]{width:18px;height:18px;min-height:0;flex:0 0 18px;margin:0;padding:0;accent-color:var(--accent)}
+
+/* Compact resource controls keep settings on their conversation entry. */
+.conversation-entry-control,.plugin-entry-control{flex:none;position:relative;margin-right:3px;min-width:44px}
+.resource-toggle-host>.extension-resource{display:flex;align-items:center;justify-content:center}
+.resource-toggle-host>.plugins-message:empty{display:none}
+.resource-toggle-host>.plugins-message:not(:empty){position:absolute;z-index:5;right:0;top:100%;width:200px;padding:8px 10px;border-radius:8px;background:var(--bg);border:1px solid var(--border,var(--line));font-size:12px;overflow-wrap:anywhere}
+.resource-inline-toggle,.resource-inline-setup{position:relative;display:block;width:44px;height:40px;min-height:40px;padding:0!important;border:0!important;border-radius:8px;background:transparent!important;box-shadow:none!important;color:inherit;cursor:pointer}
+.resource-inline-toggle::before{content:'';position:absolute;width:28px;height:16px;left:8px;top:12px;border-radius:999px;background:var(--text-faint,var(--muted));opacity:.35;transition:background .15s,opacity .15s}
+.resource-inline-toggle::after{content:'';position:absolute;width:12px;height:12px;left:10px;top:14px;border-radius:50%;background:var(--bg);box-shadow:0 1px 2px #0002;transition:transform .15s}
+.resource-inline-toggle[aria-checked=true]::before{background:var(--accent);opacity:1}
+.resource-inline-toggle[aria-checked=true]::after{transform:translateX(12px)}
+.resource-inline-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+.resource-inline-toggle:disabled{cursor:default;opacity:.55}
+.resource-toggle-confirm{margin:auto;width:min(440px,calc(100vw - 32px));max-height:80dvh;box-sizing:border-box;padding:24px;border:1px solid var(--border,var(--line));border-radius:20px;background:var(--bg);color:var(--text);box-shadow:0 12px 48px #0003;overflow:auto}
+.resource-toggle-confirm::backdrop{background:#0004}
+@media(pointer:coarse){.resource-inline-toggle,.resource-inline-setup{height:44px;min-height:44px}.resource-inline-toggle::before{top:14px}.resource-inline-toggle::after{top:16px}}
+@media(prefers-reduced-motion:reduce){.resource-inline-toggle::before,.resource-inline-toggle::after{transition:none}}
+
+.resource-toggle-confirm .extension-resource-title{margin:0 0 20px;font-size:18px;font-weight:600}
+.resource-toggle-confirm .extension-resource-review{display:grid;grid-template-columns:1fr;gap:6px;margin:0;line-height:1.65;font-size:13px}
+.resource-toggle-confirm dt{color:var(--text-faint,var(--muted));margin-top:10px}
+.resource-toggle-confirm dd{margin:0;overflow-wrap:anywhere}
+.resource-toggle-confirm .extension-resource-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}

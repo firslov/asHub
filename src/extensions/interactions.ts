@@ -15,6 +15,7 @@ export interface ResourcePlan {
     authorization?: MessageGrant;
     backgroundAuthorization?: BackgroundGrantInput;
     entryAuthorization?: EntryInput;
+    entryBackground?: {dailyCalls:number; includeHistory:boolean; followModel:boolean};
     execute(grantId?: string): unknown | Promise<unknown>;
 }
 export interface PluginResource {
@@ -122,6 +123,8 @@ export class PluginInteractions {
                         throw Error('Invalid action plan');
                     if (remoteSession !== null && (plan.authorization || plan.backgroundAuthorization || plan.entryAuthorization)) throw Error('请在桌面端确认授权');
                     if ([plan.authorization,plan.backgroundAuthorization,plan.entryAuthorization].filter(Boolean).length > 1) throw Error('Conflicting authorizations');
+                    if(plan.entryBackground !== undefined && (!plan.entryBackground || Object.keys(plan.entryBackground).some(k=>!['dailyCalls','includeHistory','followModel'].includes(k)) || !Number.isInteger(plan.entryBackground.dailyCalls) || plan.entryBackground.dailyCalls < 1 || plan.entryBackground.dailyCalls > 24 || typeof plan.entryBackground.includeHistory !== 'boolean' || plan.entryBackground.followModel !== true || !plan.entryAuthorization || !this.background)) throw Error('Invalid entry memory authorization');
+                    const entryBackground = plan.entryBackground ? {dailyCalls:plan.entryBackground.dailyCalls,includeHistory:plan.entryBackground.includeHistory,followModel:plan.entryBackground.followModel} : undefined;
                     const conversation = plan.entryAuthorization ? await this.conversations?.prepare(entry.pluginId,plan.entryAuthorization) : undefined;
                     if (plan.entryAuthorization && !conversation) throw Error('Conversation entries unavailable');
                     const authorization = plan.authorization ? this.messages.prepare(entry.pluginId, plan.authorization) : undefined;
@@ -130,11 +133,14 @@ export class PluginInteractions {
                     const background = plan.backgroundAuthorization ? this.background!.prepare(entry.pluginId, plan.backgroundAuthorization) : undefined;
                     const run = () => this.run(entry.pluginId, async () => {
                         guard();
-                        const grantId = conversation ? await this.conversations!.approve(entry.pluginId,conversation) : authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : undefined;
+                        let grantId = conversation ? await this.conversations!.approve(entry.pluginId,conversation) : authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : undefined;
+                        let memoryGrant: string | undefined;
                         try {
+                            if(entryBackground){guard(); const sid=grantId!; memoryGrant=this.background!.approve(entry.pluginId,this.background!.prepare(entry.pluginId,{...entryBackground,modelSessionId:sid,includedIds:[sid],excludedIds:[]}));grantId=memoryGrant;}
                             return { view: clone(await plan.execute(grantId)) };
                         }
                         catch (error) {
+                            if(memoryGrant)try{this.background!.bind(entry.pluginId,entry.signal).revoke(memoryGrant);}catch{}
                             if (grantId && !conversation)
                                 try {
                                     if (background) this.background!.bind(entry.pluginId, entry.signal).revoke(grantId);
@@ -156,6 +162,7 @@ export class PluginInteractions {
                         delete preview.details;
                         if (background?.details) preview.details = background.details;
                         preview.fields.push(...conversation?.fields ?? []);
+                        if(entryBackground)preview.fields.push({label:'长期记忆',value:`仅整理此专属对话的${entryBackground.includeHistory?'已有及后续':'授权后新增'}聊天；跟随此对话当前及今后选择的模型服务与 VPN。每天最多 ${entryBackground.dailyCalls} 次整理，失败计入额度，每次输入最多 16000 字符、输出最多 4096 tokens；可能产生费用，不执行工具，可随时关闭`});
                         const id = randomUUID();
                         this.pending.set(id, { key, context, entry, expires: Date.now() + 300000, run });
                         result = { confirmation: { id, preview } };

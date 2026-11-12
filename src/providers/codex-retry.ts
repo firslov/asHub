@@ -1,5 +1,9 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { setTimeout as wait } from "node:timers/promises";
 import { getSettings } from "agent-sh/settings";
+
+const silentRetries = new AsyncLocalStorage<boolean>();
+export const withSilentCodexRetries = <T>(run: () => T): T => silentRetries.run(true, run);
 
 export const CODEX_HEADERS_TIMEOUT_MS = 15 * 60_000;
 type Options = { signal?: AbortSignal; [key: string]: unknown };
@@ -114,7 +118,7 @@ export function guardCodexRetries(value: unknown, notify: (message: string) => v
           if (deadline) deadlineRetries++;
           const ms = delayFor(error, attempt, deadline);
           const reason = error.error.status === 429 ? "rate limited" : `error ${error.error.status}`;
-          notify(`(${reason}, retrying in ${Math.ceil(ms / 1000)}s — attempt ${attempt + 2}/${maxRetries + 1})`);
+          if (!silentRetries.getStore()) notify(`(${reason}, retrying in ${Math.ceil(ms / 1000)}s — attempt ${attempt + 2}/${maxRetries + 1})`);
           await wait(ms, undefined, { signal: options.signal });
         }
       }

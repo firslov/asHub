@@ -56,7 +56,8 @@ export function createPolicyFetch(proxied: typeof fetch, nodeFetch: typeof fetch
     let url = input instanceof Request ? input.url : String(input);
     try { url = new URL(url).href; } catch { /* Let fetch report invalid URLs. */ }
     const headerId = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('session_id');
-    const id = headerId && endpoints.get(url)?.has(headerId) ? headerId : context.getStore();
+    const ownerId = headerId?.endsWith(':background') ? headerId.slice(0, -':background'.length) : headerId;
+    const id = ownerId && endpoints.get(url)?.has(ownerId) ? ownerId : context.getStore();
     const policy = read();
     const enabled = (id ? policy.sessions[id] : undefined) ?? policy.proxyEnabled;
     // Explicit dispatcher bypasses the environment proxy without mutating global

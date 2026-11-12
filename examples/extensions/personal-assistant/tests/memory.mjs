@@ -41,9 +41,7 @@ test('a proposal is never recalled until reviewed; exact retries share one candi
   const first = f.a.propose('a', proposal), retry = f.a.propose('a', proposal);
   assert.equal(first.id, retry.id); assert.equal(f.db.counts().candidate, 1);
   assert.equal(f.a.search('a', '周报').length, 0);
-  const plan = f.panel.prepare('approve', first); assert(plan.preview);
-  assert.equal(f.a.search('a', '周报').length, 0, 'prepare does not authorize');
-  plan.execute(); assert.equal(f.a.search('a', '周报').length, 1);
+  f.db.approve(first.id, first.revision); assert.equal(f.a.search('a', '周报').length, 1);
 });
 test('authorization remains required but provenance and legacy personal flags no longer isolate recall', t => {
   const f = fixture(t);
@@ -60,20 +58,19 @@ test('authorization remains required but provenance and legacy personal flags no
   f.snapshot.sessions[0].cwd = '/work/replaced'; assert.equal(f.a.scope('a'), null);
   f.snapshot.sessions.splice(1, 1); assert.equal(f.a.scope('b'), null);
 });
-test('association requires confirmed unchanged target and rejects terminal sessions', t => {
-  const f = fixture(t), plan = f.panel.prepare('bind', { conversationId: 'a', personal: true });
-  assert.equal(f.a.scope('a'), null); assert(plan.preview.fields.some(f => f.label === '模型服务'));
-  f.snapshot.sessions[0].cwd = '/changed'; assert.throws(() => plan.execute(), /变化/);
+test('removed manual association routes cannot bind any conversation', t => {
+  const f = fixture(t);
+  for (const conversationId of ['a', 'terminal'])
+    assert.throws(() => f.panel.prepare('bind', {conversationId, personal:true}), /不支持/);
   assert.equal(f.db.bindings().length, 0);
-  assert.throws(() => f.panel.prepare('bind', { conversationId: 'terminal', personal: true }), /可用/);
 });
 test('candidate replacement is atomic and revision-checked, and forgotten proposals cannot replay', t => {
   const f = fixture(t); f.db.bind('a', '/work/a', true);
   const old = f.db.add(input(), user, 'active');
   const next = f.a.propose('a', { ...input({ content: '周报改用表格' }), reason: '用户纠正格式', replaces: old.id, replacesRevision: old.revision });
   assert.equal(f.a.read('a', old.id).content, old.content);
-  const approved = f.panel.prepare('approve', next).execute();
-  assert(approved.rows[0].detail.includes('表格'));
+  const approved = f.db.approve(next.id,next.revision);
+  assert(approved.content.includes('表格'));
   assert.equal(f.a.propose('a', { ...input({ content: '周报改用表格' }), reason: '用户纠正格式', replaces: old.id, replacesRevision: old.revision }).state, 'active', 'retry after approval returns existing memory');
   assert.equal(f.db.get(old.id).state, 'retired'); assert.throws(() => f.a.read('a', old.id));
   const active = f.db.get(next.id);
@@ -89,15 +86,15 @@ test('concurrent user edit invalidates a prepared approval without retiring orig
   const f = fixture(t); f.db.bind('a', '/work/a', true);
   const old = f.db.add(input(), user, 'active');
   const next = f.a.propose('a', { ...input({ content: '模型的修订' }), reason: '提议', replaces: old.id, replacesRevision: old.revision });
-  const plan = f.panel.prepare('approve', next);
+  const approve = () => f.db.approve(next.id,next.revision);
   f.db.edit(old.id, old.revision, input({ content: '用户的新要求' }));
-  assert.throws(() => plan.execute(), /变化/);
+  assert.throws(() => approve(), /变化/);
   assert.equal(f.db.get(old.id).state, 'active'); assert.equal(f.db.get(next.id).state, 'candidate');
 });
-test('candidate from revoked source cannot be activated by a stale confirmation', t => {
+test('candidate from revoked source cannot be activated through a removed UI action', t => {
   const f = fixture(t); f.db.bind('a', '/work/a', true);
-  const proposal = f.a.propose('a', { ...input(), reason: '用户偏好' }), plan = f.panel.prepare('approve', proposal);
-  f.db.unbind('a'); assert.throws(() => plan.execute(), /未关联/);
+  const proposal = f.a.propose('a', { ...input(), reason: '用户偏好' });
+  f.db.unbind('a'); assert.throws(() => f.panel.prepare('approve', proposal), /不支持/);
   assert.equal(f.db.get(proposal.id).state, 'candidate');
 });
 test('edit, bounded version history, restore and forget do not resurrect old content', t => {
@@ -106,20 +103,19 @@ test('edit, bounded version history, restore and forget do not resurrect old con
   for (let i = 0; i < 12; i++) row = f.db.edit(row.id, row.revision, input({ content: '格式' + i }));
   assert.equal(f.db.history(row.id).length, 10);
   const previous = f.db.history(row.id)[1];
-  const restore = f.panel.prepare('restore', { id: row.id, revision: row.revision, version: previous.revision });
-  assert(restore.preview); restore.execute();
+  f.db.edit(row.id,row.revision,previous.value);
   assert.equal(f.db.get(row.id).content, previous.value.content);
   row = f.db.get(row.id);
-  const removal = f.panel.prepare('forget', row); assert(f.db.search('格式', ['personal']).length);
-  removal.execute(); assert.equal(f.db.history(row.id).length, 0); assert.equal(f.db.search('格式', ['personal']).length, 0);
+  assert(f.db.search('格式', ['personal']).length);
+  f.db.forget(row.id,row.revision); assert.equal(f.db.history(row.id).length, 0); assert.equal(f.db.search('格式', ['personal']).length, 0);
 });
 test('profile pause rejects memory tools and recall while preserving data', t => {
   const f = fixture(t); f.db.bind('a', '/work/a', true); f.db.add(input(), user, 'active');
-  const p = f.db.profile(), plan = f.panel.prepare('configure', { name: '我的助手', enabled: false, revision: p.revision });
-  plan.execute();
+  const p = f.db.profile(), pause = () => f.db.configure({ name: '我的助手', enabled: false }, p.revision);
+  pause();
   assert.equal(f.a.scope('a'), null); assert.throws(() => f.a.propose('a', { ...input(), reason: 'no' }));
   assert.equal(f.db.counts().active, 1);
-  assert.throws(() => plan.execute(), /变化/);
+  assert.throws(() => pause(), /变化/);
 });
 test('scope validation, runtime argument validation and Unicode are bounded', t => {
   const f = fixture(t); f.db.bind('a', '/work/a', true);
@@ -201,8 +197,7 @@ test('application stop revokes existing session tools and a late disposal cannot
 test('explicit user recreation is allowed after forgetting', t => {
   const f = fixture(t), row = f.db.add(input(), user, 'active');
   f.db.forget(row.id, row.revision);
-  const plan = f.panel.prepare('save', input()); assert(plan.preview);
-  const view = plan.execute(); assert.equal(view.rows[0].title, '周报格式');
+  const recreated=f.db.add(input(),{type:'user',userOperation:'explicit-new-operation'},'active');assert.equal(recreated.title,'周报格式');
   assert.equal(f.db.counts().active, 1);
 });
 
@@ -256,7 +251,7 @@ test('proposal retries cannot report edited content as the original accepted mem
   const f = fixture(t); f.db.bind('a', '/work/a', true);
   const proposal = { ...input(), reason: '用户明确要求' };
   const candidate = f.a.propose('a', proposal);
-  f.panel.prepare('approve', candidate).execute();
+  f.db.approve(candidate.id,candidate.revision);
   const accepted = f.db.get(candidate.id);
   const changed = f.db.edit(accepted.id, accepted.revision, input({ content: '周报按时间顺序展开' }));
   assert.throws(() => f.a.propose('a', proposal), /已修改/);
@@ -265,14 +260,14 @@ test('proposal retries cannot report edited content as the original accepted mem
   // An explicit revision against the current memory still works.
   const revision = f.a.propose('a', { ...proposal, replaces: changed.id, replacesRevision: changed.revision });
   assert.equal(revision.state, 'candidate');
-  f.panel.prepare('approve', revision).execute();
+  f.db.approve(revision.id,revision.revision);
   assert.equal(f.a.read('a', revision.id).content, proposal.content);
 });
 
 test('deduplicated proposals are rechecked after their memory moves to another scope', t => {
   const f = fixture(t); f.db.bind('a', '/work/a', true);
   const proposal = { ...input(), reason: '用户明确要求' }, candidate = f.a.propose('a', proposal);
-  f.panel.prepare('approve', candidate).execute();
+  f.db.approve(candidate.id,candidate.revision);
   const accepted = f.db.get(candidate.id);
   f.db.edit(accepted.id, accepted.revision, input({ scope: 'project:q' }));
   assert.equal(f.a.read('a', accepted.id).context.projectId, 'q', 'scope remains provenance, not a read boundary');
@@ -292,6 +287,6 @@ test('bounded previews preserve Unicode pairs, enforce the original budget and l
   }
   assert.equal(previewText('hello',3),'hel');assert.equal(previewText('🟡',1),'');assert.equal(previewText('🟡',2),'🟡');assert.equal(previewText('文本',0),'');
   const row=f.db.add(input({content:'文'.repeat(239)+'🟡后文'}),user,'active');
-  assert(f.panel.row(row).detail.isWellFormed());assert.equal(f.panel.row(row).detail.length,239);
+  assert(previewText(row.content,240).isWellFormed());assert.equal(previewText(row.content,240).length,239);
   assert.equal(f.db.get(row.id).content,row.content);
 });

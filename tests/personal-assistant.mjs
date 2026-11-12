@@ -62,6 +62,12 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
   const instruction = session => session.core.handlers.call('instruction:personal-assistant');
   assert(!visible(a).some(name => name.startsWith('assistant_memory_')));
   assert.match(instruction(a), /常驻个人助手.*长期记忆未开启/);
+  const assertDisabledGuidance = async () => {
+    const status=JSON.parse((await a.tool('assistant_memory_status').execute({})).content),guide=instruction(a);
+    assert.deepEqual({connected:status.connected,automatic:status.automatic,inlineSwitch:/标签右侧.*开关/.test(guide),removedMenu:/更多菜单|个人助手面板/.test(guide+' '+status.note),claimsOldRecall:/可读取此前授权的记忆/.test(status.note)},
+      {connected:false,automatic:false,inlineSwitch:true,removedMenu:false,claimsOldRecall:false},JSON.stringify({guide,status}));
+  };
+  await assertDisabledGuidance();
   auto=true;const bind=resource.prepare('authorize');assert(bind.preview);bind.execute('grant');
   assert.equal(visible(a).filter(name => name.startsWith('assistant_memory_')).length, 5);
   assert.match(instruction(a), /常驻个人助手/);
@@ -94,6 +100,9 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
   assert.equal(JSON.parse((await invoke('assistant_memory_search', { query: '报告' })).content).length, 1);
   assert(!visible(b).some(name=>name.startsWith('assistant_memory_')));
   resources.get('assistant').prepare('pause').execute();
+  await assertDisabledGuidance();
+  const disabledRead=await invoke('assistant_memory_search',{query:'报告'});assert(disabledRead.isError);assert.match(disabledRead.content,/标签右侧.*开关/);
+  assert.deepEqual(a.core.handlers.call('conversation:prepare',raw),raw);
   assert(!visible(a).some(name=>name.startsWith('assistant_memory_')));
   assert(!visible(b).some(name=>name.startsWith('assistant_memory_')));
   const cancelled = new AbortController(); cancelled.abort();

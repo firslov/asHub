@@ -67,8 +67,8 @@ test('revocation or scope changes during inference prevent committing stale resu
 });
 test('invalid output retains the cursor for recovery, with bounded batches and no automatic recursive retry',async t=>{
  const f=fixture(t);f.enable();f.records.push({id:'u1',role:'user',text:'请记住以后汇报先给结论',at:1});f.api.infer=async()=>'{broken';await f.a.learning.tick();assert.equal(f.a.store.state('scan:a').cursor,undefined);assert(f.a.store.state('scan:a').checked);assert(f.a.learning.error);
- assert.equal(f.panel.prepare('learning').execute().form.action,'learning-start');
- const plan=f.panel.prepare('learning-start',{modelSessionId:'a',dailyCalls:'4',excludedIds:'b, c',includeHistory:false});assert(plan.backgroundAuthorization);assert.throws(()=>plan.execute(),/授权/);
+ assert.throws(()=>f.panel.prepare('learning'),/不支持/);
+ assert.throws(()=>f.panel.prepare('learning-start',{modelSessionId:'a'}),/不支持/);
 });
 
  test('brief enduring preferences are learned and a failing conversation cannot monopolize subsequent batches',async t=>{

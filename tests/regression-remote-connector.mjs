@@ -406,13 +406,13 @@ test('plugin resources preserve exactly-once receipts, isolate shared owners and
  c.sessions=async()=>shared?[{instanceId:'abcdef'}]:[];
  c.session=async id=>{if(!shared||id!=='abcdef')throw Error('not shared');return {instanceId:id};};
  c.local=async(route)=>{
-  if(route==='/api/plugin-conversations')return [{pluginId:'plugin',key:'assistant',resource:'assistant',label:'助手',sessionId:'abcdef'},{pluginId:'other',key:'assistant',resource:'assistant',label:'私有',sessionId:'bbbbbb'}];
-  if(route==='/api/plugin-resource-catalog')return [{pluginId:'plugin',resourceId:'assistant',sessionId:'abcdef'}];
-  assert.equal(route,'/api/plugin-resources/plugin/assistant?remoteSession=abcdef');calls++;
+  if(route==='/api/plugin-conversations')return [{pluginId:'0123456789abcdef01234567',key:'assistant',resource:'assistant',label:'助手',sessionId:'abcdef'},{pluginId:'other',key:'assistant',resource:'assistant',label:'私有',sessionId:'bbbbbb'}];
+  if(route==='/api/plugin-resource-catalog')return [{pluginId:'0123456789abcdef01234567',resourceId:'assistant',sessionId:'abcdef'}];
+  assert.equal(route,'/api/plugin-resources/0123456789abcdef01234567/assistant?remoteSession=abcdef');calls++;
   if(delay)return new Promise(r=>release=r);return {view:{actions:[],rows:[{title:'private memory'}]}};
  };
  assert.equal((await c.execute('plugin-entries',{})).length,1);
- const args={session:'abcdef',pluginId:'plugin',resourceId:'assistant'};
+ const args={session:'abcdef',pluginId:'0123456789abcdef01234567',resourceId:'assistant'};
  assert.equal((await c.execute('plugin-resource',args)).view.rows[0].title,'private memory');
  const action={...args,body:{action:'detail',values:{}},requestId:'resource-request-0001'};
  const write=await c.execute('plugin-resource',action);await waitFor(()=>write.state==='done');const before=calls;await c.execute('plugin-resource',action);assert.equal(calls,before);

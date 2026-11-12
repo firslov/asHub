@@ -51,15 +51,18 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
     const core = createCore({ apiKey: 'offline-test-only', baseURL: 'http://127.0.0.1:1/v1', model: 'test-model' }), ctx = core.extensionContext({ quit() {} });
     preparePluginRegistrations(ctx); activateAgent(ctx); preparePluginRegistrations(ctx);
     core.handlers.define('session:current-id', () => id);
-    const runtime = new PluginRuntime(file); t.after(() => { runtime.close(); core.kill(); });
-    assert.deepEqual(await runtime.load(ctx), ['个人助手']);
+    const runtime = new PluginRuntime(file, undefined, undefined, undefined, undefined, (pluginId, keys) => pluginId === entry.id && keys.includes('assistant') && id === 'a'); t.after(() => { runtime.close(); core.kill(); });
+    assert.deepEqual(await runtime.load(ctx), id === 'a' ? ['个人助手'] : []);
+    assert.equal(runtime.status.length, id === 'a' ? 1 : 0);
     core.bus.emit('core:extensions-loaded', { names: [] });
     await core.activateBackend();
     return { ctx, core, runtime, tool: name => ctx.agent.getTools().find(t => t.name === name) };
   };
   const a = await make('a'), b = await make('b'), resource = resources.get('assistant');
   const visible = session => session.core.bus.emitPipe('agent:tools:visible', { tools: session.ctx.agent.getTools() }).tools.map(tool => tool.name);
-  const instruction = session => session.core.handlers.call('instruction:personal-assistant');
+  const instruction = session => session.core.handlers.has('instruction:personal-assistant') ? session.core.handlers.call('instruction:personal-assistant') : '';
+  assert.equal(b.ctx.agent.getTools().some(tool => /^(assistant_memory_|assistant_history_)/.test(tool.name)), false);
+  assert.equal(b.core.handlers.has('instruction:personal-assistant'), false);
   assert(!visible(a).some(name => name.startsWith('assistant_memory_')));
   assert.match(instruction(a), /常驻个人助手.*长期记忆未开启/);
   const assertDisabledGuidance = async () => {
@@ -77,7 +80,7 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
   const proposed=JSON.parse((await invoke('assistant_memory_remember',{title:'报告格式',content:'用中文写报告，先给结论',kind:'preference',topic:'reports',quote:'用中文写报告，先给结论'})).content);
   assert.equal(proposed.state,'active');
   assert.equal(JSON.parse((await invoke('assistant_memory_search',{query:'报告'})).content).length,1);
-  assert((await b.tool('assistant_memory_read').execute({ id: proposed.id })).isError);
+  assert.equal(b.tool('assistant_memory_read'), undefined, 'ordinary kernel must not register memory tools');
   const raw = [{ role: 'system', content: 'unchanged' }, { role: 'user', content: [{ type: 'text', text: '报告' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,fixture' } }] }];
   const prepared = a.core.handlers.call('conversation:prepare', raw);
   assert.equal(prepared[0], raw[0]); assert.match(prepared[1].content[0].text, /用中文写报告/);

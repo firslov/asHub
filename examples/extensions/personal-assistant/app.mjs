@@ -9,8 +9,11 @@ export class AssistantPanel {
   overview() {
     const id=this.a.conversationId(),profile=this.store.profile(),running=!!id&&this.a.learning.access(id)&&profile.enabled;
     if(!id)return {actions:[action('setup','开启个人助手')],note:'一个专属对话，慢慢了解你',rows:[{title:'从这里开始',detail:'只从你与个人助手的交流中整理记忆，其他对话不受影响',actions:[]}]};
-    return {toggle:{label:'长期记忆',checked:running,action:running?'pause':'authorize'},actions:[action(running?'pause':'authorize',running?'关闭长期记忆':'开启长期记忆')],
-      note:(running?'长期记忆已开启':'长期记忆已关闭')+' · 只用于这段助手对话'+(running&&this.a.learning.error?'\n记忆整理暂缓，已有记忆仍可使用':''),rows:[]};
+    const health=this.a.learning.health();
+    const notice=running && health.errorClass==='capacity' ? '记忆整理暂缓 · 存储额度已满'
+      : running && health.errorClass && health.errorClass!=='quota' && health.failures>=2 ? '记忆整理暂缓 · 将自动重试' : '';
+    return {toggle:{label:'长期记忆',checked:running,action:running?'pause':'authorize',...(notice?{status:notice}:{})},actions:[action(running?'pause':'authorize',running?'关闭长期记忆':'开启长期记忆')],
+      note:(running?'长期记忆已开启':'长期记忆已关闭')+' · 只用于这段助手对话'+(notice?'\n'+notice+'；已有记忆仍可使用':''),rows:[]};
   }
 
   async welcome() {

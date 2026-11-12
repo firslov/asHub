@@ -25,3 +25,16 @@ test('first setup reports unavailable models without exposing unrelated settings
  const view=await p.welcome();assert.equal(view.form,undefined);assert.deepEqual(view.actions.map(a=>a.id),['retry']);assert.match(view.note,/模型提供商/);
  assert.deepEqual(p.overview().actions.map(a=>a.id),['setup']);
 });
+
+// The switch is authorization state; only a persistent fault adds a status line.
+test('inline entry reports persistent learning faults without adding settings', t=>{
+ const {a,p}=setup(t);a.services.conversations={get:()=> 'a'};a.learning.access=()=>true;
+ let health={failures:0,errorClass:null};a.learning.health=()=>health;
+ assert.equal(p.overview().toggle.status,undefined);
+ health={failures:1,errorClass:'network'};assert.equal(p.overview().toggle.status,undefined);
+ health={failures:2,errorClass:'network'};assert.match(p.overview().toggle.status,/暂缓/);
+ assert.equal(p.overview().toggle.checked,true);assert.deepEqual(p.overview().actions.map(x=>x.id),['pause']);
+ health={failures:3,errorClass:'quota'};assert.equal(p.overview().toggle.status,undefined,'daily quota is expected scheduling');
+ health={failures:1,errorClass:'capacity'};assert.match(p.overview().toggle.status,/已满/);
+ a.learning.access=()=>false;assert.equal(p.overview().toggle.status,undefined,'disabled memory has no stale warning');
+});

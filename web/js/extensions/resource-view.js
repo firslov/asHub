@@ -3,6 +3,7 @@ const node = (tag, cls = '', text) => { const e = document.createElement(tag); e
 import { lang } from '../i18n.js';
 const local = (zh, en) => lang.value === 'zh' ? zh : en;
 const fieldId = v => typeof v === 'string' && /^[a-z][a-zA-Z0-9-]{0,79}$/.test(v);
+let noticeSequence = 0;
 const id = v => typeof v === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(v);
 const text = (v, max = 8000) => typeof v === 'string' && v.length <= max;
 export function validateResourceView(v) {
@@ -13,7 +14,7 @@ export function validateResourceView(v) {
     if (v.openConversation !== undefined && (!text(v.openConversation,100) || !/^[-a-zA-Z0-9]+$/.test(v.openConversation)))
         throw Error('Invalid conversation reference');
     v.actions.forEach(action);
-    if (v.toggle !== undefined && (!v.toggle || !text(v.toggle.label,120) || typeof v.toggle.checked !== 'boolean' || !id(v.toggle.action)))
+    if (v.toggle !== undefined && (!v.toggle || !text(v.toggle.label,120) || typeof v.toggle.checked !== 'boolean' || !id(v.toggle.action) || (v.toggle.status !== undefined && !text(v.toggle.status,160))))
         throw Error('Invalid resource toggle');
     for (const r of v.rows) {
         if (r.conversationId !== undefined && (!text(r.conversationId, 100) || !/^[-a-zA-Z0-9]+$/.test(r.conversationId)))
@@ -48,7 +49,14 @@ export function mountResource(container, feature, resourceId, options = {}) {
     const base = `/api/plugin-resources/${encodeURIComponent(feature.pluginId)}/${encodeURIComponent(resourceId)}`;
     let disposed = false, busy = false, refreshing = true, view, editing = false, epoch = 0;
     let reviewDialog = null;
-    const closeReview = () => { const d=reviewDialog; reviewDialog=null; if(d?.contains(feedback))container.append(feedback); d?.remove(); };
+    const noticeId = 'resource-toggle-status-' + (++noticeSequence);
+    const restoreToggleFocus = () => queueMicrotask(() => {
+        // Replacing a switch or removing its dialog loses focus. Restore only
+        // while focus is unclaimed; a late response must not steal it elsewhere.
+        if (options.inlineToggle && !disposed && !reviewDialog && document.activeElement === document.body)
+            content.querySelector('button:not(:disabled)')?.focus();
+    });
+    const closeReview = () => { const d=reviewDialog, focused=d?.contains(document.activeElement); reviewDialog=null; if(d?.contains(feedback))container.append(feedback); d?.remove(); if(focused)restoreToggleFocus(); };
     const abort = new AbortController();
     const feedback = node('p', 'plugins-message');
     feedback.setAttribute('role', 'status');
@@ -90,7 +98,10 @@ export function mountResource(container, feature, resourceId, options = {}) {
                 d.showModal();
             } else content.replaceChildren();
             const p = data.confirmation.preview;
-            target.append(node('h3', 'extension-resource-title', p.title));
+            const title = node('h3', 'extension-resource-title', p.title);
+            title.id = noticeId + '-title';
+            target.append(title);
+            reviewDialog?.setAttribute('aria-labelledby', title.id);
             const review = fields => {
                 const dl = node('dl', 'extension-resource-review');
                 for (const f of fields) dl.append(node('dt', '', f.label), node('dd', '', f.value));
@@ -122,6 +133,7 @@ export function mountResource(container, feature, resourceId, options = {}) {
     const send = async (body) => {
         if (busy || disposed)
             return;
+        const focused = content.contains(document.activeElement) || reviewDialog?.contains(document.activeElement);
         busy = true;
         ++epoch;
         feedback.textContent = '';
@@ -147,11 +159,13 @@ export function mountResource(container, feature, resourceId, options = {}) {
             // An unchanged response may reuse the DOM; restore only applicable controls.
             for (const el of [...content.querySelectorAll('button,input,select,textarea'),...(reviewDialog?.querySelectorAll('button,input,select,textarea')??[])])
                 el.disabled = el.dataset.unavailable === 'true' || (!!reviewDialog && content.contains(el)) || !!el.closest('label[hidden]');
+            if (focused) restoreToggleFocus();
         }
     };
     const render = v => {
         if (!v || disposed)
             return;
+        const focused = content.contains(document.activeElement);
         content.replaceChildren();
         editing = !!v.form || v.refresh === false;
         if(options.inlineToggle){
@@ -159,12 +173,17 @@ export function mountResource(container, feature, resourceId, options = {}) {
                 const a=v.actions.find(a=>a.id===v.toggle.action),b=node('button','resource-inline-toggle');
                 b.type='button';b.setAttribute('role','switch');b.setAttribute('aria-label',v.toggle.label);b.setAttribute('aria-checked',String(v.toggle.checked));
                 b.disabled=!a;b.dataset.unavailable=String(!a);
-                b.title=v.toggle.label+' · '+local(v.toggle.checked?'已开启':'已关闭',v.toggle.checked?'On':'Off')+(!a?' · '+(v.note||local('当前不可更改','Currently unavailable')):'');
+                b.title=v.toggle.label+' · '+local(v.toggle.checked?'已开启':'已关闭',v.toggle.checked?'On':'Off')+(v.toggle.status?' · '+v.toggle.status:'')+(!a?' · '+(v.note||local('当前不可更改','Currently unavailable')):'');
                 b.addEventListener('click',()=>{if(a)void send({action:a.id,values:a.values});});
                 content.append(b);
+                if(v.toggle.status){
+                    const status=node('span','resource-inline-status',v.toggle.status);status.id=noticeId;status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+                    b.setAttribute('aria-describedby',noticeId);content.append(status);
+                }
             }else{
                 const b=node('button','resource-inline-setup','···');b.type='button';b.setAttribute('aria-label',local('设置对话','Set up conversation'));b.onclick=()=>options.onManage?.();content.append(b);
             }
+            if (focused) restoreToggleFocus();
             return;
         }
         const actions = node('div', 'extension-resource-actions');

@@ -6,19 +6,21 @@ import { pathToFileURL } from 'node:url';
 import { ensureTsSupport } from 'agent-sh/extension-loader';
 import { pluginCatalog, readPluginSettings } from '../plugins.js';
 import type { ApplicationExtensionContext, ApplicationExtensionDefinition, ApplicationExtensionInstance } from './application.js';
+import { adaptInstalledApplicationUI } from './installed-compatibility.js';
+import type { ApplicationExtensionServices } from './services.js';
 
 export interface InstalledApplicationContext extends ApplicationExtensionContext {
   readonly pluginId: string;
   /** Only explicitly injected host services are available; no implicit conversation identity. */
-  readonly services: Readonly<Record<string, unknown>>;
+  readonly services: ApplicationExtensionServices;
   getExtensionSettings<T extends Record<string, unknown>>(namespace: string, defaults: T): T;
 }
 /** Installed application/UI contributions use the same package catalog, disable flag and config
  * namespaces as session plugins. No executable module is imported during discovery. */
 export function installedApplicationDefinitions(settingsFile: string, options: {
   enableBrowserPages?(id: string, signal: AbortSignal): void;
-  services?: Readonly<Record<string, unknown>>;
-  bindServices?(pluginId: string, context: ApplicationExtensionContext): Readonly<Record<string, unknown>>;
+  services?: Partial<ApplicationExtensionServices>;
+  bindServices?(pluginId: string, context: ApplicationExtensionContext): Partial<ApplicationExtensionServices>;
 } = {}): ApplicationExtensionDefinition[] {
   const entries = pluginCatalog(settingsFile);
   const selected = entries.filter(entry => entry.applicationSpecifier || entry.manifest?.ui || entry.manifest?.requires.capabilities.includes('browser-pages'));
@@ -26,15 +28,7 @@ export function installedApplicationDefinitions(settingsFile: string, options: {
   const features = new Map(selected.map(entry => [entry.manifest!.id, featureId(entry.id)]));
   return selected.map(entry => {
     const manifest = entry.manifest!;
-    // Older browser ZIPs contributed a panel that only inserted an open-page prompt.
-    // Keep its session tools and native service, without registering the retired shortcut.
-    let ui = manifest.ui;
-    if (ui && manifest.id === 'ashub-browser-automation') {
-      const panels = ui.panels.filter(panel => panel.id !== 'browser' || panel.components.length !== 1 ||
-        panel.components[0].type !== 'action' || panel.components[0].action !== 'composer.insert' ||
-        panel.components[0].value !== '打开网页 https://');
-      ui = panels.length ? { ...ui, panels } : undefined;
-    }
+    const ui = adaptInstalledApplicationUI(manifest);
     const specifier = entry.applicationSpecifier;
     const enableBrowser = manifest.requires.capabilities.includes('browser-pages') ? options.enableBrowserPages : undefined;
     const stats = specifier && fs.existsSync(specifier) ? fs.statSync(specifier) : undefined;

@@ -26,6 +26,7 @@ function memoryTarget(value) {
 const targetContent=value=>memoryTarget(value).replace(/^(?:我|用户)(?=喜欢|偏好|希望|要求|认为|不|是|有|叫|从事|任职)/u,'');
 const matchesTarget=(target,row)=>[row.id,row.title,row.content,...(row.source.type==='learned' ? (row.source.refs ?? []).map(ref=>ref.quote) : [])]
   .some(value=>typeof value==='string' && targetContent(value)===targetContent(target));
+const generatedHistory = /^\[(?:Cross-conversation message|插件任务|Compacted conversation|Context checkpoint)/;
 const managers = new Map();
 export function current(directory) { return managers.get(path.resolve(directory)); }
 export class Assistant {
@@ -63,15 +64,31 @@ export class Assistant {
     const records=this.historySearch(id,args.quote).filter(r=>r.role==='user' && r.text.includes(args.quote));
     if(!records.length)throw Error('找不到当前授权对话中的原文，请重新搜索核对');
     const record=records.at(-1),target=this.learning.api.targets(c.grantId).find(t=>t.id===id);
-    const checked=this.learning.check({...args,scope:args.scope??'personal',certainty:'explicit',aliases:[],evidence:[{id:record.id,quote:args.quote}]},records,target,c.grantId);
+    let alignment, alignedPrior;
+    if(args.memoryId!==undefined || args.revision!==undefined || args.relation!==undefined){
+      if(typeof args.memoryId!=='string' || !Number.isSafeInteger(args.revision) || args.revision<1 || !['support','revise','contradict'].includes(args.relation))throw Error('修订需提供完整的记忆 ID、版本和关系');
+      const prior=this.store.check(args.memoryId,args.revision);
+      if(!this.visible(prior)||!this.learning.valid(prior))throw Error('原记忆当前不可用，请重新搜索核对');
+      alignedPrior=prior;alignment={memoryId:prior.id,revision:prior.revision,relation:args.relation};
+    }
+    const source=this.services.background.entry(c.grantId,id,record.id),context=[];
+    if(source.id!==record.id||source.role!=='user'||generatedHistory.test(source.text))throw Error('找不到当前授权对话中的用户原文');
+    // Search excerpts are evidence locations, never a sequence of neighboring
+    // turns. Ask the host for the exact predecessor only for a complete reply.
+    const evidence=source.more?{...record,truncated:true}:{...record,...source,truncated:false};
+    if(!source.more&&source.text.trim()===args.quote.trim()&&typeof source.previousId==='string'
+      && !(this.store.state('ignored:'+id)??[]).includes(source.previousId)){
+      const previous=this.services.background.entry(c.grantId,id,source.previousId);
+      if(previous.id===source.previousId&&previous.role==='assistant'&&!(previous.offset>0)&&!previous.more&&!generatedHistory.test(previous.text))context.push({...previous,truncated:false});
+    }
+    const checked=this.learning.check({...args,subject:args.subject??alignedPrior?.source.context?.subject,scope:args.scope??'personal',certainty:'explicit',aliases:[],evidence:[{id:record.id,quote:args.quote}]},[evidence],target,c.grantId,context);
     if(!checked)throw Error('记忆来源或格式未通过校验');
     // Re-learning forgotten content requires a fresh, explicit user request,
     // never a historical quote, a generated task, or an offline inference.
-    const original=record.id===this.services.background.latestUser(c.grantId,id)
-      ? this.services.background.entry(c.grantId,id,record.id) : null;
+    const original=record.id===this.services.background.latestUser(c.grantId,id)?source:null;
     const renewalTarget=original?.role==='user' && !original.more ? explicitMemoryIntent(original.text,args.quote,'remember') : null;
     const explicitRequest=!!renewalTarget && targetContent(renewalTarget)===targetContent(checked.value.content);
-    const row=this.store.learn(checked.value,checked.source,{explicitRequest,priorValid:this.learning.validator()});return {id:row.id,state:row.state,revision:row.revision};
+    const row=this.store.learn(checked.value,checked.source,{explicitRequest,priorValid:this.learning.validator(),...(alignment?{alignment}:{})});return {id:row.id,state:row.state,revision:row.revision};
   }
   forgetFromChat(id,args) {
     this.require(id);const rows=this.historySearch(id,args.quote).filter(r=>r.role==='user' && r.id===this.services.background.latestUser(this.learning.config().grantId,id) && r.text.includes(args.quote));
@@ -139,7 +156,7 @@ export class Assistant {
     return retrieve(this, this.require(id).session, query, limit).map(publicMemory);
   }
 }
-export const publicMemory = row => ({ id: row.id, title: row.title, content: row.content, kind: row.kind, scope: 'global', context: row.source.context, observedAt: observedAt(row), revision: row.revision, updatedAt: row.updated, source: row.source.type === 'learned' ? { type:'learned', mode:row.source.mode, at:row.source.at, sources:row.source.refs.map(r=>({conversationId:r.conversationId,id:r.id})) } : row.source });
+export const publicMemory = row => ({ id: row.id, title: row.title, content: row.content, kind: row.kind, ...(row.source.topic?{topic:row.source.topic}:{}), scope: 'global', context: row.source.context, observedAt: observedAt(row), revision: row.revision, updatedAt: row.updated, source: row.source.type === 'learned' ? { type:'learned', mode:row.source.mode, at:row.source.at, sources:row.source.refs.map(r=>({conversationId:r.conversationId,id:r.id})) } : row.source });
 export function start(services) {
   const key = path.resolve(services.dataDirectory);
   if (managers.has(key)) throw Error('个人助手已在运行');

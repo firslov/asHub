@@ -548,7 +548,7 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     this.plugins = new PluginRuntime(path.join(CONFIG_DIR, "settings.json"), undefined, this.opts.bindBrowserPages
       ? id => this.opts.bindBrowserPages!(id, (preview, signal) => this.requestPluginApproval(preview, signal, id))
-      : undefined, defineOwned, this.opts.imageResources);
+      : undefined, defineOwned, this.opts.imageResources, this.opts.pluginConversation);
     const userNames = await this.plugins.load(extCtx);
     // Hot reload cannot safely replace tools in an in-flight turn. New kernels
     // load current settings; existing conversations apply changes after restart.

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { satisfies, valid, validRange } from 'semver';
 
 export const HOST_PLUGIN_API_VERSION = '1.0.0';
-export const HOST_PLUGIN_CAPABILITIES = ['session-extensions', 'application-lifecycle', 'plugin-resources', 'authorized-messages', 'task-events', 'message-lifecycle', 'activity-hints', 'plugin-data', 'background-services', 'scoped-history', 'conversation-entries', 'conversation-resource-popovers', 'remote-resources', 'image-resources', ...(process.versions.electron ? ['browser-pages', 'browser-files'] : [])] as const;
+export const HOST_PLUGIN_CAPABILITIES = ['session-extensions', 'application-lifecycle', 'plugin-resources', 'authorized-messages', 'task-events', 'message-lifecycle', 'activity-hints', 'plugin-data', 'background-services', 'scoped-history', 'conversation-entries', 'conversation-resource-popovers', 'conversation-scoped-sessions', 'remote-resources', 'image-resources', ...(process.versions.electron ? ['browser-pages', 'browser-files'] : [])] as const;
 /** Match the client's JSON.stringify(ui).length limit (UTF-16 code units, not bytes). */
 export const MAX_PLUGIN_UI_JSON_CHARS = 262144;
 export const PLUGIN_ENTRY_FILES = ['index.js', 'index.mjs', 'index.ts', 'index.tsx', 'index.mts'];
@@ -50,13 +50,16 @@ interface ManifestBase {
   setup?: { script: string; description: string }; permissions?: string[]; defaults?: Record<string, Record<string, unknown>>;
 }
 export interface PluginManifestV1 extends ManifestBase { schemaVersion: 1 }
+export interface PluginSessionScope { conversationEntries: string[] }
 export interface PluginManifestV2 extends ManifestBase {
+  sessionScope?: PluginSessionScope;
   schemaVersion: 2; entries?: { session?: string; application?: string }; ui?: PluginDeclarativeUI; configNamespaces?: string[];
   requires?: { hostApi?: string; capabilities?: string[] };
   configSchema?: Record<string, PluginConfigSchema>;
 }
 export type PluginManifest = PluginManifestV1 | PluginManifestV2;
 export interface NormalizedPluginManifest extends ManifestBase {
+  sessionScope?: PluginSessionScope;
   schemaVersion: 1 | 2; entries: { session?: string; application?: string };
   requires: { hostApi: string; capabilities: string[] }; dependencies: PluginDependency[];
   configSchema?: Record<string, PluginConfigSchema>;
@@ -192,7 +195,7 @@ export function validatePluginConfig(schema: PluginConfigSchema, value: unknown,
 export function parsePluginManifest(raw: unknown, packageName: string, legacySessionEntry = 'index.mjs'): NormalizedPluginManifest {
   if (!object(raw) || ![1, 2].includes(raw.schemaVersion) || !safeId.test(raw.id) || raw.id !== packageName) throw Error('Invalid installation manifest');
   const m = raw;
-  if (m.schemaVersion === 2) keys(m, ['schemaVersion', 'id', 'name', 'platforms', 'minNode', 'dependencies', 'setup', 'permissions', 'defaults', 'entries', 'requires', 'configSchema', 'configNamespaces', 'ui'], 'manifest field');
+  if (m.schemaVersion === 2) keys(m, ['schemaVersion', 'id', 'name', 'platforms', 'minNode', 'dependencies', 'setup', 'permissions', 'defaults', 'entries', 'requires', 'configSchema', 'configNamespaces', 'ui', 'sessionScope'], 'manifest field');
   if (m.name !== undefined) text(m.name, 100);
   if (m.platforms !== undefined && (!Array.isArray(m.platforms) || !m.platforms.length || !m.platforms.every((v: unknown) => ['darwin', 'win32', 'linux'].includes(v as string)))) throw Error('Invalid platforms');
   if (m.minNode !== undefined && (typeof m.minNode !== 'string' || !/^\d+\.\d+\.\d+$/.test(m.minNode) || !valid(m.minNode))) throw Error('Invalid minimum Node version');
@@ -225,6 +228,13 @@ export function parsePluginManifest(raw: unknown, packageName: string, legacySes
     }
     if (!entries.session && !entries.application && !m.ui) throw Error('Manifest requires an entry or declarative UI');
     if (entries.session && entries.session === entries.application) throw Error('Session and application entries must be distinct');
+    if (m.sessionScope !== undefined) {
+      if (!entries.session || !entries.application || !object(m.sessionScope)) throw Error('Session scope requires session and application entries');
+      keys(m.sessionScope, ['conversationEntries'], 'session scope');
+      const names = m.sessionScope.conversationEntries;
+      if (!Array.isArray(names) || !names.length || names.length > 16 || new Set(names).size !== names.length ||
+          !names.every(name => typeof name === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(name))) throw Error('Invalid conversation entry scope');
+    }
     if (m.requires !== undefined) {
       if (!object(m.requires)) throw Error('Invalid host requirements'); keys(m.requires, ['hostApi', 'capabilities'], 'host requirement');
       if (m.requires.hostApi !== undefined) { if (typeof m.requires.hostApi !== 'string' || !validRange(m.requires.hostApi)) throw Error('Invalid host API requirement'); hostApi = m.requires.hostApi; }
@@ -252,6 +262,7 @@ export function parsePluginManifest(raw: unknown, packageName: string, legacySes
     }
     if (m.ui !== undefined) validateUI(m.ui, configNamespaces, m.configSchema);
   }
+  if (m.schemaVersion === 2 && m.sessionScope) capabilities.push('conversation-scoped-sessions');
   if (entries.session) capabilities.push('session-extensions');
   if (entries.application) capabilities.push('application-lifecycle');
   // v1 historically tolerated unrelated metadata. Do not turn an unvalidated
@@ -260,7 +271,7 @@ export function parsePluginManifest(raw: unknown, packageName: string, legacySes
     schemaVersion: m.schemaVersion, id: m.id, name: m.name, platforms: m.platforms, minNode: m.minNode,
     setup: m.setup, permissions: m.permissions, defaults: m.defaults,
     entries, requires: { hostApi, capabilities: [...new Set(capabilities)] }, dependencies: m.dependencies ?? [], configNamespaces,
-    ...(m.schemaVersion === 2 ? { ui: m.ui, configSchema: m.configSchema } : {}),
+    ...(m.schemaVersion === 2 ? { ui: m.ui, configSchema: m.configSchema, ...(m.sessionScope ? { sessionScope: { conversationEntries: [...m.sessionScope.conversationEntries] } } : {}) } : {}),
   } as NormalizedPluginManifest;
 }
 export function validatePluginEntries(root: string, manifest: NormalizedPluginManifest): void {

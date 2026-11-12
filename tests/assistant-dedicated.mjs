@@ -379,3 +379,76 @@ test('old fixed-model grants expose only off and never upgrade without consent',
  assert.deepEqual(f.p.overview().actions.map(a=>a.id),['pause']);
  assert.notEqual(f.services.background.status(grant).followModel,true);
 });
+
+
+test('session scope follows durable entry ownership during create, restore and replacement',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'entry-session-scope-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'bindings.json'),live=new Set(),life=new AbortController();let host;
+ const runtime={exists:id=>live.has(id),models:()=>[{provider:'test',model:'mock'}],changed(){},async create(id){
+  assert.equal(live.has(id),false);
+  assert(host.matchesSession('plugin',['assistant'],id),'binding must precede kernel startup');
+  const cold=new ConversationEntries(file,runtime);assert(cold.matchesSession('plugin',['assistant'],id),'restart before entry registration');
+  live.add(id);
+ }};
+ host=new ConversationEntries(file,runtime);host.bind('plugin',life.signal).register('assistant',{label:'Assistant',resource:'assistant',cwd:dir});
+ const input={key:'assistant',provider:'test',model:'mock'};
+ const a=await host.approve('plugin',await host.prepare('plugin',input));
+ assert(!host.matchesSession('other-plugin',['assistant'],a));assert(!host.matchesSession('plugin',['other'],a));assert(!host.matchesSession('plugin',['assistant'],'ordinary'));
+ live.delete(a);const b=await host.approve('plugin',await host.prepare('plugin',input));
+ assert(!host.matchesSession('plugin',['assistant'],a));assert(host.matchesSession('plugin',['assistant'],b));
+ fs.writeFileSync(file,'broken');assert(!new ConversationEntries(file,runtime).matchesSession('plugin',['assistant'],b));life.abort();
+});
+
+test('chat corrections explicitly align a memory by ID and revision while preserving authorization',async t=>{
+ const f=fixture(t),sid=f.targets[0].id;f.authorize();
+ await f.add('我的常住城市是北京');
+ const old=f.a.remember(sid,{title:'常住城市',content:'用户常住北京',kind:'fact',topic:'residence',quote:'我的常住城市是北京'});
+ await f.add('我已经搬到上海，今后常住上海');
+ const input={title:'常住城市',content:'用户现常住上海',kind:'fact',topic:'current-city',quote:'我已经搬到上海，今后常住上海',memoryId:old.id,revision:old.revision,relation:'revise'};
+ assert.throws(()=>f.a.remember(sid,{...input,revision:undefined}),/完整/);
+ const updated=f.a.remember(sid,input);assert.equal(updated.id,old.id);assert(updated.revision>old.revision);
+ assert.equal(f.a.store.activeMemories().length,1);assert.equal(f.a.read(sid,old.id).content,'用户现常住上海');
+ assert.equal(f.a.read(sid,old.id).topic,'residence','the existing canonical topic remains stable');
+ assert.throws(()=>f.a.remember(sid,input),/变化/,'a stale tool result cannot overwrite the current revision');
+ f.p.prepare('pause').execute();assert.throws(()=>f.a.remember(sid,{...input,revision:updated.revision}),/开关/);
+});
+
+
+test('chat revision retains the subject of an assistant memory instead of turning it into a user fact',async t=>{
+ const f=fixture(t),sid=f.targets[0].id;f.authorize();await f.add('以后你的名字叫小助');
+ const row=f.a.remember(sid,{title:'助手称呼',content:'个人助手名称为小助',kind:'fact',topic:'assistant-name',subject:'assistant',quote:'以后你的名字叫小助'});
+ await f.add('以后你的名字改叫阿助');
+ const input={title:'助手称呼',content:'个人助手名称为阿助',kind:'fact',topic:'nickname',quote:'以后你的名字改叫阿助',memoryId:row.id,revision:row.revision,relation:'revise'};
+ assert.throws(()=>f.a.remember(sid,{...input,subject:'user'}),/主体/);
+ const updated=f.a.remember(sid,input);assert.equal(updated.id,row.id);assert.equal(f.a.read(sid,row.id).context.subject,'assistant');
+ assert.equal(f.a.read(sid,row.id).content,'个人助手名称为阿助');
+});
+
+test('long-lived assistant learns, recalls, corrects and resumes across compact, pause and restart',async t=>{
+ const f=fixture(t),sid=f.targets[0].id,original=f.services.background;
+ const aged={...original,read:(...args)=>{const page=original.read(...args);return {...page,entries:page.entries.map(e=>({...e,at:e.at-120000}))};}};
+ f.services.background=f.a.learning.api=aged;
+ let phase='age';
+ f.reply(data=>{
+   const source=data.records.find(r=>r.role==='user');assert(source);
+   const common={scope:'personal',subject:'user',certainty:'explicit',aliases:[],evidence:[{id:source.id,quote:source.text}]};
+   const value=phase==='age'?{title:'年龄',content:'用户自述年龄为36岁',kind:'fact',topic:'age'}
+     :phase==='diet'?{title:'饮食限制',content:'用户对花生过敏',kind:'fact',topic:'dietary-restriction',scenarios:['晚餐','用餐']}
+     :{title:'年龄',content:'用户纠正自述年龄为35岁',kind:'fact',topic:'current-age',memoryId:data.existing.find(x=>x.topic==='age').id,revision:data.existing.find(x=>x.topic==='age').revision,relation:'revise'};
+   return JSON.stringify({memories:[{...common,...value}]});
+ });
+ await f.add('你今年多大？','assistant');await f.add('36岁');const firstGrant=f.authorize();await new Promise(r=>setImmediate(r));f.targets[0].busy=false;
+ await f.a.learning.tick();assert.equal(f.calls(),1);assert.match(f.a.search(sid,'我几岁')[0].content,/36/);
+ phase='diet';await f.add('我对花生过敏');await f.a.learning.tick();assert.equal(f.calls(),2);
+ const request=[{role:'system',content:'Keep this prefix'},{role:'user',content:'帮我安排晚餐'}];const recalled=withMemory(request,f.a,sid);
+ assert.match(recalled.at(-1).content,/花生过敏/);assert.equal(request.at(-1).content,'帮我安排晚餐');assert.equal(recalled[0],request[0]);
+ phase='correction';const correction=await f.add('年龄说错了，我今年是35岁');await f.a.learning.tick();assert.equal(f.calls(),3);
+ const ages=f.a.search(sid,'我的年龄');assert.equal(ages.filter(x=>x.topic==='age').length,1);assert.match(ages.find(x=>x.topic==='age').content,/35/);
+ assert(!ages.some(x=>/36岁/.test(x.content)),'outdated current conclusion leaves recall');
+ await f.history.appendCompaction(correction,12000);await f.a.learning.tick();assert.equal(f.calls(),3,'compaction does not create new learning evidence');
+ f.a.learning.pause();assert.throws(()=>aged.status(firstGrant));f.targets[0].busy=true;const secondGrant=f.authorize();await new Promise(r=>setImmediate(r));f.targets[0].busy=false;
+ await f.a.learning.tick();assert.equal(f.calls(),3,'same-scope reauthorization must not pay to relearn old history');assert.equal(aged.status(secondGrant).calls,3);
+ f.a.stop();const restored=new Assistant(f.services);
+ try{await restored.learning.tick();assert.equal(f.calls(),3);assert.match(restored.search(sid,'我的年龄').find(x=>x.topic==='age').content,/35/);assert.equal(restored.learning.health().errorClass,null);assert(restored.learning.health().lastSuccessAt);}
+ finally{restored.stop();}
+});

@@ -868,3 +868,36 @@ test('image display ships in Local extensions and registers only after opt-in',a
  setPluginEnabled(f.file,image().id,false);assert(!image().enabled);
  fs.rmSync(manual,{recursive:true});assert.equal(image().id,supplied.id);assert(!image().enabled);
 });
+
+
+test('scoped plugins are not imported or reported in ordinary kernels; unscoped plugins remain available', async t => {
+  const f = fixture("export default ctx => ctx.agent.registerInstruction('unscoped', 'available');");
+  const directory=path.join(f.root,'extensions','scoped'),marker=path.join(f.root,'imported');fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory,'package.json'),JSON.stringify({name:'scoped-plugin',version:'1.0.0',type:'module'}));
+  fs.writeFileSync(path.join(directory,'ashub-plugin.json'),JSON.stringify({schemaVersion:2,id:'scoped-plugin',entries:{session:'session.mjs',application:'app.mjs'},sessionScope:{conversationEntries:['assistant']}}));
+  fs.writeFileSync(path.join(directory,'app.mjs'),'export default () => {};');
+  fs.writeFileSync(path.join(directory,'session.mjs'),`import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(marker)},'imported');export default ctx => ctx.agent.registerInstruction('scoped','active');`);
+  const plugin=pluginCatalog(f.file).find(p=>p.manifest?.id==='scoped-plugin');
+  const make=async allowed=>{
+    const {core,ctx,defineOwned}=await makeContext();
+    const runtime=new PluginRuntime(f.file,undefined,undefined,defineOwned,undefined,allowed);
+    t.after(()=>runtime.close());await runtime.load(ctx);return {runtime,core};
+  };
+  for(const allowed of [undefined,()=>false]){
+    const ordinary=await make(allowed);
+    assert.equal(fs.existsSync(marker),false,'even the module top level must not run');
+    assert.equal(ordinary.runtime.status.some(p=>p.id===plugin.id),false);
+    assert.equal(ordinary.core.handlers.has('instruction:scoped'),false);
+    assert.equal(ordinary.core.handlers.call('instruction:unscoped'),'available');
+  }
+  const assistant=await make((id,keys)=>id===plugin.id&&keys.includes('assistant'));
+  assert(fs.existsSync(marker));assert.equal(assistant.core.handlers.call('instruction:scoped'),'active');
+  assert.equal(assistant.runtime.status.find(p=>p.id===plugin.id).state,'loaded');
+  assistant.runtime.close();assert(!assistant.core.bus.emitPipe('agent:instructions',{instructions:[]}).instructions.some(i=>i.name==='scoped'));
+  setPluginEnabled(f.file,plugin.id,false);
+  const disabled=await make(()=>true);assert.equal(disabled.runtime.status.some(p=>p.id===plugin.id),false);
+  setPluginEnabled(f.file,plugin.id,true);
+  const restarted=await make((id,keys)=>id===plugin.id&&keys.includes('assistant'));
+  assert.equal(restarted.runtime.status.find(p=>p.id===plugin.id).state,'loaded');
+  const other=await make(()=>false);assert.equal(other.runtime.status.some(p=>p.id===plugin.id),false);
+});

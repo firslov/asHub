@@ -1,6 +1,6 @@
 {
   "name": "ashub-personal-assistant",
-  "version": "0.5.3",
+  "version": "0.5.5",
   "type": "module",
   "private": true,
   "description": "A persistent assistant conversation with automatic, source-backed long-term memory",

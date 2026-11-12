@@ -101,7 +101,7 @@ app.whenReady().then(async () => {
 
     await js('document.documentElement.style.removeProperty("--dur-fast")');
     assert.equal(await js('document.querySelectorAll(".conversation-welcome .extension-resource-form > label").length'),2);
-    assert.equal(await js('!document.querySelector(".conversation-memory-dialog")'),true,'first use belongs in the chat canvas');
+    assert.equal(await js('!document.querySelector(".conversation-resource-dialog")'),true,'first use belongs in the chat canvas');
     const welcomeSubmit=()=>js('document.querySelector(".conversation-welcome .extension-resource-form").requestSubmit()');
     // Scope controls to the visible workspace, not the offscreen settings resource.
     const welcomeClick=label=>js('(()=>{const b=[...document.querySelectorAll(".conversation-welcome button")].find(b=>b.textContent==='+JSON.stringify(label)+');if(!b)throw Error("Missing welcome action");b.click()})()');
@@ -110,7 +110,10 @@ app.whenReady().then(async () => {
     assert.equal((await call('/sessions')).length,1,'cancel creates no chat');
     await welcomeSubmit();await wait('!!document.querySelector(".conversation-welcome .extension-resource-review")');
     const consent=await js('document.querySelector(".conversation-welcome .extension-resource-review").textContent');
-    assert.match(consent,/当前及今后/);assert.match(consent,/16000/);assert.match(consent,/4096/);
+    assert.match(consent,/当前选择的模型与 VPN.*今后切换的模型服务/);
+    assert.match(consent,/不读取其他对话/);assert.match(consent,/每天最多 4 次后台处理/);
+    const consentLimits=await js('document.querySelector(".conversation-welcome .extension-authorization-details").textContent');
+    assert.match(consentLimits,/单次请求上限/);assert.match(consentLimits,/16000/);assert.match(consentLimits,/4096/);
     await welcomeClick('确认');await wait('!document.querySelector(".conversation-welcome")');
     const assistantId=(await call('/api/plugin-conversations'))[0].sessionId;
     await wait('(async()=> (await import("/js/session-manager.js")).activeSessionId.value === '+JSON.stringify(assistantId)+')()');
@@ -129,10 +132,15 @@ app.whenReady().then(async () => {
     await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
     if(shots)fs.writeFileSync(path.join(shots,'assistant-chat.png'),(await win.webContents.capturePage()).toPNG());
     await wait('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="true"');
-    assert.equal(await js('!!document.querySelector(".conversation-memory-dialog")'),false);
+    assert.equal(await js('!!document.querySelector(".conversation-resource-dialog")'),false);
     // Off is immediate; opening memory still requires explicit authorization.
-    await js('document.querySelector(".resource-inline-toggle").click()');
+    win.setContentSize(1280,800);await wait('innerWidth===1280');
+    await js('document.querySelector(".app").classList.remove("sidebar-collapsed")');
+    await wait('getComputedStyle(document.getElementById("sidebar")).visibility==="visible"');
+    await wait('(()=>{const b=document.querySelector(".resource-inline-toggle");return !b.disabled&&b.getBoundingClientRect().width>0&&getComputedStyle(b).visibility==="visible"})()');
+    await js('document.querySelector(".resource-inline-toggle").focus();document.querySelector(".resource-inline-toggle").click()');
     await wait('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="false"');
+    assert(await js('document.activeElement===document.querySelector(".resource-inline-toggle")'),'pausing retains keyboard focus');
     assert.equal(await js('!!document.querySelector("dialog[open]")'),false);
     await js('document.querySelector(".resource-inline-toggle").click()');
     await wait('!!document.querySelector(".resource-toggle-confirm[open]")');
@@ -155,6 +163,7 @@ app.whenReady().then(async () => {
     })()`);
     win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});
     await wait('!document.querySelector(".resource-toggle-confirm")');
+    assert(await js('document.activeElement===document.querySelector(".resource-inline-toggle")'),'Escape restores switch focus');
     assert.equal(await js('window.memoryCancelRequests'),0);
     await js('window.restoreMemoryFetch()');
     assert.equal(await js('document.querySelector(".resource-inline-toggle").getAttribute("aria-checked")'),'false');
@@ -163,8 +172,10 @@ app.whenReady().then(async () => {
     await js(`document.querySelector('.resource-toggle-confirm button').dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',ctrlKey:true,bubbles:true,cancelable:true}))`);
     assert.equal(await js('(async()=> (await import("/js/session-manager.js")).activeSessionId.value)()'),beforeShortcut);
     await click('取消');assert.equal(await js('document.querySelector(".resource-inline-toggle").getAttribute("aria-checked")'),'false');
+    assert(await js('document.activeElement===document.querySelector(".resource-inline-toggle")'),'cancel restores switch focus');
     await js('document.querySelector(".resource-inline-toggle").click()');await wait('!!document.querySelector(".resource-toggle-confirm[open]")');
     await click('确认');await wait('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="true"');
+    assert(await js('document.activeElement===document.querySelector(".resource-inline-toggle")'),'confirmation restores switch focus');
     assert.equal(await js('!!document.querySelector("dialog[open]")'),false);
     // Polling retains the control instead of replacing it or opening settings.
     await js('window.memorySwitchNode=document.querySelector(".resource-inline-toggle")');await new Promise(r=>setTimeout(r,5500));
@@ -174,6 +185,27 @@ app.whenReady().then(async () => {
     await new Promise(r=>setTimeout(r,400));
     await js('document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))');
     if(shots)fs.writeFileSync(path.join(shots,'assistant-inline-switch.png'),(await win.webContents.capturePage()).toPNG());
+    // A second renderer shares the host state. Polling must update the first
+    // window's switch without discarding its keyboard focus.
+    const peer=new BrowserWindow({show:false,width:1280,height:800,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
+    try {
+      await peer.loadURL(base);
+      let ready=false;
+      for(let i=0;i<160;i++){
+        ready=await peer.webContents.executeJavaScript('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="true"');
+        if(ready)break;await new Promise(r=>setTimeout(r,25));
+      }
+      assert(ready,'second window loads the current memory state');
+      await js('document.querySelector(".resource-inline-toggle").focus()');
+      await peer.webContents.executeJavaScript('document.querySelector(".resource-inline-toggle").click()');
+      let synced=false;
+      for(let i=0;i<320;i++){
+        synced=await js('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="false"');
+        if(synced)break;await new Promise(r=>setTimeout(r,25));
+      }
+      assert(synced,'other window updates after memory is paused');
+      assert(await js('document.activeElement===document.querySelector(".resource-inline-toggle")'),'cross-window refresh retains focus');
+    } finally {peer.destroy();}
     await call('/api/extensions/'+feature.id+'/enabled',{enabled:false});
     await wait('document.querySelector(".conversation-entries")?.hidden===true');
     await call('/api/extensions/'+feature.id+'/enabled',{enabled:true});await wait('document.querySelector(".conversation-entries")?.hidden===false');
@@ -201,6 +233,17 @@ app.whenReady().then(async () => {
       if(host.querySelector('[role=switch]').getAttribute('aria-checked')!=='false')throw Error('Failed enable changed visual state');
       dispose();if(document.querySelector('.resource-toggle-confirm'))throw Error('Disposed control left a permission dialog');host.remove();
     })()`);
+    await js(`(async()=>{
+      const {mountResource}=await import('/js/extensions/resource-view.js');
+      const host=document.createElement('div'),other=document.createElement('button');document.body.append(host,other);
+      let release;const view=checked=>({actions:[{id:'toggle',label:'Toggle',values:{}}],rows:[],toggle:{label:'Memory',checked,action:'toggle'}});
+      const dispose=mountResource(host,{pluginId:'test'},'start',{inlineToggle:true,request:async body=>body?new Promise(r=>release=()=>r({view:view(false)})):{view:view(true)}});
+      await new Promise(r=>setTimeout(r,20));const b=host.querySelector('button');b.focus();b.click();other.focus();release();
+      await new Promise(r=>setTimeout(r,20));if(document.activeElement!==other)throw Error('Late toggle response stole focus');
+      if(host.querySelector('[role=switch]').getAttribute('aria-checked')!=='false')throw Error('Toggle response did not update');
+      dispose();host.remove();other.remove();
+    })()`);
+    await js('('+require('./assistant-health-scenario.cjs').toString()+')({moduleUrl:"/js/extensions/resource-view.js"})');
     console.log('PASS dedicated assistant UI: ZIP install, explicit creation/grant, one persistent entry, in-app navigation, pause, themes, disable/re-enable and 1280/390/320 layouts');
     win.destroy();await hub.shutdown();clearTimeout(timeout);app.exit(0);
   }catch(error){console.error(error);win?.destroy();try{await hub?.shutdown();}catch{}clearTimeout(timeout);app.exit(1);}

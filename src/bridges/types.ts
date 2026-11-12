@@ -32,6 +32,8 @@ export interface BridgeOpts {
   /** Hub-owned identity, stable across lazy restore and application restarts. */
   sessionId?: string;
   conversationAccess?: ConversationAccess;
+  /** Host-owned named conversation bindings; missing access denies scoped plugins. */
+  pluginConversation?: (pluginId: string, entryKeys: readonly string[]) => boolean;
   bindBrowserPages?: (plugin: string, approve: (preview: import("../host-operations.js").ApprovalPreview, signal?: AbortSignal) => Promise<boolean | "automatic">) => {
     available(): boolean;
     run(request: unknown, signal?: AbortSignal): Promise<unknown>;

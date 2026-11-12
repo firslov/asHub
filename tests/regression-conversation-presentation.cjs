@@ -217,3 +217,26 @@ for (const client of ['desktop', 'remote']) test(`${client} common event semanti
   assert.equal(activityState({ sealed: true }), 'settled');
   assert.equal(activityState({ sealed: true, pending: 1 }), 'running');
 });
+
+for (const client of ['desktop','remote']) test(`${client} compaction notices recognize only completed compactions`,clientOptions(client),()=>{
+ const {parseCompactionNotice}=rules(client==='desktop'?'web/js/conversation-presentation.js':'remote/public/conversation-presentation.js').AsHubConversationPresentation;
+ for(const message of ['(compacted: ~34,168 → ~19,570 tokens)','(auto-compacted: ~34,168 → ~19,570 tokens, evicted 21)','(context overflow — compacted ~34,168 → ~19,570 tokens, retrying)']){
+  assert.equal(parseCompactionNotice(message).beforeTokens,34168);assert.equal(parseCompactionNotice(message).afterTokens,19570);
+ }
+ for(const message of ['(nothing to compact)','(context overflow — nothing to compact; aborting retries)','error 502, retrying','a quoted (compacted: ~3 → ~2 tokens)',null,'(compacted: ~Infinity → ~0 tokens)'])assert.equal(parseCompactionNotice(message),null);
+});
+
+test('compaction presentation metadata survives persisted checkpoint replay without changing history',async()=>{
+ const {env,Bridge}=require('./harness.cjs'),e=env(),sessions=new Map();
+ const h=e.load('src/hub.ts','export const audit={createSession,synthesizeBranchFrames,shutdownHub};').audit;
+ try{
+  const s=await h.createSession(sessions,{makeBridge:o=>new Bridge(o)},e.dir);
+  s.bridge.messages=[{role:'user',content:'Original principle'},{role:'assistant',content:'Earlier answer'},{role:'user',content:'Keep this turn'},{role:'assistant',content:'Latest answer'}];await s.capture.flush();
+  const ids=s.store.buildBranchWithIds().entryIds;
+  await s.store.appendCompaction(ids[2],34168,{version:1,sourceLeaf:s.store.getActiveLeaf(),mode:'semantic',memory:{state:{goal:[],open:[],next:[],blockers:[]},history:[{text:'Earlier answer',sourceIds:[ids[1]]}]},diagnostics:{target:20000,estimatedAfter:19570,elapsedMs:40168,inputTokens:5564,omittedRecords:0}});
+  const check=()=>{const v=s.store.buildBranchWithIds(),frames=h.synthesizeBranchFrames(s,v.messages,v.entryIds);return JSON.parse(frames.find(f=>f.includes('hub:compaction-marker')).match(/^data: (.+)$/m)[1]).payload;};
+  const marker=check();assert.equal(marker.evictedCount,2);assert.equal(marker.beforeTokens,34168);assert.equal(marker.afterTokens,19570);assert.equal(marker.mode,'semantic');assert.equal(marker.elapsedMs,40168);assert(marker.checkpointId);
+  const Store=e.load('src/history/session-store.ts').SessionStore;s.store=new Store(path.join(e.dir,'hub-sessions',s.id+'.jsonl'));
+  assert.deepEqual(JSON.parse(JSON.stringify(check())),JSON.parse(JSON.stringify(marker)));
+ }finally{await h.shutdownHub(undefined,sessions);}
+});

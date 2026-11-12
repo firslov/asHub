@@ -8,7 +8,7 @@ import { closeOtherPanels } from '../panel-manager.js';
 const host=document.createElement('nav');host.className='conversation-entries';host.hidden=true;
 host.setAttribute('aria-label','Plugin conversations');
 document.querySelector('.sidebar-head')?.after(host);
-let entries=[],epoch=0,signature='',welcome=null,memoryDialog=null;
+let entries=[],epoch=0,signature='',welcome=null,resourceDialog=null;
 let controls=[];
 const text=(zh,en)=>lang.value==='zh'?zh:en;
 function closeWelcome(restoreFocus=false){
@@ -41,16 +41,16 @@ function openWelcome(entry){
   state.dispose=mountResource(content,{pluginId:entry.pluginId},entry.setupResource||entry.resource,{openConversation:navigate,onComplete:navigate});
 }
 function openPanel(entry){
-  closeWelcome();closeOtherPanels();memoryDialog?.close();
-  const dialog=document.createElement('dialog');dialog.className='conversation-memory-dialog';dialog.setAttribute('aria-label',entry.label);
+  closeWelcome();closeOtherPanels();resourceDialog?.close();
+  const dialog=document.createElement('dialog');dialog.className='conversation-resource-dialog';dialog.setAttribute('aria-label',entry.label);
   // Keep modal keys away from chat shortcuts; retain native Escape and focus traversal.
   dialog.addEventListener('keydown',event=>event.stopPropagation());
   const close=document.createElement('button');close.type='button';close.className='p-icon-btn';close.textContent='×';close.setAttribute('aria-label',text('关闭','Close'));
   const title=document.createElement('h2');title.className='p-title';title.textContent=entry.label;
   const header=document.createElement('header');header.className='p-head';header.append(title,close);
   const content=document.createElement('div');content.className='p-body extension-resource-host';dialog.append(header,content);document.body.append(dialog);
-  let dispose;const cleanup=()=>{dispose?.();dialog.remove();if(memoryDialog===dialog)memoryDialog=null;};close.onclick=()=>dialog.close();dialog.addEventListener('close',cleanup,{once:true});
-  dispose=mountResource(content,{pluginId:entry.pluginId},entry.resource);memoryDialog=dialog;dialog.dataset.pluginId=entry.pluginId;dialog.showModal();close.focus();
+  let dispose;const cleanup=()=>{dispose?.();dialog.remove();if(resourceDialog===dialog)resourceDialog=null;};close.onclick=()=>dialog.close();dialog.addEventListener('close',cleanup,{once:true});
+  dispose=mountResource(content,{pluginId:entry.pluginId},entry.resource);resourceDialog=dialog;dialog.dataset.pluginId=entry.pluginId;dialog.showModal();close.focus();
 }
 
 function render(){
@@ -68,7 +68,7 @@ function render(){
     controls.push(mountResource(control,{pluginId:e.pluginId},e.resource,{inlineToggle:true,onManage:()=>e.sessionId?openPanel(e):openWelcome(e)}));
   }
 }
-async function refresh(){const token=++epoch;try{const response=await fetch('/api/plugin-conversations',{cache:'no-store'});if(!response.ok)throw Error('Entries unavailable');const data=await response.json();if(token!==epoch)return;if(!Array.isArray(data))return;entries=data;if(memoryDialog&&!entries.some(e=>e.pluginId===memoryDialog.dataset.pluginId))memoryDialog.close();if(welcome&&!entries.some(e=>e.pluginId===welcome.entry.pluginId&&e.key===welcome.entry.key))closeWelcome();if(JSON.stringify(conversationEntries.peek())!==JSON.stringify(data))conversationEntries.value=data;render();}catch{/* Keep the last successful catalog on transient network failure. */}}
+async function refresh(){const token=++epoch;try{const response=await fetch('/api/plugin-conversations',{cache:'no-store'});if(!response.ok)throw Error('Entries unavailable');const data=await response.json();if(token!==epoch)return;if(!Array.isArray(data))return;entries=data;if(resourceDialog&&!entries.some(e=>e.pluginId===resourceDialog.dataset.pluginId))resourceDialog.close();if(welcome&&!entries.some(e=>e.pluginId===welcome.entry.pluginId&&e.key===welcome.entry.key))closeWelcome();if(JSON.stringify(conversationEntries.peek())!==JSON.stringify(data))conversationEntries.value=data;render();}catch{/* Keep the last successful catalog on transient network failure. */}}
 effect(()=>{const active=activeSessionId.value;lang.value;if(welcome&&active!==welcome.active)closeWelcome();render();});
 document.addEventListener('ash:panel-opening',()=>closeWelcome());
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&welcome){event.preventDefault();event.stopImmediatePropagation();closeWelcome(true);}},{capture:true});

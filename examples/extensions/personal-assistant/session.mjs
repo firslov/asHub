@@ -31,7 +31,9 @@ export default function activate(ctx) {
       : scope ? '仅可召回已授权的记忆，后台自动整理未开启。'
       : a.dedicated && a.conversationId() === id ? '长期记忆已关闭，不读取或召回已保存记忆。可通过个人助手标签右侧的记忆开关开启，并在桌面确认授权；已有聊天和记忆保留。'
       : '此对话未启用个人助手记忆。';
-    return { connected: !!scope, scopes: scope ? ['global'] : [], automatic, note };
+    const health=automatic ? a.learning.health() : undefined;
+    return { connected: !!scope, scopes: scope ? ['global'] : [], automatic, note, ...(health?{health}:{}),
+      ...(health?.errorClass ? {learningNote:health.errorClass==='quota'?'今日整理预算已用完，未处理记录将在后续继续整理；已保存记忆仍可召回。':health.errorClass==='capacity'?'记忆整理遇到容量限制，部分新信息尚未保存；不要声称已经记住，可依照用户明确要求在对话中忘记不再需要的记忆。':'后台整理暂缓，将按重试时间恢复；不要声称未整理的信息已经保存。'}:{}) };
   });
   register('assistant_memory_search', '搜索个人助手的长期记忆，支持中文。重要事实请核对来源和时间，未命中不代表不存在。', {
     query: { type: 'string', maxLength: 500 }, limit: { type: 'integer', minimum: 1, maximum: 12 },
@@ -46,7 +48,7 @@ export default function activate(ctx) {
   }, ['title', 'content', 'kind', 'scope', 'reason'], (a, args) => a.propose(id, args), false);
   register('assistant_history_search','搜索个人助手专属对话的授权原文；未找到记忆时用于追溯。',{query:{type:'string',maxLength:300}},['query'],(a,args)=>a.historySearch(id,args.query));
   register('assistant_history_read','分段读取搜索命中的原始记录，核对事实和时间。',{id:{type:'string'},offset:{type:'integer',minimum:0}},['id'],(a,args)=>a.historyRead(id,args.id,args.offset??0));
-  register('assistant_memory_remember','记录用户明确表达的事实、偏好或纠正。必须引用当前专属对话的真实用户原文；不是根据模型猜测写入。重新保存已忘记的内容，需要最新用户直接要求「请重新记住：完整内容」，quote 引用完整内容或整条请求；引用旧指令、疑问和否定不算授权。',{title:{type:'string'},content:{type:'string'},kind:{type:'string',enum:['fact','preference','principle','experience','procedure']},topic:{type:'string'},quote:{type:'string',maxLength:300},scope:{type:'string',enum:['personal','local']}},['title','content','kind','topic','quote'],(a,args)=>a.remember(id,args),false);
+  register('assistant_memory_remember','记录用户明确表达的事实、偏好或纠正。同一认识的补充或纠正，先搜索已有记忆，传 memoryId、revision 和 relation（support 补充同一命题；revise 明确更新；contradict 明确否定而无新结论），保留同一身份。必须引用当前专属对话的真实用户原文；不是根据模型猜测写入。重新保存已忘记的内容，需要最新用户直接要求「请重新记住：完整内容」，quote 引用完整内容或整条请求；引用旧指令、疑问和否定不算授权。',{title:{type:'string'},content:{type:'string'},kind:{type:'string',enum:['fact','preference','principle','experience','procedure']},topic:{type:'string'},subject:{type:'string',enum:['user','assistant','project','other']},quote:{type:'string',maxLength:300},scope:{type:'string',enum:['personal','local']},memoryId:{type:'string'},revision:{type:'integer',minimum:1},relation:{type:'string',enum:['support','revise','contradict']}},['title','content','kind','topic','quote'],(a,args)=>a.remember(id,args),false);
   register('assistant_memory_forget','仅当最新用户直接要求「忘记……」或「不要记……」时，按真实记忆 ID 与版本删除；quote 引用完整请求或完整目标内容。目标必须对应这条记忆的标题、完整内容、来源原文或 ID；有重名时先向用户澄清具体内容，再使用明确指定的 ID。「不要忘记」、引用旧指令或询问不算删除授权。',{id:{type:'string'},revision:{type:'integer'},quote:{type:'string',maxLength:200}},['id','revision','quote'],(a,args)=>a.forgetFromChat(id,args),false);
   ctx.agent.registerInstruction('personal-assistant', [
     '个人助手插件提供当前用户的全局长期记忆。来源对话和项目是背景信息，不是检索边界。请求中已注入的记忆也是有效召回；涉及用户背景、偏好或过去决定时，若现有记忆不足，回答不知道之前先用 assistant_memory_search 查询一次，未命中不代表不存在。不为无关问题主动展示个人信息。',

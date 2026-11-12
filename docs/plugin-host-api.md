@@ -119,17 +119,22 @@ Hosts advertising `plugin-data` expose the same `ctx.services.dataDirectory` to 
 
 An application-owned database can be shared with session adapters through a canonical sibling module inside the same installed package. Stop/dispose the application service to revoke new operations; do not create a second background service per session. Upgrade after restarting asHub because JavaScript submodule caching can otherwise mix package versions. This is trusted in-process code, not a sandbox or a cross-plugin service registry.
 
-`examples/extensions/personal-assistant` demonstrates an application-owned memory store, explicit conversation association, user-reviewed memory proposals, bounded Chinese search and ephemeral multipart-safe request recall. The host does not learn personal preferences, extract history or decide memory policy.
+`examples/extensions/personal-assistant` demonstrates a separately installed, application-owned memory store, one dedicated conversation, evidence-based automatic learning, bounded Chinese search and ephemeral multipart-safe request recall. The host supplies authorized original history; it does not extract memories, learn personal preferences or decide memory policy.
 
 ## Authorized background services
 
 The additive `background-services` capability exposes `ctx.services.background` to application entries only. Learning, memory policy, schedules and UI remain plugin code. This is trusted in-process JavaScript, not a sandbox.
 
+The application-side service shape is defined by
+`ApplicationExtensionServices` in `src/extensions/services.ts`. Services are
+explicitly injected and may be absent; their types and capability declarations
+do not create user grants or an implicit current-conversation identity.
+
 A resource plan may declare `backgroundAuthorization: {modelSessionId, includeHistory, excludedIds, dailyCalls}`. The host appends its own scope, provider/model and cost preview. Only user confirmation creates a package-bound grant and passes its ID to `execute(grantId)`. A plan cannot also request message authorization. A failed commit revokes the new grant; replacement invalidates the old one. Plugins cannot mint grants themselves.
 
 The grant covers current and future active agent conversations except exclusions. Archived, terminal and closing sessions are excluded. `includeHistory:false` sets the start time to preparation of this authorization. The configured model source is bound to its session identity, directory, provider and model; changes require renewed approval for inference. The host persists grants and usage atomically under the settings profile; corrupt storage fails closed without preventing ordinary conversations from starting.
 
-- `background.status(grantId)` returns the current grant and quota, without the internal model binding.
+- `background.status(grantId)` returns the current grant and quota, without the internal model binding. Usage is persisted per plugin and UTC day independently of grant replacement/revocation. A newly approved `dailyCalls` is the total daily limit, not an additional allowance. Failed or cancelled requests that have started still count; quota is persisted before calling the provider. Existing grant counters migrate to the version 2 usage ledger; revoked counters already discarded by older hosts cannot be reconstructed. Older hosts fail closed on this ledger rather than resetting it.
 - `background.targets(grantId)` returns authorized target metadata, including busy state.
 - `background.read(grantId, conversationId, cursor?)` returns `{target, entries, cursor, reset, more}`. Pages scan at most 40 persisted active-branch entries, with stable IDs, timestamps, roles and text capped at 3000 UTF-16 units on a safe Unicode boundary. System notes are omitted; recognized generated task envelopes use the `generated` role. This is not complete provenance classification. The cursor tracks scanned entries, even if filtered. A missing cursor restarts the active branch with `reset:true`; consumers must deduplicate by source ID.
 - `background.valid(grantId, conversationId, sourceIds)` checks whether up to 200 IDs still belong to the authorized active branch. It does not attest to semantic correctness or user intent.
@@ -222,7 +227,7 @@ A setup resource may return `openConversation: id` in its completed view. Only a
 `scoped-history` extends background authorization with optional `includedIds`. When supplied it must be nonempty; the host intersects it with exclusions for every target/read/provenance call. Existing unscoped plugins remain compatible. The assistant always supplies exactly its dedicated conversation. Additional read methods:
 
 - `search(grant, conversationId, query)`: at most 12 matching snippets of 800 characters, with original message ID, role and timestamp.
-- `entry(grant, conversationId, sourceId, offset?)`: at most 3000 characters with `nextOffset` and `more`; rejects invalid UTF-16 boundaries.
+- `entry(grant, conversationId, sourceId, offset?)`: at most 3000 characters with `nextOffset` and `more`; rejects invalid UTF-16 boundaries. `previousId` identifies the directly preceding message in the current authorized history, or is `null` at its beginning or authorization boundary; invisible system notes remain omitted, while tool/generated messages are not skipped.
 - `latestUser(grant, conversationId)`: the latest authorized user entry ID, allowing plugins to validate fresh user intent.
 
 These methods obey the grant start date, current history branch and plugin lifecycle. Generated cross-conversation messages are marked `generated` in search results, not asserted as human statements.
@@ -235,6 +240,34 @@ Background authorization previews summarize a single model-bound conversation wi
 
 `services.background.supportsFollowModel` advertises explicitly approved `followModel` grants, limited to one conversation with a fixed identity/directory and budget. Existing grants stay fixed-model. `services.conversations.supportsEntryBackground` advertises resource plans combining `entryAuthorization` with `entryBackground: {dailyCalls, includeHistory, followModel:true}`. The host displays both scopes in one desktop confirmation, binds background access only to the resulting owned conversation, and revokes the new grant on plugin commit failure. Remote clients cannot approve these grants.
 
+These are general conversation/background capabilities, not memory APIs. Plugin
+previews supply the purpose (for example, long-term memory or meeting analysis).
+The host supplies the authoritative history scope, model/network binding, limits
+and cost disclosure using the same background authorization presentation for
+existing and newly created conversations. Plugin wording cannot replace those
+facts or move mandatory fields into collapsed details. Conversation creation does
+not promise preservation or migration of plugin-owned data.
+
 `conversation-resource-popovers` declares that conversation-entry resources can open directly in a dismissible dialog without a registered sidebar panel. Plugins relying on this presentation must require the capability. Combined `entryBackground` inputs accept only the three documented fields; the host freezes them at preview time and supplies the created conversation identity itself.
 
-Conversation resources may expose `toggle: { label, checked, action }` for an inline sidebar switch. `action` references an existing resource action; absent or remotely filtered actions leave the switch disabled. The host never derives permission from toggle metadata. Enabling follows normal resource confirmation; reversible disabling may execute immediately. Other resource views retain their generic management entry.
+Conversation resources may expose `toggle: { label, checked, action, status? }` for an inline sidebar switch. `action` references an existing resource action; absent or remotely filtered actions leave the switch disabled. The host never derives permission from toggle metadata. Enabling follows normal resource confirmation; reversible disabling may execute immediately. An optional plain-text `status` (up to 160 characters) shows a quiet inline notice below the entry and is associated with the switch for assistive technology. It describes resource health and never changes authorization state. Other resource views retain their generic management entry.
+
+
+### Conversation-scoped session entries
+
+A v2 plugin with both application and session entries may declare
+`"sessionScope": {"conversationEntries": ["assistant"]}` and require
+`conversation-scoped-sessions`. Entry keys refer only to named conversations
+owned by that same plugin through `services.conversations`. The application
+entry remains application-scoped; only its bound conversation imports and
+activates the session entry. Other kernels do not import that module, attach
+its hooks, or list it as a loaded session plugin. Omitting `sessionScope`
+preserves the existing all-session behavior.
+
+The host matches persisted binding IDs, not titles or paths. Binding creation
+precedes kernel startup, and lazy restore uses the same match before application
+entries re-register. Missing host support or unmatched ownership never falls
+back to loading in all conversations. This controls loading, not memory or
+history authorization: plugins must retain their existing runtime access guards.
+After updating an already loaded plugin, restart asHub to replace old kernels;
+no active conversation is interrupted for a hot reload.

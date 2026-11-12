@@ -11,7 +11,7 @@ import { reasoningLabel } from "./reasoning.js";
 import { escape, stripAnsi, mdToHtml, highlightWithin, renderMathIn, blockToText, fmtNum } from "./utils.js";
 import { setBusy } from "./state.js";
 import { effect } from "../vendor/signals-core.js";
-import { t } from "./i18n.js";
+import { t, lang } from "./i18n.js";
 import { toast } from "./toast.js";
 import { maybeScroll, forceScrollBottom } from "./stream/scroll.js";
 import { append, appendAfterPending, appendToGroup, bumpToolCount, insertStreamNode, closeToolGroup, refreshToolSummaries } from "./stream/tool-group.js";
@@ -725,13 +725,7 @@ export const handlers = {
 
   "hub:compaction-marker"(p) {
     if (!this.streamEl) return;
-    const evicted = Number(p?.evictedCount ?? 0);
-    const pill = document.createElement("div");
-    pill.className = "compaction-marker";
-    pill.innerHTML =
-      `<span class="cm-line"></span>` +
-      `<span class="cm-pill">📦 ${evicted} message(s) compacted</span>` +
-      `<span class="cm-line"></span>`;
+    const pill = globalThis.AsHubConversationPresentation.renderCompaction(p, lang.value);
     const target = (this.state.replaying && this._replayFrag) || this.streamEl;
     if (target) target.appendChild(pill);
   },
@@ -1209,6 +1203,11 @@ export const handlers = {
   },
 
   "ui:info"(p) {
+    const presentation = globalThis.AsHubConversationPresentation;
+    const root = (this.state.replaying && this._replayFrag) || this.streamEl;
+    if (presentation.mergeCompactionNotice(root, p?.message, lang.value)) return;
+    const stats = presentation.parseCompactionNotice(p?.message);
+    if (stats) { append(this, presentation.renderCompaction(stats, lang.value)); return; }
     const row = document.createElement("div");
     row.className = "ui-info";
     row.textContent = String(p?.message ?? "");

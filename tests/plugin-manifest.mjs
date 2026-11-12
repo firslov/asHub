@@ -14,6 +14,19 @@ function fixture(run = async () => {}) {
   return { e, file, manifest, catalog, installer: new PluginInstaller(file, run, 'darwin') };
 }
 const manifest = { schemaVersion: 2, id: 'sample-plugin', entries: { session: 'index.mjs' } };
+test('conversation-scoped sessions require a host capability and validated entry keys', () => {
+  const { manifest: api } = fixture();
+  const scoped = { ...manifest, entries: { session: 'index.mjs', application: 'app.mjs' }, sessionScope: { conversationEntries: ['assistant'] } };
+  const parsed = api.parsePluginManifest(scoped, manifest.id);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.sessionScope)), scoped.sessionScope);
+  assert(parsed.requires.capabilities.includes('conversation-scoped-sessions'));
+  assert.equal(api.pluginCompatibility(parsed, { capabilities: api.HOST_PLUGIN_CAPABILITIES.filter(c => c !== 'conversation-scoped-sessions') }).compatible, false);
+  for (const sessionScope of [null, {}, { conversationEntries: [] }, { conversationEntries: ['../assistant'] }, { conversationEntries: ['assistant', 'assistant'] }, { conversationEntries: ['assistant'], all: true }]) {
+    assert.throws(() => api.parsePluginManifest({ ...scoped, sessionScope }, manifest.id));
+  }
+  for (const entries of [{session:'index.mjs'}, {application:'app.mjs'}]) assert.throws(() => api.parsePluginManifest({...scoped,entries},manifest.id));
+  assert.equal(api.parsePluginManifest(manifest, manifest.id).sessionScope, undefined);
+});
 const ui = { version: 1, panels: [{ id: 'overview', title: 'Sample', components: [
   { type: 'text', text: '<script>plain text only</script>' },
   { type: 'action', label: 'Insert', action: 'composer.insert', value: 'Review this project' },

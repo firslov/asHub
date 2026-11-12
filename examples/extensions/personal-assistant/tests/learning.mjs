@@ -185,8 +185,9 @@ test('unavailable persisted history cannot starve another authorized conversatio
  await f.a.learning.tick();assert.match(f.a.learning.error,/history unavailable/);
  await f.a.learning.tick();assert.equal(f.calls(),1,'a healthy conversation still gets a learning turn');
  assert.equal(f.a.store.state('scan:b').cursor,'u1');assert.equal(f.a.store.state('scan:a').cursor,undefined,'failure must not skip history');
- broken=false;await f.a.learning.tick();assert.equal(f.a.store.state('scan:a').cursor,'u1');
- assert.deepEqual(reads,['a','b','a']);
+ broken=false;await f.a.learning.tick();assert.equal(f.a.store.state('scan:a').cursor,undefined,'a failed source waits for its retry time');
+ f.a.store.setState('retry:a',{retryAt:0});await f.a.learning.tick();assert.equal(f.a.store.state('scan:a').cursor,'u1');
+ assert.deepEqual(reads,['a','b','b','a']);
 });
 
 test('nested JSON escaping cannot exceed the host input budget or block later history',async t=>{

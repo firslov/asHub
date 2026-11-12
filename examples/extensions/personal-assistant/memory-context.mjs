@@ -19,6 +19,18 @@ export function observedAt(row) {
   return refs.length ? Math.max(...refs.map(r=>Number(r.at)||0)) : row.source.at ?? row.created;
 }
 
+// Small, local applicability groups. These route already-evidenced memories;
+// they do not infer facts about the user or issue additional model requests.
+const contexts = [
+  ['food', /饮食|吃饭|晚餐|早餐|午餐|菜单|聚餐|用餐|食谱|忌口|过敏|花生|素食|\b(?:meal|dinner|lunch|breakfast|food|allerg\w*|diet|vegetarian)\b/iu],
+  ['residence', /居住|住在|搬到|搬家|定居|所在地|现住|\b(?:residen\w*|moved?|living|live)\b/iu],
+  ['occupation', /职业|任职|工作单位|大学教师|教授|老师|律师|医生|转行|\b(?:profession|occupation|teacher|professor|lawyer|career)\b/iu],
+];
+export function applicability(value) {
+  return contexts.filter(([key, pattern]) => pattern.test(value)
+    && !(key === 'food' && /菜单(?:栏|按钮|样式|组件|布局)|右键菜单|导航菜单|\bmenu (?:bar|button|component)|\bdropdown\b/iu.test(value))).map(([key]) => key);
+}
+
 // Exact content identity, not a semantic similarity guess. Keep word boundaries
 // and meaningful punctuation (decimal points, signs, code operators).
 export function memoryIdentity(row) {

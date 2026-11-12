@@ -1,18 +1,33 @@
 import { retrieve } from './retrieval.mjs';
 import { observedAt } from './memory-context.mjs';
+function messageText(message) {
+  const body = message.content;
+  let query = typeof body === 'string' ? body : Array.isArray(body) ? body.filter(p => p?.type === 'text').map(p => p.text ?? '').join('\n') : '';
+  // Strip wrappers from the search copy only, never from request/history data.
+  for (const tag of ['dynamic_context', 'query_context']) {
+    const open = `<${tag}>\n`, close = `\n</${tag}>\n\n`;
+    if (!query.startsWith(open)) continue;
+    const end = query.indexOf(close, open.length);
+    if (end !== -1) query = query.slice(end + close.length);
+  }
+  return query;
+}
+const generated = /^\[(?:Cross-conversation message|插件任务|Compacted conversation|Context checkpoint)/;
 function userText(messages) {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role !== 'user') continue;
-    const body = messages[i].content;
-    let query = typeof body === 'string' ? body : Array.isArray(body) ? body.filter(p => p?.type === 'text').map(p => p.text ?? '').join('\n') : '';
-    // The kernel prepends per-request and per-query context before this hook.
-    // Remove only complete leading envelopes from the search copy, before
-    // applying the query budget. Never change the actual request or history.
-    for (const tag of ['dynamic_context', 'query_context']) {
-      const open = `<${tag}>\n`, close = `\n</${tag}>\n\n`;
-      if (!query.startsWith(open)) continue;
-      const end = query.indexOf(close, open.length);
-      if (end !== -1) query = query.slice(end + close.length);
+    const query = messageText(messages[i]);
+    const followup = query.length <= 80 && /^(?:那(?:么|就|按|这个|件|种)|(?:这个|那个|这件事|这项|它|上述|刚才).*(?:呢|吗|如何|怎么|可以|合适|怎么样)|(?:按|结合)我的(?:情况|背景)|what about|how about|and (?:that|this)|given my)/i.test(query.trim())
+      && !/新话题|换个话题|换个问题|unrelated|new topic/i.test(query);
+    if (followup) {
+      // One nearby real user turn resolves references without mixing unrelated
+      // past topics or turning an assistant's own claims into user facts.
+      for (let j = i - 1, inspected = 0; j >= 0 && inspected < 6; j--, inspected++) {
+        if (messages[j]?.role !== 'user') continue;
+        const prior = messageText(messages[j]);
+        if (prior.trim() && !generated.test(prior)) return (prior.slice(-240) + '\n' + query).slice(-500);
+        break;
+      }
     }
     return query.slice(-500);
   }

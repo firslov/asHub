@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readBodyWithSignal } from '../transport/body-reader.js';
 import { ExtensionMessages, type MessageGrant } from '../services/extension-messages.js';
-import { PluginBackground, type BackgroundGrantInput } from './background.js';
+import { PluginBackground, singleConversationBackgroundPreview, type BackgroundGrantInput } from './background.js';
 export interface ResourcePlan {
     preview?: {
         title: string;
@@ -123,7 +123,7 @@ export class PluginInteractions {
                         throw Error('Invalid action plan');
                     if (remoteSession !== null && (plan.authorization || plan.backgroundAuthorization || plan.entryAuthorization)) throw Error('请在桌面端确认授权');
                     if ([plan.authorization,plan.backgroundAuthorization,plan.entryAuthorization].filter(Boolean).length > 1) throw Error('Conflicting authorizations');
-                    if(plan.entryBackground !== undefined && (!plan.entryBackground || Object.keys(plan.entryBackground).some(k=>!['dailyCalls','includeHistory','followModel'].includes(k)) || !Number.isInteger(plan.entryBackground.dailyCalls) || plan.entryBackground.dailyCalls < 1 || plan.entryBackground.dailyCalls > 24 || typeof plan.entryBackground.includeHistory !== 'boolean' || plan.entryBackground.followModel !== true || !plan.entryAuthorization || !this.background)) throw Error('Invalid entry memory authorization');
+                    if(plan.entryBackground !== undefined && (!plan.entryBackground || Object.keys(plan.entryBackground).some(k=>!['dailyCalls','includeHistory','followModel'].includes(k)) || !Number.isInteger(plan.entryBackground.dailyCalls) || plan.entryBackground.dailyCalls < 1 || plan.entryBackground.dailyCalls > 24 || typeof plan.entryBackground.includeHistory !== 'boolean' || plan.entryBackground.followModel !== true || !plan.entryAuthorization || !this.background)) throw Error('Invalid entry background authorization');
                     const entryBackground = plan.entryBackground ? {dailyCalls:plan.entryBackground.dailyCalls,includeHistory:plan.entryBackground.includeHistory,followModel:plan.entryBackground.followModel} : undefined;
                     const conversation = plan.entryAuthorization ? await this.conversations?.prepare(entry.pluginId,plan.entryAuthorization) : undefined;
                     if (plan.entryAuthorization && !conversation) throw Error('Conversation entries unavailable');
@@ -131,16 +131,19 @@ export class PluginInteractions {
                     if (plan.authorization && plan.backgroundAuthorization) throw Error('Conflicting authorizations');
                     if (plan.backgroundAuthorization && !this.background) throw Error('Background services unavailable');
                     const background = plan.backgroundAuthorization ? this.background!.prepare(entry.pluginId, plan.backgroundAuthorization) : undefined;
+                    const backgroundPreview = background ?? (entryBackground && conversation ? singleConversationBackgroundPreview(entryBackground, {
+                        title: conversation.entry.spec.label, model: conversation.input.model, provider: conversation.input.provider,
+                    }, conversation.createsConversation, 'confirmation') : undefined);
                     const run = () => this.run(entry.pluginId, async () => {
                         guard();
                         let grantId = conversation ? await this.conversations!.approve(entry.pluginId,conversation) : authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : undefined;
-                        let memoryGrant: string | undefined;
+                        let entryBackgroundGrant: string | undefined;
                         try {
-                            if(entryBackground){guard(); const sid=grantId!; memoryGrant=this.background!.approve(entry.pluginId,this.background!.prepare(entry.pluginId,{...entryBackground,modelSessionId:sid,includedIds:[sid],excludedIds:[]}));grantId=memoryGrant;}
+                            if(entryBackground){guard(); const sid=grantId!; entryBackgroundGrant=this.background!.approve(entry.pluginId,this.background!.prepare(entry.pluginId,{...entryBackground,modelSessionId:sid,includedIds:[sid],excludedIds:[]}));grantId=entryBackgroundGrant;}
                             return { view: clone(await plan.execute(grantId)) };
                         }
                         catch (error) {
-                            if(memoryGrant)try{this.background!.bind(entry.pluginId,entry.signal).revoke(memoryGrant);}catch{}
+                            if(entryBackgroundGrant)try{this.background!.bind(entry.pluginId,entry.signal).revoke(entryBackgroundGrant);}catch{}
                             if (grantId && !conversation)
                                 try {
                                     if (background) this.background!.bind(entry.pluginId, entry.signal).revoke(grantId);
@@ -153,16 +156,15 @@ export class PluginInteractions {
                     if (plan.preview || authorization || background || conversation) {
                         if (this.pending.size >= 100)
                             throw Error('Too many pending confirmations');
-                        const preview = clone(plan.preview ?? { title: '授权消息投递 / Authorize messages', fields: [] });
+                        const preview = clone(plan.preview ?? { title: backgroundPreview ? '授权后台处理 / Authorize background processing' : conversation ? '新建专属对话 / Create conversation' : '授权消息投递 / Authorize messages', fields: [] });
                         if (typeof preview.title !== 'string' || !Array.isArray(preview.fields) || preview.fields.length > 32 || preview.fields.some((f: any) => typeof f?.label !== 'string' || typeof f?.value !== 'string'))
                             throw Error('Invalid approval preview');
                         preview.fields.push(...authorization?.fields ?? []);
-                        preview.fields.push(...background?.fields ?? []);
+                        preview.fields.push(...conversation?.fields ?? []);
+                        preview.fields.push(...backgroundPreview?.fields ?? []);
                         // Only the host can collapse its authorization diagnostics.
                         delete preview.details;
-                        if (background?.details) preview.details = background.details;
-                        preview.fields.push(...conversation?.fields ?? []);
-                        if(entryBackground)preview.fields.push({label:'长期记忆',value:`仅整理此专属对话的${entryBackground.includeHistory?'已有及后续':'授权后新增'}聊天；跟随此对话当前及今后选择的模型服务与 VPN。每天最多 ${entryBackground.dailyCalls} 次整理，失败计入额度，每次输入最多 16000 字符、输出最多 4096 tokens；可能产生费用，不执行工具，可随时关闭`});
+                        if (backgroundPreview?.details) preview.details = backgroundPreview.details;
                         const id = randomUUID();
                         this.pending.set(id, { key, context, entry, expires: Date.now() + 300000, run });
                         result = { confirmation: { id, preview } };

@@ -330,7 +330,8 @@ export class PluginRuntime {
   constructor(private file: string, private timeout = 10_000,
     private bindBrowser?: (plugin: string) => ReturnType<NonNullable<import('./bridges/types.js').BridgeOpts['bindBrowserPages']>>,
     private defineOwned?: ScopedDefine,
-    private imageResources?: import("./image-resources.js").ImageResourceAccess) {}
+    private imageResources?: import("./image-resources.js").ImageResourceAccess,
+    private pluginConversation?: (pluginId: string, entryKeys: readonly string[]) => boolean) {}
   async load(ctx: Context): Promise<string[]> {
     let entries, settings: Record<string, any>;
     try { entries = pluginCatalog(this.file).filter(p => p.enabled); settings = readPluginSettings(this.file); }
@@ -341,6 +342,10 @@ export class PluginRuntime {
     for (const plugin of entries) {
       if (this.closed) break;
       if (this.uninstalled.has(plugin.id)) continue;
+      // Decide before importing the session entry or attaching any hooks. Ordinary
+      // conversations do not count as having loaded this scoped plugin.
+      const entryKeys = plugin.manifest?.sessionScope?.conversationEntries;
+      if (entryKeys && this.pluginConversation?.(plugin.id, entryKeys) !== true) continue;
       const state: PluginStatus = { id: plugin.id, name: plugin.name, state: 'loading', configNamespaces: [] };
       this.status.push(state);
       if (plugin.compatibilityError) {

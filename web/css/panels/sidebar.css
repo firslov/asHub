@@ -837,12 +837,12 @@
 .plugin-conversation-empty .stream-empty-hints{display:none!important}
 
 /* Plugin-owned conversation resources stay close to the conversation. */
-.conversation-memory-dialog{margin:auto;padding:0;width:min(440px,calc(100vw - 32px));max-height:80dvh;box-sizing:border-box;border:1px solid var(--border-mid);border-radius:20px;background:var(--bg);color:var(--text);box-shadow:var(--shadow-lg);overflow:auto}
-.conversation-memory-dialog::backdrop{background:rgb(0 0 0 / 24%)}
-.conversation-memory-dialog .p-head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:0}
-.conversation-memory-dialog .p-body{padding:4px 20px 20px}
-.conversation-memory-dialog .extension-resource-note{padding-bottom:0;border-bottom:0}
-@media(max-width:600px){.conversation-memory-dialog{margin:auto 0 0;width:100%;max-height:85dvh;border-radius:20px 20px 0 0;padding-bottom:env(safe-area-inset-bottom)}}
+.conversation-resource-dialog{margin:auto;padding:0;width:min(440px,calc(100vw - 32px));max-height:80dvh;box-sizing:border-box;border:1px solid var(--border-mid);border-radius:20px;background:var(--bg);color:var(--text);box-shadow:var(--shadow-lg);overflow:auto}
+.conversation-resource-dialog::backdrop{background:rgb(0 0 0 / 24%)}
+.conversation-resource-dialog .p-head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:0}
+.conversation-resource-dialog .p-body{padding:4px 20px 20px}
+.conversation-resource-dialog .extension-resource-note{padding-bottom:0;border-bottom:0}
+@media(max-width:600px){.conversation-resource-dialog{margin:auto 0 0;width:100%;max-height:85dvh;border-radius:20px 20px 0 0;padding-bottom:env(safe-area-inset-bottom)}}
 
 .conversation-welcome .plugin-config-label:has(input[type="checkbox"]){display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px;min-height:40px}
 .conversation-welcome input[type="checkbox"]{width:18px;height:18px;min-height:0;flex:0 0 18px;margin:0;padding:0;accent-color:var(--accent)}
@@ -869,3 +869,8 @@
 .resource-toggle-confirm dt{color:var(--text-faint,var(--muted));margin-top:10px}
 .resource-toggle-confirm dd{margin:0;overflow-wrap:anywhere}
 .resource-toggle-confirm .extension-resource-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}
+
+/* Persistent resource health is visible only when the plugin reports a problem. */
+.conversation-entry:has(.resource-inline-status),.plugin-entry:has(.resource-inline-status){position:relative;padding-bottom:22px}
+.conversation-entry-control:has(.resource-inline-status),.plugin-entry-control:has(.resource-inline-status){position:static}
+.resource-inline-status{position:absolute;left:12px;right:12px;bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;font-weight:400;color:var(--text-dim,var(--muted))}

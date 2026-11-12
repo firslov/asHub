@@ -18,7 +18,8 @@
       "conversation-entries",
       "scoped-history",
       "remote-resources",
-      "conversation-resource-popovers"
+      "conversation-resource-popovers",
+      "conversation-scoped-sessions"
     ]
   },
   "permissions": [
@@ -26,5 +27,10 @@
     "记忆存储在本机，可追溯、纠正和忘记；其他对话默认不参与学习或召回",
     "已共享的个人助手可在远控端聊天及关闭长期记忆，开启授权在桌面确认"
   ],
-  "configNamespaces": []
+  "configNamespaces": [],
+  "sessionScope": {
+    "conversationEntries": [
+      "assistant"
+    ]
+  }
 }

@@ -142,6 +142,56 @@
     };
   }
 
+  function parseCompactionNotice(message) {
+    if (typeof message !== 'string') return null;
+    const match = /^\((?:compacted|auto-compacted|context overflow — compacted):? ~(\d+|\d{1,3}(?:,\d{3})+) → ~(\d+|\d{1,3}(?:,\d{3})+) tokens(?:, evicted \d+|, retrying)?\)$/.exec(message);
+    if (!match) return null;
+    const beforeTokens = Number(match[1].replaceAll(',', '')), afterTokens = Number(match[2].replaceAll(',', ''));
+    return Number.isSafeInteger(beforeTokens) && beforeTokens > 0 && Number.isSafeInteger(afterTokens) && afterTokens >= 0
+      ? { beforeTokens, afterTokens } : null;
+  }
+
+  function renderCompaction(payload = {}, locale = 'zh', existing) {
+    payload = payload && typeof payload === 'object' ? payload : {};
+    const zh = locale === 'zh', pick = (a,b) => zh ? a : b;
+    const valid = n => Number.isFinite(n) && n >= 0;
+    const short = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(Math.round(n));
+    const node = existing || document.createElement('details');
+    const opened = node.open;
+    node.className = 'compaction-marker';
+    node._compactionData = { ...payload };
+    const summary = document.createElement('summary');summary.className = 'cm-summary';
+    const title = document.createElement('span');title.className = 'cm-title';title.textContent = pick('上下文已整理','Context compacted');
+    const info = [];
+    if (Number.isSafeInteger(payload.evictedCount) && payload.evictedCount > 0) info.push(pick(`${payload.evictedCount} 条记录`,`${payload.evictedCount} records`));
+    if (valid(payload.beforeTokens) && payload.beforeTokens > 0 && valid(payload.afterTokens)) info.push(`~${short(payload.beforeTokens)} → ~${short(payload.afterTokens)}`);
+    const metrics = document.createElement('span');metrics.className = 'cm-metrics';metrics.textContent = info.join(' · ');
+    summary.append(title,metrics);
+    const body = document.createElement('div');body.className = 'cm-details';
+    const rows = [];
+    if (valid(payload.beforeTokens) && payload.beforeTokens > 0 && valid(payload.afterTokens)) rows.push([pick('上下文估算','Estimated context'),`${Math.round(payload.beforeTokens).toLocaleString()} → ${Math.round(payload.afterTokens).toLocaleString()} tokens`]);
+    if (payload.mode === 'semantic' || payload.mode === 'fallback') rows.push([pick('整理方式','Method'),payload.mode === 'semantic' ? pick('语义整理','Semantic summary') : pick('保底整理','Fallback summary')]);
+    if (valid(payload.elapsedMs)) rows.push([pick('整理耗时','Duration'),`${(payload.elapsedMs / 1000).toFixed(1)} s`]);
+    const dl = document.createElement('dl');
+    for (const [label,value] of rows) { const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=value;dl.append(dt,dd); }
+    const note=document.createElement('p');note.textContent=pick('Token 为上下文估算值，不代表实际计费。','Token counts estimate context size, not billed usage.');
+    body.append(dl,note);node.replaceChildren(summary,body);node.open=opened;
+    return node;
+  }
+
+  function mergeCompactionNotice(root, message, locale = 'zh') {
+    const stats = parseCompactionNotice(message);
+    if (!stats || !root) return false;
+    // A matching checkpoint is required. Never attach an unrelated completion
+    // to an older boundary merely because it happens to be the last one.
+    const marker = [...root.querySelectorAll('.compaction-marker')].at(-1);
+    if (!marker || marker._compactionData?.beforeTokens !== stats.beforeTokens) return false;
+    const focused = marker.contains(document.activeElement);
+    renderCompaction({ ...marker._compactionData, ...stats }, locale, marker);
+    if (focused) marker.querySelector('summary').focus();
+    return true;
+  }
+
   // A classic script on remote and a side-effect ESM import on desktop.
-  globalThis.AsHubConversationPresentation = Object.freeze({ eventVersion: 1, diagnosticState, turnLifecycle, activityState, activityTimestamp, renderActivityTime, toolActivityKey, usageMetrics, toolDisplayName, thinkingPreview, renderThinkingContent });
+  globalThis.AsHubConversationPresentation = Object.freeze({ eventVersion: 1, diagnosticState, turnLifecycle, activityState, activityTimestamp, renderActivityTime, toolActivityKey, usageMetrics, toolDisplayName, thinkingPreview, renderThinkingContent, parseCompactionNotice, renderCompaction, mergeCompactionNotice });
 })();

@@ -1073,3 +1073,19 @@
   .live-wrap .tool-body { padding: 8px 10px; }
   .live-wrap :is(.subagent-body, .subagent-result) { padding: 6px 8px; }
 }
+
+/* One quiet, expandable boundary for a compaction checkpoint and its receipt. */
+.compaction-marker{display:block;min-width:0;margin:24px 0;padding-top:10px;border-top:1px solid var(--border,var(--line));font-family:inherit;font-size:12px;line-height:1.6;color:var(--text-dim,var(--muted))}
+.compaction-marker>.cm-summary{display:grid;grid-template-columns:auto minmax(0,1fr) 16px;align-items:center;gap:4px 10px;min-height:32px;padding:4px 0;list-style:none;cursor:pointer;outline-offset:4px}
+.compaction-marker>.cm-summary::-webkit-details-marker{display:none}
+.compaction-marker>.cm-summary::after{content:'›';margin-left:auto;flex:none;width:16px;height:16px;line-height:16px;text-align:center;transition:transform .15s}
+.compaction-marker[open]>.cm-summary::after{transform:rotate(90deg)}
+.compaction-marker .cm-title{font-weight:500;white-space:nowrap}
+.compaction-marker .cm-metrics{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.compaction-marker .cm-details{padding:10px 0 4px;overflow-wrap:anywhere}
+.compaction-marker dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 18px;margin:0}
+.compaction-marker dt{opacity:.75}
+.compaction-marker dd{margin:0;font-variant-numeric:tabular-nums}
+.compaction-marker .cm-details p{margin:12px 0 0;font-size:11px;opacity:.75}
+@media(pointer:coarse){.compaction-marker>.cm-summary{min-height:44px}}
+@media(prefers-reduced-motion:reduce){.compaction-marker>.cm-summary::after{transition:none}}

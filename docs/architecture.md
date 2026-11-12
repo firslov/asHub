@@ -16,6 +16,20 @@ asHub owns the durable conversation model, project membership, host authorizatio
 
 Services do not import the Hub or frontend. They receive explicit ports for persistence, bridge calls and notifications. Session history and project files keep their existing formats; extracting services does not duplicate their ownership. Bridge event translation and legacy transport adapters remain in the Hub where they share state; new feature logic belongs in a service or extension rather than expanding that file.
 
+Plugin dependencies point toward host contracts, never from core services into a
+plugin implementation. The host owns conversation identity, authorized history,
+bounded model calls, resource rendering and transport. Plugins own their data
+schemas, learning/scheduling policies, prompts and recovery of business results.
+Host authorization previews describe the actual scope, model/network binding and
+limits; the plugin supplies the purpose. A new consumer of a host service must not
+inherit another plugin's business labels or data-retention promises.
+
+The personal assistant is separately installed, not part of the desktop package
+or the included-plugin catalog. Keeping its source and integration tests in this
+repository does not make it a runtime dependency. Updates preserve existing user
+installations and data; they must not install, remove or reactivate the assistant
+on the user's behalf.
+
 ## Optional built-in features
 
 `quick-prompts`, `skills-marketplace`, `provider-balance` and `mobile-access` are registered application/frontend features. Existing installations enable all four by default. Disable choices are persisted in `ashub.features.disabled`, separately from kernel plugin settings. Disabling a feature retains settings, prompts, history, projects and remote identity. Core conversation creation, sending, cancellation and history do not depend on these features.
@@ -29,6 +43,15 @@ The prompt library remains a bundled UI module with its existing local storage a
 There is one plugin catalog and archive installer. Manifest v1 and manifestless agent-sh plugins remain session extensions. Manifest v2 can declare distinct `entries.session` and `entries.application`, declarative UI, or a combination. UI-only packages do not require an executable entry. Host API/capability and dependency requirements are validated before code is loaded.
 
 Application extensions start once per Hub, not once per conversation. A successful ZIP installation refreshes the registry and notifies connected clients independently of the installer panel. Installed-plugin toggles serialize dependency checks with persistence, so a busy rejection retains the previous settings. They receive an abort signal, cleanup registration, a snapshot of their declared configuration and explicitly injected services. Saved configuration is read on the next activation; restart the application, or disable and re-enable an idle application feature, to apply it. The injected host service is read-only (`capabilities`, `snapshot`, `subscribe`). They cannot obtain a conversation mutation identity by supplying a source ID. Session extensions continue using `ashub:catalog` and `ashub:execute` with host-bound identity and explicit user approval.
+
+`src/extensions/services.ts` defines the application service contract without
+runtime imports. Capability requirements describe compatibility; access still
+depends on the bound service's authorization and lifetime checks. The generic
+loader delegates legacy presentation adaptation to `installed-compatibility.ts`.
+Its sole existing exception preserves the retired browser ZIP shortcut behavior
+without rewriting user manifests. Remove that adapter once the oldest supported
+browser package no longer contains the old shortcut; new package UI belongs in
+the package manifest, not in additional host exceptions.
 
 Factories must register cleanup before awaiting resource creation, honor the abort signal and return a cleanup function or an instance with `stop`. The registry serializes lifecycle changes, isolates activation failures, times out unresponsive activation/cleanup, and tears down dependents before dependencies. Failed replacement cleanup retains the affected dependency instances until restart, reflects persisted enable preferences, and leaves the catalog and unrelated plugins usable. Shutdown always proceeds with durable core cleanup even when optional cleanup fails. This is trusted Node code in the application process, not a security sandbox; synchronous blocking code or arbitrary native side effects cannot be isolated by a promise timeout.
 

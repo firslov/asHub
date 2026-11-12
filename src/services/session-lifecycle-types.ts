@@ -10,6 +10,7 @@ export interface SessionLifecycleOptions {
   makeBridge: BridgeFactory;
   signal?: AbortSignal;
   conversationAccess?: (id: string) => ConversationAccess;
+  pluginConversation?: (sessionId: string, pluginId: string, entryKeys: readonly string[]) => boolean;
   imageResources?: (id: string) => import("../image-resources.js").ImageResourceAccess;
   hostAccess?: (id: string) => HostAccess;
   collaboration?: CollaborationTasks;

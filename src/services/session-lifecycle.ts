@@ -92,7 +92,7 @@ async function initializeSession(
   try {
     if (typeof setup?.proxyEnabled === "boolean") writeNetworkPolicy(setup.proxyEnabled, id);
     bridge = isRestored && isAgent ? null as unknown as Bridge
-      : opts.makeBridge({ sessionId: id, cwd, kind, initialMessages, compactionStrategy, historyAccess: isAgent ? createHistoryReader(() => session?.store ?? null) : undefined, ...setup, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id), imageResources: opts.imageResources?.(id) });
+      : opts.makeBridge({ sessionId: id, cwd, kind, initialMessages, compactionStrategy, historyAccess: isAgent ? createHistoryReader(() => session?.store ?? null) : undefined, ...setup, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id), imageResources: opts.imageResources?.(id), pluginConversation: (pluginId, keys) => opts.pluginConversation?.(id, pluginId, keys) === true });
   } catch (error) {
     if (typeof setup?.proxyEnabled === "boolean") { try { writeNetworkPolicy(null, id); } catch {} }
     await store?.seal();

@@ -74,6 +74,7 @@ import { invalidateGlobalSkillsCache } from "agent-sh/skills";
 export interface HubOpts {
   enableBrowserPages?: (plugin: string, signal: AbortSignal) => void;
   conversationAccess?: (id: string) => ConversationAccess;
+  pluginConversation?: (sessionId: string, pluginId: string, entryKeys: readonly string[]) => boolean;
   imageResources?: (id: string) => import("./image-resources.js").ImageResourceAccess;
   hostAccess?: (id: string) => HostAccess;
   collaboration?: CollaborationTasks;
@@ -932,6 +933,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     create:async(id,spec,input)=>{const s=await createSession(sessions,opts,spec.cwd,undefined,'agent',{instanceId:id,model:input.model,provider:input.provider});await setSessionTitle(s,spec.label,true);},
     changed:()=>hostEvents.publish('extensions'),
   });
+  opts.pluginConversation = (sessionId, pluginId, entryKeys) => conversationEntries.matchesSession(pluginId, entryKeys, sessionId);
   const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action), background, conversationEntries);
   extensions = new ApplicationExtensionRegistry({ settingsFile: settingsPath(), capabilities: HOST_PLUGIN_CAPABILITIES,
     discover: () => installedApplicationDefinitions(settingsPath(), { enableBrowserPages: opts.enableBrowserPages, bindServices: (id, context) => ({
@@ -1044,6 +1046,10 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
           if (!input || typeof input.id !== "string") throw new Error("Invalid plugin");
           const id = input.id;
           const checkIdle = () => {
+            // Initializing conversations are not published in sessions yet. Their
+            // loaders may already hold a plugin catalog or registered tools.
+            if (_initializing.get(sessions)?.size)
+              throw Object.assign(new Error("等待会话初始化完成后再卸载 / Wait for conversations to finish initializing before uninstalling"), { status: 409 });
             for (const session of sessions.values()) {
               const plugin = session.bridge?.getPluginStatus?.().find(p => p.id === id);
               if (plugin && (plugin.state === 'loading' || (plugin.state === 'loaded' && session.isProcessing)))
@@ -3877,6 +3883,7 @@ function synthesizeBranchFrames(
   type Msg = {
     role?: string;
     content?: unknown;
+    meta?: { ashubCheckpoint?: string };
     tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
     tool_call_id?: string;
   };
@@ -3904,7 +3911,13 @@ function synthesizeBranchFrames(
     if (((hasEntryIdTags && entryIds[idx] === null) || isContextPlaceholder(m)) && m.role === "user" && typeof m.content === "string") {
       closeTurn();
       const evictedCount = parseEvictedCount(m.content);
-      frames.push(sseFrame(meta("hub:compaction-marker"), { evictedCount, summary: m.content }));
+      const checkpoint = m.meta?.ashubCheckpoint ? session.store?.getEntry(m.meta.ashubCheckpoint) : undefined;
+      const details = checkpoint?.type === "compaction" ? {
+        checkpointId: checkpoint.id, beforeTokens: checkpoint.tokensBefore,
+        afterTokens: checkpoint.checkpoint?.diagnostics?.estimatedAfter,
+        mode: checkpoint.checkpoint?.mode, elapsedMs: checkpoint.checkpoint?.diagnostics?.elapsedMs,
+      } : {};
+      frames.push(sseFrame(meta("hub:compaction-marker"), { evictedCount, summary: m.content, ...details }));
       continue;
     }
     if (m.role === "user") {

@@ -128,10 +128,14 @@ app
       });
       await registry.start();
       const {pluginCatalog} = await load('plugins.js');
-      for(const plugin of pluginCatalog(settings).filter(p=>p.includedApp && !p.bundled)){
+      const catalog = pluginCatalog(settings);
+      const browserPlugin = catalog.find(plugin => plugin.manifest?.id === 'ashub-browser-automation' && !plugin.bundled);
+      assert(browserPlugin, 'Browser ZIP should appear as an installed plugin');
+      for(const plugin of catalog.filter(p=>p.includedApp && !p.bundled)){
         assert(!plugin.enabled); await registry.setPluginEnabled(plugin.id,true);
       }
-      const feature = registry.snapshot().features[0];
+      const feature = registry.snapshot().features.find(entry => entry.pluginId === browserPlugin.id);
+      assert(feature, 'Installed browser plugin should register a feature');
       assert.equal(feature.state, 'active');
       async function bridge(id) {
         const partition =

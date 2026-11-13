@@ -1,0 +1,1 @@
+export class DevicePublisher { [key:string]:any; constructor(options:any); start(port:number):void; status():any; close():void; isBusy():boolean; drain():Promise<void>; execute(op:string,args:any):Promise<any>; }

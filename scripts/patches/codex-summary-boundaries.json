@@ -1,0 +1,30 @@
+{
+  "files": [
+    {
+      "path": "src/agent/extensions/codex-provider/translate.ts",
+      "hunks": [
+        {
+          "before": "  private reasoningCount = 0;",
+          "after": "  private reasoningCount = 0;\n  private summaryTextStarted = false;"
+        },
+        {
+          "before": "case \"response.reasoning_summary_text.delta\":\n        return event.delta ? [this.chunk({ reasoning: event.delta })] : [];\n      case \"response.reasoning_summary_part.added\":\n        return (event.summary_index ?? 0) > 0 ? [this.chunk({ reasoning: \"\\n\\n\" })] : [];\n      ",
+          "after": "case \"response.reasoning_summary_text.delta\":\n        if (!event.delta) return [];\n        this.summaryTextStarted = true;\n        return [this.chunk({ reasoning: event.delta })];\n      case \"response.reasoning_summary_part.added\":\n        // summary_index restarts at zero for each reasoning item.\n        return this.summaryTextStarted ? [this.chunk({ reasoning: \"\\n\\n\" })] : [];\n      "
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/extensions/codex-provider/translate.js",
+      "hunks": [
+        {
+          "before": "    reasoningCount = 0;",
+          "after": "    reasoningCount = 0;\n    summaryTextStarted = false;"
+        },
+        {
+          "before": "case \"response.reasoning_summary_text.delta\":\n                return event.delta ? [this.chunk({ reasoning: event.delta })] : [];\n            case \"response.reasoning_summary_part.added\":\n                return (event.summary_index ?? 0) > 0 ? [this.chunk({ reasoning: \"\\n\\n\" })] : [];\n            ",
+          "after": "case \"response.reasoning_summary_text.delta\":\n                if (!event.delta) return [];\n                this.summaryTextStarted = true;\n                return [this.chunk({ reasoning: event.delta })];\n            case \"response.reasoning_summary_part.added\":\n                // summary_index restarts at zero for each reasoning item.\n                return this.summaryTextStarted ? [this.chunk({ reasoning: \"\\n\\n\" })] : [];\n            "
+        }
+      ]
+    }
+  ]
+}

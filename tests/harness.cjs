@@ -3,7 +3,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {EventEmitter} = require('node:events');
 const {Readable} = require('node:stream');
-const {pathToFileURL} = require('node:url');
+const {pathToFileURL,fileURLToPath} = require('node:url');
 const root = process.env.ASHUB_TEST_ROOT || path.resolve(__dirname, '..');
 const ts = require(root + '/node_modules/typescript');
 const base = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ashub-tests-'));
@@ -39,6 +39,7 @@ function env(extra={}) {
    if(id==='agent-sh/auth')return auth;
    if(id==='agent-sh/skills')return {invalidateGlobalSkillsCache(){}};
    if(id.startsWith('agent-sh'))return {};
+   if(id.startsWith('file:'))return load(fileURLToPath(id));
    if(id.startsWith('.')) {let f=path.resolve(path.dirname(file),id); if(!fs.existsSync(f))f=f.replace(/\.js$/,'.ts');return load(f);}
    return require(id);
   };

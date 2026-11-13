@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
+import { remoteTransport } from '../dist/remote/transport.js';
 import { RemoteConnector } from '../dist/remote/connector.js';
 import { MobileAccessExtension } from '../dist/remote/extension.js';
 
@@ -16,8 +17,7 @@ function fixture(t, { disabled = false } = {}) {
   let reads = 0;
   const identity = { deviceId: 'desktop', deviceToken: 'secret', username: 'alice', deviceName: 'Desktop', roots: [fs.realpathSync(dir)], ...(disabled ? { enabled: false } : {}) };
   let saved = JSON.stringify(identity);
-  const nativeWebSocket = globalThis.WebSocket;
-  globalThis.WebSocket = class {
+  const Socket = class {
     static OPEN = 1;
     readyState = 1;
     bufferedAmount = 0;
@@ -27,11 +27,12 @@ function fixture(t, { disabled = false } = {}) {
     send(data) { this.sent.push(JSON.parse(data)); }
     close() { this.closed = true; }
   };
+  t.mock.method(remoteTransport,'socket',url=>new Socket(url));
   const connector = new RemoteConnector({ dataDir: dir, gateway: 'http://127.0.0.1/mobile/', store: {
     read() { reads++; return saved; }, write(value) { writes.push(value); saved = value; },
   } });
   const mobile = new MobileAccessExtension(connector);
-  t.after(async () => { connector.close(); await connector.drain(); globalThis.WebSocket = nativeWebSocket; fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { connector.close(); await connector.drain(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { dir, connector, mobile, sockets, writes, identity, reads: () => reads, saved: () => saved };
 }
 function activate(mobile) {
@@ -124,7 +125,7 @@ test('application stop revokes authorization still in progress and waits for it 
 
 test('close cancels an unfinished request body before it can enroll or replace credentials', async t => {
   const f = fixture(t); let enrollments = 0;
-  t.mock.method(globalThis, 'fetch', async () => { enrollments++; throw Error('Unexpected enrollment'); });
+  t.mock.method(remoteTransport, 'fetch', async () => { enrollments++; throw Error('Unexpected enrollment'); });
   f.mobile.start(1234); const activation = activate(f.mobile);
   const req = Object.assign(new PassThrough(), { method: 'POST', url: '/api/mobile/connect', headers: { 'x-ashub-local': '1' } });
   const res = response(), pending = f.mobile.handle(req, res);
@@ -140,7 +141,7 @@ test('close cancels an unfinished request body before it can enroll or replace c
 
 test('stop during enrollment prevents late binding and credentials persistence', async t => {
   const f = fixture(t), enrolled = deferred(), enrollmentStarted = deferred();
-  t.mock.method(globalThis, 'fetch', async () => { enrollmentStarted.resolve(); return enrolled.promise; });
+  t.mock.method(remoteTransport, 'fetch', async () => { enrollmentStarted.resolve(); return enrolled.promise; });
   f.mobile.start(1234); const activation = activate(f.mobile), res = response();
   const pending = f.mobile.handle(request('/api/mobile/connect', { username: 'bob', roots: [f.dir] }), res);
   await enrollmentStarted.promise;
@@ -154,7 +155,7 @@ test('stop during enrollment prevents late binding and credentials persistence',
 
 test('connection-level disconnect allows explicit rebind while the application remains enabled', async t => {
   const f = fixture(t); let enrollments = 0;
-  t.mock.method(globalThis, 'fetch', async () => { enrollments++; return Response.json({ protocol: 1, deviceId: 'desktop', deviceToken: 'secret', username: 'alice' }); });
+  t.mock.method(remoteTransport, 'fetch', async () => { enrollments++; return Response.json({ protocol: 1, deviceId: 'desktop', deviceToken: 'secret', username: 'alice' }); });
   f.mobile.start(1234); const activation = activate(f.mobile);
   const disconnected = response(); await f.mobile.handle(request('/api/mobile/disconnect'), disconnected);
   assert.equal(disconnected.result.status, 200); assert.equal(f.mobile.status().enabled, false); assert.equal(f.mobile.status().featureEnabled, true);

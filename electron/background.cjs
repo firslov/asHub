@@ -57,7 +57,7 @@ function createBackgroundController({ app, Tray, Menu, nativeImage, dialog, powe
       { label: text('打开 asHub', 'Open asHub'), click: restoreWindows },
       { type: 'separator' },
       { label: status, enabled: false },
-      { label: text('移动访问', 'Mobile access'), click: () => { restoreWindows(); openMobile(); } },
+      { label: text('设备互联', 'Device interconnect'), click: () => { restoreWindows(); openMobile(); } },
       { type: 'separator' },
       { label: text('退出 asHub', 'Quit asHub'), click: () => app.quit() },
     ]));

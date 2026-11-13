@@ -747,8 +747,34 @@ async function startServer() {
         fs.renameSync(temp, credentialFile);
       },
     } : undefined;
+    const backendWindows = new Map();
+    const pluginSecretsDir = path.join(app.getPath("userData"), "plugin-secrets");
+    const pluginSecretStore = secureStorage ? {
+      read(key) {
+        if (!/^[a-f0-9]{64}$/.test(key)) throw Error('Invalid credential key');
+        const file=path.join(pluginSecretsDir,key+'.bin');
+        return fs.existsSync(file)?safeStorage.decryptString(fs.readFileSync(file)):null;
+      },
+      write(key,value) {
+        if (!/^[a-f0-9]{64}$/.test(key)) throw Error('Invalid credential key');
+        fs.mkdirSync(pluginSecretsDir,{recursive:true,mode:0o700});const file=path.join(pluginSecretsDir,key+'.bin');
+        if(value===null){fs.rmSync(file,{force:true});return;}
+        fs.writeFileSync(file+'.tmp',safeStorage.encryptString(value),{mode:0o600});fs.renameSync(file+'.tmp',file);
+      },
+    } : undefined;
     const hubOptions = {
-      remoteSecretStore,
+      remoteSecretStore, pluginSecretStore,
+      openBackendWorkspace(id,label) {
+        if(!/^[a-f0-9]{32}$/.test(id))throw Error('Invalid backend');
+        const old=backendWindows.get(id);if(old&&!old.isDestroyed()){old.show();old.focus();return;}
+        // Trusted local UI only, without the native file/browser/admin preload.
+        const win=new BrowserWindow({width:1280,height:860,minWidth:760,minHeight:560,title:label+' · asHub',backgroundColor:nativeTheme.shouldUseDarkColors?'#272824':'#f3f0e8',webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
+        backendWindows.set(id,win);win.on('closed',()=>backendWindows.delete(id));
+        const url=`http://127.0.0.1:${HUB_PORT}/backend.html?connection=${id}`;
+        win.webContents.on('will-navigate',(event,target)=>{if(target!==url)event.preventDefault();});
+        win.webContents.setWindowOpenHandler(({url:target})=>{try{const parsed=new URL(target);if(['http:','https:'].includes(parsed.protocol)&&!['127.0.0.1','localhost','[::1]'].includes(parsed.hostname))void shell.openExternal(target);}catch{}return {action:'deny'};});
+        void win.loadURL(url);
+      },
       enableBrowserPages: browserPages.enable,
       port: HUB_PORT,
       host: "127.0.0.1",

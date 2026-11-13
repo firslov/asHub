@@ -83,6 +83,22 @@ async function runSwarmTool(x,items,entries){
  return {result,events};
 }
 (async()=>{
+ for(const replaying of [false,true])await check('Late thinking stays before its intact reply; later tools stay after (replay='+replaying+')',()=>{
+  const x=fixture(),s=x.session;s.state.replaying=replaying;s.reply={};
+  if(replaying)s._replayFrag=new Node();const root=s._replayFrag||s.streamEl;
+  const reply=x.node('agent-reply','**Start');x.groups.append(s,reply);s.reply.current=reply;
+  const pending=x.node('agent-box pending','queued');root.append(pending);
+  for(const text of ['First summary','Second summary']){const thought=x.node('thinking-block',text);thought.dataset.activityDone='1';x.groups.append(s,thought);}
+  assert(root.children.length===3&&root.children[0].classList.contains('execution-activity'));
+  assert(root.children[1]===reply&&root.children[2]===pending);
+  assert(root.children[0].querySelectorAll('.thinking-block').length===2,'same reply summaries should remain grouped');
+  reply.textContent+=' end**';s.reply.current=null;x.tool();
+  assert(root.children[0].querySelectorAll('.tool-row').length===0,'subsequent tool was moved before the reply');
+  assert(root.children[1]===reply&&root.children[2].querySelector('.tool-row')&&root.children[3]===pending);
+  assert(reply.textContent==='**Start end**','summary insertion changed reply content');
+  x.finish();
+ });
+
  for (const replaying of [false,true]) await check('Activity replaces idle thinking across reply boundaries (replay='+replaying+')',()=>{
   const x=fixture(),s=x.session,think=x.e.load('web/js/stream/thinking.js');
   s.thinking={};s.state.replaying=replaying;

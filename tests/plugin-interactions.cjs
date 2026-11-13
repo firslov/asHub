@@ -223,3 +223,15 @@ for(const createsConversation of [true,false])test(`combined new-message consent
  assert.deepEqual(Array.from(restored.search(grant,sid,'组合范围'),entry=>entry.id),[after]);
  assert.deepEqual(Array.from(restored.valid(grant,sid,[...before,after])),[after]);
 });
+
+test('sharing authorization is mandatory, desktop-only, idempotent and rolled back on failed plugin commit',async()=>{
+ const e=env(),{PluginInteractions}=e.load('src/extensions/interactions.ts'),{SharedConversations}=e.load('src/extensions/shared-conversations.ts'),life=new AbortController();
+ const sharing=new SharedConversations(path.join(e.dir,'grants.json'));let attempts=0,granted;
+ const ui=new PluginInteractions({},()=>{},life.signal,async(_id,run)=>run(),undefined,undefined,sharing);
+ ui.bind('plugin',life.signal).register('sharing',{remote:{conversationId:()=> 'aaaa',actions:['enable']},view:()=>({}),prepare:()=>({sharingAuthorization:{roots:[e.dir]},execute:id=>{attempts++;granted=id;throw Error('credential store locked');}})});
+ const call=async(body,remote=false)=>{const r=req(body,'/api/plugin-resources/plugin/sharing'+(remote?'?remoteSession=aaaa':''),'POST'),s=new Res();await ui.handle(r,s,async()=>JSON.stringify(body));return{status:s.statusCode,value:s.json()};};
+ assert.equal((await call({action:'enable',values:{}},true)).status,409);assert.equal(attempts,0);
+ const prepared=await call({action:'enable',values:{}});assert(prepared.value.confirmation);assert.equal(attempts,0);assert(prepared.value.confirmation.preview.fields.some(f=>f.value.includes(e.dir.replace('/var/','/private/var/'))));
+ const confirm={confirm:prepared.value.confirmation.id};assert.equal((await call(confirm,true)).status,409);assert.equal(attempts,0);
+ assert.equal((await call(confirm)).status,409);assert.equal((await call(confirm)).status,409);assert.equal(attempts,1);assert.equal(sharing.bind('plugin',life.signal).scope(granted),null);life.abort();
+});

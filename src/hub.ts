@@ -1,3 +1,4 @@
+import { BackendConnections, type PluginSecretStore } from './extensions/backends.js';
 import { ConversationEntries } from './extensions/conversation-entries.js';
 import { PluginBackground } from './extensions/background.js';
 import { replayEventName } from './history/replay-frame.js';
@@ -15,7 +16,6 @@ import { handleFeatureRequest, type FeatureServices } from "./transport/feature-
 import { ApplicationExtensionRegistry } from "./extensions/application.js";
 import { installedApplicationDefinitions } from "./extensions/installed.js";
 import { HOST_PLUGIN_CAPABILITIES } from "./extensions/manifest.js";
-import { MobileAccessExtension } from "./remote/extension.js";
 import { handleProjectRequest } from "./transport/project-http.js";
 import type { HostSnapshot } from "./services/host-contract.js";
 import type { Session, QueuedMessage } from "./services/session-types.js";
@@ -45,6 +45,9 @@ import { ImageResources } from "./image-resources.js";
  */
 import { ProjectStore } from "./projects.js";
 import type { ConversationAccess } from "./bridges/types.js";
+import { SharedConversations } from './extensions/shared-conversations.js';
+import { migrateDeviceInterconnect } from './remote/migration.js';
+import { MobileAccessExtension } from "./remote/extension.js";
 import { RemoteConnector, type RemoteSecretStore } from "./remote/connector.js";
 import { DEEPSEEK_MODELS } from "./providers/deepseek.js";
 import { codexCatalogVersion, codexStatus } from "./providers/codex.js";
@@ -80,6 +83,8 @@ export interface HubOpts {
   collaboration?: CollaborationTasks;
   port: number;
   remoteSecretStore?: RemoteSecretStore;
+  pluginSecretStore?: PluginSecretStore;
+  openBackendWorkspace?(id: string, label: string): Promise<void> | void;
   host: string;
   webRoot: string;
   /** Factory the hub uses to spawn one bridge per session. */
@@ -832,7 +837,7 @@ function unmaskApiKeys(parsed: Record<string, unknown>, old: Record<string, unkn
   }
 }
 
-export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => Promise<void>; resolveArtifact: (id: string, requested: string) => Promise<string>; remoteStatus: () => ReturnType<RemoteConnector["status"]> } {
+export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => Promise<void>; resolveArtifact: (id: string, requested: string) => Promise<string>; remoteStatus: () => ReturnType<SharedConversations["status"]> } {
   const lifecycle = new AbortController();
   opts = { ...opts, signal: lifecycle.signal };
   const hostEvents = new HostEvents();
@@ -852,6 +857,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (!session || session.kind !== 'agent' || session._closing || session._closed) throw Object.assign(new Error('Conversation is unavailable'), {status:409});
     return session.cwd;
   });
+  const backends = new BackendConnections({signal:lifecycle.signal,secrets:opts.pluginSecretStore,open:opts.openBackendWorkspace});
   let extensions: ApplicationExtensionRegistry;
   const pluginInstaller = new PluginInstaller(settingsPath(), undefined, process.platform, target => {
     const ids = new Set(pluginCatalog(settingsPath()).filter(p => (p.packageRoot ?? path.dirname(p.source)) === target).map(p => p.id));
@@ -866,7 +872,15 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   opts.hostAccess = id => hostAccess(id, sessions, projects, opts, operations, projects.isDeleting);
 
   const access = createAccessGuard(opts.host);
-  const mobile = new MobileAccessExtension(new RemoteConnector({ store: opts.remoteSecretStore, dataDir: path.join(SESSIONS_DIR, "remote"), localToken: access.token }));
+  const sharing = new SharedConversations(path.join(SESSIONS_DIR, 'sharing-grants.json'), access.token);
+  let legacyMobile: MobileAccessExtension | undefined;
+  try { migrateDeviceInterconnect({settingsFile:settingsPath(), sessionsDir:SESSIONS_DIR, legacy:opts.remoteSecretStore, secrets:opts.pluginSecretStore, sharing}); }
+  catch {
+    // Upgrade fallback only: a failed migration must not break an already paired
+    // phone or prevent local startup. Fresh installs never use this adapter.
+    legacyMobile = new MobileAccessExtension(new RemoteConnector({store:opts.remoteSecretStore,dataDir:path.join(SESSIONS_DIR,'remote'),localToken:access.token}));
+    console.error('[hub] Device migration deferred; existing mobile connection retained. Update the device interconnect plugin and check secure storage.');
+  }
   let knownExtensions = '';
   const extensionSnapshot = (pluginCatalogChanged = false) => {
     const snapshot = extensions.snapshot();
@@ -934,9 +948,11 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     changed:()=>hostEvents.publish('extensions'),
   });
   opts.pluginConversation = (sessionId, pluginId, entryKeys) => conversationEntries.matchesSession(pluginId, entryKeys, sessionId);
-  const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action), background, conversationEntries);
+  const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action), background, conversationEntries, sharing);
   extensions = new ApplicationExtensionRegistry({ settingsFile: settingsPath(), capabilities: HOST_PLUGIN_CAPABILITIES,
     discover: () => installedApplicationDefinitions(settingsPath(), { enableBrowserPages: opts.enableBrowserPages, bindServices: (id, context) => ({
+      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('shared-conversations') ? {sharedConversations:sharing.bind(id,context.signal)} : {}),
+      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('backend-connections') ? {backends:backends.bind(id,context.signal)} : {}),
       activities: pluginActivities.bind(id, context.signal),
       collaboration: Object.freeze({
         snapshot: (owner: string) => {
@@ -955,13 +971,13 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     }), services: {
       host: Object.freeze({ capabilities: () => JSON.parse(JSON.stringify(HOST_CAPABILITIES)), snapshot: () => JSON.parse(JSON.stringify(hostSnapshot())),
         subscribe: (listener: Parameters<HostEvents['subscribe']>[0]) => hostEvents.subscribe(listener) }),
-    } }), definitions: [
+    } }).filter(definition => !legacyMobile || !definition.capabilities?.includes('shared-conversations')), definitions: [
+    ...(legacyMobile ? [legacyMobile.definition] : []),
     { id: 'quick-prompts', name: '快捷提示词', scope: 'frontend', ui: { panel: 'prompt-manager' } },
     { id: 'skills-marketplace', name: '技能市场', capabilities: ['skills.search', 'skills.install'], ui: { panel: 'skills-panel' },
       create: () => ({ canStop: () => featureServices.skills.pendingCount === 0 }) },
     { id: 'provider-balance', name: '余额查询', capabilities: ['provider.balance'],
       create: () => ({ canStop: () => featureServices.balance.pendingCount === 0 }) },
-    mobile.definition,
   ] });
   knownExtensions = JSON.stringify(extensions.snapshot());
   if (access.token) console.error(`[hub] Access token: ${access.token} (sign in at /auth)`);
@@ -978,6 +994,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     }
 
     if (!await access.allow(req, res)) return;
+    if (await backends.handle(req,res,async request=>(await readLimitedBody(request,6*1024*1024)).toString('utf8'))) return;
     if (await extensions.handle(req, res)) {
       extensionSnapshot();
       return;
@@ -988,7 +1005,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (handleHostQuery(req, res, { events: hostEvents, signal: lifecycle.signal,
       snapshot: hostSnapshot })) return;
     if (await handleFeatureRequest(req, res, featureServices, extensions)) return;
-    if (url === "/api/mobile" || url.startsWith("/api/mobile/")) return mobile.handle(req, res);
+    if (url === "/api/mobile" || url.startsWith("/api/mobile/")) { if(legacyMobile)return legacyMobile.handle(req,res); if(req.headers["x-ashub-local"]!=="1"){res.writeHead(403);res.end("Local application request required");return;} res.setHeader('Content-Type','application/json'); res.statusCode = req.method === 'GET' && url === '/api/mobile' ? 200 : 410; res.end(JSON.stringify(req.method === 'GET' && url === '/api/mobile' ? sharing.status() : {error:'请在设备互联插件中管理本机访问'})); return; }
 
     if (await handleProjectRequest(req, res, { sessions, projects, activities: id => pluginActivities.list(id), collaboration: opts.collaboration!, worktreesDirectory: path.join(SESSIONS_DIR, "worktrees"), readBody,
       create: cwd => createSession(sessions, opts, cwd), saveSessionMetaDebounced, setSessionTitle })) return;
@@ -1341,7 +1358,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (stopping) return;
     server.listen(opts.port, opts.host, () => {
       const address = server.address();
-      if (address && typeof address !== "string") mobile.start(address.port);
+      if (address && typeof address !== "string") { sharing.start(address.port); legacyMobile?.start(address.port); }
       extensionMessages.start();
       void extensions.start().then(() => extensionSnapshot(), error => {
         extensionSnapshot(); console.error("[hub] extension startup failed:", error);
@@ -1352,7 +1369,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
 
   return {
     server,
-    remoteStatus: () => mobile.status(),
+    remoteStatus: () => legacyMobile?.status() ?? sharing.status(),
     // Native desktop API only: never expose host paths through HTTP or RPC.
     resolveArtifact: async (id, requested) => {
       const session = sessions.get(id);

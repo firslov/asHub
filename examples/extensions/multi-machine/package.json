@@ -1,0 +1,27 @@
+{
+  "name": "ashub-multi-machine",
+  "version": "0.2.0",
+  "type": "module",
+  "private": true,
+  "description": "连接已授权的电脑，在手机或其他电脑上访问本机共享的对话。",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "undici": "6.26.0"
+  },
+  "files": [
+    "ashub-plugin.json",
+    "app.mjs",
+    "client.mjs",
+    "README.md",
+    "package-lock.json",
+    "publisher.mjs",
+    "transport.mjs",
+    "sharing.mjs"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.mjs"
+  }
+}

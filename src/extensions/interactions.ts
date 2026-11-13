@@ -1,3 +1,4 @@
+import { SharedConversations, type SharingInput } from './shared-conversations.js';
 import { ConversationEntries, type EntryInput } from './conversation-entries.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -12,6 +13,7 @@ export interface ResourcePlan {
             value: string;
         }>;
     };
+    sharingAuthorization?: SharingInput;
     authorization?: MessageGrant;
     backgroundAuthorization?: BackgroundGrantInput;
     entryAuthorization?: EntryInput;
@@ -45,7 +47,7 @@ export class PluginInteractions {
         run: () => Promise<unknown>;
         result?: Promise<unknown>;
     }>();
-    constructor(private messages: ExtensionMessages, private requireActive: (pluginId: string) => void, private signal: AbortSignal, private run: <T>(pluginId: string, action: () => T | Promise<T>) => Promise<T> = async (_id, action) => action(), private background?: PluginBackground, private conversations?: ConversationEntries) { }
+    constructor(private messages: ExtensionMessages, private requireActive: (pluginId: string) => void, private signal: AbortSignal, private run: <T>(pluginId: string, action: () => T | Promise<T>) => Promise<T> = async (_id, action) => action(), private background?: PluginBackground, private conversations?: ConversationEntries, private sharing?: SharedConversations) { }
     bind(pluginId: string, signal: AbortSignal) {
         return Object.freeze({ register: (id: string, resource: PluginResource) => {
                 signal.throwIfAborted();
@@ -121,10 +123,12 @@ export class PluginInteractions {
                     guard();
                     if (!plan || typeof plan.execute !== 'function')
                         throw Error('Invalid action plan');
-                    if (remoteSession !== null && (plan.authorization || plan.backgroundAuthorization || plan.entryAuthorization)) throw Error('请在桌面端确认授权');
-                    if ([plan.authorization,plan.backgroundAuthorization,plan.entryAuthorization].filter(Boolean).length > 1) throw Error('Conflicting authorizations');
+                    if (remoteSession !== null && (plan.authorization || plan.backgroundAuthorization || plan.entryAuthorization || plan.sharingAuthorization)) throw Error('请在桌面端确认授权');
+                    if ([plan.authorization,plan.backgroundAuthorization,plan.entryAuthorization,plan.sharingAuthorization].filter(Boolean).length > 1) throw Error('Conflicting authorizations');
                     if(plan.entryBackground !== undefined && (!plan.entryBackground || Object.keys(plan.entryBackground).some(k=>!['dailyCalls','includeHistory','followModel'].includes(k)) || !Number.isInteger(plan.entryBackground.dailyCalls) || plan.entryBackground.dailyCalls < 1 || plan.entryBackground.dailyCalls > 24 || typeof plan.entryBackground.includeHistory !== 'boolean' || plan.entryBackground.followModel !== true || !plan.entryAuthorization || !this.background)) throw Error('Invalid entry background authorization');
                     const entryBackground = plan.entryBackground ? {dailyCalls:plan.entryBackground.dailyCalls,includeHistory:plan.entryBackground.includeHistory,followModel:plan.entryBackground.followModel} : undefined;
+                    const sharing = plan.sharingAuthorization ? this.sharing?.prepare(entry.pluginId, plan.sharingAuthorization) : undefined;
+                    if (plan.sharingAuthorization && !sharing) throw Error('Sharing services unavailable');
                     const conversation = plan.entryAuthorization ? await this.conversations?.prepare(entry.pluginId,plan.entryAuthorization) : undefined;
                     if (plan.entryAuthorization && !conversation) throw Error('Conversation entries unavailable');
                     const authorization = plan.authorization ? this.messages.prepare(entry.pluginId, plan.authorization) : undefined;
@@ -136,7 +140,7 @@ export class PluginInteractions {
                     }, conversation.createsConversation, 'confirmation') : undefined);
                     const run = () => this.run(entry.pluginId, async () => {
                         guard();
-                        let grantId = conversation ? await this.conversations!.approve(entry.pluginId,conversation) : authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : undefined;
+                        let grantId = sharing ? this.sharing!.approve(entry.pluginId, sharing) : conversation ? await this.conversations!.approve(entry.pluginId,conversation) : authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : undefined;
                         let entryBackgroundGrant: string | undefined;
                         try {
                             if(entryBackground){guard(); const sid=grantId!; entryBackgroundGrant=this.background!.approve(entry.pluginId,this.background!.prepare(entry.pluginId,{...entryBackground,modelSessionId:sid,includedIds:[sid],excludedIds:[]}));grantId=entryBackgroundGrant;}
@@ -146,19 +150,21 @@ export class PluginInteractions {
                             if(entryBackgroundGrant)try{this.background!.bind(entry.pluginId,entry.signal).revoke(entryBackgroundGrant);}catch{}
                             if (grantId && !conversation)
                                 try {
-                                    if (background) this.background!.bind(entry.pluginId, entry.signal).revoke(grantId);
+                                    if (sharing) this.sharing!.revoke(entry.pluginId, grantId);
+                                    else if (background) this.background!.bind(entry.pluginId, entry.signal).revoke(grantId);
                                     else this.messages.revoke(entry.pluginId, grantId);
                                 }
                                 catch { }
                             throw error;
                         }
                     });
-                    if (plan.preview || authorization || background || conversation) {
+                    if (plan.preview || authorization || background || conversation || sharing) {
                         if (this.pending.size >= 100)
                             throw Error('Too many pending confirmations');
-                        const preview = clone(plan.preview ?? { title: backgroundPreview ? '授权后台处理 / Authorize background processing' : conversation ? '新建专属对话 / Create conversation' : '授权消息投递 / Authorize messages', fields: [] });
+                        const preview = clone(plan.preview ?? { title: sharing ? '允许访问本机 / Share conversations' : backgroundPreview ? '授权后台处理 / Authorize background processing' : conversation ? '新建专属对话 / Create conversation' : '授权消息投递 / Authorize messages', fields: [] });
                         if (typeof preview.title !== 'string' || !Array.isArray(preview.fields) || preview.fields.length > 32 || preview.fields.some((f: any) => typeof f?.label !== 'string' || typeof f?.value !== 'string'))
                             throw Error('Invalid approval preview');
+                        preview.fields.push(...sharing?.fields ?? []);
                         preview.fields.push(...authorization?.fields ?? []);
                         preview.fields.push(...conversation?.fields ?? []);
                         preview.fields.push(...backgroundPreview?.fields ?? []);

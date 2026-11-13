@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 (async () => {
   const e = env(); e.context.process.env.ASHUB_TOKEN = 'modular-delivery-fixture';
-  const ids = ['quick-prompts', 'skills-marketplace', 'provider-balance', 'mobile-access'];
+  const ids = ['quick-prompts', 'skills-marketplace', 'provider-balance'];
   const settingsFile = path.join(e.dir, 'settings.json');
   fs.writeFileSync(settingsFile, JSON.stringify({ 'ashub.features.disabled': ids, unrelated: { preserved: true } }));
   let hub;
@@ -22,6 +22,8 @@ const { once } = require('node:events');
     assert.equal((await request('/api/extensions/quick-prompts/enabled', { enabled: true }, { headers: { ...headers, Origin: 'https://foreign.invalid' } })).status, 403);
     const features = await api('/api/extensions');
     assert.equal(features.version, 1);
+    assert(!features.features.some(f=>f.id==='mobile-access'));
+    assert.equal(features.features.find(f=>f.capabilities?.includes('shared-conversations'))?.enabled,false,'device interconnect is optional on fresh install');
     for (const id of ids) assert.equal(features.features.find(f => f.id === id)?.enabled, false, id);
     for (const route of ['/api/balance?provider=deepseek', '/api/skills', '/api/skills/installed']) {
       assert.equal((await request(route)).status, 409, route);

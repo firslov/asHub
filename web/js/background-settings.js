@@ -1,5 +1,5 @@
 import { lang, t } from './i18n.js';
-import { featureEnabled, loadFeature, featuresReady } from './extensions/feature-state.js';
+import { featuresReady } from './extensions/feature-state.js';
 
 const api = window.electronAPI;
 const section = document.getElementById('desktop-background-settings');
@@ -41,9 +41,9 @@ if (api?.getBackgroundSettings && section) {
   document.getElementById('config-toggle')?.addEventListener('click', () => { if (failed) load(); });
   api.onOpenMobileAccess(async () => {
     await featuresReady();
-    if (!featureEnabled('mobile-access')) return;
-    await loadFeature('mobile-access');
-    if (document.getElementById('mobile-access-panel')?.hidden) document.getElementById('mobile-access-toggle')?.click();
+    const trigger = document.querySelector('[data-host-capabilities~="shared-conversations"]');
+    if (trigger && !trigger.classList.contains('active')) trigger.click();
+    else if (!trigger) document.getElementById('plugins-toggle')?.click();
   });
   load();
   syncLanguage();

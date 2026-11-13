@@ -27,5 +27,6 @@ if (require.main === module) {
   const hunks = require('./patch-steering.cjs');
   hunks.apply();
   hunks.apply(undefined, require('./patches/provider-refresh.json'), 'provider refresh');
+  hunks.apply(undefined, require('./patches/codex-summary-boundaries.json'), 'Codex summary boundaries');
   console.log(`Codex Windows login patch: ${count ? 'applied' : 'verified'}`);
 }

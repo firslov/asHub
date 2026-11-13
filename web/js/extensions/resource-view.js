@@ -22,13 +22,15 @@ export function validateResourceView(v) {
         if (!text(r.title, 200) || !text(r.detail ?? '') || !text(r.status ?? '', 300) || !Array.isArray(r.actions) || r.actions.length > 8)
             throw Error('Invalid plugin row');
         r.actions.forEach(action);
+        if (r.primaryAction !== undefined && !id(r.primaryAction))
+            throw Error('Invalid primary resource action');
     }
     if (v.form) {
         if (!id(v.form.action) || !Array.isArray(v.form.fields) || v.form.fields.length > 20 || !text(v.form.submit, 100) || !v.form.values || typeof v.form.values !== 'object')
             throw Error('Invalid plugin form');
         const ids = new Set();
         for (const f of v.form.fields) {
-            if (!fieldId(f.id) || ids.has(f.id) || !text(f.label, 200) || !['text', 'textarea', 'number', 'select', 'checkbox', 'time', 'datetime-local'].includes(f.type) || !['string', 'number', 'boolean', 'undefined'].includes(typeof f.value))
+            if (!fieldId(f.id) || ids.has(f.id) || !text(f.label, 200) || !['text', 'password', 'textarea', 'number', 'select', 'checkbox', 'time', 'datetime-local'].includes(f.type) || !['string', 'number', 'boolean', 'undefined'].includes(typeof f.value))
                 throw Error('Invalid plugin field');
             ids.add(f.id);
             if (f.when && (!fieldId(f.when.field) || !Array.isArray(f.when.values) || !f.when.values.every(v => text(v, 100))))
@@ -212,7 +214,8 @@ export function mountResource(container, feature, resourceId, options = {}) {
                 if (f.type === 'checkbox')
                     control.checked = f.value === true;
                 else
-                    control.value = String(f.value ?? '');
+                    control.value = f.type === 'password' ? '' : String(f.value ?? '');
+                if(f.type === 'password') control.autocomplete = 'current-password';
                 if (f.type === 'textarea') {
                     control.rows = 4;
                     control.maxLength = 8000;
@@ -259,14 +262,18 @@ export function mountResource(container, feature, resourceId, options = {}) {
                 if(options.openConversation) link.addEventListener('click',e=>{e.preventDefault();options.openConversation(r.conversationId);});
                 row.append(link);
             }
+            // Reference an existing action; presentation never adds authority.
+            const primary = r.actions.find(a => a.id === r.primaryAction);
+            if (primary) row.append(button(primary));
+            const secondary = r.actions.filter(a => a !== primary);
             const menu = node('details', 'extension-resource-menu');
             const summary = node('summary', '', local('更多', 'More'));
             menu.append(summary);
             const menuActions = node('div', 'extension-resource-menu-actions');
-            for (const a of r.actions)
+            for (const a of secondary)
                 menuActions.append(button(a));
             menu.append(menuActions);
-            if (r.actions.length)
+            if (secondary.length)
                 row.append(menu);
             rows.append(row);
         }

@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {DeviceSharing} from '../sharing.mjs';
+import {remoteTransport} from '../transport.mjs';
+test('migrated publisher retains identity, disabled restart stays offline, late enrollment never reopens closed plugin',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'interconnect-publisher-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ let saved=JSON.stringify({deviceId:'same-id',deviceToken:'same-token',username:'owner',roots:[dir],deviceName:'Existing',grantId:'previous'}),socketCount=0,closed=0,release,body;
+ t.mock.method(remoteTransport,'socket',()=>{socketCount++;return{close(){}};});
+ const activate=()=>{const controller=new AbortController();const ctx={signal:controller.signal,services:{dataDirectory:dir,backends:{secrets:{available:true,read:()=>saved,write:(_key,v)=>saved=v}},sharedConversations:{open:id=>({roots:[dir],close:()=>closed++,request:async()=>[]}),registerStatus(){},revoke(){}}}};return {sharing:new DeviceSharing(ctx),controller};};
+ let first=activate();assert.equal(socketCount,1);assert.equal(first.sharing.status().deviceName,'Existing');
+ const beforeRestart=saved;await first.sharing.close();first.controller.abort();first=activate();
+ assert.equal(socketCount,2,'enabled sharing reconnects on a fresh application instance');assert.equal(saved,beforeRestart,'restart does not enroll or replace identity');
+ first.sharing.disable();await first.sharing.close();first.controller.abort();assert.equal(JSON.parse(saved).deviceId,'same-id');assert.equal(JSON.parse(saved).deviceToken,'same-token');
+ let second=activate();assert.equal(socketCount,2);assert.equal(second.sharing.status().enabled,false);
+ t.mock.method(remoteTransport,'fetch',async(_url,options)=>{body=JSON.parse(options.body);return new Promise(r=>release=r);});
+ const configuring=second.sharing.configure({username:'owner',password:'not-persisted',deviceName:'Renamed'},'new-grant');const rejected=assert.rejects(configuring,/取消/);
+ assert.equal(body.deviceId,'same-id');assert.equal(body.deviceToken,'same-token');second.controller.abort();release(Response.json({protocol:1,deviceId:'same-id',deviceToken:'rotated',username:'owner'}));await rejected;await second.sharing.close();assert.equal(JSON.parse(saved).enabled,false);assert.equal(JSON.parse(saved).deviceToken,'same-token');assert.equal(socketCount,2);assert(closed>0);
+});

@@ -55,12 +55,12 @@ test('included apps are opt-in, retain settings, and give precedence to a manual
   const f=fixture();
   const catalog=()=>pluginCatalog(f.file);
   const bundled=catalog().filter(p=>p.bundled);
-  assert.equal(bundled.length,4);
+  assert.equal(bundled.length,5);
   for(const plugin of bundled) {
     assert(!plugin.enabled && plugin.includedApp);
-    assert(fs.existsSync(plugin.sessionSpecifier));
+    assert(fs.existsSync(plugin.sessionSpecifier || plugin.applicationSpecifier));
     // Also resolve transitive imports (including Kimi's proper-lockfile) without activating tools.
-    assert.equal(typeof (await import(pathToFileURL(plugin.sessionSpecifier).href)).default,'function');
+    assert.equal(typeof (await import(pathToFileURL(plugin.sessionSpecifier || plugin.applicationSpecifier).href)).default,'function');
   }
   const project=bundled.find(p=>p.manifest.id==='ashub-project-management');
   const kimi=bundled.find(p=>p.manifest.id==='ashub-kimi-coding-plan');

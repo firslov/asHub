@@ -19,7 +19,7 @@ const { once } = require('node:events');
     let r = await fetch(base + '/api/plugins', { headers }); let data = await r.json();
     assert.equal(data.plugins.filter(p => !p.builtin && !p.bundled).length, 1); assert(data.plugins.some(p => p.builtin && p.name === 'OpenAI')); assert.equal(data.plugins[0].sessions.length, 0);
     const included=data.plugins.filter(p=>p.includedApp);
-    assert.deepEqual(included.map(p=>p.manifest.id).sort(),['ashub-browser-automation','ashub-image-display','ashub-kimi-coding-plan','ashub-project-management']);
+    assert.deepEqual(included.map(p=>p.manifest.id).sort(),['ashub-browser-automation','ashub-image-display','ashub-kimi-coding-plan','ashub-multi-machine','ashub-project-management']);
     assert(included.every(p=>p.bundled && !p.enabled && !p.autoApprove));
     const unavailable=included.find(p=>p.manifest.id==='ashub-browser-automation');
     assert(unavailable.compatibilityError);

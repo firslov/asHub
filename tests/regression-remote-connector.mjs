@@ -7,6 +7,7 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { Readable } from 'node:stream';
 import { RemoteConnector } from '../dist/remote/connector.js';
+import { remoteTransport } from '../dist/remote/transport.js';
 process.env.NODE_ENV = 'test';
 // Connector-only regressions run without the separately deployed gateway package.
 async function waitFor(fn) { for (let i = 0; i < 100; i++) { if (await fn()) return; await new Promise(r => setTimeout(r, 20)); } throw Error('timed out'); }
@@ -16,10 +17,11 @@ test('local enrollment preserves chunked UTF-8 and rejects oversized byte payloa
   let saved, enrolled;
   const connector = new RemoteConnector({ dataDir: dir, store: { read: () => saved, write: value => { saved = value; } } });
   t.after(() => { connector.close(); fs.rmSync(dir, { recursive: true, force: true }); });
-  t.mock.method(globalThis, 'fetch', async (url, options) => {
+  t.mock.method(remoteTransport, 'fetch', async (url, options) => {
     enrolled = JSON.parse(options.body);
     return Response.json({ protocol: 1, deviceId: 'device', deviceToken: 'secret', username: enrolled.username });
   });
+  t.mock.method(remoteTransport, 'socket', () => ({ close() {} }));
   const body = { username: 'unicode-body', password: 'test password 中文字符', deviceName: '设计电脑 🟡', roots: [project] };
   const bytes = Buffer.from(JSON.stringify(body));
   const offsets = [0, ...['中', '设', '🟡', '项'].map(s => bytes.indexOf(Buffer.from(s)) + 1).sort((a, b) => a - b), bytes.length];
@@ -39,13 +41,7 @@ test('local enrollment preserves chunked UTF-8 and rejects oversized byte payloa
 test('gateway revocation cancels local authorization still in progress', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ashub-connector-revoked-'));
   let socket;
-  const nativeWebSocket = globalThis.WebSocket;
-  t.after(() => { globalThis.WebSocket = nativeWebSocket; });
-  globalThis.WebSocket = class {
-    static OPEN = 1;
-    constructor() { socket = this; }
-    close() {}
-  };
+  t.mock.method(remoteTransport, 'socket', () => (socket = { close() {} }));
   const config = { deviceId: 'desktop', deviceToken: 'secret', username: 'alice', roots: [fs.realpathSync(dir)], deviceName: 'Desktop' };
   const connector = new RemoteConnector({ dataDir: dir, store: { read: () => JSON.stringify(config), write() {} } });
   t.after(() => { connector.close(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -321,10 +317,10 @@ test('project pins preserve desktop order without exposing unshared or nonmember
 
 test('image resources recheck authorization after reads and reject forged IDs or offsets',async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-images-remote-'));let socket;
- const native=globalThis.WebSocket;globalThis.WebSocket=class{static OPEN=1;constructor(){socket=this}close(){}};
+ t.mock.method(remoteTransport,'socket',()=>socket={close(){}});
  const config={deviceId:'desktop',deviceToken:'secret',username:'alice',roots:[fs.realpathSync(dir)],deviceName:'Desktop'};
  const c=new RemoteConnector({dataDir:dir,store:{read:()=>JSON.stringify(config),write(){}}});
- t.after(()=>{c.close();globalThis.WebSocket=native;fs.rmSync(dir,{recursive:true,force:true})});c.start(1);
+ t.after(()=>{c.close();fs.rmSync(dir,{recursive:true,force:true})});c.start(1);
  let allowed=true,release,waiting=false;const routes=[];
  c.local=async route=>{routes.push(route);if(route==='/sessions')return allowed?[{instanceId:'abcdef',kind:'agent',cwd:dir}]:[];if(waiting)return new Promise(r=>release=r);return {version:'a'.repeat(64),size:1};};
  const args={session:'abcdef',id:'a'.repeat(64)};

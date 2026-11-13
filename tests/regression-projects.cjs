@@ -2,8 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {env, Bridge, fs, path} = require('./harness.cjs');
 const tick = () => new Promise(r => setImmediate(r));
-function fixture(t) {
-  const e = env(); t.after(() => fs.rmSync(e.dir, {recursive:true, force:true}));
+function fixture(t, sessions) {
+  const e = env();
+  t.after(async () => {
+    // Delivery receipts can arrive before the Hub finishes writing replay and metadata.
+    if (sessions) await e.load('src/hub.ts').shutdownHub(undefined, sessions);
+    fs.rmSync(e.dir, {recursive:true, force:true});
+  });
   const {ProjectStore} = e.load('src/projects.ts');
   const store = new ProjectStore(path.join(e.dir, 'projects.json'));
   return {e, store, ProjectStore};
@@ -51,9 +56,9 @@ test('invalid edits are atomic and corrupt storage is never overwritten', t => {
   assert.equal(fs.readFileSync(file,'utf8'),'{broken');
 });
 async function communication(t) {
-  const {e,store} = fixture(t);
-  const {createSession, conversationAccess} = e.load('src/hub.ts','export { createSession, conversationAccess };');
   const sessions = new Map();
+  const {e,store} = fixture(t, sessions);
+  const {createSession, conversationAccess} = e.load('src/hub.ts','export { createSession, conversationAccess };');
   const opts = {makeBridge:o=>new Bridge(o), conversationAccess:id=>conversationAccess(id,sessions,store)};
   const a = await createSession(sessions,opts,e.dir), b = await createSession(sessions,opts,e.dir), c = await createSession(sessions,opts,e.dir);
   const project = store.update({action:'create',cwd:e.dir,name:'Project',add:[a.id,b.id]},()=>true)[0];

@@ -326,3 +326,15 @@ test('conversation-only assistant rejects hosts without resource popovers',()=>{
  assert.equal(f.manifest.pluginCompatibility(parsed,{capabilities:old}).compatible,false);
  assert.equal(f.manifest.pluginCompatibility(parsed).compatible,true);
 });
+
+
+test('multi-machine device icon validates on host and renderer without changing project icon',async()=>{
+ const f=fixture(),{validateDeclarativeUI}=await import('../web/js/extensions/declarative-schema.js');
+ try{
+  const plugin=JSON.parse(fs.readFileSync(new URL('../examples/extensions/multi-machine/ashub-plugin.json',import.meta.url)));
+  assert.equal(f.manifest.parsePluginManifest(plugin,plugin.id).ui.panels[0].icon,'devices');
+  assert.equal(validateDeclarativeUI(plugin.ui).panels[0].icon,'devices');
+  const project=JSON.parse(fs.readFileSync(new URL('../examples/extensions/project-management/ashub-plugin.json',import.meta.url)));
+  assert.notEqual(project.ui.panels[0].icon,plugin.ui.panels[0].icon);
+ }finally{await f.installer.close();}
+});

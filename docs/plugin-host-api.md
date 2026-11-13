@@ -96,7 +96,7 @@ Queued collaboration tasks keep a stable queue ID across user edits, so editing 
 
 Application plugins may declare the additive `plugin-resources` and `authorized-messages` capabilities. The host exposes no calendar or task-specific operations: recurrence, catch-up rules, templates and job history remain plugin code.
 
-`ctx.services.dataDirectory` is a stable package-scoped local directory. `ctx.services.interactions.register(id, {view, prepare})` registers a bounded declarative resource; the manifest renders it with `{type:"resource", id}`. A panel may use the built-in `clock`, `panel`, or `browser` icon. Older browser-capable packages using the generic panel icon receive the browser glyph automatically. A resource view contains `actions`, `rows`, optional `note`, and an optional form. Forms accept text, textarea, number, checkbox, select, time and datetime-local controls, optional advanced groups, and `when:{field,values}` visibility conditions. `refresh:false` holds a detail view until the user navigates back. A row's `conversationId` creates a host-generated local conversation link. Arbitrary HTML, scripts, event names and URLs are not accepted.
+`ctx.services.dataDirectory` is a stable package-scoped local directory. `ctx.services.interactions.register(id, {view, prepare})` registers a bounded declarative resource; the manifest renders it with `{type:"resource", id}`. A panel may use the built-in `clock`, `panel`, `browser`, or `devices` icon. Older browser-capable packages using the generic panel icon receive the browser glyph automatically. A resource view contains `actions`, `rows`, optional `note`, and an optional form. Forms accept text, password, textarea, number, checkbox, select, time and datetime-local controls, optional advanced groups, and `when:{field,values}` visibility conditions. `refresh:false` holds a detail view until the user navigates back. A row's `conversationId` creates a host-generated local conversation link. Arbitrary HTML, scripts, event names and URLs are not accepted.
 
 `prepare(action, values)` returns `{preview?, authorization?, execute(grantId?)}`. The host renders the preview, appends its own authorization scope, and issues a short-lived, resource-scoped confirmation token. Only confirmation creates a grant and invokes the prepared commit. Duplicate confirmation shares one result. Plugin stop/disposal invalidates pending confirmations. Commits participate in the application registry's in-flight operation tracking; failed commits revoke newly created grants. Plugins must recheck their own revision/version before mutation.
 
@@ -271,3 +271,98 @@ back to loading in all conversations. This controls loading, not memory or
 history authorization: plugins must retain their existing runtime access guards.
 After updating an already loaded plugin, restart asHub to replace old kernels;
 no active conversation is interrupted for a hot reload.
+
+
+## Optional backend workspaces
+
+An application extension declaring `backend-connections` receives `ctx.services.backends`.
+It must register only connections the user has authorized. The capability is opt-in and
+not available to session tools. Existing local conversations keep their original paths.
+
+```js
+const registration = ctx.services.backends.register('stable-target-id', {
+  label: 'Office computer',
+  online: () => connection.online,
+  request: (operation, args, signal) => connection.request(operation, args, signal),
+  subscribe: (sessionId, emit, signal) => connection.subscribe(sessionId, emit, signal),
+  resource: (args, signal) => connection.resource(args, signal),
+});
+await registration.open(); // invoke from a plugin-owned, desktop-only resource action
+registration.dispose();
+```
+
+The host derives an opaque ID from the package identity and registration key. A native
+workspace is permanently bound to that ID; credentials and protocol endpoints never enter
+the renderer. Disposal, plugin disable, client disconnection and host shutdown cancel work.
+Late responses from disposed registrations are rejected even if the same ID is re-registered.
+Adapters must honor cancellation and dispose their network clients on shutdown.
+`registration.open()` can open only that still-active registration, rejects offline targets,
+and fails when native windows are unavailable. It accepts no URL, target ID or renderer code.
+There is no HTTP `open` route. Plugins provide device selection through existing declarative
+resources; the local client has no fixed connection launcher or background discovery polling.
+Account/device discovery remains in the plugin. Resource rows may reference an existing action
+using `primaryAction: 'action-id'` to display it directly; other actions retain their menu.
+If that action is filtered out by remote permissions, no primary button is rendered. This is
+presentation only and does not grant any additional authority.
+
+The v1 workspace uses the conversation operation contract in `BackendConnections`:
+metadata (`capabilities`, `sessions`, `project-groups`, `projects`, `models`), conversation
+creation/deletion, submit/receipt/cancel, model/thinking, conversation network policy,
+queue edits, one-time permissions, images and explicitly exposed plugin resources.
+Local terminal, admin settings, plugin installation and persistent approvals are not routes.
+The adapter must also enforce the target's user and directory authorization. It must never
+fall back to local execution when offline.
+
+`subscribe` emits conversation protocol v1 frames, including `hub:replay-done`. A fresh
+subscription reconstructs history, and an upstream reset emits `backend:reset` before replay.
+`request-status` and stable request IDs preserve uncertain write receipts across disconnection.
+The host bounds request/response/event sizes and streaming backpressure.
+
+`resource` receives string query arguments plus host-provided `method` (`HEAD`/`GET`).
+Return `{data:Uint8Array,type,size?,version?}`. HEAD must not transfer the file; GET must
+validate the supplied version. Responses are private, bounded to 32 MB, attachment-only,
+with active content forced to an inert MIME type. Version values are opaque alphanumeric,
+underscore or hyphen identifiers. No local path or native-open capability is granted.
+
+`ctx.services.backends.secrets` provides `available`, `read(key)` and `write(key,value|null)`.
+Keys are package-scoped. The desktop uses OS encryption; unavailable secure storage fails
+closed. Store session credentials, not passwords. A declarative `password` field is always
+rendered empty and masked; do not return password contents in resource views or previews.
+
+Remote workspace windows have no Electron preload. Their device/session drafts and pending
+send payloads are isolated from the existing local conversation storage. The multi-machine
+plugin is an optional example adapter for the existing remote gateway; no provider protocol
+or account policy is implemented in the core.
+
+## Authorized local conversation sharing
+
+Application plugins declaring `shared-conversations` receive
+`ctx.services.sharedConversations`. A resource action requests
+`sharingAuthorization: {roots: ['/absolute/project']}`. The host canonicalizes
+existing directories, displays its own scope description and requires a desktop
+confirmation. Remote callers cannot approve this grant. After confirmation,
+`execute(grantId)` receives a package-bound grant. Failed execution revokes the
+new grant. Keep successful grants private in scoped secure storage.
+
+`scope(grantId)` returns the saved roots or null; `open(grantId)` returns a scoped
+channel with `roots`, `request(route, body?, method?)`, `events(sessionId, recent,
+signal)`, `image(sessionId, imageId)`, `openArtifact(sessionId, path)` and `close()`.
+`revoke(grantId)` persists revocation and cancels active channels; plugin disposal
+also invalidates channels. Local authentication credentials and arbitrary URLs
+are never provided. Callers must close file handles after use and bound reads.
+The local route allowlist permits shared conversation operations, project metadata,
+models, files and explicitly remote-enabled plugin resources. Administrative
+settings, unrestricted filesystem access, shell shortcuts and persistent approvals
+are excluded; network policy changes are conversation-scoped. Streams exclude
+terminal data and stop when directory authorization changes.
+
+`registerStatus(read)` supplies a lifecycle-bound, non-secret status snapshot for
+native desktop affordances. Only return public connectivity metadata. The host has
+no account, gateway, device discovery or reconnection policy.
+
+The optional device interconnect application combines the former mobile publisher
+and multi-machine controller. A one-time compatibility migration copies existing
+identity/scope/receipt state into plugin storage. The old local `/api/mobile` GET
+remains a status shim; mutation routes return 410 after migration. A legacy adapter
+runs only if migration fails, preserving an existing paired phone until upgrade
+can finish; it is not used for fresh installations or successful migrations.

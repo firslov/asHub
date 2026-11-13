@@ -1,6 +1,6 @@
 {
   "name": "ashub-personal-assistant",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "type": "module",
   "private": true,
   "description": "A persistent assistant conversation with automatic, source-backed long-term memory",
@@ -21,6 +21,7 @@
     "retrieval.mjs"
   ],
   "scripts": {
-    "test": "node --test tests/*.mjs"
+    "test": "node --test tests/*.mjs",
+    "test:ui": "node tests/status-ui.cjs"
   }
 }

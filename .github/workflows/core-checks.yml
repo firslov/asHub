@@ -62,3 +62,4 @@ jobs:
       - run: npm run test:updater:ui
       - run: npm run test:browser:ui
       - run: npm run test:images:ui
+      - run: npm run test:multi-machine:ui

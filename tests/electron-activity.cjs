@@ -15,9 +15,10 @@ const fixture=`<!doctype html><meta charset="utf-8">${styles}
 import * as activity from '/js/stream/activity.js';
 import * as thinking from '/js/stream/thinking.js';
 import * as groups from '/js/stream/tool-group.js';
+import * as replyApi from '/js/stream/reply.js';
 import {buildToolRow} from '/js/stream/renderers.js';
 import {lang} from '/js/i18n.js';
-window.fixture={activity,thinking,groups,buildToolRow,lang};
+window.fixture={activity,thinking,groups,replyApi,buildToolRow,lang};
 </script>`;
 app.whenReady().then(async()=>{
  server=http.createServer((req,res)=>{
@@ -30,6 +31,32 @@ app.whenReady().then(async()=>{
  await win.loadURL(`http://127.0.0.1:${server.address().port}/fixture`);
  const run=s=>win.webContents.executeJavaScript(s);
  for(let i=0;i<50&&!await run('!!window.fixture');i++)await new Promise(r=>setTimeout(r,50));
+ for(const replaying of [false,true]) {
+  const order=await run(`(()=>{
+   const {activity,thinking,groups,replyApi}=fixture;
+   const stream=document.querySelector('.session-stream');stream.replaceChildren();
+   const session={id:'fixture',streamEl:stream,state:{replaying:${replaying},currentTurn:1},thinking:{},toolGroup:{},reply:{text:''},scroll:{stickToBottom:true}};
+   activity.resetActivity(session);
+   replyApi.appendReplyChunk(session,'**Opening');const original=session.reply.current;
+   thinking.appendThinkingChunk(session,'**First summary**\\n\\n**Second summary**');thinking.finalizeThinking(session);
+   replyApi.appendReplyChunk(session,' complete**');
+   replyApi.fillFinalReply(session,'**Opening complete** Final tail.');replyApi.closeReply(session);
+   const first=stream.querySelector('.execution-activity');
+   const tool=document.createElement('div');tool.className='tool-row';tool.dataset.toolName='read_file';groups.appendToGroup(session,tool);groups.bumpToolCount(session);
+   replyApi.appendReplyChunk(session,'After tool.');replyApi.closeReply(session);activity.activityEvent(session,'agent:processing-done');
+   const replies=[...stream.querySelectorAll('.agent-reply')];
+   return {order:[...stream.children].map(n=>n.className),sameNode:replies[0]===original,
+    firstText:replies[0].querySelector('p').textContent,secondText:replies[1].querySelector('p').textContent,
+    paragraphs:first.querySelectorAll('.thinking-block-inner p').length,
+    summaries:[...first.querySelectorAll('.thinking-block-inner strong')].map(n=>n.textContent),
+    toolsBeforeReply:first.querySelectorAll('.tool-row').length,copyButtons:replies[0].querySelectorAll('.reply-copy-btn').length};
+  })()`);
+  assert.deepEqual(order.order,['execution-activity','agent-reply','execution-activity','agent-reply']);
+  assert(order.sameNode&&order.paragraphs===2&&order.toolsBeforeReply===0&&order.copyButtons===1);
+  assert.deepEqual(order.summaries,['First summary','Second summary']);
+  assert.equal(order.firstText,'Opening complete Final tail.');assert.equal(order.secondText,'After tool.');
+ }
+ console.log('PASS interleaved thinking order, intact reply/final reconciliation, separated summaries and tool boundaries');
  const review = await run(`(()=>{
   const {activity,thinking,lang}=fixture;
   const stream=document.querySelector('.session-stream');stream.replaceChildren();

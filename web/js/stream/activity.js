@@ -108,7 +108,13 @@ export function prepareActivityNode(session, node, target) {
     session.thinking.el.remove();
     session.thinking.el = null;
   }
+  // A summary arriving during a reply describes that reply. Keep it before
+  // the same text node, without splitting Markdown or duplicating final text.
+  const replyAnchor = node.classList?.contains("thinking-block") && session.reply?.current?.parentNode === target
+    ? session.reply.current : null;
   let record = state.current;
+  // Tools following the reply must not join its earlier summary disclosure.
+  if (record?.replyAnchor && record.replyAnchor !== replyAnchor) record = null;
   if (record && record.box.parentNode !== target) record = null;
   let newBox = null;
   if (!record) {
@@ -143,6 +149,7 @@ export function prepareActivityNode(session, node, target) {
     box.append(head, body);
     record = { box, head, body, label, changes, hint, arrow, count, time, state, settledAt: null, sealed: false, finished: "", waiting: state.waiting, requestLabel: state.requestLabel };
     records.set(box, record);
+    record.replyAnchor = replyAnchor;
     state.current = record;
     state.turn.add(record);
     head.addEventListener("click", () => {
@@ -155,6 +162,7 @@ export function prepareActivityNode(session, node, target) {
   record.body.appendChild(node);
   noteWorkTime(record);
   refresh(record);
+  if (newBox && replyAnchor) { target.insertBefore(newBox, replyAnchor); return null; }
   return newBox;
 }
 

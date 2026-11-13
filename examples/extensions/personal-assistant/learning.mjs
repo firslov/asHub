@@ -365,7 +365,14 @@ export class Learning {
     let value;
     if(cached?.fingerprint===fingerprint){value=cached.value;existing=cached.existing;legacy=cached.legacy;}
     else {
-      const raw=await this.api.infer(c.grantId,request,signal);this.alive(c,signal);requireScope();
+      // Persist pending work before yielding to inference. Cancellation or a
+      // restart must not make an unfinished batch look like the last success.
+      this.setHealth({backlog:true});
+      let raw;
+      this.inferenceSignal=signal;
+      try { raw=await this.api.infer(c.grantId,request,signal); }
+      finally { if(this.inferenceSignal===signal)this.inferenceSignal=null; }
+      this.alive(c,signal);requireScope();
       value=JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g,''));
       if(!value||!Array.isArray(value.memories)||value.memories.length>6||JSON.stringify(value).length>32000)throw Error('整理结果格式不正确，未推进读取位置');
       const sourceIds=[...new Set([...records,...context].map(r=>r.id))];

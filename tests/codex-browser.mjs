@@ -86,3 +86,42 @@ test('Windows PowerShell passes all characters unchanged to Start-Process', { sk
     assert.equal(Buffer.from(result.stdout.trim(), 'base64').toString('utf8'), url);
   }
 });
+
+
+test('Codex summary item boundaries separate headings without changing answer or reasoning replay',async()=>{
+ const {CodexStreamTranslator,toResponsesRequest}=await import(pathToFileURL(path.join(appRoot,'node_modules/agent-sh/dist/agent/extensions/codex-provider/translate.js')));
+ const translator=new CodexStreamTranslator('fixture'),chunks=[];
+ const push=e=>chunks.push(...translator.push(e));
+ const part=(item,index)=>push({type:'response.reasoning_summary_part.added',item_id:item,summary_index:index});
+ const delta=(item,text)=>push({type:'response.reasoning_summary_text.delta',item_id:item,delta:text});
+ part('r1',0);delta('r1','**First');delta('r1',' summary**');
+ push({type:'response.output_text.delta',delta:'**Complete'});
+ part('r2',0);delta('r2','**Second summary**');
+ part('r2',1);delta('r2','Additional context');
+ push({type:'response.output_text.delta',delta:' answer**'});
+ const item={type:'reasoning',id:'r2',summary:[{type:'summary_text',text:'**Second summary**'}],encrypted_content:'fixture-only'};
+ push({type:'response.output_item.done',item,output_index:2});
+ const deltas=chunks.flatMap(c=>c.choices.map(x=>x.delta));
+ assert.equal(deltas.map(d=>d.reasoning??'').join(''),'**First summary**\n\n**Second summary**\n\nAdditional context');
+ assert.equal(deltas.map(d=>d.content??'').join(''),'**Complete answer**');
+ const details=deltas.flatMap(d=>d.reasoning_details??[]);
+ assert.deepEqual(details.map(d=>d.item),[item]);
+ const request=toResponsesRequest({model:'fixture',messages:[{role:'assistant',content:'**Complete answer**',reasoning_details:details}]});
+ assert.deepEqual(request.input[0],item);
+ const fresh=new CodexStreamTranslator('fixture');assert.deepEqual(fresh.push({type:'response.reasoning_summary_part.added',summary_index:0}),[]);
+});
+
+test('Codex summary patch applies cleanly to both kernel sources and is idempotent',async t=>{
+ const fs=await import('node:fs'),os=await import('node:os');
+ const {createRequire}=await import('node:module'),require=createRequire(import.meta.url);
+ const {apply}=require('../scripts/patch-steering.cjs'),spec=require('../scripts/patches/codex-summary-boundaries.json');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-codex-summary-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const expected=new Map();
+ for(const entry of spec.files){
+  const patched=fs.readFileSync(path.join(appRoot,'node_modules/agent-sh',entry.path),'utf8');expected.set(entry.path,patched);
+  let original=patched;for(const hunk of [...entry.hunks].reverse()){assert.equal(original.split(hunk.after).length,2);original=original.replace(hunk.after,hunk.before);}
+  const target=path.join(dir,entry.path);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,original);
+ }
+ assert.equal(apply(dir,spec,'summary boundaries'),2);assert.equal(apply(dir,spec,'summary boundaries'),0);
+ for(const [file,source]of expected)assert.equal(fs.readFileSync(path.join(dir,file),'utf8'),source);
+});

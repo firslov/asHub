@@ -61,7 +61,7 @@ app.whenReady().then(async () => {
       return response.json();
     }
     const fresh = (await request('/api/plugins')).plugins.filter(plugin => plugin.includedApp);
-    assert.equal(fresh.length,4);
+    assert.equal(fresh.length,5);
     assert(fresh.every(plugin => plugin.bundled && !plugin.enabled && !plugin.autoApprove));
     const bundledBrowser = fresh.find(plugin => plugin.manifest.id === 'ashub-browser-automation');
     const bundledOwner = pages.bind('bundled-test-session', bundledBrowser.id, async () => false);
@@ -750,7 +750,7 @@ app.whenReady().then(async () => {
     await js("document.querySelector("+JSON.stringify(toolsRow+' .plugin-configure')+").click()");
     await until(()=>js("!!document.querySelector("+JSON.stringify(toolsRow+' .plugin-entry-toggle')+")"),'other plugin keeps its placement control');
     assert(await js("document.querySelector('#plugins-list').contains(document.querySelector("+JSON.stringify(browserRow)+"))"),'browser appears in Local extensions');
-    assert(await js("!!document.querySelector('#features-list [data-feature-id=mobile-access]') && document.querySelectorAll("+JSON.stringify(browserRow)+").length===1"),'no duplicate browser row');
+    assert(await js("!document.querySelector('#features-list [data-feature-id=mobile-access]') && document.querySelectorAll("+JSON.stringify(browserRow)+").length===1"),'no duplicate browser row');
     assert.equal(await js("!!document.querySelector('.plugin-bound-features[data-plugin-id=\""+projectPlugin.id+"\"] .plugin-entry-toggle')"),!!projectPlugin.manifest.ui?.panels?.length);
     await js("document.querySelector("+JSON.stringify(toolsRow+' .plugin-entry-toggle')+").click()");
     await until(()=>js("!document.querySelector('.extension-menu[aria-label=资料]').classList.contains('rail-unpinned')"),'plugin entry pin without granting consent');

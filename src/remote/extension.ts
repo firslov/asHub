@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ApplicationExtensionDefinition } from '../extensions/application.js';
 import { RemoteConnector } from './connector.js';
 
-/** The Hub injects one connector; application toggles reuse its identity and
+/** Legacy migration fallback only. The Hub injects one connector; application toggles reuse its identity and
  * durable receipts without touching connection-level authorization settings. */
 export class MobileAccessExtension {
   private port: number | undefined;

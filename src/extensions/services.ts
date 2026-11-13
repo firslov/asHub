@@ -1,3 +1,5 @@
+import type { SharedConversations } from './shared-conversations.js';
+import type { BackendConnections } from './backends.js';
 import type { CollaborationTasks } from '../collaboration.js';
 import type { ExtensionMessages } from '../services/extension-messages.js';
 import type { HostCapabilities, HostSnapshot } from '../services/host-contract.js';
@@ -25,6 +27,8 @@ export interface ApplicationCollaborationService {
  * an implicit current conversation. Keep this module type-only at runtime. */
 export interface ApplicationExtensionServices {
   readonly dataDirectory: string;
+  readonly sharedConversations?: ReturnType<SharedConversations['bind']>;
+  readonly backends?: ReturnType<BackendConnections['bind']>;
   readonly host?: Readonly<ApplicationHostService>;
   readonly activities?: Readonly<ReturnType<PluginActivities['bind']>>;
   readonly collaboration?: Readonly<ApplicationCollaborationService>;

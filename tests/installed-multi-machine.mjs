@@ -1,0 +1,24 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url),{zip}=require('./plugin-zip-fixture.cjs');
+const home=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-multi-install-'));process.env.AGENT_SH_HOME=home;
+const {PluginInstaller}=await import('../dist/plugin-installer.js'),{installedApplicationDefinitions}=await import('../dist/extensions/installed.js'),{ApplicationExtensionRegistry}=await import('../dist/extensions/application.js'),{pluginCatalog}=await import('../dist/plugins.js'),{BackendConnections}=await import('../dist/extensions/backends.js');
+test.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+test('real optional ZIP validates, installs and activates application service without any session extension',async t=>{
+ const settings=path.join(home,'settings.json');fs.writeFileSync(settings,'{}');const installer=new PluginInstaller(settings);t.after(()=>installer.close());
+ const root=new URL('../examples/extensions/multi-machine/',import.meta.url),files=['package.json','package-lock.json','ashub-plugin.json','app.mjs','client.mjs','sharing.mjs','publisher.mjs','transport.mjs','README.md'];
+ const bytes=zip(Object.fromEntries(files.map(name=>['multi/'+name,fs.readFileSync(new URL(name,root),'utf8')])));
+ const preview=await installer.preview(bytes);assert(preview.canInstall,JSON.stringify(preview.checks));const job=installer.confirm(preview.token);
+ for(let i=0;i<600&&installer.status(job.id).state==='running';i++)await new Promise(r=>setTimeout(r,50));assert.equal(installer.status(job.id).state,'succeeded',installer.status(job.id).error);
+ const entry=pluginCatalog(settings).find(e=>e.packageName==='ashub-multi-machine');assert(entry);assert(entry.applicationSpecifier);assert(!entry.manifest.entries.session);assert(entry.includedApp);
+ const signal=new AbortController(),backends=new BackendConnections({signal:signal.signal}),resources=new Map();
+ const definitions=()=>installedApplicationDefinitions(settings,{bindServices:(_id,ctx)=>({backends:backends.bind(_id,ctx.signal),sharedConversations:{registerStatus(){},open(){throw Error('No grant');}},interactions:{register:(id,resource)=>resources.set(id,resource)}})});
+ const registry=new ApplicationExtensionRegistry({settingsFile:settings,definitions:[],discover:definitions});t.after(async()=>{signal.abort();await registry.close();});await registry.start();
+ const feature=registry.snapshot().features.find(f=>f.pluginId===entry.id);await registry.setPluginEnabled(entry.id,true);const resource=resources.get('connections');assert(resource);const initial=resource.view();assert(!initial.form);const view=await(await resource.prepare('connect-account',{})).execute();assert(view.form.fields.some(f=>f.type==='password'));assert.equal(backends.list().length,0);
+ const plan=await resource.prepare('login',{username:'test',password:'private-test'});assert(!JSON.stringify(plan.preview).includes('private-test'));await assert.rejects(plan.execute(),/加密存储/);
+ await registry.setEnabled(feature.id,false);assert.equal(backends.list().length,0);
+});

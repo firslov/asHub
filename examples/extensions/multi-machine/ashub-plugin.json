@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "id": "ashub-multi-machine",
+  "name": "设备互联",
+  "minNode": "22.13.0",
+  "entries": {
+    "application": "app.mjs"
+  },
+  "requires": {
+    "hostApi": "^1.0.0",
+    "capabilities": [
+      "application-lifecycle",
+      "plugin-resources",
+      "backend-connections",
+      "shared-conversations"
+    ]
+  },
+  "configNamespaces": [],
+  "permissions": [
+    "连接用户登录账号下已授权的远程电脑；任务在选定电脑执行",
+    "登录凭据保存到系统加密存储，密码不保存",
+    "远程审批仅允许单次授权，不继承本机管理权限",
+    "仅在桌面确认的目录范围内允许手机和其他电脑访问本机，关闭后停止连接"
+  ],
+  "ui": {
+    "version": 1,
+    "panels": [
+      {
+        "id": "connections",
+        "title": "设备互联",
+        "icon": "devices",
+        "components": [
+          {
+            "type": "resource",
+            "id": "connections"
+          }
+        ]
+      }
+    ]
+  }
+}

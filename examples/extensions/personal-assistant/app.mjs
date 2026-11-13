@@ -9,11 +9,28 @@ export class AssistantPanel {
   overview() {
     const id=this.a.conversationId(),profile=this.store.profile(),running=!!id&&this.a.learning.access(id)&&profile.enabled;
     if(!id)return {actions:[action('setup','开启个人助手')],note:'一个专属对话，慢慢了解你',rows:[{title:'从这里开始',detail:'只从你与个人助手的交流中整理记忆，其他对话不受影响',actions:[]}]};
-    const health=this.a.learning.health();
-    const notice=running && health.errorClass==='capacity' ? '记忆整理暂缓 · 存储额度已满'
-      : running && health.errorClass && health.errorClass!=='quota' && health.failures>=2 ? '记忆整理暂缓 · 将自动重试' : '';
+    const notice=running ? this.memoryStatus() : '';
     return {toggle:{label:'长期记忆',checked:running,action:running?'pause':'authorize',...(notice?{status:notice}:{})},actions:[action(running?'pause':'authorize',running?'关闭长期记忆':'开启长期记忆')],
-      note:(running?'长期记忆已开启':'长期记忆已关闭')+' · 只用于这段助手对话'+(notice?'\n'+notice+'；已有记忆仍可使用':''),rows:[]};
+      note:(running?'长期记忆已开启':'长期记忆已关闭')+' · 只用于这段助手对话'+(notice?'\n'+notice:''),rows:[]};
+  }
+
+  memoryStatus(now=Date.now()) {
+    const health=this.a.learning.health();
+    // This is live inference, not the scheduler's short periodic scan. Never
+    // persist it: an interrupted request must not look active after restart.
+    if(this.a.learning.inferenceSignal && !this.a.learning.inferenceSignal.aborted)return '正在整理记忆…';
+    if(health.errorClass==='capacity')return '记忆整理暂缓 · 存储额度已满';
+    if(health.errorClass==='quota' && health.retryAt>now)return '今日整理已暂停 · 已有记忆可用';
+    if(health.errorClass && health.errorClass!=='quota' && health.failures>=2)return '整理暂缓 · 稍后重试';
+    if(health.backlog)return '等待空闲整理';
+    if(Number.isFinite(health.lastSuccessAt) && health.lastSuccessAt>0 && health.lastSuccessAt<=now) {
+      const date=new Date(health.lastSuccessAt),today=new Date(now);
+      const sameDay=date.getFullYear()===today.getFullYear() && date.getMonth()===today.getMonth() && date.getDate()===today.getDate();
+      const day=sameDay?'今天':`${date.getFullYear()}/${date.getMonth()+1}/${date.getDate()}`;
+      const time=`${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
+      return `最近整理 · ${day} ${time}`;
+    }
+    return '随交流逐步形成记忆';
   }
 
   async welcome() {

@@ -93,7 +93,7 @@ chmod +x ./asHub-*.AppImage
 
 Continue desktop conversations at [asHub Mobile](https://ashub.aihao.world/mobile/). **Requires asHub v0.20.5 or later.**
 
-1. Open **Mobile Access (移动访问)** in the desktop toolbar, sign in or create an account, and authorize project directories
+1. In the updated desktop, enable **Device interconnect (设备互联)** under **Plugins → Local extensions**, open its toolbar entry, and choose **Allow access to this computer**. Sign in or register and confirm shared directories. Earlier versions use **Mobile Access**; upgrading preserves existing device identity and authorization.
 2. Save the recovery code, then select **I have saved it (我已保存)**. Unconfirmed codes survive menu switches, but must be saved before quitting or refreshing the app
 3. Sign in with the same account on your phone, select your computer, and continue a conversation or start a new one
 

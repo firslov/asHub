@@ -9,6 +9,7 @@ files:
   - examples/extensions/project-management/{*.mjs,ashub-plugin.json,package.json}
   - examples/extensions/browser-automation/{*.mjs,ashub-plugin.json,package.json}
   - examples/extensions/image-display/{*.mjs,ashub-plugin.json,package.json}
+  - examples/extensions/multi-machine/{*.mjs,ashub-plugin.json,package.json}
   - node_modules/**/*
   - package.json
 

@@ -16,7 +16,7 @@ app.whenReady().then(async () => {
   let window, server;
   let legacy = false, revision = '1', stored = { label: 'Fixture', limit: 4, enabled: true, choice: 'one', keep: { token: 'fixture-preserved' } };
   const writes = [];
-  const builtins = ['quick-prompts', 'skills-marketplace', 'provider-balance', 'mobile-access'].map(id => ({ id, name: id, scope: id === 'mobile-access' ? 'application' : 'frontend', enabled: true, state: 'active' }));
+  const builtins = ['quick-prompts', 'skills-marketplace', 'provider-balance'].map(id => ({ id, name: id, scope: id === 'mobile-access' ? 'application' : 'frontend', enabled: true, state: 'active' }));
   const declaration = { id: 'fixture-ui', name: 'Fixture UI', scope: 'frontend', enabled: true, state: 'active', pluginId: 'fixture-bound-id', configNamespaces: ['fixture-settings'], ui: { version: 1, panels: [{ id: 'overview', title: 'Project helper', components: [
     { type: 'text', text: '<img src=x onerror=alert(1)> is plain text' },
     { type: 'status', text: 'Ready', tone: 'success' }, { type: 'list', items: ['First item', 'Second item'] },
@@ -80,16 +80,22 @@ app.whenReady().then(async () => {
       await import('/js/prefs.js');
       await import('/js/extensions/feature-state.js').then(m=>m.featuresReady());`);
     await run(`document.getElementById('plugins-toggle').click()`);
-    await wait(`document.querySelectorAll('#plugins-overlay [data-feature-id]').length === 6`, 'feature controls');
+    await wait(`document.querySelectorAll('#plugins-overlay [data-feature-id]').length === 5`, 'feature controls');
     assert.equal(await js(`document.querySelector('[data-feature-id="fixture-ui"]').closest('.plugin-bound-features')?.dataset.pluginId`), 'fixture-bound-id',
       'installed feature controls belong to their local extension');
-    assert.equal(await js(`document.querySelectorAll('#features-list [data-feature-id]').length`), 5);
+    assert.equal(await js(`document.querySelectorAll('#features-list [data-feature-id]').length`), 4);
     await run(`document.getElementById('plugins-close').click()`);
     assert.equal(await js(`document.querySelectorAll('.extension-menu').length`), 3);
     assert.equal(await js(`Boolean(window.pwned)`), false);
-    await run(`document.getElementById('mobile-access-toggle').click()`);
-    await wait(`document.getElementById('mobile-access-toggle').getAttribute('aria-expanded') === 'true'`, 'lazy-created mobile drawer accessible state');
-    await run(`document.getElementById('mobile-close').click()`);
+    const icons=await run(`const {mountDeclarativeUI}=await import('/js/extensions/declarative-ui.js');
+      const menuHost=document.createElement('div'),panelHost=document.createElement('div');document.body.append(menuHost,panelHost);
+      const dispose=mountDeclarativeUI({id:'icon-fixture',pluginId:'icon-fixture',name:'Icons',ui:{version:1,panels:['devices','panel'].map(icon=>({id:icon,title:icon,icon,components:[]}))}},{menuHost,panelHost});
+      const result=[...menuHost.querySelectorAll('svg')].map(svg=>({path:svg.querySelector('path').getAttribute('d'),width:svg.getAttribute('width'),stroke:svg.getAttribute('stroke-width'),viewBox:svg.getAttribute('viewBox')}));
+      dispose();menuHost.remove();panelHost.remove();return result;`);
+    assert.notEqual(icons[0].path,icons[1].path,'device connection and project panels must have distinct icons');
+    assert.deepEqual({...icons[0],path:''},{...icons[1],path:''},'toolbar optical size and stroke remain consistent');
+
+    assert.equal(await js(`document.getElementById('mobile-access-toggle')`),null,'old mobile entry is replaced by the optional interconnect plugin');
     await run(`document.getElementById('prompt-toggle').click()`);
     await wait(`!document.getElementById('prompt-overlay').hidden && document.getElementById('prompt-list').textContent.includes('Review')`, 'lazy prompts');
     await run(`document.querySelector('[data-feature-id="quick-prompts"] button').click()`);
@@ -146,24 +152,24 @@ app.whenReady().then(async () => {
     for (const feature of builtins) feature.enabled = false;
     await run(`await import('/js/extensions/feature-state.js').then(m=>m.refreshFeatures())`);
     assert.equal(await js(`document.getElementById('query').disabled`), composerDisabled);
-    assert.equal(await js(`['prompt-toggle','skills-toggle','mobile-access-toggle'].every(id=>document.getElementById(id).hidden)`), true);
+    assert.equal(await js(`['prompt-toggle','skills-toggle'].every(id=>document.getElementById(id).hidden)`), true);
     for (const theme of ['light', 'dark']) {
       await run(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
-      assert.equal(await js(`['prompt-toggle','skills-toggle','mobile-access-toggle'].every(id=>{const button=document.getElementById(id);return button.hidden&&button.disabled&&getComputedStyle(button).display==='none'&&button.getClientRects().length===0})`), true, `disabled toolbar buttons take no space in ${theme} mobile layout`);
+      assert.equal(await js(`['prompt-toggle','skills-toggle'].every(id=>{const button=document.getElementById(id);return button.hidden&&button.disabled&&getComputedStyle(button).display==='none'&&button.getClientRects().length===0})`), true, `disabled toolbar buttons take no space in ${theme} mobile layout`);
       assert.equal(await js(`getComputedStyle(document.getElementById('plugins-toggle')).display!=='none' && !document.getElementById('plugins-toggle').disabled`), true, 'plugin management remains available to re-enable features');
     }
     const disabledReload = once(window.webContents, 'did-finish-load'); window.reload(); await disabledReload;
     await run(`await import('/js/extensions/feature-ui.js').then(m=>m.initializeFeatureUI());await import('/js/plugins-panel.js');await import('/js/extensions/feature-state.js').then(m=>m.featuresReady());`);
-    assert.equal(await js(`['prompt-toggle','skills-toggle','mobile-access-toggle'].every(id=>getComputedStyle(document.getElementById(id)).display==='none')`), true, 'persisted disabled features stay absent after reload');
+    assert.equal(await js(`['prompt-toggle','skills-toggle'].every(id=>getComputedStyle(document.getElementById(id)).display==='none')`), true, 'persisted disabled features stay absent after reload');
     for (const feature of builtins) { feature.enabled = true; feature.state = 'active'; }
     await run(`await import('/js/extensions/feature-state.js').then(m=>m.refreshFeatures())`);
-    assert.equal(await js(`['prompt-toggle','skills-toggle','mobile-access-toggle'].every(id=>{const button=document.getElementById(id);return !button.hidden&&!button.disabled&&getComputedStyle(button).display!=='none'&&button.getClientRects().length>0})`), true, 're-enabled toolbar entries are visible and usable');
+    assert.equal(await js(`['prompt-toggle','skills-toggle'].every(id=>{const button=document.getElementById(id);return !button.hidden&&!button.disabled&&getComputedStyle(button).display!=='none'&&button.getClientRects().length>0})`), true, 're-enabled toolbar entries are visible and usable');
     await run(`document.getElementById('prompt-toggle').click()`);
     await wait(`!document.getElementById('prompt-overlay').hidden && document.getElementById('prompt-list').textContent.includes('Review')`, 're-enabled prompt opens with retained data');
     legacy = true;
     const reloaded = once(window.webContents, 'did-finish-load'); window.reload(); await reloaded;
     await run(`await import('/js/extensions/feature-ui.js').then(m=>m.initializeFeatureUI());await import('/js/plugins-panel.js');await import('/js/extensions/feature-state.js').then(m=>m.featuresReady());`);
-    await wait(`document.querySelectorAll('#features-list button').length === 4`, 'old host defaults');
+    await wait(`document.querySelectorAll('#features-list button').length === 3`, 'old host defaults');
     assert.equal(await js(`[...document.querySelectorAll('#features-list button')].every(button=>button.disabled) && !document.getElementById('prompt-toggle').hidden`), true);
     assert.equal(writes.filter(write => write.type === 'config').length, 3);
     console.log('PASS feature UI: lazy built-ins, disable/data retention, catalog panels, injection rejection, bound config save/reload/conflict, draft-only action, remount, mobile layout and legacy fallback');

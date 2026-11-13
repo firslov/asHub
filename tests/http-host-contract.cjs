@@ -50,15 +50,15 @@ test('real host snapshots/invalidations agree with legacy routes and optional fe
     const packet = new TextDecoder().decode((await eventReader.read()).value);
     assert.match(packet, /event: invalidation/);
     await eventReader.cancel(); eventReader = undefined;
-    for (const feature of ['quick-prompts', 'skills-marketplace', 'provider-balance', 'mobile-access']) {
+    for (const feature of ['quick-prompts', 'skills-marketplace', 'provider-balance']) {
       const response = await f.api('/api/extensions/' + feature + '/enabled', { enabled: false });
       assert.equal(response.status, 200, JSON.stringify(response.value));
     }
     assert.equal((await f.api('/api/skills/installed')).status, 409);
     assert.equal((await f.api('/api/balance?provider=fixture')).status, 409);
     const mobile = await f.api('/api/mobile');
-    assert.equal(mobile.status, 200); assert.equal(mobile.value.featureEnabled, false);
-    assert.equal((await f.api('/api/mobile/enable', {})).status, 409);
+    assert.equal(mobile.status, 200); assert.equal(mobile.value.enabled, false);
+    assert.equal((await f.api('/api/mobile/enable', {})).status, 410);
     assert.equal((await f.api('/api/projects')).value[0].sessionIds[0], id);
     assert.equal((await f.api('/' + id + '/submit', { query: 'Fixture core-only turn' })).status, 200);
     assert.equal((await f.api('/' + id + '/cancel', {})).status, 200);

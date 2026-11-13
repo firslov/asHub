@@ -50,6 +50,26 @@ test('host scopes local API, blocks administration and persistent approvals, fil
  const pending=channel.request('/aaaa/thinking');const rejected=assert.rejects(pending);while(!release)await new Promise(r=>setTimeout(r,5));service.revoke(id);await rejected;release();await assert.rejects(channel.request('/sessions'));assert.equal(new SharedConversations(path.join(dir,'grants.json')).bind('plugin',owner.signal).scope(id),null);
 });
 
+test('shared SSE reads through partial and filtered chunks until replay completes', {timeout:5000}, async t => {
+ const dir=fixture(t), owner=new AbortController();
+ const frame=(source,name,text)=>'data: '+JSON.stringify({meta:{source,name},payload:{text}})+'\n\n';
+ const query=frame('aaaa','agent:query','长'.repeat(60000)), done=frame('aaaa','hub:replay-done','');
+ const server=http.createServer((req,res)=>{
+  if(req.url==='/sessions')return res.end(JSON.stringify([{instanceId:'aaaa',kind:'agent',cwd:dir}]));
+  assert.match(req.url,/^\/events\?/);
+  res.writeHead(200,{'Content-Type':'text/event-stream'});
+  res.write(frame('bbbb','agent:query','other conversation')+frame('aaaa','shell:output','filtered')+query.slice(0,30000));
+  setTimeout(()=>res.end(query.slice(30000)+done),50);
+ });
+ server.listen(0,'127.0.0.1');await once(server,'listening');
+ t.after(()=>{owner.abort();server.closeAllConnections();server.close();});
+ const grants=new SharedConversations(path.join(dir,'grants.json'));
+ grants.start(server.address().port);
+ const id=grants.approve('plugin',grants.prepare('plugin',{roots:[dir]}));
+ const stream=await grants.bind('plugin',owner.signal).open(id).events('aaaa',true,AbortSignal.timeout(1800));
+ assert.equal(await stream.text(),query+done);
+});
+
 test('interrupted migration merges compatibility publisher receipts before retrying, without resetting newer device settings',t=>{
  const dir=fixture(t),settingsFile=path.join(dir,'settings.json'),sessionsDir=path.join(dir,'hub-sessions');fs.writeFileSync(settingsFile,'{}');fs.mkdirSync(path.join(sessionsDir,'remote'),{recursive:true});
  const source=path.join(sessionsDir,'remote','remote-requests.json');fs.writeFileSync(source,JSON.stringify({'same:old':{digest:'first',state:'pending'}}));

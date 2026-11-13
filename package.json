@@ -88,5 +88,22 @@
     "@vscode/ripgrep-darwin-x64": "1.18.0",
     "@vscode/ripgrep-win32-arm64": "1.18.0",
     "@vscode/ripgrep-win32-x64": "1.18.0"
+  },
+  "overrides": {
+    "app-builder-lib": {
+      "builder-util-runtime": "9.7.0"
+    },
+    "builder-util": {
+      "builder-util-runtime": "9.7.0"
+    },
+    "electron-builder": {
+      "builder-util-runtime": "9.7.0"
+    },
+    "electron-publish": {
+      "builder-util-runtime": "9.7.0"
+    },
+    "electron-updater": {
+      "builder-util-runtime": "9.7.0"
+    }
   }
 }

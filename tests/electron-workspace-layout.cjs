@@ -495,8 +495,11 @@ app.whenReady().then(async () => {
           'approval',
         );
         if (compact) {
-          await until(() => !view(), 'compact approval exposes chat');
-          assert(await js("document.querySelector('.browser-web').disabled"));
+          // The settings drawer can hide the native view before the approval layout runs.
+          await until(
+            async () => !view() && await js("document.querySelector('.browser-web').disabled"),
+            'compact approval exposes chat and disables the web tab',
+          );
           if (editingSettings) {
             assert.equal(await js("document.activeElement.id"),'plugins-close','pending approval must preserve drawer focus');
             await js("document.getElementById('plugins-close').click()");

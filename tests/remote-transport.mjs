@@ -48,7 +48,7 @@ test('remote enrollment and reconnect bypass proxy while model VPN policy remain
         if(opcode===8){socket.end(Buffer.from([0x88,0]));return;}
         if(opcode===1){
           const hello=JSON.parse(body.toString());hellos.push(hello);
-          assert.deepEqual(hello,{type:'hello',protocol:1,deviceId:'desktop',token:'fixture-token'});
+          assert.deepEqual(hello,{type:'hello',protocol:1,deviceId:'desktop',token:'fixture-token',replace:true});
           const ready=Buffer.from(JSON.stringify({type:'ready',protocol:1}));socket.write(Buffer.concat([Buffer.from([0x81,ready.length]),ready]));
         }
       }

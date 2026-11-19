@@ -6,13 +6,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { createManagedVoice, loadManagedVoice, VOICE_REQUEST_LIMIT } from './managed-voice.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const hash = value => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(32).toString('base64url');
 const derive = promisify(scrypt);
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const LIMIT = 6 * 1024 * 1024;
-export function createGateway({ database, publicUrl, publicDir = path.join(here, 'public'), testing = false }) {
+export function createGateway({ database, publicUrl, publicDir = path.join(here, 'public'), testing = false, voiceConfig, voiceFetch }) {
   const base = new URL(publicUrl), prefix = base.pathname.replace(/\/$/, '');
   if (!testing && base.protocol !== 'https:') throw Error('HTTPS public URL required');
   fs.mkdirSync(path.dirname(database), { recursive: true, mode: 0o700 });
@@ -22,6 +23,9 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, password TEXT NOT NULL, recovery TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS logins (token TEXT PRIMARY KEY, user TEXT NOT NULL REFERENCES users(id), expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, user TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, token TEXT UNIQUE NOT NULL, seen INTEGER NOT NULL DEFAULT 0);`);
+  let managedVoice;
+  try { managedVoice = createManagedVoice(db, voiceConfig, voiceFetch); }
+  catch { console.error('Unable to enable asHub voice transcription'); }
   const devices = new Map(), pending = new Map(), streams = new Map(), rates = new Map(), downloads = new Map();
   let hashing = 0;
   function rate(key, max, duration) {
@@ -102,9 +106,9 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
     });
   }
   const json = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); };
-  async function read(req) {
+  async function read(req, limit = LIMIT) {
     let size = 0, chunks = [];
-    for await (const c of req) { size += c.length; if (size > LIMIT) throw fail(413, '内容过大'); chunks.push(c); }
+    for await (const c of req) { size += c.length; if (size > limit) throw fail(413, '内容过大'); chunks.push(c); }
     try { const data = JSON.parse(Buffer.concat(chunks).toString() || '{}'); if (!data || typeof data !== 'object' || Array.isArray(data)) throw Error(); return data; }
     catch { throw fail(400, '请求格式错误'); }
   }
@@ -120,6 +124,21 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
       const ip = req.headers['x-real-ip'] || req.socket.remoteAddress;
       rate(`ip:${ip}`, 600, 60000);
       if (req.headers.origin && req.headers.origin !== base.origin) throw fail(403, '来源不受信任');
+      if (route === '/voice/transcribe' && method === 'POST') {
+        if (!managedVoice) throw fail(503, 'asHub 免费转写暂不可用');
+        if (req.headers['content-type'] !== 'application/json') throw fail(415, '需要 JSON 录音请求');
+        if (Number(req.headers['content-length']) > VOICE_REQUEST_LIMIT) throw fail(413, '录音请求过大');
+        rate(`voice:${ip}`, 10, 60_000);
+        const disconnect = new AbortController();
+        const abort = () => disconnect.abort();
+        res.once('close', abort);
+        try {
+          const input = await read(req, VOICE_REQUEST_LIMIT);
+          const result = await managedVoice(input, ip, disconnect.signal);
+          if (!res.destroyed) json(res, 200, result);
+          return;
+        } finally { res.off('close', abort); }
+      }
       if (method !== 'GET' && method !== 'HEAD' && route !== '/api/device/enroll' && req.headers.origin !== base.origin) throw fail(403, '需要同源请求');
       if (route === '/health' && method === 'GET') return json(res, 200, { ok: true });
       if (['/api/login', '/api/register', '/api/device/enroll', '/api/recover'].includes(route) && method === 'POST') {
@@ -269,7 +288,7 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
       }
       if (!files[name]) throw fail(404, 'Not found');
       res.writeHead(200, { 'Content-Type': `${files[name]}; charset=utf-8` }); res.end(fs.readFileSync(path.join(publicDir, name)));
-    } catch (e) { if (!res.headersSent) json(res, e.status || 500, { error: e.status ? e.message : '服务暂不可用' }); else res.end(); }
+    } catch (e) { if (res.destroyed) return; if (!res.headersSent) json(res, e.status || 500, { error: e.status ? e.message : '服务暂不可用' }); else res.end(); }
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: LIMIT, perMessageDeflate: false });
   server.on('upgrade', (req, socket, head) => {
@@ -319,7 +338,7 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
   return { server, db, close: async () => { clearInterval(heartbeat); for (const ws of wss.clients) ws.terminate(); for (const id of streams.keys()) closeStream(id); await new Promise(r => server.close(r)); wss.close(); db.close(); } };
 }
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const app = createGateway({ database: process.env.ASHUB_REMOTE_DB || './data/remote.sqlite', publicUrl: process.env.ASHUB_REMOTE_URL || 'https://ashub.aihao.world/mobile/' });
+  const app = createGateway({ database: process.env.ASHUB_REMOTE_DB || './data/remote.sqlite', publicUrl: process.env.ASHUB_REMOTE_URL || 'https://ashub.aihao.world/mobile/', voiceConfig: loadManagedVoice(process.env.CREDENTIALS_DIRECTORY) });
   app.server.listen(Number(process.env.PORT || 3002), '127.0.0.1', () => console.log('asHub remote gateway ready'));
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { void app.close().then(() => process.exit(0)); });
 }

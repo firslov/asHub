@@ -146,7 +146,25 @@ usable for basic chat; refresh after upgrading an online desktop. Terminal, file
 explorer, bulk history management, provider credentials, OS notifications,
 offline history and E2EE are not included.
 
-Deployment archives must include `server.mjs`, `package.json`, `package-lock.json`, `public/`, and `deploy/`. The scheduled backup service reads `deploy/backup.mjs` through the active release symlink. Verify the backup service after switching releases.
+Deployment archives must include `server.mjs`, `managed-voice.mjs`, `package.json`, `package-lock.json`, `public/`, and `deploy/`. The scheduled backup service reads `deploy/backup.mjs` through the active release symlink. Verify the backup service after switching releases.
+
+### asHub free transcription
+
+To enable the plugin's free option, provision a root-owned credential file with mode `0600` outside the release directory. Use the desktop's Tencent TokenHub transcription configuration.
+
+```json
+{
+  "endpoint": "https://tokenhub.tencentmaas.com/v1/wand/asrproxy/sync_transcribe",
+  "model": "hy-asr-3.0-preview",
+  "apiKey": "<the existing TokenHub key>",
+  "dailyLimit": 300,
+  "dailyIpLimit": 20
+}
+```
+
+Load the updated `deploy/nginx-mobile.conf` before enabling the service credential. The exact voice route disables request buffering so Nginx does not spool recordings to a temporary file. Add a systemd drop-in with `LoadCredential=ashub-voice:/etc/ashub-mobile/ashub-voice.json` under `[Service]`, then reload the units and restart `ashub-mobile`. Keep the credential out of Git, plugin packages, release archives and logs. The gateway returns `503` for free transcription while the credential is absent. Custom transcription calls the configured provider directly from the desktop.
+
+`POST /mobile/voice/transcribe` is available to desktops without mobile accounts. It accepts only the composer's 16 kHz mono PCM WAV format, up to 60 seconds of actual samples, before charging quota or contacting the transcription provider. It forwards only audio and returns only the transcript. Neither the audio nor the transcript is stored by the gateway. The gateway counts upstream attempts against the UTC daily quotas, including attempts that fail or are cancelled after being sent. The budgets survive restarts. Quota entries store a daily hash of the request IP and are removed when processing a request on a later UTC day.
 
 ### Mobile navigation
 

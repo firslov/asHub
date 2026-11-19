@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import activate,{validateConfig,transcribe} from '../app.mjs';
+import activate,{validateConfig,transcribe,transcribeWithDefault} from '../app.mjs';
 const config={endpoint:'https://example.test/v1/audio/transcriptions',model:'gpt-transcribe',apiKey:'fixture-secret'};
 test('provider sends file with MIME/extension, no chat history, no retry; accepts mixed text',async()=>{
  for(const mime of ['audio/mp4','audio/mp4; codecs=mp4a.40.2','audio/webm;codecs=opus']){
@@ -16,16 +16,16 @@ test('credentials cannot silently follow endpoint changes and plaintext storage 
  assert.throws(()=>validateConfig({endpoint:'https://other.test',model:'test'},config),/重新填写/);
  assert.equal(validateConfig({endpoint:config.endpoint,model:'test'},config).apiKey,'fixture-secret');
  let saved=null,resource,registrations=[],disposals=0;const ctx={signal:new AbortController().signal,services:{
-  secrets:{available:true,read:()=>saved,write:(_,v)=>saved=v},interactions:{register:(_,r)=>resource=r},composerInputs:{register:(_,input)=>{registrations.push(input);return()=>disposals++;}}
- }};const instance=activate(ctx);assert.equal(registrations.length,0);
- const plan=await resource.prepare('save',config);assert(plan.preview);assert.equal(saved,null);await plan.execute();assert.equal(registrations.length,1);
+  secrets:{available:true,read:()=>saved,write:(_,v)=>saved=v},interactions:{register:(_,r)=>resource=r},composerInputs:{supportsPcmWav:true, register:(_,input)=>{registrations.push(input);return()=>disposals++;}}
+ }};const instance=activate(ctx);assert.equal(registrations[0].transform,transcribeWithDefault);
+ const plan=await resource.prepare('save',config);assert(plan.preview);assert.equal(saved,null);await plan.execute();assert.equal(registrations.length,2);
  assert(!JSON.stringify(resource.view()).includes('fixture-secret'));assert(!JSON.stringify(plan.preview).includes('fixture-secret'));
- const clear=await resource.prepare('clear',{});await clear.execute();assert.equal(saved,null);assert.equal(disposals,1);
+ const clear=await resource.prepare('clear',{});await clear.execute();assert.equal(saved,null);assert.equal(disposals,2);assert.equal(registrations[2].transform,transcribeWithDefault);
  instance.stop();
  ctx.services.secrets.available=false;await assert.rejects(resource.prepare('save',config),/加密存储/);
 });
 test('restart restores configuration; late transcriptions observe aborted signal',async()=>{
- let registered;activate({signal:new AbortController().signal,services:{secrets:{read:()=>JSON.stringify(config)},interactions:{register(){}},composerInputs:{register:(_,r)=>{registered=r;return()=>{};}}}});assert(registered);
+ let registered;activate({signal:new AbortController().signal,services:{secrets:{read:()=>JSON.stringify(config)},interactions:{register(){}},composerInputs:{supportsPcmWav:true, register:(_,r)=>{registered=r;return()=>{};}}}});assert(registered);
  const controller=new AbortController();controller.abort();let calls=0;
  await assert.rejects(transcribe(config,{data:new Uint8Array(),mimeType:'audio/mp4',signal:controller.signal},async()=>{calls++;}));assert.equal(calls,0);
 });
@@ -55,7 +55,7 @@ test('TokenHub config is inferred from the exact endpoint, with safe legacy rest
  // The model name alone never changes the wire protocol for another provider.
  await transcribe({...config,model:hunyuan.model},audio(),async(_,opts)=>{assert(opts.body instanceof FormData);return Response.json({text:'compatible provider'});});
  let registered,resource;const saved=JSON.stringify(hunyuan);
- activate({signal:new AbortController().signal,services:{secrets:{read:()=>saved},interactions:{register:(_,r)=>resource=r},composerInputs:{register:(_,r)=>{registered=r;return()=>{};}}}});
+ activate({signal:new AbortController().signal,services:{secrets:{read:()=>saved},interactions:{register:(_,r)=>resource=r},composerInputs:{supportsPcmWav:true, register:(_,r)=>{registered=r;return()=>{};}}}});
  assert(registered);assert(!JSON.stringify(resource.view()).includes(hunyuan.apiKey));assert.match(resource.view().note,/TokenHub API Key/);
 });
 test('TokenHub failures do not leak response bodies, retry, or accept partial/wrong output',async()=>{
@@ -80,14 +80,14 @@ test('TokenHub cancellation suppresses late success and aborts response streamin
 });
 
 function configuredSettings() {
- let saved=JSON.stringify(hunyuan),resource,disposals=0,registrations=0,failWrites=false;
+ let saved=JSON.stringify(hunyuan),resource,disposals=0,registrations=0,failWrites=false,active;
  const lifecycle=new AbortController();
  activate({signal:lifecycle.signal,services:{
   secrets:{available:true,read:()=>saved,write:(_,v)=>{if(failWrites)throw Error('fixture storage failure');saved=v;}},
   interactions:{register:(_,r)=>resource=r},
-  composerInputs:{register:()=>{registrations++;return()=>disposals++;}},
+  composerInputs:{supportsPcmWav:true, register:(_,entry)=>{registrations++;active=entry;return()=>disposals++;}},
  }});
- return {resource,lifecycle,set failWrites(value){failWrites=value;},get saved(){return saved;},get registrations(){return registrations;},get disposals(){return disposals;}};
+ return {resource,lifecycle,set failWrites(value){failWrites=value;},get saved(){return saved;},get active(){return active;},get registrations(){return registrations;},get disposals(){return disposals;}};
 }
 test('a stale save confirmation cannot restore a cleared TokenHub credential',async()=>{
  const f=configuredSettings();
@@ -95,7 +95,7 @@ test('a stale save confirmation cannot restore a cleared TokenHub credential',as
  await (await f.resource.prepare('clear',{})).execute();
  assert.equal(f.saved,null);assert.equal(f.disposals,1);
  assert.throws(()=>oldSave.execute(),/配置已变更/);
- assert.equal(f.saved,null);assert.equal(f.registrations,1);
+ assert.equal(f.saved,null);assert.equal(f.registrations,2);
 });
 test('stale clear/save confirmations cannot cancel a newer recording configuration',async()=>{
  const f=configuredSettings(),oldClear=await f.resource.prepare('clear',{}),oldSave=await f.resource.prepare('save',hunyuan);
@@ -114,7 +114,7 @@ test('clear then save identical settings still invalidates previous-window confi
  await (await f.resource.prepare('save',hunyuan)).execute();
  assert.deepEqual(JSON.parse(f.saved),hunyuan);
  assert.throws(()=>oldSave.execute(),/配置已变更/);assert.throws(()=>oldClear.execute(),/配置已变更/);
- assert.equal(f.registrations,2);assert.equal(f.disposals,1);
+ assert.equal(f.registrations,3);assert.equal(f.disposals,2);
  const retained=await f.resource.prepare('save',{endpoint:hunyuan.endpoint,model:hunyuan.model});await retained.execute();assert.deepEqual(JSON.parse(f.saved),hunyuan);
 });
 test('failed credential writes preserve live configuration and allow a fresh successful save',async()=>{
@@ -125,6 +125,71 @@ test('failed credential writes preserve live configuration and allow a fresh suc
  assert.deepEqual(JSON.parse(f.saved),hunyuan);assert.equal(f.registrations,1);assert.equal(f.disposals,0);
  f.failWrites=false;await (await f.resource.prepare('save',changed)).execute();
  assert.deepEqual(JSON.parse(f.saved),changed);assert.equal(f.registrations,2);assert.equal(f.disposals,1);
- let restored;activate({signal:new AbortController().signal,services:{secrets:{read:()=>f.saved},interactions:{register(){}},composerInputs:{register:(_,r)=>{restored=r;return()=>{};}}}});assert(restored);
+ let restored;activate({signal:new AbortController().signal,services:{secrets:{read:()=>f.saved},interactions:{register(){}},composerInputs:{supportsPcmWav:true, register:(_,r)=>{restored=r;return()=>{};}}}});assert(restored);
  assert(!JSON.stringify(f.resource.view()).includes('rotated-key'));
+});
+
+test('existing custom settings survive switching to free mode and back after restart', async () => {
+ const fixture = configuredSettings();
+ assert.notEqual(fixture.active.transform, transcribeWithDefault);
+ const select = resource => resource.view().form.fields.find(field => field.id === 'mode');
+ assert.equal(select(fixture.resource).value, 'custom');
+ const stale = await fixture.resource.prepare('save', hunyuan);
+ const change = await fixture.resource.prepare('save', {mode:'default', endpoint:'https://ignored.test', apiKey:'ignored-key'});
+ change.execute();
+ assert.throws(() => stale.execute(), /配置已变更/);
+ assert.equal(fixture.disposals, 1);
+ assert.equal(fixture.active.transform, transcribeWithDefault);
+ assert.equal(fixture.active.audioFormat, 'pcm-wav');
+ assert.deepEqual(JSON.parse(fixture.saved), {...hunyuan, mode:'default'});
+
+ let saved = fixture.saved, resource, transform;
+ activate({signal:new AbortController().signal, services:{
+  secrets:{available:true, read:()=>saved, write:(_,value)=>saved=value},
+  interactions:{register:(_,value)=>resource=value},
+  composerInputs:{supportsPcmWav:true, register:(_,entry)=>{transform=entry.transform;return()=>{};}},
+ }});
+ assert.equal(transform, transcribeWithDefault);
+ assert.equal(select(resource).value, 'default');
+ assert(!JSON.stringify(resource.view()).includes(hunyuan.apiKey));
+ const restore = await resource.prepare('save', {mode:'custom', endpoint:hunyuan.endpoint, model:hunyuan.model});
+ restore.execute();
+ assert.notEqual(transform, transcribeWithDefault);
+ assert.deepEqual(JSON.parse(saved), hunyuan);
+});
+
+test('free transcription needs no local secrets and returns safe error messages', async () => {
+ let transform, resource;
+ activate({signal:new AbortController().signal, services:{
+  secrets:{available:false, read:()=>null, write:()=>assert.fail('requires no local secret store')},
+  interactions:{register:(_,value)=>resource=value},
+  composerInputs:{supportsPcmWav:true, register:(_,entry)=>{transform=entry.transform;return()=>{};}},
+ }});
+ assert.equal(transform, transcribeWithDefault);
+ assert.equal(resource.view().form.fields[0].value, 'default');
+ (await resource.prepare('save', {mode:'default'})).execute();
+ for (const status of [429, 502, 503]) {
+  await assert.rejects(transcribeWithDefault({...audio(), mimeType:'audio/wav'}, async () =>
+   new Response('sensitive upstream detail', {status})), error =>
+   error.message.includes(status === 429 ? '使用限额' : '暂不可用') && !error.message.includes('sensitive'));
+ }
+ const cancelled = new AbortController();
+ cancelled.abort();
+ await assert.rejects(transcribeWithDefault(audio(cancelled.signal), async () => assert.fail('sent cancelled audio')), {name:'AbortError'});
+ await assert.rejects(transcribeWithDefault(audio(), async () => assert.fail('sent non-WAV audio')), /刷新远控网页/);
+});
+
+test('an older host offers self-configured transcription and hides the unsupported free microphone', async () => {
+ let resource, registered;
+ activate({signal:new AbortController().signal, services:{
+  secrets:{available:true, read:()=>null, write(){}},
+  interactions:{register:(_,value)=>resource=value},
+  composerInputs:{register:(_,entry)=>{registered=entry;return()=>{};}},
+ }});
+ assert.equal(registered, undefined);
+ assert.match(resource.view().note, /免费转写需要更新 asHub/);
+ (await resource.prepare('save', {...config, mode:'custom'})).execute();
+ assert.equal(registered.audioFormat, undefined);
+ await assert.rejects(resource.prepare('save', {mode:'default'}), /更新 asHub/);
+ assert.equal(resource.view().form.fields[0].value, 'custom');
 });

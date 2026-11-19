@@ -7,6 +7,7 @@ export interface ComposerInput {
     label: string;
     description: string;
     kind: 'audio';
+    audioFormat?: 'pcm-wav';
     maxBytes: number;
     maxDuration: number;
     transform(input: { data: Uint8Array; mimeType: string; sessionId: string; signal: AbortSignal }): Promise<string>;
@@ -23,12 +24,13 @@ export class ComposerInputs {
         signal.addEventListener('abort', () => { for (const j of this.jobs.values()) j.controller.abort(); this.jobs.clear(); this.entries.clear(); }, { once: true });
     }
     bind(plugin: string, owner: AbortSignal) {
-        return Object.freeze({ register: (key: string, input: ComposerInput) => {
+        return Object.freeze({ supportsPcmWav: true, register: (key: string, input: ComposerInput) => {
             this.signal.throwIfAborted(); owner.throwIfAborted();
             if (!/^[a-z][a-z0-9-]{0,79}$/.test(key) || input.kind !== 'audio' || typeof input.transform !== 'function'
                 || !input.label?.trim() || input.label.length > 80 || !input.description?.trim() || input.description.length > 300
                 || !Number.isInteger(input.maxBytes) || input.maxBytes < 1 || input.maxBytes > MAX_BYTES
-                || !Number.isInteger(input.maxDuration) || input.maxDuration < 1 || input.maxDuration > 60) throw fail('Invalid composer input');
+                || !Number.isInteger(input.maxDuration) || input.maxDuration < 1 || input.maxDuration > 60
+                || (input.audioFormat !== undefined && input.audioFormat !== 'pcm-wav')) throw fail('Invalid composer input');
             const id = createHash('sha256').update(plugin + '\0' + key).digest('hex').slice(0, 32);
             if (this.entries.has(id)) throw fail('Composer input already registered', 409);
             const entry: Entry = { id, revision: randomUUID(), input: { ...input }, controller: new AbortController() };
@@ -53,7 +55,7 @@ export class ComposerInputs {
             if (!match) throw fail('Invalid composer input route', 404);
             const sid = match[1]!; this.session(sid);
             if (!match[2] && req.method === 'GET') {
-                send(200, [...this.entries.values()].map(({ id, revision, input: { label, description, kind, maxBytes, maxDuration } }) => ({ id, revision, label, description, kind, maxBytes, maxDuration }))); return true;
+                send(200, [...this.entries.values()].map(({ id, revision, input: { label, description, kind, audioFormat, maxBytes, maxDuration } }) => ({ id, revision, label, description, kind, audioFormat, maxBytes, maxDuration }))); return true;
             }
             const id = match[2], requestId = match[3]; if (!id || !requestId) throw fail('Method not allowed', 405);
             const key = sid + ':' + id + ':' + requestId;

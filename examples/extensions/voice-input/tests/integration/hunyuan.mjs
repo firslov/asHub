@@ -1,4 +1,5 @@
 import activate from '../../app.mjs';
+import {wavBlob} from '../../../../../web/js/composer-pcm.js';
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import http from 'node:http';import {once} from 'node:events';import {randomUUID} from 'node:crypto';
 import {createGateway} from '../../../../../remote/server.mjs';import {ComposerInputs} from '../../../../../dist/extensions/composer-inputs.js';import {SharedConversations} from '../../../../../dist/extensions/shared-conversations.js';import {DevicePublisher} from '../../../../../examples/extensions/multi-machine/publisher.mjs';
 process.env.NODE_ENV='test';
@@ -6,8 +7,10 @@ test('TokenHub plugin through desktop HTTP and real remote gateway: formats, sco
  const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'ashub-voice-sharing-'))),controller=new AbortController();let transforms=0,finish;
  const media=new ComposerInputs(controller.signal,id=>{assert(['aaaa','bbbb'].includes(id));});
  const config={endpoint:'https://tokenhub.tencentmaas.com/v1/wand/asrproxy/sync_transcribe',model:'hy-asr-3.0-preview',apiKey:'fixture-key'},originalFetch=globalThis.fetch;
- let expectedKey=config.apiKey;
+ const managedData=Buffer.from(await wavBlob([new Int16Array([1, 2])], 2).arrayBuffer()).toString('base64');
+ let expectedKey=config.apiKey, managedRoute;
  globalThis.fetch=async(url,opts)=>{
+  if(String(url)==='https://ashub.aihao.world/mobile/voice/transcribe')return originalFetch(managedRoute,opts);
   if(String(url)!==config.endpoint)return originalFetch(url,opts);
   transforms++;assert.equal(opts.headers.Authorization,'Bearer '+expectedKey);assert.equal(opts.headers['Content-Type'],'application/json');assert.equal(opts.redirect,'error');
   assert.deepEqual(JSON.parse(opts.body),{model:config.model,data:Buffer.from('test audio').toString('base64')});
@@ -22,7 +25,19 @@ test('TokenHub plugin through desktop HTTP and real remote gateway: formats, sco
   res.writeHead(404);res.end('{}');
  });local.listen(0,'127.0.0.1');await once(local,'listening');
  const sharing=new SharedConversations(path.join(dir,'grants.json'));sharing.start(local.address().port);const grant=sharing.approve('devices',sharing.prepare('devices',{roots:[dir]}));const bound=sharing.bind('devices',controller.signal);
- const gateway=createGateway({database:path.join(dir,'db.sqlite'),publicUrl:'http://127.0.0.1/mobile/',testing:true});gateway.server.listen(0,'127.0.0.1');await once(gateway.server,'listening');const base='http://127.0.0.1:'+gateway.server.address().port+'/mobile/';
+ const gateway=createGateway({
+  database:path.join(dir,'db.sqlite'), publicUrl:'http://127.0.0.1/mobile/', testing:true,
+  voiceConfig:{...config,apiKey:'managed-fixture-key'},
+  voiceFetch:async(url,opts)=>{
+   assert.equal(url,config.endpoint);
+   assert.equal(opts.headers.Authorization,'Bearer managed-fixture-key');
+   assert.deepEqual(JSON.parse(opts.body),{model:config.model,data:managedData});
+   return Response.json({status:'completed',output:{text:'managed remote transcript'}});
+  },
+ });
+ gateway.server.listen(0,'127.0.0.1');await once(gateway.server,'listening');
+ const base='http://127.0.0.1:'+gateway.server.address().port+'/mobile/';
+ managedRoute=base+'voice/transcribe';
  let publisher;
  t.after(async()=>{controller.abort();publisher?.stopConnection();local.closeAllConnections();local.close();await gateway.close();fs.rmSync(dir,{force:true,recursive:true});});
  const request=async(route,body,cookie)=>{const r=await fetch(base+route,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Origin:'http://127.0.0.1',...(cookie?{Cookie:cookie}:{})},body:body?JSON.stringify(body):undefined});return{status:r.status,cookie:r.headers.get('set-cookie')?.split(';')[0],data:await r.json()};};
@@ -68,7 +83,14 @@ test('TokenHub plugin through desktop HTTP and real remote gateway: formats, sco
  // Clear while an old provider request is pending, rotate credentials, then
  // finish the old response while a new recording is awaiting its own result.
  const obsolete={...current,requestId:randomUUID()};assert.equal((await rpc({...obsolete,action:'start'})).data.state,'pending');const obsoleteFinish=finish;
- await (await settings.prepare('clear',{})).execute();assert.equal(saved,null);assert.deepEqual((await rpc({action:'list'})).data,[]);
+ await (await settings.prepare('clear',{})).execute();assert.equal(saved,null);
+ const [managed]=(await rpc({action:'list'})).data;
+ assert.match(managed.description,/asHub 网关及腾讯混元/);
+ assert.equal(managed.audioFormat, 'pcm-wav');
+ const managedRequest={...args,revision:managed.revision,requestId:randomUUID(),data:managedData,mimeType:'audio/wav'};
+ assert.equal((await rpc({...managedRequest,action:'start'})).data.state,'pending');
+ await wait(async()=>(await rpc({...managedRequest,action:'status'})).data.state==='done');
+ assert.equal((await rpc({...managedRequest,action:'status'})).data.text,'managed remote transcript');
  await assert.rejects(settings.prepare('save',{endpoint:config.endpoint,model:config.model}),/API Key/);
  expectedKey='rotated-fixture-key';await (await settings.prepare('save',{...config,apiKey:expectedKey})).execute();
  const [rotated]=(await rpc({action:'list'})).data;assert.notEqual(rotated.revision,updated.revision);

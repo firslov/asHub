@@ -21,6 +21,7 @@ const server=http.createServer((req,res)=>{res.setHeader('Cache-Control','no-sto
    }
    close(){return super.close().then(()=>{this.closedSuccessfully=true;});}
   };
+  globalThis.managed = false;
   globalThis.MediaRecorder=class{constructor(){throw Error('iPhone must bypass MP4 encoder');}};
   Object.defineProperty(navigator,'mediaDevices',{value:{getUserMedia:async()=>{
    permissionRequests++;
@@ -30,7 +31,7 @@ const server=http.createServer((req,res)=>{res.setHeader('Cache-Control','no-sto
   }}});
   form.onsubmit=e=>{e.preventDefault();sends++;};
   globalThis.controller=AsHubComposerMedia.mount({container:tools,input:query,form,owner:()=>session,enabled:()=>available,request:async(_,action,args)=>{
-   if(action==='list')return[{id:'a'.repeat(32),revision:inputRevision,kind:'audio',maxBytes:4194304,maxDuration:duration}];
+   if(action==='list')return[{id:'a'.repeat(32),revision:inputRevision,kind:'audio',maxBytes:4194304,maxDuration:duration,...(managed?{audioFormat:'pcm-wav'}:{})}];
    if(action==='start'){uploads.push(args);if(hold)return new Promise(r=>pending.push(r));return{state:'done',text:'语音结果'};}
    return{state:'cancelled'};
   }});
@@ -73,5 +74,12 @@ await page.waitForSelector('.composer-media:not([hidden])');
  await page.evaluate(async()=>{duration=60;await controller.refresh();});const noAudioCount=await page.evaluate(()=>uploads.length);
  await record();await idle();assert.match(await page.locator('.composer-media-status').textContent(),/未收到麦克风音频/);assert.equal(await page.evaluate(()=>uploads.length),noAudioCount);
  await page.waitForFunction(()=>captures.every(c=>c.closedSuccessfully)&&tracks.every(t=>t.readyState==='ended'));silentWorklet=false;
+ // The free descriptor must select PCM on desktop browsers with MediaRecorder.
+ await page.evaluate(async()=>{
+  Object.defineProperties(navigator, {userAgent:{value:'Desktop test'}, maxTouchPoints:{value:0}});
+  managed=true;inputRevision='managed-pcm';await controller.refresh();
+ });
+ await record();await page.waitForTimeout(350);await button.click();await idle();
+ assert.equal(await page.evaluate(()=>uploads.at(-1).mimeType),'audio/wav');
  assert.equal(await page.evaluate(()=>blockedResumes),0,'every fresh context must be unlocked in the record-button tap');assert.equal(await page.evaluate(()=>sends),0);assert.deepEqual(errors,[]);console.log('PASS '+engine+' iPhone PCM: 4.2s cold start, tap activation, no hold/extra enable step, actual AudioWorklet, 3-second 16k mono WAV, non-silent samples, duration, cancel/re-record/late results, session/pagehide/permission cleanup',wav);
 }finally{await browser.close();server.closeAllConnections();server.close();}})().catch(e=>{console.error(e);process.exitCode=1;server.close();});

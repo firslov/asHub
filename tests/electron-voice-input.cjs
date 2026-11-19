@@ -48,6 +48,15 @@ app.whenReady().then(async()=>{
   await wait("Array.from(document.querySelectorAll('.extension-resource-form')).some(f=>f.textContent.includes('API Key'))");
   assert(!await js("document.body.innerText.includes('fixture-key')"));
   await wait("Array.from(document.querySelectorAll('.extension-panel:not([hidden])')).some(f=>f.textContent.includes('API Key'))");
+  await js(`(() => {
+    const form=document.querySelector('.extension-panel:not([hidden]) .extension-resource-form');
+    const mode=form.querySelector('select'), key=form.querySelector('input[type=password]');
+    if (mode.value!=='custom' || key.closest('label').hidden) throw Error('Existing custom configuration not shown');
+    mode.value='default';mode.dispatchEvent(new Event('change',{bubbles:true}));
+    if (!key.closest('label').hidden || !key.disabled) throw Error('Free mode still shows the API key field');
+    mode.value='custom';mode.dispatchEvent(new Event('change',{bubbles:true}));
+    if (key.closest('label').hidden || key.disabled) throw Error('Could not switch back to the custom fields');
+  })()`);
   await js("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))");
   await new Promise(r=>setTimeout(r,250));
   const layout=await js("(()=>{const q=query.getBoundingClientRect(),b=document.querySelector('.composer-media-button').getBoundingClientRect(),p=document.querySelector('.extension-panel:not([hidden])').getBoundingClientRect();return {q:q.toJSON(),b:b.toJSON(),p:p.toJSON(),h:innerHeight,w:innerWidth}})()");

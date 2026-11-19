@@ -14,7 +14,7 @@
     const status = document.createElement('span'); status.className = 'composer-media-status'; status.setAttribute('role','status'); status.setAttribute('aria-live','polite');
     root.append(button,cancelButton); container.prepend(root); form.append(status);
     let descriptor, ticket = null, phase = 'idle', renderKey = '', revision = 0, composing = false, disposed = false, catalog = 0, knownOwner = owner();
-    const supports = () => !!((globalThis.MediaRecorder || pcmAvailable()) && navigator.mediaDevices?.getUserMedia && globalThis.isSecureContext);
+    const supports = () => !!((descriptor?.audioFormat === 'pcm-wav' ? pcmAvailable() : globalThis.MediaRecorder || pcmAvailable()) && navigator.mediaDevices?.getUserMedia && globalThis.isSecureContext);
     const current = t => !!t && ticket === t && !disposed && t.owner === owner() && !t.controller.signal.aborted;
     const label = message => { if (status.textContent !== message) status.textContent = message; };
     function render() {
@@ -117,7 +117,7 @@
       ticket=t; phase='permission'; label('等待麦克风授权…'); render();
       try {
         // Create/resume synchronously in the tap handler, before awaiting permission.
-        t.pcm=pcmAvailable() && (appleMobile() || !globalThis.MediaRecorder);
+        t.pcm=pcmAvailable() && (t.input.audioFormat === 'pcm-wav' || appleMobile() || !globalThis.MediaRecorder);
         if(t.pcm){t.audioContext=new (globalThis.AudioContext || globalThis.webkitAudioContext)();t.audioReady=t.audioContext.resume();t.audioReady.catch(()=>{});}
         const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});
         t.stream=stream;

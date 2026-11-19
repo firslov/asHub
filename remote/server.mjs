@@ -13,6 +13,10 @@ const token = () => randomBytes(32).toString('base64url');
 const derive = promisify(scrypt);
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const LIMIT = 6 * 1024 * 1024;
+const STREAM_LIMIT = 8;
+const STREAM_LEASE_MS = 60_000;
+const LEGACY_STREAM_MS = 5 * 60_000;
+const STREAM_HEARTBEAT_MS = 15_000;
 export function createGateway({ database, publicUrl, publicDir = path.join(here, 'public'), testing = false, voiceConfig, voiceFetch }) {
   const base = new URL(publicUrl), prefix = base.pathname.replace(/\/$/, '');
   if (!testing && base.protocol !== 'https:') throw Error('HTTPS public URL required');
@@ -85,14 +89,19 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
     streams.delete(id); clearInterval(s.timer); s.res.end();
     try { send(s.ws, { type: 'unsubscribe', id }); } catch {}
   }
+  function pruneStreams(now = Date.now()) {
+    for (const [id, stream] of streams) {
+      if (stream.deadline <= now || stream.res.destroyed || stream.res.writableEnded || stream.ws.readyState !== 1) closeStream(id);
+    }
+  }
   function offline(ws) {
     if (devices.get(ws.device)?.ws === ws) devices.delete(ws.device);
     for (const [id, p] of pending) if (p.ws === ws) { clearTimeout(p.timer); pending.delete(id); p.reject(fail(503, '电脑离线，请重新连接后查看发送状态')); }
     for (const [id, s] of streams) if (s.ws === ws) closeStream(id);
   }
-  function revokeDevice(id) {
+  function disconnectDevice(id, code = 4001, reason = 'revoked') {
     const ws = devices.get(id)?.ws;
-    if (ws) { ws.close(4001, 'revoked'); offline(ws); }
+    if (ws) { ws.close(code, reason); offline(ws); }
   }
   async function rpc(device, op, args) {
     const ws = devices.get(device)?.ws;
@@ -152,7 +161,7 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
           const updated = db.prepare('UPDATE users SET password=?, recovery=? WHERE id=? AND recovery=?').run(encoded, hash(recovery), user.id, hash(String(b.recovery || '')));
           if (updated.changes !== 1) throw fail(401, '恢复码已使用');
           db.prepare('DELETE FROM logins WHERE user=?').run(user.id);
-          for (const d of db.prepare('SELECT id FROM devices WHERE user=?').all(user.id)) revokeDevice(d.id);
+          for (const d of db.prepare('SELECT id FROM devices WHERE user=?').all(user.id)) disconnectDevice(d.id);
           db.prepare('DELETE FROM devices WHERE user=?').run(user.id);
           return json(res, 200, { recovery });
         }
@@ -200,7 +209,7 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
         const match = route.match(/^\/api\/devices\/([A-Za-z0-9_-]{43})(?:\/(rpc|events|artifact|image-resource))?$/);
         if (!match) throw fail(404, 'Not found');
         const id = match[1]; owns(l.user, id);
-        if (!match[2] && method === 'DELETE') { db.prepare('DELETE FROM devices WHERE id=?').run(id); revokeDevice(id); return json(res, 200, { ok: true }); }
+        if (!match[2] && method === 'DELETE') { db.prepare('DELETE FROM devices WHERE id=?').run(id); disconnectDevice(id); return json(res, 200, { ok: true }); }
         if (match[2] === 'rpc' && method === 'POST') {
           const b = await read(req);
           // Reading the body can outlive logout, expiry, or device revocation.
@@ -251,22 +260,48 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
           } catch (e) { if (res.headersSent) { res.destroy(); return; } throw e; }
           finally { const n = (downloads.get(l.user) || 1) - 1; if (n) downloads.set(l.user, n); else downloads.delete(l.user); }
         }
-        if (match[2] === 'events' && method === 'GET') {
+        if (match[2] === 'events' && (method === 'GET' || method === 'POST')) {
           const session = u.searchParams.get('session');
           if (!/^[0-9a-f]{4,32}$/.test(session || '')) throw fail(400, '会话无效');
+          const viewer = u.searchParams.get('viewer'), revision = u.searchParams.get('attempt');
+          const leased = viewer !== null || revision !== null || method === 'POST';
+          if (leased && (!/^[A-Za-z0-9_-]{36}$/.test(viewer || '') || !/^[1-9]\d{0,14}$/.test(revision || ''))) throw fail(400, '订阅标识无效');
+          const attempt = Number(revision), now = Date.now();
+          pruneStreams(now);
+          // A reader belongs to this login and window, including when it changes devices.
+          const previous = leased && [...streams].find(([, s]) => s.login === l.token && s.viewer === viewer);
+          if (method === 'POST') {
+            const s = previous && previous[1];
+            if (!s || s.attempt !== attempt || s.session !== session || s.ws.device !== id) throw fail(404, '订阅已失效');
+            s.deadline = now + STREAM_LEASE_MS;
+            return json(res, 200, { ok: true });
+          }
           const ws = devices.get(id)?.ws;
-          if (!ws) throw fail(503, '电脑离线');
-          if ([...streams.values()].filter(s => s.user === l.user).length >= 8) throw fail(429, '打开的对话过多');
+          if (!ws || ws.readyState !== 1) throw fail(503, '电脑离线');
+          if (previous) {
+            if (previous[1].attempt > attempt) throw fail(409, '订阅已更新');
+            closeStream(previous[0]);
+          }
+          if ([...streams.values()].filter(s => s.user === l.user).length >= STREAM_LIMIT) {
+            if (!leased) throw fail(429, '打开的对话过多');
+            // EventSource hides HTTP failure status from the browser. Send a
+            // terminal event without consuming a subscription slot.
+            res.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Accel-Buffering': 'no' });
+            res.end('data: {"meta":{"name":"hub:stream-limit"}}\n\n');
+            return;
+          }
           const sid = token();
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Accel-Buffering': 'no' });
           res.write('event: reset\ndata: {}\n\n');
           const timer = setInterval(() => {
-            if (l.expires <= Date.now() || !db.prepare('SELECT 1 FROM logins WHERE token=?').get(l.token)) { closeStream(sid); return; }
+            if (streams.get(sid)?.deadline <= Date.now() || l.expires <= Date.now() || !db.prepare('SELECT 1 FROM logins WHERE token=?').get(l.token)) { closeStream(sid); return; }
             res.write(': heartbeat\n\n');
-          }, 15000);
-          streams.set(sid, { ws, res, timer, login: l.token, user: l.user });
-          res.on('close', () => closeStream(sid));
-          send(ws, { type: 'subscribe', id: sid, session, history: u.searchParams.get('history') === 'recent' ? 'recent' : 'all' }); return;
+          }, STREAM_HEARTBEAT_MS);
+          streams.set(sid, { ws, res, timer, login: l.token, user: l.user, viewer, attempt, session, deadline: now + (leased ? STREAM_LEASE_MS : LEGACY_STREAM_MS) });
+          res.once('close', () => closeStream(sid));
+          try { send(ws, { type: 'subscribe', id: sid, session, history: u.searchParams.get('history') === 'recent' ? 'recent' : 'all' }); }
+          catch { closeStream(sid); }
+          return;
         }
         throw fail(405, 'Method not allowed');
       }
@@ -309,7 +344,9 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
           if (m.type !== 'hello' || m.protocol !== 1 || typeof m.token !== 'string') return ws.close(4001, 'invalid credentials');
           const d = db.prepare('SELECT id FROM devices WHERE id=? AND token=?').get(m.deviceId, hash(m.token));
           if (!d) return ws.close(4001, 'revoked');
-          clearTimeout(authTimer); revokeDevice(d.id);
+          clearTimeout(authTimer);
+          if (m.replace !== true && devices.get(d.id)?.ws.readyState === 1) return ws.close(4002, 'replaced');
+          disconnectDevice(d.id, 4002, 'replaced');
           ws.device = d.id; devices.set(d.id, { ws });
           db.prepare('UPDATE devices SET seen=? WHERE id=?').run(Date.now(), d.id);
           send(ws, { type: 'ready', protocol: 1 }); return;
@@ -323,11 +360,12 @@ export function createGateway({ database, publicUrl, publicDir = path.join(here,
           const s = streams.get(m.id); if (!s || s.ws !== ws) return;
           if (typeof m.data !== 'string' || m.data.length > 256 * 1024 || s.res.writableLength > LIMIT) return closeStream(m.id);
           s.res.write(m.data);
-        } else if (m.type === 'end') closeStream(m.id);
+        } else if (m.type === 'end' && streams.get(m.id)?.ws === ws) closeStream(m.id);
       } catch { ws.close(1008, 'invalid message'); }
     });
   });
   const heartbeat = setInterval(() => {
+    pruneStreams();
     for (const ws of wss.clients) {
       if (!ws.alive) { ws.terminate(); continue; } ws.alive = false; ws.ping();
       if (ws.device) db.prepare('UPDATE devices SET seen=? WHERE id=?').run(Date.now(), ws.device);

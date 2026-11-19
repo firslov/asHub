@@ -9,6 +9,8 @@ const backend = new URL(location.href).searchParams.get('connection');
 if (!/^[a-f0-9]{32}$/.test(backend || ''))
     throw Error('Invalid backend workspace');
 const base = '/api/backends/' + backend, presentation = globalThis.AsHubConversationPresentation;
+const streamViewer = crypto.randomUUID();
+let streamAttempt = 0;
 const stored = { get: key => { try {
         return localStorage.getItem('ash.backend.' + backend + '.' + key);
     }
@@ -29,13 +31,14 @@ const hidden = () => document.hidden || suspended;
 const text = (id, value) => { if ($(id).textContent !== value) $(id).textContent = value; };
 function syncStatus() {
     const expired = syncWait && syncWait.g === generation && syncWait.sid === session && Date.now() - syncWait.started >= SYNC_WAIT_MS;
-    text('connection', syncPhase === 'ready' ? '已同步 · 在远程电脑执行' : syncPhase === 'syncing' ? '正在同步对话…' : syncPhase === 'reconnecting' ? '连接中断，正在恢复…' : syncPhase === 'invalid' ? '授权已失效' : syncPhase === 'offline' ? '执行设备离线' : syncPhase === 'unknown' ? '设备状态待确认' : syncPhase === 'paused' ? '连接已暂停' : '选择一个对话');
+    text('connection', syncPhase === 'ready' ? '已同步 · 在远程电脑执行' : syncPhase === 'syncing' ? '正在同步对话…' : syncPhase === 'reconnecting' ? '连接中断，正在恢复…' : syncPhase === 'invalid' ? '授权已失效' : syncPhase === 'offline' ? '执行设备离线' : syncPhase === 'unknown' ? '设备状态待确认' : syncPhase === 'limited' ? '打开的远控对话过多' : syncPhase === 'paused' ? '连接已暂停' : '选择一个对话');
     const help = syncPhase === 'invalid' ? '请返回设备列表重新登录或确认授权。草稿与发送回执已保留。'
         : syncPhase === 'offline' ? '请在执行设备上启动 asHub 并保持联网，恢复后将自动同步。'
         : syncPhase === 'unknown' ? '暂时无法确认设备状态，正在重试。草稿与发送回执已保留。'
+        : syncPhase === 'limited' ? '请关闭一个不用的远控对话窗口，然后重新同步。草稿与发送回执已保留。'
         : expired && !ready && !hidden() ? '同步用时较长，可以重新同步。草稿和待确认发送将保留，不会自动重发。' : '';
     text('sync-help', help); $('sync-status').hidden = !help;
-    $('sync-retry').hidden = !session || !expired || hidden() || !['syncing','reconnecting','unknown'].includes(syncPhase);
+    $('sync-retry').hidden = !session || hidden() || (syncPhase !== 'limited' && (!expired || !['syncing','reconnecting','unknown'].includes(syncPhase)));
 }
 function watchSync() {
     ready = false;
@@ -48,7 +51,7 @@ function stopWatch() { clearTimeout(syncTimer); syncTimer = null; syncWait = nul
 function retryConnection() {
     clearTimeout(retry);
     const g = generation;
-    if (session && !hidden() && !invalidated) retry = setTimeout(() => { if (g === generation && !hidden()) void refresh(); }, 2000);
+    if (session && !hidden() && !invalidated && syncPhase !== 'limited') retry = setTimeout(() => { if (g === generation && !hidden()) void refresh(); }, 2000);
 }
 let frameQueue = [], frameTimer = null;
 function notice(text = '') { $('notice').textContent = text; $('notice').hidden = !text; }
@@ -111,7 +114,7 @@ $('search').oninput = renderSessions;
 async function refresh() {
     const version = ++catalogVersion, owner = generation, connection = source;
     const current = () => version === catalogVersion && owner === generation && connection === source;
-    if (session && !source && !hidden() && !invalidated && syncPhase !== 'offline') {
+    if (session && !source && !hidden() && !invalidated && !['offline','limited'].includes(syncPhase)) {
         if (syncPhase !== 'unknown') syncPhase = 'reconnecting';
         watchSync();
     }
@@ -148,7 +151,7 @@ async function refresh() {
             if (last && sessions.some(s => s.instanceId === last))
                 openSession(last);
         }
-        else if (!source && !hidden())
+        else if (!source && !hidden() && syncPhase !== 'limited')
             connect();
         if (caps.projects) {
             try {
@@ -230,11 +233,15 @@ function connect() {
     const g = generation, sid = session;
     clearMessages();
     syncPhase = 'syncing'; watchSync();
-    const stream = new EventSource(base + '/events?session=' + encodeURIComponent(sid));
+    const stream = new EventSource(base + '/events?session=' + encodeURIComponent(sid) + '&viewer=' + streamViewer + '&attempt=' + ++streamAttempt);
     source = stream;
     stream.onmessage = event => { if (source !== stream || generation !== g)
         return; try {
-        frameQueue.push(JSON.parse(event.data));
+        const frame = JSON.parse(event.data);
+        if (frame.meta?.name === 'hub:stream-limit') {
+            disconnect(); syncPhase = 'limited'; syncStatus(); return;
+        }
+        frameQueue.push(frame);
         if (frameTimer === null)
             frameTimer = setTimeout(drain, 0);
     }

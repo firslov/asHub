@@ -1,7 +1,7 @@
 import { DeviceSharing } from './sharing.mjs';
 import { RemoteAccount } from './client.mjs';
 const action = (id, label, values = {}) => ({ id, label, values });
-const stateLabels = { online: '在线', revoked: '授权已撤销，请重新验证', error: '连接异常', connecting: '连接中' };
+const stateLabels = { online: '在线', revoked: '授权已撤销，请重新验证', replaced: '连接已被接替', error: '连接异常', connecting: '连接中' };
 const rootsOf = value => [...new Set(String(value || '').split('\n').map(x => x.trim()).filter(Boolean))];
 const impact = '新增目录中的对话将对手机和其他电脑可见；移除目录后，仅不再被任何已授权目录（含其子目录）覆盖的对话会隐藏。不会删除本地对话，也不会改变工具权限。保存后远程连接会短暂重连。';
 

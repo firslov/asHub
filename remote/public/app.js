@@ -7,6 +7,8 @@ let user = '', device = '', session = '', devices = [], sessions = [], source, g
 let deviceListReady = false, sessionListDevice = '';
 // Device reachability and completion of this subscription's replay are distinct.
 const SYNC_WAIT_MS = 12000;
+const streamViewer = crypto.randomUUID();
+let streamAttempt = 0, streamRenewal;
 let syncPhase = 'idle', syncWait = null, syncTimer = null, reconnectTimer = null, reconnectAttempt = 0, pageSuspended = false;
 const viewHidden = () => document.hidden || pageSuspended;
 const onlineDevice = () => devices.some(d => d.id === device && d.online);
@@ -19,19 +21,21 @@ function renderConnectionStatus() {
   const d = devices.find(d => d.id === device);
   const waiting = !streamReady && ownsSyncWait(syncWait) && !viewHidden() && !!d?.online && !!session;
   const overdue = waiting && Date.now() - syncWait.started >= SYNC_WAIT_MS;
+  const limited = !!d?.online && !!session && syncPhase === 'limited';
   let title = '', hint = '';
   if (!d) { title = '尚未绑定电脑'; hint = '在桌面端打开「设备互联 → 允许其他设备访问本机」，登录同一账号并确认共享目录。'; }
   else if (!d.online) { title = '电脑离线'; hint = '请保持电脑联网、asHub 运行，并在「设备互联 → 允许其他设备访问本机」开启共享。草稿已保留。'; }
   else if (!session) title = '电脑在线 · 请选择对话';
   else if (viewHidden() || syncPhase === 'paused') { title = '连接已暂停，等待重新同步'; hint = '返回页面后自动同步；草稿已保留。'; }
   else if (streamReady) title = '已同步 · 在电脑上执行';
+  else if (limited) { title = '打开的远控对话过多'; hint = '请关闭一个不用的远控对话窗口，然后重新同步。草稿与发送回执已保留。'; }
   else if (syncPhase === 'reconnecting') { title = '连接中断，正在自动重连…'; hint = overdue ? '仍未完成同步。可检查手机网络，或重新同步此对话；不会重发消息。' : '请检查手机网络，连接恢复后会自动同步。草稿已保留。'; }
   else { title = '正在同步对话…'; hint = overdue ? '同步用时较长，可重新同步此对话；草稿和待确认的发送状态会保留。' : '电脑在线，正在读取当前对话，请稍候。'; }
   if ($('connection').textContent !== title) $('connection').textContent = title;
   $('connection').dataset.state = !d ? 'unbound' : !d.online ? 'offline' : !session ? 'idle' : viewHidden() || syncPhase === 'paused' ? 'paused' : streamReady ? 'ready' : syncPhase;
   if ($('sync-help') && $('sync-help').textContent !== hint) $('sync-help').textContent = hint;
   if ($('sync-status')) $('sync-status').hidden = !session || !hint || viewHidden();
-  if ($('sync-retry')) { $('sync-retry').hidden = !overdue; $('sync-retry').disabled = !overdue; }
+  if ($('sync-retry')) { $('sync-retry').hidden = !overdue && !limited; $('sync-retry').disabled = !overdue && !limited; }
 }
 function beginSync(phase, preserve = false) {
   const previous = preserve && ownsSyncWait(syncWait) ? syncWait : null;
@@ -172,6 +176,7 @@ $('login-form').onsubmit = async e => {
   } catch (e) { $('auth-error').textContent = e.message; } finally { authSubmitting = false; for (const id of ['auth-submit', 'auth-mode', 'recover-mode']) $(id).disabled = false; }
 };
 function closeSource({retainWait = false} = {}) {
+  clearInterval(streamRenewal); streamRenewal = null;
   clearSyncTimers(); if (!retainWait) { syncWait = null; reconnectAttempt = 0; }
   syncPhase = 'paused';
   clearFrameQueue(); source?.close(); source = null; streamReady = false; streamPaused = true;
@@ -1553,21 +1558,42 @@ function frame(data) {
   refreshProgress(name?.startsWith('permission:')); scroll(near);
 }
 function resumeStream() {
+  if (syncPhase === 'limited') return;
   connectStream({preserveWait: true, reconnecting: syncPhase === 'reconnecting'});
 }
 function connectStream({preserveWait = false, reconnecting = false} = {}) {
   closeSource({retainWait: preserveWait});
   if (!session || viewHidden() || !onlineDevice()) return;
   const g = generation, did = device, sid = session;
-  const s = new EventSource(new URL(`api/devices/${encodeURIComponent(did)}/events?session=${encodeURIComponent(sid)}&history=${fullHistory ? 'all' : 'recent'}`, base)); source = s;
+  const url = new URL(`api/devices/${encodeURIComponent(did)}/events?session=${encodeURIComponent(sid)}&history=${fullHistory ? 'all' : 'recent'}&viewer=${streamViewer}&attempt=${++streamAttempt}`, base);
+  const s = new EventSource(url); source = s;
   const current = () => g === generation && device === did && session === sid && source === s && !viewHidden();
   beginSync(reconnecting ? 'reconnecting' : 'syncing', preserveWait);
-  s.onopen = () => { if (current() && !streamReady) beginSync('syncing', true); };
+  s.onopen = () => {
+    if (!current()) return;
+    if (!streamReady) beginSync('syncing', true);
+    clearInterval(streamRenewal);
+    streamRenewal = setInterval(() => {
+      if (!current()) return;
+      void fetch(url, {method:'POST', cache:'no-store', signal:AbortSignal.timeout(8000)}).then(async response => {
+        await response.body?.cancel();
+        if (current() && response.status === 405) { clearInterval(streamRenewal); streamRenewal = null; }
+      }).catch(() => {});
+    }, 15000);
+  };
   s.addEventListener('reset', () => {
     if (!current()) return;
     clearFrameQueue(); beginSync('syncing', !streamReady); resetMessages();
   });
-  s.onmessage = e => { if (!current()) return; try { enqueueFrame(JSON.parse(e.data)); } catch { notice('部分内容暂时无法显示，请刷新对话'); } };
+  s.onmessage = e => {
+    if (!current()) return;
+    try {
+      const frame = JSON.parse(e.data);
+      if (frame.meta?.name === 'hub:stream-limit') {
+        closeSource(); syncPhase = 'limited'; renderConnectionStatus();
+      } else enqueueFrame(frame);
+    } catch { notice('部分内容暂时无法显示，请刷新对话'); }
+  };
   s.onerror = () => {
     if (!current()) return;
     closeSource({retainWait: true}); beginSync('reconnecting', true);
@@ -1579,7 +1605,7 @@ function connectStream({preserveWait = false, reconnecting = false} = {}) {
   };
 }
 if ($('sync-retry')) $('sync-retry').onclick = () => {
-  if (!ownsSyncWait(syncWait) || streamReady || viewHidden() || !onlineDevice() || Date.now() - syncWait.started < SYNC_WAIT_MS) return;
+  if (streamReady || viewHidden() || !onlineDevice() || (syncPhase !== 'limited' && (!ownsSyncWait(syncWait) || Date.now() - syncWait.started < SYNC_WAIT_MS))) return;
   // Do not call openSession: it resets history range and pending-send state.
   // Only replace the subscription; the current send receipt keeps its owner.
   saveDraft(); connectStream();
@@ -1825,7 +1851,7 @@ $('account').onclick = async () => {
 function resumeRemoteView() {
   if (!user || viewHidden()) return;
   const epoch = authGeneration, g = generation;
-  if (session && !source && onlineDevice()) {
+  if (session && !source && onlineDevice() && syncPhase !== 'limited') {
     if (!ownsSyncWait(syncWait)) beginSync('reconnecting');
     else { syncPhase = 'reconnecting'; renderConnectionStatus(); }
   }

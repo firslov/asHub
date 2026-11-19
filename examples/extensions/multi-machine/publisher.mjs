@@ -19,6 +19,7 @@ export class DevicePublisher {
     connectionDeadline;
     generation = 0;
     attempts = 0;
+    waitingForDevice = false;
     streams = new Map();
     entries = {};
     resourceViews = new Map();
@@ -98,6 +99,7 @@ export class DevicePublisher {
     }
     stopConnection() {
         this.stopped = true;
+        this.waitingForDevice = false;
         this.generation++;
         this.resourceViews.clear();
         clearTimeout(this.timer);
@@ -229,16 +231,17 @@ export class DevicePublisher {
             return;
         const epoch = this.generation, url = new URL('connect', this.gateway);
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-        this.statusText = 'connecting';
+        if (!this.waitingForDevice) this.statusText = 'connecting';
         const ws = remoteTransport.socket(url);
         this.socket = ws;
+        const current = () => epoch === this.generation && this.socket === ws && !this.stopped;
         const deadline = this.connectionDeadline = setTimeout(() => ws.close(), 15000);
-        ws.onopen = () => { if (epoch === this.generation && !this.stopped)
-            this.send(ws, { type: 'hello', protocol: 1, deviceId: this.config?.deviceId, token: this.config?.deviceToken }); };
-        ws.onerror = () => { if (epoch === this.generation && !this.stopped)
+        ws.onopen = () => { if (current())
+            this.send(ws, { type: 'hello', protocol: 1, deviceId: this.config?.deviceId, token: this.config?.deviceToken, replace: !this.waitingForDevice }); };
+        ws.onerror = () => { if (current() && !this.waitingForDevice)
             this.lastError = '连接中断，正在自动重连'; };
         ws.onmessage = event => {
-            if (epoch !== this.generation)
+            if (!current())
                 return;
             try {
                 if (typeof event.data !== 'string' || event.data.length > LIMIT)
@@ -246,6 +249,7 @@ export class DevicePublisher {
                 const m = JSON.parse(event.data);
                 if (m.type === 'ready' && m.protocol === 1) {
                     clearTimeout(deadline);
+                    this.waitingForDevice = false;
                     this.statusText = 'online';
                     this.lastError = '';
                     this.attempts = 0;
@@ -266,8 +270,9 @@ export class DevicePublisher {
         };
         ws.onclose = e => {
             clearTimeout(deadline);
-            if (epoch !== this.generation || this.stopped)
+            if (!current())
                 return;
+            this.socket = null;
             for (const c of this.streams.values())
                 c.abort();
             this.streams.clear();
@@ -278,7 +283,11 @@ export class DevicePublisher {
                 this.lastError = '设备授权已撤销，请重新绑定';
                 return;
             }
-            this.statusText = 'connecting';
+            if (e.code === 4002) {
+                this.waitingForDevice = true;
+                this.lastError = '同一设备的另一条连接已接替，空闲后自动恢复';
+            }
+            this.statusText = this.waitingForDevice ? 'replaced' : 'connecting';
             this.timer = setTimeout(() => this.connect(), Math.min(30000, 1000 * 2 ** Math.min(this.attempts++, 5)) + Math.random() * 1000);
         };
     }

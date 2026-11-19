@@ -61,6 +61,15 @@ A persistent local journal prevents duplicate submit/create effects after retrie
 A crash with an outstanding operation returns `unknown` and never retries it
 automatically. Stream reconnects request a fresh local replay. Protocol version: 1.
 
+Remote conversations renew their subscription every 15 seconds. A subscription
+without renewal expires after 60 seconds, and reconnecting in the same window
+replaces its previous subscription. Older clients can still subscribe for up to
+five minutes per connection and then reconnect. If all eight subscriptions are
+in use, updated clients show the limit and let the user resync after closing a
+window. A replacement WebSocket uses close code 4002. The displaced desktop can
+reconnect when the device has no active connection. Revocation still uses 4001
+and requires reauthorization.
+
 ## Development and tests
 
 Desktop: Node 22 as pinned by the repository. Gateway: Node >=22.13 with node:sqlite

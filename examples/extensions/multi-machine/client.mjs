@@ -1,4 +1,5 @@
 import { Agent, fetch as nodeFetch } from 'undici';
+import { randomUUID } from 'node:crypto';
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 const sid = v => typeof v === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(v);
 /** Protocol/account policy belongs to this plugin, not the application host. */
@@ -154,7 +155,7 @@ export class RemoteAccount {
                         status: () => !record.confirmed ? 'unknown' : record.device.online ? 'online' : 'offline',
                         managementResource: 'connections',
                         request: (op, args, signal) => owner.call(`api/devices/${d.id}/rpc`, { op, args }, signal),
-                        subscribe: (session, emit, signal) => owner.subscribe(d.id, session, emit, signal), resource: (args, signal) => owner.resource(d.id, args, signal) };
+                        subscribe: (session, emit, signal, viewer) => owner.subscribe(d.id, session, emit, signal, viewer), resource: (args, signal) => owner.resource(d.id, args, signal) };
                     record.registration = this.backends.register(d.id, adapter);
                     this.records.set(d.id, record);
                 }
@@ -180,25 +181,46 @@ export class RemoteAccount {
                 this.refreshing = null;
         }
     }
-    async subscribe(device, session, emit, signal) {
+    async subscribe(device, session, emit, signal, viewer = {id: randomUUID(), attempt: '1'}) {
         if (!sid(session))
             throw fail('会话无效');
         const epoch = this.epoch;
         this.current(epoch);
         // A stream is long-lived; the request timeout only bounds establishment.
         const establishment = new AbortController(), timer = setTimeout(() => establishment.abort(), 30000);
+        const expired = new AbortController();
+        const active = AbortSignal.any([signal, this.signal, this.controller.signal, expired.signal]);
+        const query = new URLSearchParams({session, history:'recent', viewer:viewer.id, attempt:viewer.attempt});
+        const route = `api/devices/${device}/events?${query}`;
         let response;
         try {
-            response = await this.fetch(new URL(`api/devices/${device}/events?session=${encodeURIComponent(session)}&history=recent`, this.gateway), { headers: { Cookie: this.cookie }, redirect: 'error', signal: AbortSignal.any([signal, this.signal, this.controller.signal, establishment.signal]) });
+            response = await this.fetch(new URL(route, this.gateway), { headers: { Cookie: this.cookie }, redirect: 'error', signal: AbortSignal.any([active, establishment.signal]) });
         }
         finally {
             clearTimeout(timer);
         }
         this.current(epoch);
         if (response.status === 401) this.expire();
+        if (response.status === 429) {
+            await response.body?.cancel();
+            this.current(epoch);
+            if (!active.aborted) emit({meta:{name:'hub:stream-limit'}});
+            return;
+        }
         if (!response.ok || !response.body)
             throw fail('对话连接失败', response.status);
         const reader = response.body.getReader(), decoder = new TextDecoder();
+        let renewing = false;
+        const renewal = setInterval(async () => {
+            if (active.aborted || renewing) return;
+            renewing = true;
+            try { await this.call(route, {}, active); }
+            catch (error) {
+                if (error.status === 405) clearInterval(renewal); // Older relay.
+                if (error.status === 404) expired.abort();
+            } finally { renewing = false; }
+        }, 15000);
+        renewal.unref?.();
         let buffer = '';
         try {
             while (true) {
@@ -224,6 +246,8 @@ export class RemoteAccount {
             }
         }
         finally {
+            clearInterval(renewal);
+            expired.abort();
             await reader.cancel().catch(() => { });
         }
     }

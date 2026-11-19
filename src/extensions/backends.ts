@@ -4,13 +4,14 @@ export interface PluginSecretStore {
     read(key: string): string | null;
     write(key: string, value: string | null): void;
 }
+type StreamViewer = { id: string; attempt: string };
 export interface BackendAdapter {
     label: string;
     online(): boolean;
     status?(): 'online' | 'offline' | 'unknown';
     managementResource?: string;
     request(operation: string, args: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
-    subscribe(session: string, emit: (event: unknown) => void, signal: AbortSignal): Promise<void>;
+    subscribe(session: string, emit: (event: unknown) => void, signal: AbortSignal, viewer?: StreamViewer): Promise<void>;
     resource?(args: Record<string, string>, signal: AbortSignal): Promise<{
         data: Uint8Array;
         type: string;
@@ -137,6 +138,9 @@ export class BackendConnections {
                 const session = url.searchParams.get('session');
                 if (!identifier(session))
                     throw fail('Invalid conversation');
+                const viewerId = url.searchParams.get('viewer'), attempt = url.searchParams.get('attempt');
+                const viewer = viewerId && attempt && /^[A-Za-z0-9_-]{36}$/.test(viewerId) && /^[1-9]\d{0,14}$/.test(attempt)
+                    ? { id: viewerId, attempt } : undefined;
                 res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
                 res.write(': connected\n\n');
                 const timer = setInterval(() => { if (!res.destroyed)
@@ -150,7 +154,7 @@ export class BackendConnections {
                         const text = JSON.stringify(event); if (text.length > 6 * 1024 * 1024 || res.writableLength > 8 * 1024 * 1024) {
                         cancel!.abort();
                         return;
-                    } res.write('data: ' + text + '\n\n'); }, cancel.signal);
+                    } res.write('data: ' + text + '\n\n'); }, cancel.signal, viewer);
                 }
                 finally {
                     clearInterval(timer);

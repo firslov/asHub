@@ -2434,6 +2434,34 @@ test('automatic reconnect is independent of device polling and does not reset th
   r.advance(1000);r.timer('syncTimer');assert.equal(r.$('sync-retry').hidden,false);r.streams[1].onerror();assert.equal(r.$('sync-retry').hidden,false,'another connection error cannot hide overdue retry');
   r.$('sync-retry').onclick();assert.equal(r.run('reconnectTimer'),null);assert.equal(r.streams.length,3);assert.equal(r.$('sync-retry').hidden,true);
 });
+test('a full subscription quota pauses automatic reconnect until explicit resync', async () => {
+  const r=syncFixture(), sent=[];
+  r.fetch(async (url, options) => { sent.push({url:String(url),method:options.method}); return ok({}); });
+  const old=r.streams[0], initial=new URL(old.url);
+  r.$('query').value='保留草稿';
+  r.run("storage.set(key('pending'),'pending-send')");
+  old.onopen();
+  const lease=r.run('streamRenewal');
+  r.intervals.get(lease)();
+  await Promise.resolve();
+  assert.deepEqual(sent,[{url:old.url,method:'POST'}]);
+  r.emit('hub:stream-limit',{},old);
+  old.onerror();
+  r.run('resumeStream()');
+  assert.equal(r.streams.length,1);
+  assert.equal(r.run('reconnectTimer'),null);
+  assert.equal(r.intervals.has(lease),false);
+  assert.match(r.$('connection').textContent,/远控对话过多/);
+  assert.equal(r.$('sync-retry').hidden,false);
+  r.$('sync-retry').onclick();
+  const next=new URL(r.streams[1].url);
+  assert.equal(next.searchParams.get('viewer'),initial.searchParams.get('viewer'));
+  assert.equal(Number(next.searchParams.get('attempt')),Number(initial.searchParams.get('attempt'))+1);
+  r.emit('hub:replay-done');
+  assert.equal(r.run('streamReady'),true);
+  assert.equal(r.$('query').value,'保留草稿');
+  assert.equal(r.run("storage.get(key('pending'))"),'pending-send');
+});
 for(const change of ['session','device','signout','offline','background','pagehide'])test(`${change} invalidates retry timers, old stream callbacks and scheduled reconnect`,async()=>{
   const r=syncFixture();r.$('query').value='preserved';r.run("images=[{name:'draft.png',data:'AAAA',mimeType:'image/png'}]");
   r.advance(12000);r.timer('syncTimer');r.streams[0].onerror();const reconnect=r.timers.get(r.run('reconnectTimer')),old=r.streams[0];

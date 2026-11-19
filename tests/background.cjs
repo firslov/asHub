@@ -179,6 +179,8 @@ test('tray starts after the local Hub listens, including when the fallback windo
     app.whenReady = () => ({ then: fn => fn() });
     const context = {
       app, server, process: { platform: 'darwin' }, isDev: true,
+      require: id => { assert.equal(id,'./media-permissions.cjs'); return require('../electron/media-permissions.cjs'); },
+      HUB_PORT: 7878, systemPreferences: {}, electronSession: {defaultSession: {setPermissionRequestHandler() {},setPermissionCheckHandler() {}}},
       Menu: { buildFromTemplate: () => [], setApplicationMenu() {} },
       Tray: {}, nativeImage: {}, dialog: {}, powerSaveBlocker: {},
       BrowserWindow: { getAllWindows: () => [] },

@@ -1,3 +1,4 @@
+import './composer-media.js';
 import { loadThinking, saveThinking, thinkingChoices, thinkingLabel } from "./thinking-control.js";
 import { currentSessionId, state, queryHistory } from "./state.js";
 import { escape, toBlobUrl } from "./utils.js";
@@ -23,6 +24,20 @@ deliveryButton?.addEventListener("click", () => {
   try { localStorage.setItem("ash.delivery-mode", deliveryMode); } catch {}
   updateSendBtn();
 });
+const mediaInput = globalThis.AsHubComposerMedia.mount({container:document.getElementById('composer-help'),input,form,
+  owner:()=>activeSession.peek()?.id || '',
+  enabled:()=>!!activeSession.peek() && !state.isSubmitting,
+  request:async(sid,action,args,signal)=>{
+    const route=`/${sid}/composer-inputs`+(action==='list'?'':`/${args.input}/${args.requestId}`);
+    const response=await fetch(route,{method:({list:'GET',start:'POST',status:'GET',cancel:'DELETE'})[action],signal,
+      ...(action==='start'?{headers:{'Content-Type':'application/json'},body:JSON.stringify(args)}:{})});
+    const result = await response.json();
+    if (!response.ok) throw Object.assign(Error(result.error || '语音输入暂不可用'), {status:response.status});
+    return result;
+  }});
+let mediaSession;
+effect(()=>{const s=activeSession.value;if(s!==mediaSession){mediaSession=s;mediaInput.cancel();void mediaInput.refresh();}});
+features.subscribe(()=>void mediaInput.refresh());
 const imagePreviews = document.getElementById("image-previews");
 const visionIndicator = document.getElementById("vision-indicator");
 
@@ -131,8 +146,7 @@ const compressImage = (file) => new Promise((resolve, reject) => {
   img.src = url;
 });
 
-const addImage = async (file) => {
-  const sid = currentSessionId();
+const addImage = async (file, sid = currentSessionId()) => {
   if (!sid) return;
   const draft = imageDrafts.get(sid) ?? [];
   imageDrafts.set(sid, draft);
@@ -190,12 +204,14 @@ document.addEventListener("paste", (ev) => {
 
 // Upload button
 visionIndicator?.addEventListener("click", () => {
+  const sid = activeSession.peek()?.id;
+  if (!sid) return;
   const inp = document.createElement("input");
   inp.type = "file";
   inp.accept = "image/png,image/jpeg,image/gif,image/webp";
   inp.multiple = true;
   inp.onchange = () => {
-    for (const file of inp.files) addImage(file);
+    for (const file of inp.files) addImage(file, sid);
     inp.remove();
   };
   inp.click();
@@ -460,6 +476,7 @@ const assertSubmitOk = async (res) => {
 };
 
 const doSubmit = async (query) => {
+  mediaInput.cancel();
   if (!query && !attachedImages.length) return;
   if (shellMode || (shellSupported && query.startsWith("!"))) {
     await doShellSubmit(query.startsWith("!") ? query.slice(1) : query);

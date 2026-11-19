@@ -1,0 +1,1 @@
+{"name":"ashub-voice-input","version":"0.1.2","type":"module","private":true,"description":"短录音转为可编辑的对话草稿，支持桌面和手机远控。","license":"MIT","engines":{"node":">=22.13.0"},"files":["app.mjs","ashub-plugin.json","README.md"],"scripts":{"test":"node --test tests/*.mjs","test:integration":"node --test tests/integration/*.mjs"}}

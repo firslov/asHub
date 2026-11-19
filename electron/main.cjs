@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor, safeStorage, net, Tray, nativeImage, powerSaveBlocker } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor, safeStorage, net, Tray, nativeImage, powerSaveBlocker, session: electronSession, systemPreferences } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
@@ -77,6 +77,7 @@ const browserPages = require('./browser-pages.cjs').createBrowserPages({
 const { performFileAction } = require('./files.cjs');
 const desktopReady = new WeakSet();
 const pendingMobile = new WeakSet();
+const pendingPlugin = new WeakMap();
 function showMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();
   else {
@@ -90,6 +91,13 @@ function openMobileAccess() {
   const contents = mainWindow.webContents;
   if (desktopReady.has(contents)) contents.send('desktop:open-mobile');
   else pendingMobile.add(contents);
+}
+
+function revealPluginResource(plugin, resource) {
+  showMainWindow();
+  const contents = mainWindow.webContents, target = { plugin, resource };
+  if (desktopReady.has(contents)) contents.send('desktop:reveal-plugin-resource', target);
+  else pendingPlugin.set(contents, target);
 }
 
 // ── Update install capability ─────────────────────────────────────────
@@ -437,6 +445,8 @@ function setupIPC() {
     if (!trustedDesktop(event)) return;
     desktopReady.add(event.sender);
     if (pendingMobile.delete(event.sender)) event.sender.send('desktop:open-mobile');
+    const target = pendingPlugin.get(event.sender);
+    if (target) { pendingPlugin.delete(event.sender); event.sender.send('desktop:reveal-plugin-resource', target); }
   });
   ipcMain.handle("pick-directory", async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
@@ -763,17 +773,17 @@ async function startServer() {
       },
     } : undefined;
     const hubOptions = {
-      remoteSecretStore, pluginSecretStore,
-      openBackendWorkspace(id,label) {
+      remoteSecretStore, pluginSecretStore, revealPluginResource,
+      async openBackendWorkspace(id,label) {
         if(!/^[a-f0-9]{32}$/.test(id))throw Error('Invalid backend');
-        const old=backendWindows.get(id);if(old&&!old.isDestroyed()){old.show();old.focus();return;}
+        const old=backendWindows.get(id);if(old&&!old.isDestroyed()){if(old.isMinimized())old.restore();old.show();old.focus();return;}
         // Trusted local UI only, without the native file/browser/admin preload.
         const win=new BrowserWindow({width:1280,height:860,minWidth:760,minHeight:560,title:label+' · asHub',backgroundColor:nativeTheme.shouldUseDarkColors?'#272824':'#f3f0e8',webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
         backendWindows.set(id,win);win.on('closed',()=>backendWindows.delete(id));
         const url=`http://127.0.0.1:${HUB_PORT}/backend.html?connection=${id}`;
         win.webContents.on('will-navigate',(event,target)=>{if(target!==url)event.preventDefault();});
         win.webContents.setWindowOpenHandler(({url:target})=>{try{const parsed=new URL(target);if(['http:','https:'].includes(parsed.protocol)&&!['127.0.0.1','localhost','[::1]'].includes(parsed.hostname))void shell.openExternal(target);}catch{}return {action:'deny'};});
-        void win.loadURL(url);
+        try { await win.loadURL(url); } catch (error) { if (!win.isDestroyed()) win.destroy(); throw error; }
       },
       enableBrowserPages: browserPages.enable,
       port: HUB_PORT,
@@ -853,6 +863,7 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(() => {
+    require('./media-permissions.cjs').installMediaPermissions(electronSession.defaultSession, {origin:`http://127.0.0.1:${HUB_PORT}`,BrowserWindow,systemPreferences});
     // Custom menu omits Cmd+W so the renderer can intercept it for tab close.
     const isMac = process.platform === "darwin";
     if (!isDev) {

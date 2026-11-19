@@ -184,6 +184,32 @@ export class DevicePublisher {
             this.connecting = false;
         }
     }
+    // Local scope changes use the existing device credential. The gateway does
+    // not store directory grants; enrollment/password validation is for binding.
+    updateRoots(grantId, expected) {
+        if (!this.accepting || this.isBusy()) throw error('请等待当前请求完成', 409);
+        if (!this.config || this.config !== expected || this.config.enabled === false || this.statusText === 'revoked')
+            throw error('共享状态已变化，请重新核对', 409);
+        if (!this.opts.access || !this.opts.store) throw error('共享服务不可用');
+        const access = this.opts.access(grantId);
+        try {
+            const config = { ...this.config, roots: [...access.roots], grantId };
+            this.opts.store.write(JSON.stringify(config));
+            const oldGrant = this.config.grantId;
+            this.stopConnection();
+            this.access?.close();
+            this.config = config;
+            this.access = access;
+            this.stopped = false;
+            this.attempts = 0;
+            this.lastError = '';
+            try { this.connect(); } catch { this.statusText = 'error'; this.lastError = '连接暂时失败，请重新打开插件重试'; }
+            return { oldGrant };
+        } catch (e) {
+            if (this.access !== access) access.close();
+            throw e;
+        }
+    }
     disable() {
         if (this.isBusy())
             throw error('请等待当前请求完成', 409);
@@ -406,7 +432,15 @@ export class DevicePublisher {
             throw error('移动访问已关闭', 403);
         const epoch = this.generation;
         if (op === 'capabilities')
-            return { projects: true, tasks: true, artifacts: true, imageResources: true, thinking: true, queue: true, steering: true, queueActions: true, sessionNetwork: true, sessionDelete: true, pluginResources: true };
+            return { composerInputs: true, projects: true, tasks: true, artifacts: true, imageResources: true, thinking: true, queue: true, steering: true, queueActions: true, sessionNetwork: true, sessionDelete: true, pluginResources: true };
+        if (op === 'composer-input') {
+            const session = await this.session(args.session); this.current(epoch);
+            let route = `/${session.instanceId}/composer-inputs`;
+            if (args.action === 'list') return this.local(route);
+            if (!['start','status','cancel'].includes(args.action) || !/^[a-f0-9]{32}$/.test(args.input || '') || !/^[a-f0-9-]{36}$/.test(args.requestId || '')) throw error('Invalid media request');
+            route += `/${args.input}/${args.requestId}`;
+            return this.local(route, args.action === 'start' ? {revision:args.revision, data:args.data, mimeType:args.mimeType} : undefined, false, {start:'POST',status:'GET',cancel:'DELETE'}[args.action]);
+        }
         if (op === 'project-groups')
             return this.groups(epoch);
         if (op === 'project-tasks')

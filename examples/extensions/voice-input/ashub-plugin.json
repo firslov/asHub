@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 2,
+  "id": "ashub-voice-input",
+  "name": "语音输入",
+  "minNode": "22.13.0",
+  "entries": {"application": "app.mjs"},
+  "requires": {"hostApi": "^1.0.0", "capabilities": ["application-lifecycle", "plugin-resources", "composer-inputs", "plugin-secrets"]},
+  "permissions": ["仅在点击录音后使用麦克风，最长 60 秒", "录音发送到配置的转写服务，可能产生费用；结果仅写入草稿，不自动发送", "API 密钥使用本机系统加密存储，不发送到手机"],
+  "ui": {"version": 1, "panels": [{"id": "voice", "title": "语音输入", "icon": "microphone", "components": [{"type": "resource", "id": "settings"}]}]}
+}

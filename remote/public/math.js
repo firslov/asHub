@@ -1,0 +1,411 @@
+// Generated from web/js/math.js and stream/idle-work.js; parity checked by remote regression tests.
+(()=>{
+/**
+ * Cooperative idle-work scheduler.
+ *
+ * Processes an array of work items in small batches using requestIdleCallback,
+ * yielding to the event loop between batches so the main thread stays responsive
+ * even while processing thousands of code blocks / math expressions after replay.
+ *
+ * Falls back to requestAnimationFrame → setTimeout(0) when requestIdleCallback
+ * is unavailable (e.g. Electron < 29, Safari).
+ */
+
+const BATCH_SIZE = 4;
+
+/**
+ * @param {Array} items
+ * @param {(item: any, index: number) => void} processFn
+ * @param {object} [opts]
+ * @param {number} [opts.batchSize=4]
+ * @param {(done: number, total: number) => void} [opts.onProgress]
+ * @param {() => void} [opts.onComplete]
+ * @param {AbortSignal} [opts.signal] Abort to stop processing future batches.
+ * @returns {{ cancel: () => void, readonly cancelled: boolean }}
+ *   Handle for cancelling the remaining batches.  Items that are DOM nodes
+ *   detached since queueing (view destroyed, stream cleared) are skipped
+ *   automatically, so callers on a hot path don't need the handle.
+ */
+function scheduleIdleWork(items, processFn, opts = {}) {
+  const { batchSize = BATCH_SIZE, onProgress, onComplete, signal } = opts;
+
+  let cancelled = false;
+  const onAbort = () => handle.cancel();
+  const handle = {
+    cancel() {
+      if (cancelled) return;
+      cancelled = true;
+      signal?.removeEventListener?.("abort", onAbort);
+    },
+    get cancelled() { return cancelled; },
+  };
+
+  if (!items || items.length === 0) {
+    onComplete?.();
+    return handle;
+  }
+
+  if (signal) {
+    if (signal.aborted) { cancelled = true; return handle; }
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  let index = 0;
+  const total = items.length;
+
+  const runBatch = (deadline) => {
+    if (cancelled) return;
+    // Process items until time runs out or batch is complete.
+    const end = Math.min(index + batchSize, total);
+    while (index < end) {
+      // If we have a deadline hint and are out of time, yield early.
+      if (deadline && deadline.timeRemaining && deadline.timeRemaining() <= 1) break;
+      const item = items[index];
+      index++;
+      // Skip DOM nodes that were detached after this batch was queued
+      // (e.g. the tab was closed right after replay flushed) — running
+      // processFn on them would do invisible work and keep the whole
+      // detached subtree alive until the queue drains.
+      if (typeof Node !== "undefined" && item instanceof Node && !item.isConnected) continue;
+      try {
+        processFn(item, index - 1);
+      } catch {
+        // Swallow per-item errors so one bad block doesn't stall the whole queue.
+      }
+    }
+
+    onProgress?.(index, total);
+
+    if (index < total) {
+      scheduleNext(runBatch);
+    } else {
+      signal?.removeEventListener?.("abort", onAbort);
+      onComplete?.();
+    }
+  };
+
+  scheduleNext(runBatch);
+  return handle;
+}
+
+function scheduleNext(fn) {
+  if (typeof requestIdleCallback === "function") {
+    // Timeout ensures we don't wait forever if the page is constantly busy.
+    requestIdleCallback(fn, { timeout: 100 });
+  } else if (typeof requestAnimationFrame === "function") {
+    // rAF as first fallback — yields between frames.
+    requestAnimationFrame(() => setTimeout(() => fn({ timeRemaining: () => 50 }), 0));
+  } else {
+    setTimeout(() => fn({ timeRemaining: () => 50 }), 0);
+  }
+}
+
+
+// Math extraction & rendering.
+//
+// Delimiter pairs supported:
+//   Inline  : $...$        — pandoc-strict pairing rules (see below).
+//   Inline  : \( ... \)    — permissive.
+//   Display : $$ ... $$    — permissive (may span lines).
+//   Display : \[ ... \]    — permissive (may span lines).
+//
+// Math inside fenced (```...```) and inline (`...`) code is left untouched.
+//
+// Pipeline:
+//   1. extractMath(raw) replaces each math span with an empty placeholder
+//      <span class="math-tex" data-tex="...">.  Placeholders survive marked
+//      + DOMPurify untouched (no markdown-significant chars in attributes).
+//   2. renderMathIn(root) walks the DOM and substitutes KaTeX HTML.
+//
+// Pairing rules for $...$:
+//   - Opener `$`:  char before must NOT be alphanumeric/underscore (rules
+//                  out `0.31$)` becoming a stray opener after a real
+//                  closer).  Char after must NOT be whitespace (pandoc).
+//                  (Pandoc also forbids digit-after, but that drops
+//                  legit math like `$0.87 \pm 0.31$`; we let KaTeX
+//                  validation be the arbiter instead.)
+//   - Closer `$`:  char before must NOT be whitespace (pandoc).
+//                  Char after must NOT be a digit (pandoc).
+//   - Content on one line, non-empty, ≤ MAX_INLINE_LEN chars.
+//
+// To prevent stray `$` symbols from swallowing prose into "math", every
+// candidate is validated by KaTeX (throwOnError: true).  If KaTeX rejects
+// the content the candidate is dropped and the leading `$` is emitted as
+// literal text — the walker then re-tries the remaining input, so a real
+// math span later in the same line still gets a chance to match.
+//
+// Validation results are cached so chunk-by-chunk streaming doesn't pay
+// the render cost on every frame.
+
+const MAX_INLINE_LEN = 250;
+const MAX_DISPLAY_LEN = 2000;
+
+const escapeAttr = (s) => String(s)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+const findCloseDollarDollar = (src, start) => {
+  for (let i = start; i < src.length - 1; i++) {
+    if (src[i] === "\\") { i++; continue; }
+    if (src[i] === "$" && src[i + 1] === "$") return i;
+  }
+  return -1;
+};
+
+const findCloseInlineDollar = (src, start) => {
+  for (let i = start; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\n") return -1;
+    if (c === "\\") { i++; continue; }
+    if (c === "$") {
+      if (src[i + 1] === "$") return -1;
+      if (/\s/.test(src[i - 1] || "")) continue;
+      if (/\d/.test(src[i + 1] || "")) continue;
+      if (i === start) return -1;
+      return i;
+    }
+  }
+  return -1;
+};
+
+const findCloseEscape = (src, start, closeCh) => {
+  for (let i = start; i < src.length - 1; i++) {
+    if (src[i] === "\\" && src[i + 1] === closeCh) return i;
+  }
+  return -1;
+};
+
+const inlinePlaceholder = (tex) =>
+  `<span class="math-tex" data-tex="${escapeAttr(tex)}"></span>`;
+
+const displayPlaceholder = (tex) =>
+  `\n\n<span class="math-tex" data-display="1" data-tex="${escapeAttr(tex)}"></span>\n\n`;
+
+const skipFencedCode = (src, i) => {
+  let runLen = 0;
+  const runStart = i;
+  while (i < src.length && src[i] === "`") { runLen++; i++; }
+  if (runLen >= 3) {
+    const closeRe = new RegExp("\\n[ \\t]{0,3}`{" + runLen + ",}[ \\t]*(?:\\n|$)");
+    const m = closeRe.exec(src.slice(i));
+    const end = m ? i + m.index + m[0].length : src.length;
+    return { text: src.slice(runStart, end), next: end };
+  }
+  let j = i;
+  while (j < src.length) {
+    if (src[j] === "`") {
+      let k = j;
+      while (k < src.length && src[k] === "`") k++;
+      if (k - j === runLen) { j = k; break; }
+      j = k;
+    } else j++;
+  }
+  return { text: src.slice(runStart, j), next: j };
+};
+
+// Cache key: "D|<tex>" or "I|<tex>".  Value: rendered HTML string, or null
+// (KaTeX rejected the input — treat as not-math).
+// Bounded LRU: Map preserves insertion order, so the first key is always
+// the least-recently-used entry.  Without a cap a long session full of
+// unique formulas (or `$`-heavy prose candidates) would grow this forever.
+const RENDER_CACHE_MAX = 500;
+const renderCache = new Map();
+
+const cacheKey = (tex, display) => (display ? "D|" : "I|") + tex;
+
+// Same tri-state semantics as a raw Map.get: string | null | undefined.
+const cacheGet = (key) => {
+  if (!renderCache.has(key)) return undefined;
+  const value = renderCache.get(key);
+  // Re-insert to mark as most-recently-used.
+  renderCache.delete(key);
+  renderCache.set(key, value);
+  return value;
+};
+
+const cacheSet = (key, value) => {
+  renderCache.delete(key);
+  renderCache.set(key, value);
+  while (renderCache.size > RENDER_CACHE_MAX) {
+    renderCache.delete(renderCache.keys().next().value);
+  }
+};
+
+// Returns: html string on success, null on KaTeX rejection, undefined if
+// KaTeX is not available (validateCandidate then rejects the candidate so
+// the raw delimiters stay visible as plain text).
+const tryRender = (tex, display) => {
+  if (typeof window === "undefined" || !window.katex) return undefined;
+  const key = cacheKey(tex, display);
+  const hit = cacheGet(key);
+  if (hit !== undefined) return hit;
+  let html;
+  try {
+    html = window.katex.renderToString(tex, {
+      displayMode: display,
+      throwOnError: true,
+      strict: "ignore",
+      trust: false,
+      output: "htmlAndMathml",
+    });
+  } catch {
+    html = null;
+  }
+  cacheSet(key, html);
+  return html;
+};
+
+const validateCandidate = (tex, display) => {
+  const maxLen = display ? MAX_DISPLAY_LEN : MAX_INLINE_LEN;
+  if (tex.length === 0 || tex.length > maxLen) return false;
+  const result = tryRender(tex, display);
+  // No KaTeX available (offline / script failed to load): reject the
+  // candidate so extractMath leaves the original $...$ text untouched
+  // instead of emitting an empty placeholder that would never render.
+  if (result === undefined) return false;
+  return result !== null;
+};
+
+const extractMath = (src) => {
+  if (!src) return "";
+  let out = "";
+  let i = 0;
+  const len = src.length;
+
+  while (i < len) {
+    const ch = src[i];
+
+    if (ch === "`") {
+      const { text, next } = skipFencedCode(src, i);
+      out += text;
+      i = next;
+      continue;
+    }
+
+    if (ch === "\\") {
+      const next = src[i + 1];
+      if (next === "(") {
+        const end = findCloseEscape(src, i + 2, ")");
+        if (end !== -1) {
+          const content = src.slice(i + 2, end);
+          if (validateCandidate(content, false)) {
+            out += inlinePlaceholder(content);
+            i = end + 2;
+            continue;
+          }
+        }
+      }
+      if (next === "[") {
+        const end = findCloseEscape(src, i + 2, "]");
+        if (end !== -1) {
+          const content = src.slice(i + 2, end);
+          if (validateCandidate(content, true)) {
+            out += displayPlaceholder(content);
+            i = end + 2;
+            continue;
+          }
+        }
+      }
+      out += ch;
+      if (next != null) { out += next; i += 2; } else { i++; }
+      continue;
+    }
+
+    if (ch === "$") {
+      if (src[i + 1] === "$") {
+        const end = findCloseDollarDollar(src, i + 2);
+        if (end !== -1) {
+          const content = src.slice(i + 2, end);
+          if (validateCandidate(content, true)) {
+            out += displayPlaceholder(content);
+            i = end + 2;
+            continue;
+          }
+        }
+      }
+      const before = src[i - 1];
+      const after = src[i + 1];
+      const openerOk =
+        after && after !== "$" &&
+        !/\s/.test(after) &&
+        !/[A-Za-z0-9_]/.test(before || "");
+      if (openerOk) {
+        const end = findCloseInlineDollar(src, i + 1);
+        if (end !== -1) {
+          const content = src.slice(i + 1, end);
+          if (validateCandidate(content, false)) {
+            out += inlinePlaceholder(content);
+            i = end + 1;
+            continue;
+          }
+        }
+      }
+      out += ch;
+      i++;
+      continue;
+    }
+
+    out += ch;
+    i++;
+  }
+
+  return out;
+};
+
+/** Render a single math placeholder. Extracted for shared sync/async paths. */
+const renderMathNode = (node) => {
+  if (node.dataset.rendered === "1") return;
+  const tex = node.dataset.tex || "";
+  const display = node.dataset.display === "1";
+  const cached = cacheGet(cacheKey(tex, display));
+  if (typeof cached === "string") {
+    node.innerHTML = cached;
+    node.dataset.rendered = "1";
+    return;
+  }
+  if (cached === null) {
+    node.classList.add("math-error");
+    node.textContent = display ? `$$${tex}$$` : `$${tex}$`;
+    return;
+  }
+  try {
+    const html = window.katex.renderToString(tex, {
+      displayMode: display,
+      throwOnError: false,
+      strict: "ignore",
+      trust: false,
+      output: "htmlAndMathml",
+    });
+    cacheSet(cacheKey(tex, display), html);
+    node.innerHTML = html;
+    node.dataset.rendered = "1";
+  } catch {
+    node.classList.add("math-error");
+    node.textContent = display ? `$$${tex}$$` : `$${tex}$`;
+  }
+};
+
+/**
+ * Render all KaTeX math placeholders within `root`.
+ *
+ * When `async` is true and there are many uncached formulas (>8), processing
+ * is split into small batches via requestIdleCallback.  Use `async: true`
+ * after replay flushes; use `async: false` (default) for live streaming.
+ */
+const renderMathIn = (root, { async: asyncMode = false } = {}) => {
+  if (!root || typeof window === "undefined" || !window.katex) return;
+  const nodes = Array.from(
+    root.querySelectorAll(".math-tex[data-tex]"),
+  ).filter((n) => n.dataset.rendered !== "1");
+
+  if (nodes.length === 0) return;
+
+  if (asyncMode && nodes.length > 8) {
+    scheduleIdleWork(nodes, renderMathNode, { batchSize: 8 });
+  } else {
+    nodes.forEach(renderMathNode);
+  }
+};
+
+globalThis.AsHubMath = {extractMath, renderMathIn};
+})();

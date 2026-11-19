@@ -1,3 +1,4 @@
+import type { ComposerInputs } from './composer-inputs.js';
 import type { SharedConversations } from './shared-conversations.js';
 import type { BackendConnections } from './backends.js';
 import type { CollaborationTasks } from '../collaboration.js';
@@ -27,6 +28,8 @@ export interface ApplicationCollaborationService {
  * an implicit current conversation. Keep this module type-only at runtime. */
 export interface ApplicationExtensionServices {
   readonly dataDirectory: string;
+  readonly composerInputs?: ReturnType<ComposerInputs['bind']>;
+  readonly secrets?: ReturnType<BackendConnections['bind']>['secrets'];
   readonly sharedConversations?: ReturnType<SharedConversations['bind']>;
   readonly backends?: ReturnType<BackendConnections['bind']>;
   readonly host?: Readonly<ApplicationHostService>;

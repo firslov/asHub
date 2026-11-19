@@ -30,3 +30,8 @@ html,body.backend-workspace { height:100%; overflow:hidden; }
 @media(prefers-reduced-motion:reduce){.backend-workspace *{transition:none!important;}}
 
 .bw-phase-time { margin-left:12px; font-variant-numeric:tabular-nums; opacity:.75; }
+
+#return-devices{font-size:12px;text-align:left;background:transparent;border-color:transparent;color:var(--text-dim);}
+#execution-device{font-size:12px;color:var(--accent);font-weight:550;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#sync-status{margin:10px 24px 0;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:16px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);color:var(--text-dim);font-size:12px;}
+#sync-help{min-width:0;overflow-wrap:anywhere;}#sync-retry{flex-shrink:0;font-size:12px;background:transparent;}

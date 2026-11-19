@@ -25,6 +25,7 @@ app.whenReady().then(async()=>{
    request:async(op)=>{
     if(op==='sessions'){if(key==='A'&&holdList){holdList=false;const pending=deferred();releaseList=pending.resolve;return pending.promise;}return [{instanceId:local.instanceId,title:'Remote '+key}];}
     if(op==='capabilities')return {};
+    if(op==='request-status')return {state:'pending'};
     throw Error('Unexpected operation '+op);
    },
    subscribe:async(_sid,emit,signal)=>{
@@ -53,7 +54,11 @@ app.whenReady().then(async()=>{
   await wait(()=>ja("!document.querySelector('#send').disabled"),'reopened A restores connection');
   assert.equal(await ja("document.querySelector('#query').value"),'Draft A');
   assert((await ja("document.querySelector('#messages').textContent")).includes('Reply A'));
-  const snapshot=js=>js("JSON.stringify({list:document.querySelector('#sessions').textContent,messages:document.querySelector('#messages').textContent,draft:document.querySelector('#query').value,status:document.querySelector('#connection').textContent,disabled:document.querySelector('#send').disabled})");
+  for(const [js,label]of [[ja,'A'],[jb,'B']]) {
+   await js(`(()=>{const files=new DataTransfer();files.items.add(new File(['image'],'draft-${label}.png',{type:'image/png'}));const input=document.querySelector('#upload');input.files=files.files;input.dispatchEvent(new Event('change'));})()`);
+   await wait(()=>js(`document.querySelector('#attachments').textContent.includes('draft-${label}.png')`),'image '+label);
+  }
+  const snapshot=js=>js("JSON.stringify({images:document.querySelector('#attachments').textContent,list:document.querySelector('#sessions').textContent,messages:document.querySelector('#messages').textContent,draft:document.querySelector('#query').value,status:document.querySelector('#connection').textContent,disabled:document.querySelector('#send').disabled})");
   const localSnapshot=()=>jl("JSON.stringify({list:document.querySelector('#sessions').textContent,messages:document.querySelector('session-view .session-stream').textContent,draft:document.querySelector('#query').value})");
   const beforeLocal=await localSnapshot(),beforeB=await snapshot(jb);
   const old=streams.get('A');old.stop();await wait(()=>ja("document.querySelector('#connection').textContent.includes('正在恢复')"),'disconnect A');
@@ -62,13 +67,17 @@ app.whenReady().then(async()=>{
   assert.equal(await ja("document.querySelector('#query').value"),'Draft A');
   assert(!(await snapshot(ja)).includes('Late stream'));assert.equal(await snapshot(jb),beforeB);assert.equal(await localSnapshot(),beforeLocal);
   holdList=true;await ja("document.querySelector('#refresh').click()");await wait(()=>!!releaseList,'held A list');
+  await ja(`localStorage.setItem('ash.backend.${a.id}.${local.instanceId}.pending',JSON.stringify({requestId:'pending-account-A',session:'${local.instanceId}',query:'Draft A',images:[],attachmentIds:[]}))`);
   const revoked=streams.get('A');a.dispose();const replacement=bind('C');
   releaseList([{instanceId:local.instanceId,title:'Late old account'}]);revoked.emit(frame('agent:response-segment',{text:'Late revoked message'}));
   await ja("document.querySelector('#refresh').click()");await wait(()=>ja("document.querySelector('#sessions').children.length===0"),'revoked A view');
   assert(!(await snapshot(ja)).includes('Late old account'));assert(!(await snapshot(ja)).includes('Late revoked message'));
   assert.equal(await snapshot(jb),beforeB);assert.equal(await localSnapshot(),beforeLocal);assert.equal(localCalls,1,'remote activity must not invoke local execution');
   const jc=await make('/backend.html?connection='+replacement.id);await wait(()=>jc("!!document.querySelector('#sessions button')"),'new account device');await jc("document.querySelector('#sessions button').click()");await wait(()=>jc("!document.querySelector('#send').disabled"),'new account ready');
-  assert.equal(await jc("document.querySelector('#query').value"),'');assert.equal(await snapshot(jb),beforeB);assert.equal(await localSnapshot(),beforeLocal);
+  assert.equal(await jc("document.querySelector('#query').value"),'');
+  assert.equal(await jc("document.querySelector('#attachments').textContent"),'');
+  assert.equal(await jc(`localStorage.getItem('ash.backend.${replacement.id}.${local.instanceId}.pending')`),null);
+  assert.equal(JSON.parse(await ja(`localStorage.getItem('ash.backend.${a.id}.${local.instanceId}.pending')`)).requestId,'pending-account-A');assert.equal(await snapshot(jb),beforeB);assert.equal(await localSnapshot(),beforeLocal);
   console.log('PASS same-origin local + two devices with identical session IDs: drafts/messages/lists isolated, native close/reopen restores draft and history, automatic reconnect, revoked stream and late list ignored, replacement device cannot inherit old draft or execute locally');
  }finally{owner.abort();for(const w of windows)if(!w.isDestroyed())w.destroy();await hub?.shutdown();clearTimeout(guard);}
 }).then(()=>app.exit(0),e=>{console.error(e);app.exit(1);});

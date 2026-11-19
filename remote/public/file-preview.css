@@ -1,0 +1,40 @@
+/* One quiet file surface shared by desktop and mobile. */
+dialog.artifact-preview{position:fixed;inset:0 0 0 auto;margin:0;width:min(880px,88vw);height:100dvh;max-width:100vw;max-height:100dvh;padding:0;border:0;border-left:1px solid var(--line,var(--border));border-radius:0;background:var(--surface,var(--bg-elevated,var(--bg)));color:var(--text);box-shadow:-16px 0 60px #00000012;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden}
+dialog.artifact-preview[open]{display:flex;flex-direction:column}
+.artifact-preview::backdrop{background:#0003}
+.artifact-preview .artifact-preview-header{display:flex;flex-direction:column;align-items:stretch;gap:12px;padding:24px 28px 16px;border-bottom:1px solid var(--line,var(--border));background:transparent;position:static;margin-bottom:0}
+.artifact-preview-title{display:flex;gap:16px;align-items:baseline;min-width:0}
+.artifact-preview-title strong{font-size:16px;font-weight:550;overflow-wrap:anywhere;flex:1;min-width:0}
+.artifact-preview-title span{color:var(--muted,var(--text-muted));font-size:12px;white-space:nowrap}
+.artifact-preview-actions,.artifact-preview-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.artifact-preview button{appearance:none;border:0;background:transparent;color:var(--muted,var(--text-muted));font:inherit;font-size:12px;padding:7px 10px;border-radius:6px;cursor:pointer;white-space:nowrap}
+.artifact-preview button:hover{background:var(--soft,var(--bg2));color:var(--text)}
+.artifact-preview button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.artifact-preview button:disabled{opacity:.5;cursor:wait}
+.artifact-preview .artifact-preview-back{color:var(--accent);margin-right:auto}
+.artifact-preview-toolbar{padding:8px 24px;flex-shrink:0}
+.artifact-preview-toolbar:empty{display:none}
+.artifact-preview-toolbar input{font:inherit;font-size:13px;color:inherit;background:transparent;border:0;border-bottom:1px solid var(--line,var(--border));border-radius:0;padding:6px;min-width:0;width:180px;max-width:100%}
+.artifact-preview-body{position:relative;flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:24px 28px 40px}
+.artifact-preview-status{font-size:13px;color:var(--muted,var(--text-muted));margin:32px 0}
+.artifact-preview-image{display:block;max-width:100%;height:auto;margin:auto}
+.artifact-preview-text{font:13px/1.8 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4;margin:0;background:transparent;border:0;color:inherit}
+.artifact-preview-text mark{background:var(--soft,var(--bg3));color:inherit;outline:1px solid var(--accent)}
+.artifact-preview-markdown{font-size:15px;line-height:1.8;overflow-wrap:anywhere}
+.artifact-preview-markdown p,.artifact-preview-markdown pre,.artifact-preview-markdown ul,.artifact-preview-markdown ol{margin:0 0 1em}
+.artifact-preview-markdown ul,.artifact-preview-markdown ol{padding-left:24px}
+.artifact-preview-markdown pre{overflow:auto;font-size:13px;white-space:pre-wrap}
+.artifact-preview-markdown table{border-collapse:collapse;display:block;overflow:auto}
+.artifact-preview-markdown th,.artifact-preview-markdown td{padding:8px 12px;border-bottom:1px solid var(--line,var(--border))}
+.artifact-preview-markdown a{color:var(--accent)}
+.artifact-preview-pdf{display:block;margin:auto;background:white;max-width:none}
+.files-preview-button{border:0;background:transparent;color:var(--text-muted);padding:4px 6px;border-radius:4px;cursor:pointer;font-size:12px;flex-shrink:0}
+.files-preview-button:hover{background:var(--bg3);color:var(--text)}
+@media(max-width:640px){dialog.artifact-preview{width:100%;border:0}.artifact-preview .artifact-preview-header{padding:calc(16px + env(safe-area-inset-top)) 16px 12px}.artifact-preview-body{padding:16px 16px calc(24px + env(safe-area-inset-bottom))}.artifact-preview-toolbar{padding:8px 12px}.artifact-preview-actions{gap:2px}.artifact-preview button{min-height:40px}.artifact-preview-text{font-size:12px}.artifact-preview-toolbar input{font-size:16px}}
+
+/* Isolate reader typography from surrounding dialog styles. */
+.artifact-preview-markdown p{font-size:inherit;color:inherit}
+.artifact-preview .artifact-preview-text,.artifact-preview-markdown pre{padding:0;border:0;border-radius:0;background:transparent;color:inherit}
+.artifact-preview-markdown :is(h1,h2,h3,h4){line-height:1.4;font-weight:600;margin:1.25em 0 .5em}
+.artifact-preview-markdown :is(h1,h2,h3,h4):first-child{margin-top:0}
+.artifact-preview-markdown h1{font-size:1.6em}.artifact-preview-markdown h2{font-size:1.35em}.artifact-preview-markdown h3{font-size:1.15em}

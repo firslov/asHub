@@ -1,0 +1,27 @@
+.composer-media{display:inline-flex;align-items:center;gap:4px;flex:0 0 auto;color:var(--muted,var(--text-muted,#89877f));vertical-align:middle}
+.composer-media[hidden],.composer-media [hidden]{display:none!important}
+.composer-media .composer-media-button,.composer-media .composer-media-cancel{display:inline-flex;align-items:center;justify-content:center;background:transparent;border:1px solid transparent;border-radius:9px;box-shadow:none;min-width:32px;min-height:32px;padding:5px;color:inherit;font:inherit;cursor:pointer;touch-action:manipulation}
+.composer-media .composer-media-cancel{font-size:12px;padding-inline:8px}
+.composer-media button:hover{background:color-mix(in srgb,currentColor 8%,transparent)}
+.composer-media button:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+.composer-media button:disabled{opacity:.45;cursor:default}
+.composer-media[data-state=recording]{color:var(--accent,#92764a)}
+.composer-media-stop{width:10px;height:10px;border-radius:3px;background:currentColor}
+.composer-media-status{display:block;font-size:12px;line-height:1.5;color:var(--muted,var(--text-muted,#89877f));padding:4px 8px 0;overflow-wrap:anywhere;white-space:normal;max-width:100%;box-sizing:border-box;pointer-events:none}
+.composer-media-status:empty{display:none}
+@media(pointer:coarse){.composer-media .composer-media-button,.composer-media .composer-media-cancel{min-height:44px;min-width:44px}}
+@media(prefers-reduced-motion:reduce){.composer-media *{transition:none}}
+.live-input > .composer-media-status{grid-column:1 / -1;grid-row:4;padding:0 2px;font-size:var(--fs-xs,12px)}
+/* Quiet visual feedback; capture and draft behavior stay on the verified tap flow. */
+.composer-media .composer-media-button{gap:6px;border-radius:11px;transition:background-color .15s ease,border-color .15s ease}
+.composer-media[data-state=recording] .composer-media-button{padding-inline:12px;background:color-mix(in srgb,var(--accent,#92764a) 12%,transparent);border-color:color-mix(in srgb,var(--accent,#92764a) 25%,transparent)}
+.composer-media[data-state=recording] .composer-media-button::after{content:'完成';font-size:12px;font-weight:500;white-space:nowrap}
+.composer-media .composer-media-cancel{color:var(--muted,var(--text-muted,#89877f));border-radius:11px}
+.composer-media-status:not(:empty){margin-top:6px;padding:8px 10px;border-radius:9px;background:color-mix(in srgb,currentColor 4%,transparent);font-variant-numeric:tabular-nums;letter-spacing:.01em}
+.live-input>.composer-media-status:not(:empty){padding:8px 10px}
+form:has(.composer-media[data-state=recording])>.composer-media-status{color:var(--accent,#92764a)}
+form:has(.composer-media[data-state=recording])>.composer-media-status::before{content:'';display:inline-block;width:5px;height:5px;margin:0 7px 2px 1px;border-radius:50%;background:currentColor;vertical-align:middle}
+.composer-media:is([data-state=permission],[data-state=transcribing],[data-state=inserting]) .composer-media-button svg{display:none}
+.composer-media:is([data-state=permission],[data-state=transcribing],[data-state=inserting]) .composer-media-button::before{content:'';width:14px;height:14px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:composer-media-spin 1s linear infinite}
+@keyframes composer-media-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.composer-media .composer-media-button{transition:none}.composer-media .composer-media-button::before{animation:none}}

@@ -1,3 +1,4 @@
+import './composer-media.js';
 import { extractMath, renderMathIn } from './math.js';
 import { mountResource } from './extensions/resource-view.js';
 const $ = id => document.getElementById(id), el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined)
@@ -21,7 +22,34 @@ const stored = { get: key => { try {
     }
     catch { } } };
 let session = '', generation = 0, source = null, ready = false, busy = false, online = false, sessions = [], groups = [], capabilities = {}, modelInfo = {}, images = [], reply = null, liveSegment = false, phase = null, turnOutcome = '', retry = null, queueTimer = null, renderTimer = null, modalGeneration = 0, disposeResource = null, catalogVersion = 0, queueVersion = 0, receiptTimer = null;
-const owners = new Map(), approvals = new Map();
+const owners = new Map(), approvals = new Map(), imageDrafts = new Map();
+const SYNC_WAIT_MS = 12000;
+let syncWait = null, syncTimer = null, syncPhase = 'idle', suspended = false, invalidated = false, connectionNotice = '';
+const hidden = () => document.hidden || suspended;
+const text = (id, value) => { if ($(id).textContent !== value) $(id).textContent = value; };
+function syncStatus() {
+    const expired = syncWait && syncWait.g === generation && syncWait.sid === session && Date.now() - syncWait.started >= SYNC_WAIT_MS;
+    text('connection', syncPhase === 'ready' ? '已同步 · 在远程电脑执行' : syncPhase === 'syncing' ? '正在同步对话…' : syncPhase === 'reconnecting' ? '连接中断，正在恢复…' : syncPhase === 'invalid' ? '授权已失效' : syncPhase === 'offline' ? '执行设备离线' : syncPhase === 'unknown' ? '设备状态待确认' : syncPhase === 'paused' ? '连接已暂停' : '选择一个对话');
+    const help = syncPhase === 'invalid' ? '请返回设备列表重新登录或确认授权。草稿与发送回执已保留。'
+        : syncPhase === 'offline' ? '请在执行设备上启动 asHub 并保持联网，恢复后将自动同步。'
+        : syncPhase === 'unknown' ? '暂时无法确认设备状态，正在重试。草稿与发送回执已保留。'
+        : expired && !ready && !hidden() ? '同步用时较长，可以重新同步。草稿和待确认发送将保留，不会自动重发。' : '';
+    text('sync-help', help); $('sync-status').hidden = !help;
+    $('sync-retry').hidden = !session || !expired || hidden() || !['syncing','reconnecting','unknown'].includes(syncPhase);
+}
+function watchSync() {
+    ready = false;
+    if (!syncWait || syncWait.g !== generation || syncWait.sid !== session) syncWait = { g: generation, sid: session, started: Date.now() };
+    clearTimeout(syncTimer); const ticket = syncWait;
+    syncTimer = setTimeout(() => { if (syncWait === ticket) syncStatus(); }, Math.max(0, SYNC_WAIT_MS - (Date.now() - ticket.started)));
+    syncStatus(); controls();
+}
+function stopWatch() { clearTimeout(syncTimer); syncTimer = null; syncWait = null; }
+function retryConnection() {
+    clearTimeout(retry);
+    const g = generation;
+    if (session && !hidden() && !invalidated) retry = setTimeout(() => { if (g === generation && !hidden()) void refresh(); }, 2000);
+}
 let frameQueue = [], frameTimer = null;
 function notice(text = '') { $('notice').textContent = text; $('notice').hidden = !text; }
 async function api(path, body, signal) { const r = await fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: signal ?? AbortSignal.timeout(35000), cache: 'no-store' }); const value = await r.json(); if (!r.ok)
@@ -30,8 +58,7 @@ const rpc = (op, args = {}, signal) => api('/request', { op, args }, signal);
 function controls() { const enabled = online && ready && !!session; $('query').disabled = !enabled; $('send').disabled = !enabled || !!pending(); $('upload').disabled = !enabled; $('model').disabled = !enabled || busy; $('stop').hidden = !enabled || !busy; $('delivery').hidden = !busy || !capabilities.steering; $('settings').hidden = !session; $('create').disabled = !online; for (const b of approvals.values())
     for (const a of b.querySelectorAll('button'))
         a.disabled = !enabled || b.deciding || b.expiresAt <= Date.now(); }
-function draft() { if (session)
-    stored.set(session + '.draft', $('query').value); }
+function draft() { if (session) { stored.set(session + '.draft', $('query').value); imageDrafts.set(session, images.slice()); } }
 function pending() { try {
     return session ? JSON.parse(stored.get(session + '.pending') || 'null') : null;
 }
@@ -83,45 +110,45 @@ function renderSessions() {
 $('search').oninput = renderSessions;
 async function refresh() {
     const version = ++catalogVersion, owner = generation, connection = source;
+    const current = () => version === catalogVersion && owner === generation && connection === source;
+    if (session && !source && !hidden() && !invalidated && syncPhase !== 'offline') {
+        if (syncPhase !== 'unknown') syncPhase = 'reconnecting';
+        watchSync();
+    }
     try {
         const info = await api('/info');
-        if (version !== catalogVersion)
+        if (!current())
             return;
-        online = info.online;
+        online = info.online; invalidated = false;
+        if (connectionNotice && $('notice').textContent === connectionNotice) notice();
+        connectionNotice = '';
         $('device-name').textContent = info.label;
         document.title = info.label + ' · asHub';
-        $('device-status').textContent = online ? '在线 · 远程执行' : '离线 · 草稿已保留';
+        text('execution-device', '执行设备：' + info.label); $('execution-device').title = info.label;
+        $('device-status').textContent = online ? '在线 · 远程执行' : info.status === 'unknown' ? '状态待确认' : '离线 · 草稿已保留';
         controls();
         if (!online) {
-            disconnect();
+            disconnect({ retainWait: info.status === 'unknown' });
+            syncPhase = info.status === 'unknown' ? 'unknown' : 'offline'; syncStatus(); retryConnection();
             return;
         }
         const [list, caps] = await Promise.all([rpc('sessions'), rpc('capabilities')]);
-        if (version !== catalogVersion)
+        if (!current())
             return;
         sessions = list;
         capabilities = caps;
         renderSessions();
         if (session && !sessions.some(s => s.instanceId === session)) {
             draft();
-            disconnect();
-            generation++;
-            closeModal();
-            session = '';
-            images = [];
-            renderAttachments();
-            $('query').value = '';
-            renderReceipt();
-            clearMessages();
+            closeSessionView();
             notice('此对话已关闭或不再共享');
-            controls();
         }
         if (!session) {
             const last = stored.get('last');
             if (last && sessions.some(s => s.instanceId === last))
                 openSession(last);
         }
-        else if (!source && !document.hidden)
+        else if (!source && !hidden())
             connect();
         if (caps.projects) {
             try {
@@ -143,32 +170,66 @@ async function refresh() {
         controls();
     }
     catch (e) {
-        if (version === catalogVersion && owner === generation && connection === source) {
+        if (current()) {
             online = false;
-            disconnect();
-            $('device-status').textContent = '暂时无法连接';
-            if(e.status===410 || e.status===401){
-                draft();generation++;closeModal();
-                session='';sessions=[];groups=[];capabilities={};images=[];
-                $('query').value='';renderAttachments();renderReceipt();clearMessages();renderSessions();
-                $('device-status').textContent='连接已失效';$('connection').textContent='请在本地窗口重新连接';
+            if (e.status === 410 || e.status === 401) {
+                draft();
+                closeSessionView();
+                invalidated = true;
+                syncPhase = 'invalid';
+                sessions = []; groups = []; capabilities = {};
+                renderSessions();
+                text('device-status', '连接已失效');
+            } else {
+                disconnect({ retainWait: true });
+                syncPhase = 'unknown';
+                text('device-status', '暂时无法连接');
             }
-            controls();
-            notice(e.message);
+            controls(); syncStatus(); retryConnection();
+            connectionNotice = e.message; notice(connectionNotice);
         }
     }
 }
 $('refresh').onclick = () => void refresh();
-function disconnect() { queueVersion++; clearTimeout(queueTimer); clearTimeout(receiptTimer); globalThis.AsHubFilePreview?.close(); source?.close(); source = null; clearTimeout(retry); retry = null; clearTimeout(frameTimer); frameTimer = null; frameQueue = []; ready = false; controls(); if (session)
-    $('connection').textContent = '连接已暂停'; }
+$('sync-retry').onclick = () => {
+    if (!session || invalidated || hidden()) return;
+    draft(); ++catalogVersion; stopWatch();
+    // Replace only the event subscription. Pending receipt IDs and in-flight sends survive.
+    if (online) connect(); else void refresh();
+};
+$('return-devices').onclick = async () => {
+    const b = $('return-devices'); if (b.disabled) return;
+    b.disabled = true; draft();
+    try { await api('/owner', {}); } catch (e) { notice('无法打开设备列表：' + e.message); }
+    finally { b.disabled = false; }
+};
+function disconnect({ retainWait = false } = {}) {
+    queueVersion++; clearTimeout(queueTimer); clearTimeout(receiptTimer); globalThis.AsHubFilePreview?.close();
+    source?.close(); source = null; clearTimeout(retry); retry = null;
+    clearTimeout(frameTimer); frameTimer = null; frameQueue = []; ready = false;
+    if (!retainWait) stopWatch();
+    syncPhase = session ? 'paused' : 'idle'; syncStatus(); controls();
+}
+function closeSessionView() {
+    composerMedia.cancel();
+    generation++;
+    closeModal();
+    session = '';
+    disconnect();
+    images = [];
+    $('query').value = '';
+    renderAttachments();
+    clearMessages();
+    renderReceipt();
+}
 function clearMessages() { turnOutcome = ''; clearTimeout(renderTimer); reply = null; liveSegment = false; phase = null; owners.clear(); approvals.clear(); $('messages').replaceChildren(); busy = false; modelInfo = {}; $('model').textContent = '选择模型'; $('queue').replaceChildren(); }
 function connect() {
-    disconnect();
-    if (!session || document.hidden || !online)
+    disconnect({ retainWait: true });
+    if (!session || hidden() || !online)
         return;
     const g = generation, sid = session;
     clearMessages();
-    $('connection').textContent = '正在同步对话…';
+    syncPhase = 'syncing'; watchSync();
     const stream = new EventSource(base + '/events?session=' + encodeURIComponent(sid));
     source = stream;
     stream.onmessage = event => { if (source !== stream || generation !== g)
@@ -181,11 +242,10 @@ function connect() {
         notice('收到无法识别的事件，请重新连接');
     } };
     stream.onerror = () => { if (source !== stream || generation !== g)
-        return; disconnect(); $('connection').textContent = '连接中断，正在恢复…'; retry = setTimeout(() => { if (generation === g)
-        void refresh(); }, 2000); };
+        return; disconnect({ retainWait: true }); syncPhase = 'reconnecting'; watchSync(); retryConnection(); };
 }
 function openSession(id) { if (!sessions.some(s => s.instanceId === id))
-    return; draft(); disconnect(); generation++; closeModal(); session = id; images = []; renderAttachments(); $('query').value = stored.get(id + '.draft') || ''; stored.set('last', id); notice(); renderSessions(); connect(); renderReceipt(); }
+    return; composerMedia.cancel(); draft(); disconnect(); generation++; closeModal(); session = id; images = imageDrafts.get(id)?.slice() || []; renderAttachments(); $('query').value = stored.get(id + '.draft') || ''; stored.set('last', id); notice(); renderSessions(); connect(); renderReceipt(); }
 function nearBottom() { const box = $('messages'); return box.scrollHeight - box.scrollTop - box.clientHeight < 100; }
 function drain() { frameTimer = null; const near = !ready || nearBottom(); for (const event of frameQueue.splice(0, 60)) {
     try {
@@ -318,13 +378,12 @@ function frame({ meta = {}, payload: p = {} }) {
     const name = meta.name;
     if (name === 'backend:reset' || name === 'hub:branch-switched') {
         clearMessages();
-        ready = false;
-        controls();
+        queueVersion++; clearTimeout(queueTimer); clearTimeout(receiptTimer);
+        syncPhase = 'syncing'; watchSync();
         return;
     }
     if (name === 'hub:replay-done') {
-        ready = true;
-        $('connection').textContent = '已同步 · 在远程电脑执行';
+        ready = true; stopWatch(); syncPhase = 'ready'; syncStatus();
         controls();
         void loadQueue();
         void checkReceipt();
@@ -501,26 +560,43 @@ async function loadQueue() {
             notice(e.message);
     }
 }
-function renderAttachments() { $('attachments').replaceChildren(...images.map((img, i) => button(img.name + ' ×', () => { images.splice(i, 1); renderAttachments(); }))); }
-$('upload').onchange = async () => { const g = generation; try {
-    for (const file of $('upload').files) {
-        if (images.length >= 4)
-            throw Error('最多添加 4 张图片');
-        if (file.size + images.reduce((n, image) => n + Math.ceil(image.data.length * 3 / 4), 0) > 3 * 1024 * 1024 || !/^image\/(png|jpeg|webp|gif)$/.test(file.type))
-            throw Error('图片总大小请控制在 3 MB 内，支持 PNG、JPEG、WebP 和 GIF');
-        const value = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsDataURL(file); });
-        if (g !== generation)
-            return;
-        images.push({ id:crypto.randomUUID(), name: file.name, data: String(value).split(',')[1], mimeType: file.type });
+function renderAttachments() { $('attachments').replaceChildren(...images.map((img, i) => button(img.name + ' ×', () => { images.splice(i, 1); draft(); renderAttachments(); }))); }
+function checkImageDraftSize(file, drafts) {
+    if (drafts.length >= 4) throw Error('最多添加 4 张图片');
+    if (file.size + drafts.reduce((n, image) => n + Math.ceil(image.data.length * 3 / 4), 0) > 3 * 1024 * 1024)
+        throw Error('图片总大小请控制在 3 MB 内，支持 PNG、JPEG、WebP 和 GIF');
+}
+$('upload').onchange = async event => {
+    const picker = event.currentTarget, owner = session, files = [...picker.files];
+    picker.value = '';
+    if (!owner || !files.length) return;
+    draft();
+    const draftsForOwner = () => session === owner ? images : imageDrafts.get(owner);
+    try {
+        for (const file of files) {
+            const drafts = draftsForOwner();
+            if (!drafts) return;
+            if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type))
+                throw Error('图片总大小请控制在 3 MB 内，支持 PNG、JPEG、WebP 和 GIF');
+            checkImageDraftSize(file, drafts);
+            const value = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(file);
+            });
+            // View switches keep the selection with its original draft. If the
+            // conversation was deleted during the read, that draft is gone.
+            const latest = draftsForOwner();
+            if (!latest) return;
+            checkImageDraftSize(file, latest);
+            latest.push({ id: crypto.randomUUID(), name: file.name, data: String(value).split(',')[1], mimeType: file.type });
+            if (owner === session) { draft(); renderAttachments(); }
+        }
+    } catch (error) {
+        if (owner === session) notice(error.message);
     }
-    renderAttachments();
-}
-catch (e) {
-    notice(e.message);
-}
-finally {
-    $('upload').value = '';
-} };
+};
 $('query').oninput = draft;
 $('query').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
@@ -551,7 +627,7 @@ async function checkReceipt() {
             }
             const sentIds = new Set(record.attachmentIds || []);
             images = images.filter(image => !sentIds.has(image.id));
-            renderAttachments();
+            draft(); renderAttachments();
             stored.set(sid + '.pending', null);
             renderReceipt();
         }
@@ -564,7 +640,7 @@ async function checkReceipt() {
     }
 }
 const sending = new Set();
-async function sendReceipt(record) { const g = generation, sid = session; if (!ready || !ownsReceipt(record, g) || record.session !== sid || sending.has(record.requestId))
+async function sendReceipt(record, { firstAttempt = false } = {}) { const g = generation, sid = session; if (!ready || !ownsReceipt(record, g) || record.session !== sid || sending.has(record.requestId))
     return; sending.add(record.requestId); try {
     const {attachmentIds, ...payload} = record;
     await rpc('submit', payload);
@@ -574,7 +650,9 @@ async function sendReceipt(record) { const g = generation, sid = session; if (!r
 }
 catch (e) {
     if (ownsReceipt(record, g)) {
-        if ([400, 403, 413].includes(e.status))
+        // A retry can be rejected by a new authorization check before it
+        // sees the original result. Only a first-attempt rejection settles it.
+        if (firstAttempt && [400, 403, 413].includes(e.status))
             stored.set(sid + '.pending', null);
         notice(e.message);
     }
@@ -588,7 +666,7 @@ $('composer').onsubmit = async (e) => { e.preventDefault(); if (!ready || !onlin
     return; const record = { session, query: $('query').value, attachmentIds:images.map(image=>image.id), images: images.map(({ data, mimeType }) => ({ data, mimeType })), requestId: crypto.randomUUID(), delivery: busy && capabilities.steering ? $('delivery').value : 'queue' }; stored.set(session + '.pending', JSON.stringify(record)); if (!pending()) {
     notice('无法保存发送凭据，请释放本地存储后重试');
     return;
-} renderReceipt(); await sendReceipt(record); };
+} renderReceipt(); await sendReceipt(record, { firstAttempt: true }); };
 $('stop').onclick = async () => { const g = generation; try {
     await rpc('cancel', { session });
 }
@@ -743,7 +821,7 @@ $('settings').onclick = async () => {
             $('dialog-body').append(button('删除对话', async () => { const confirm = modal('删除远程对话', [el('p', '此操作会删除远程电脑上的对话，不能撤销。')]); $('dialog-body').append(button('确认删除', async () => { if (g !== generation || confirm !== modalGeneration)
                 return; requestId ??= crypto.randomUUID(); const result = await rpc('session-delete', { session: sid, confirm: true, requestId }); if (result.state !== 'done')
                 await waitRequest(requestId, g); if (g !== generation)
-                return; stored.set(sid + '.draft', null); stored.set(sid + '.pending', null); stored.set('last', null); disconnect(); generation++; session = ''; clearMessages(); closeModal(); await refresh(); })); }));
+                return; stored.set(sid + '.draft', null); imageDrafts.delete(sid); stored.set(sid + '.pending', null); stored.set('last', null); closeSessionView(); await refresh(); })); }));
         }
     }
     catch (e) {
@@ -751,19 +829,18 @@ $('settings').onclick = async () => {
             notice(e.message);
     }
 };
-window.addEventListener('pagehide', () => { draft(); disconnect(); clearInterval(poll); closeModal(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden) {
-    draft();
-    disconnect();
-}
-else
-    void refresh(); });
-window.addEventListener('online', () => void refresh());
-let poll = setInterval(() => { if (!document.hidden)
-    void refresh(); }, 15000);
+window.addEventListener('pagehide', () => { suspended = true; draft(); ++catalogVersion; disconnect(); clearInterval(poll); closeModal(); });
+document.addEventListener('visibilitychange', () => { if (hidden()) {
+    draft(); ++catalogVersion; disconnect();
+} else void refresh(); });
+window.addEventListener('online', () => { if (!hidden()) void refresh(); });
+const startPoll = () => setInterval(() => { if (!hidden()) void refresh(); }, 15000);
+let poll = startPoll();
 void refresh();
-window.addEventListener('pageshow', event => { if (event.persisted) {
-    poll = setInterval(() => { if (!document.hidden)
-        void refresh(); }, 15000);
-    void refresh();
+window.addEventListener('pageshow', event => { suspended = false; if (event.persisted) {
+    clearInterval(poll); poll = startPoll(); void refresh();
 } });
+
+const composerMedia = globalThis.AsHubComposerMedia.mount({container:document.querySelector('.bw-composer-actions'), input:$('query'),form:$('composer'),
+ owner:()=>session?backend+':'+session+':'+generation:'',enabled:()=>!!capabilities.composerInputs&&ready&&online&&!pending(),
+ request:(target,action,args,signal)=>rpc('composer-input',{...args,session:target.split(':')[1],action},signal)});

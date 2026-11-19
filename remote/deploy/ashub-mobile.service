@@ -1,0 +1,30 @@
+[Unit]
+Description=asHub mobile gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ashub-mobile
+Group=ashub-mobile
+WorkingDirectory=/opt/ashub-mobile/current
+Environment=NODE_ENV=production
+Environment=PORT=3002
+Environment=ASHUB_REMOTE_URL=https://ashub.aihao.world/mobile/
+Environment=ASHUB_REMOTE_DB=/var/lib/ashub-mobile/remote.sqlite
+ExecStart=/usr/bin/node /opt/ashub-mobile/current/server.mjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+StateDirectory=ashub-mobile
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=384M
+TasksMax=64
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

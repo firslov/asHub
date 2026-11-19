@@ -37,7 +37,7 @@ test('revocation cancels pending requests and late results cannot become success
 test('disconnect and host shutdown cancel streams; bounded resources preserve preview metadata and force safe MIME',async t=>{
  const f=await fixture(t),started=deferred();let streamSignal;
  const e=f.scoped.register('machine',adapter({subscribe:async(sid,emit,signal)=>{streamSignal=signal;emit({meta:{name:'hub:replay-done'},payload:{session:sid}});started.resolve();await new Promise(r=>signal.addEventListener('abort',r,{once:true}));},resource:async args=>({data:args.method==='HEAD'?new Uint8Array():Buffer.from('abc'),type:'text/html',size:3,version:'abc123'})}));
- const controller=new AbortController(),r=await fetch(f.url+'/api/backends/'+e.id+'/events?session=abc',{signal:controller.signal});await started.promise;const reader=r.body.getReader();assert.match(new TextDecoder().decode((await reader.read()).value),/replay-done/);controller.abort();await new Promise(r=>setTimeout(r,25));assert(streamSignal.aborted);
+ const controller=new AbortController(),r=await fetch(f.url+'/api/backends/'+e.id+'/events?session=abc',{signal:controller.signal});await started.promise;const reader=r.body.getReader();let received='';while(!received.includes('replay-done')){const chunk=await reader.read();assert(!chunk.done);received+=new TextDecoder().decode(chunk.value);}assert.match(received,/replay-done/);controller.abort();await new Promise(r=>setTimeout(r,25));assert(streamSignal.aborted);
  const url=f.url+'/api/backends/'+e.id+'/resource?kind=artifact&session=abc&path=x';
  const head=await fetch(url,{method:'HEAD'});assert.equal(head.headers.get('content-length'),'3');assert.equal(head.headers.get('x-artifact-version'),'abc123');assert.match(head.headers.get('content-disposition'),/^attachment;/);assert.equal(head.headers.get('content-type'),'application/octet-stream');
  assert.equal(await (await fetch(url)).text(),'abc');f.host.abort();assert.equal(f.registry.list().length,0);assert.throws(()=>f.scoped.register('later',adapter()));
@@ -60,4 +60,17 @@ test('workspace handles cannot retarget or reopen disposed registrations',async 
  const offline=f.scoped.register('offline',adapter({online:()=>false}));await assert.rejects(offline.open(),/offline/);assert.equal(f.opened.length,1);
  const other=f.registry.bind('other-plugin',new AbortController().signal).register('machine',adapter());
  await replacement.open(other.id);assert.equal(f.opened[1][0],replacement.id,'extra arguments cannot retarget a scoped handle');
+});
+
+test('owner navigation stays scoped and works after revocation without restoring remote authority',async t=>{
+ const controller=new AbortController(),revealed=[];
+ const registry=new BackendConnections({signal:controller.signal,reveal:(...args)=>revealed.push(args)});
+ const server=http.createServer((req,res)=>registry.handle(req,res,async()=>''));await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ t.after(()=>{controller.abort();server.closeAllConnections();server.close();});
+ const entry=registry.bind('owner-plugin',controller.signal).register('machine',adapter({managementResource:'connections',status:()=> 'unknown'}));
+ const base='http://127.0.0.1:'+server.address().port+'/api/backends/'+entry.id;
+ assert.equal((await(await fetch(base+'/info')).json()).status,'unknown');
+ assert.equal((await fetch(base+'/owner',{method:'POST',body:JSON.stringify({plugin:'other-plugin',resource:'admin'})})).status,200);assert.deepEqual(revealed,[['owner-plugin','connections']]);
+ entry.dispose();assert.equal((await fetch(base+'/owner',{method:'POST'})).status,200);assert.equal((await fetch(base+'/info')).status,410);
+ assert.equal((await fetch(base.replace(entry.id,'f'.repeat(32))+'/owner',{method:'POST'})).status,410);
 });

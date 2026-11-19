@@ -1,3 +1,4 @@
+import { ComposerInputs } from './extensions/composer-inputs.js';
 import { BackendConnections, type PluginSecretStore } from './extensions/backends.js';
 import { ConversationEntries } from './extensions/conversation-entries.js';
 import { PluginBackground } from './extensions/background.js';
@@ -85,6 +86,7 @@ export interface HubOpts {
   remoteSecretStore?: RemoteSecretStore;
   pluginSecretStore?: PluginSecretStore;
   openBackendWorkspace?(id: string, label: string): Promise<void> | void;
+  revealPluginResource?(plugin: string, resource: string): Promise<void> | void;
   host: string;
   webRoot: string;
   /** Factory the hub uses to spawn one bridge per session. */
@@ -857,7 +859,10 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     if (!session || session.kind !== 'agent' || session._closing || session._closed) throw Object.assign(new Error('Conversation is unavailable'), {status:409});
     return session.cwd;
   });
-  const backends = new BackendConnections({signal:lifecycle.signal,secrets:opts.pluginSecretStore,open:opts.openBackendWorkspace});
+  const composerInputs = new ComposerInputs(lifecycle.signal, id => {
+    const s = sessions.get(id); if (!s || s.kind !== 'agent' || s._closing || s._closed) throw Object.assign(Error('Conversation unavailable'), {status: 409});
+  });
+  const backends = new BackendConnections({signal:lifecycle.signal,secrets:opts.pluginSecretStore,open:opts.openBackendWorkspace,reveal:async (plugin,resource)=>{ interactions.reveal(plugin,resource); if (!opts.revealPluginResource) throw Object.assign(Error('Desktop window unavailable'),{status:501}); await opts.revealPluginResource(plugin,resource); }});
   let extensions: ApplicationExtensionRegistry;
   const pluginInstaller = new PluginInstaller(settingsPath(), undefined, process.platform, target => {
     const ids = new Set(pluginCatalog(settingsPath()).filter(p => (p.packageRoot ?? path.dirname(p.source)) === target).map(p => p.id));
@@ -953,6 +958,8 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     discover: () => installedApplicationDefinitions(settingsPath(), { enableBrowserPages: opts.enableBrowserPages, bindServices: (id, context) => ({
       ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('shared-conversations') ? {sharedConversations:sharing.bind(id,context.signal)} : {}),
       ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('backend-connections') ? {backends:backends.bind(id,context.signal)} : {}),
+      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('composer-inputs') ? {composerInputs:composerInputs.bind(id,context.signal)} : {}),
+      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('plugin-secrets') ? {secrets:backends.bind(id,context.signal).secrets} : {}),
       activities: pluginActivities.bind(id, context.signal),
       collaboration: Object.freeze({
         snapshot: (owner: string) => {
@@ -994,6 +1001,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     }
 
     if (!await access.allow(req, res)) return;
+    if (await composerInputs.handle(req,res,async request=>(await readLimitedBody(request,6*1024*1024)).toString('utf8'))) return;
     if (await backends.handle(req,res,async request=>(await readLimitedBody(request,6*1024*1024)).toString('utf8'))) return;
     if (await extensions.handle(req, res)) {
       extensionSnapshot();

@@ -123,6 +123,7 @@ export class SharedConversations {
             const match = /^\/([a-f0-9]{4,32})(\/.*)$/.exec(p);
             if (!match) throw fail('Unsupported conversation route');
             await session(match[1]);
+            if ((match[2] === '/composer-inputs' && method === 'GET') || (/^\/composer-inputs\/[a-f0-9]{32}\/[a-f0-9-]{36}$/.test(match[2]!) && ['GET','POST','DELETE'].includes(method))) return json(route, body, method);
             const allowed: Record<string, string[]> = { '/': ['DELETE'], '/submit': ['POST'], '/cancel': ['POST'], '/queue': ['GET'], '/queue/update': ['POST'], '/queue/withdraw': ['POST'], '/thinking': ['GET','POST'], '/model': ['PUT'] };
             if (method === 'GET' && /^\/image-resources\/[a-f0-9]{64}$/.test(match[2]!)) return json(route);
             if (!allowed[match[2]!]?.includes(method)) throw fail('Unsupported conversation operation');

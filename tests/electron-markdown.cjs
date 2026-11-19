@@ -8,6 +8,8 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ashub-markdown-ui-'));
 app.setPath('userData', profile);
 const watchdog = setTimeout(() => app.exit(1), 30000);
 const fixtures = [
+  { source: '**注意：**OBJ 包必须完整解压，保留其中的 PNG 和 EXR 贴图；STL 不含颜色。', expected: '注意：' },
+  { source: '**接口：**API 返回值', expected: '接口：' },
   { source: '**没有证据覆盖的部分默认“未检查”，不是默认通过。**正式库分别登记。', expected: '没有证据覆盖的部分默认“未检查”，不是默认通过。' },
   { source: '- **执行：**5次续算全部退出0，峰值内存 **5.52 GiB**', expected: '执行：' },
 ];

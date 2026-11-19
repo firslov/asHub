@@ -313,6 +313,16 @@ Local terminal, admin settings, plugin installation and persistent approvals are
 The adapter must also enforce the target's user and directory authorization. It must never
 fall back to local execution when offline.
 
+Adapters may expose `status(): "online" | "offline" | "unknown"` to distinguish
+unconfirmed availability from confirmed offline state. `online()` remains the access gate.
+Optional `managementResource` names a resource of the owning plugin. An explicit workspace
+"return" action reveals that resource in the local desktop, including after backend
+revocation; the host retains only plugin/resource identifiers, never the retired adapter.
+The active resource may implement synchronous `onReveal()` to reset its navigation to its
+entry view. This hook grants no authority and is not callable through remote resources.
+Unknown backend IDs cannot choose another owner or resource. Remote windows retain no native
+preload and remain bound to their original backend ID.
+
 `subscribe` emits conversation protocol v1 frames, including `hub:replay-done`. A fresh
 subscription reconstructs history, and an upstream reset emits `backend:reset` before replay.
 `request-status` and stable request IDs preserve uncertain write receipts across disconnection.
@@ -366,3 +376,62 @@ identity/scope/receipt state into plugin storage. The old local `/api/mobile` GE
 remains a status shim; mutation routes return 410 after migration. A legacy adapter
 runs only if migration fails, preserving an existing paired phone until upgrade
 can finish; it is not used for fresh installations or successful migrations.
+
+### Grouped resources and directory fields
+
+`resource-directory-fields` advertises the generic resource renderer additions:
+rows can declare `section` (a text heading grouping consecutive rows) and
+`inlineActions: true` to show their actions directly. An action can declare
+`copyText` to copy that exact text on a user click; no plugin action runs.
+`pendingLabel` (up to 200 characters) provides contextual status while a resource action
+is pending; controls remain disabled to prevent duplicate submissions.
+A form field with `type: "directories"` uses a newline-separated string value,
+shows removable paths and offers the existing desktop directory picker. Without
+the native bridge it accepts absolute paths as text. Picking a path grants no
+access: plugins must still request `sharingAuthorization` and the host validates
+and confirms the actual scope. Pending native picker results are ignored after
+navigation or submission. These are presentation primitives, not sharing policy.
+
+### Composer media inputs and scoped credentials
+
+Optional application plugins may request `composer-inputs` and `plugin-secrets`.
+These capabilities do not grant message submission, conversation history, browser
+page access, or backend registration. The host supplies:
+
+```js
+const unregister = ctx.services.composerInputs.register('dictation', {
+  kind: 'audio', label: '语音输入', description: '录音发送至配置的服务；仅写入草稿',
+  maxBytes: 4 * 1024 * 1024, maxDuration: 60,
+  async transform({data, mimeType, sessionId, signal}) { return 'draft text'; },
+});
+ctx.services.secrets.available; // false when OS encrypted storage is unavailable
+ctx.services.secrets.read('configuration');
+ctx.services.secrets.write('configuration', value); // string or null to delete
+```
+
+The host records media only after user interaction, holds it in memory and bounds
+size/duration. Transform business logic, provider selection and settings remain in
+the plugin. `plugin-secrets` reuses the package-scoped OS vault; it has no plaintext
+fallback and grants no other backend capabilities.
+
+Authenticated routes: `GET /:session/composer-inputs` returns active descriptors;
+`POST /:session/composer-inputs/:input/:requestId` accepts `{revision,data,mimeType}`
+(base64), returning an ephemeral job; `GET` polls and `DELETE` cancels the same job.
+Revision changes reject stale uploads. Cancellation before start creates a bounded
+tombstone. IDs cannot be reused with different content. Jobs are memory-only,
+bounded to 64 receipts / 4 active transformations, time out at 90 seconds and expire
+after 5 minutes (pruned at most 30 seconds later). Disable/dispose cancels jobs and
+invalidates registration. Restart never resumes recording or retranscribes audio.
+
+Shared-conversation channels allow these routes only for shared sessions. Device
+interconnect advertises `composerInputs` and forwards the bounded `composer-input`
+RPC (`list/start/status/cancel`); account ownership and shared-directory grants
+remain mandatory. No API key/configuration is returned through this protocol.
+The separate remote gateway needs the corresponding RPC/static-asset update.
+
+The host recorder owns permission, interruption, cancellation and draft merging.
+It cannot invoke submit. Device/session switches and sends invalidate the pending
+result. Edits during transcription are preserved, and late results wait for IME
+completion. Foreground loss cancels capture and transcription. The bundled browser
+page partitions remain denied media permissions; only trusted composer windows
+may request audio, never camera or screen capture.

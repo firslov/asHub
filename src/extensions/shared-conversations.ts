@@ -123,6 +123,7 @@ export class SharedConversations {
             const match = /^\/([a-f0-9]{4,32})(\/.*)$/.exec(p);
             if (!match) throw fail('Unsupported conversation route');
             await session(match[1]);
+            if ((match[2] === '/composer-inputs' && method === 'GET') || (/^\/composer-inputs\/[a-f0-9]{32}\/[a-f0-9-]{36}$/.test(match[2]!) && ['GET','POST','DELETE'].includes(method))) return json(route, body, method);
             const allowed: Record<string, string[]> = { '/': ['DELETE'], '/submit': ['POST'], '/cancel': ['POST'], '/queue': ['GET'], '/queue/update': ['POST'], '/queue/withdraw': ['POST'], '/thinking': ['GET','POST'], '/model': ['PUT'] };
             if (method === 'GET' && /^\/image-resources\/[a-f0-9]{64}$/.test(match[2]!)) return json(route);
             if (!allowed[match[2]!]?.includes(method)) throw fail('Unsupported conversation operation');
@@ -144,21 +145,27 @@ export class SharedConversations {
                 const body=new ReadableStream<Uint8Array>({
                     async pull(output) {
                         try {
-                            current(); const {value,done}=await reader.read();current();
-                            if(done){finish();output.close();return;}
-                            buffer+=decoder.decode(value,{stream:true});if(buffer.length>6*1024*1024)throw fail('Event too large');
-                            let end;let outgoing='';
-                            while((end=buffer.indexOf('\n\n'))>=0){
-                                const frame=buffer.slice(0,end);buffer=buffer.slice(end+2);
-                                const data=frame.split('\n').find(l=>l.startsWith('data: '));
-                                if(data){const event=JSON.parse(data.slice(6)), name=event.meta?.name;
-                                    if(event.meta?.source && event.meta.source!==id)continue;
-                                    if(name==='shell:cwd-change'&&!inside(event.payload?.cwd||''))throw fail('Conversation moved outside sharing scope');
-                                    if(['shell:pty-data','shell:output','pty:data','pty:resize'].includes(name)||name?.startsWith('terminal:'))continue;
+                            // A pending read will not pull again if this pull produces no chunk.
+                            // Keep reading when a network chunk is partial or entirely filtered.
+                            while (true) {
+                                current(); streamSignal.throwIfAborted();
+                                const {value,done}=await reader.read();
+                                current(); streamSignal.throwIfAborted();
+                                if(done){finish();output.close();return;}
+                                buffer+=decoder.decode(value,{stream:true});if(buffer.length>6*1024*1024)throw fail('Event too large');
+                                let end;let outgoing='';
+                                while((end=buffer.indexOf('\n\n'))>=0){
+                                    const frame=buffer.slice(0,end);buffer=buffer.slice(end+2);
+                                    const data=frame.split('\n').find(l=>l.startsWith('data: '));
+                                    if(data){const event=JSON.parse(data.slice(6)), name=event.meta?.name;
+                                        if(event.meta?.source && event.meta.source!==id)continue;
+                                        if(name==='shell:cwd-change'&&!inside(event.payload?.cwd||''))throw fail('Conversation moved outside sharing scope');
+                                        if(['shell:pty-data','shell:output','pty:data','pty:resize'].includes(name)||name?.startsWith('terminal:'))continue;
+                                    }
+                                    outgoing+=frame+'\n\n';
                                 }
-                                outgoing+=frame+'\n\n';
+                                if(outgoing){output.enqueue(encoder.encode(outgoing));return;}
                             }
-                            if(outgoing)output.enqueue(encoder.encode(outgoing));
                         }catch(e){finish();output.error(e);}
                     },cancel(){finish();void reader.cancel().catch(()=>{});},
                 });

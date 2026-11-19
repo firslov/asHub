@@ -7,6 +7,8 @@ export interface PluginSecretStore {
 export interface BackendAdapter {
     label: string;
     online(): boolean;
+    status?(): 'online' | 'offline' | 'unknown';
+    managementResource?: string;
     request(operation: string, args: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
     subscribe(session: string, emit: (event: unknown) => void, signal: AbortSignal): Promise<void>;
     resource?(args: Record<string, string>, signal: AbortSignal): Promise<{
@@ -16,7 +18,7 @@ export interface BackendAdapter {
         version?: string;
     }>;
 }
-const operations = new Set(['capabilities', 'sessions', 'project-groups', 'projects', 'create', 'models', 'model', 'thinking', 'set-thinking', 'session-network', 'set-session-network', 'session-delete', 'queue', 'queue-update', 'queue-withdraw', 'submit', 'request-status', 'cancel', 'permission', 'image', 'plugin-entries', 'plugin-resource']);
+const operations = new Set(['composer-input', 'capabilities', 'sessions', 'project-groups', 'projects', 'create', 'models', 'model', 'thinking', 'set-thinking', 'session-network', 'set-session-network', 'session-delete', 'queue', 'queue-update', 'queue-withdraw', 'submit', 'request-status', 'cancel', 'permission', 'image', 'plugin-entries', 'plugin-resource']);
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(value);
 const fail = (message: string, status = 400) => Object.assign(new Error(message), { status });
 type Entry = {
@@ -28,13 +30,16 @@ type Entry = {
 /** Scoped adapters only. Credentials/protocols and device discovery belong to plugins. */
 export class BackendConnections {
     private entries = new Map<string, Entry>();
+    // Retain only navigation metadata after revocation, never an adapter or credentials.
+    private owners = new Map<string, { plugin: string; resource: string }>();
     constructor(private options: {
         signal: AbortSignal;
         secrets?: PluginSecretStore;
         open?(id: string, label: string): Promise<void> | void;
+        reveal?(plugin: string, resource: string): Promise<void> | void;
     }) {
         options.signal.addEventListener('abort', () => { for (const e of this.entries.values())
-            e.controller.abort(); this.entries.clear(); }, { once: true });
+            e.controller.abort(); this.entries.clear(); this.owners.clear(); }, { once: true });
     }
     bind(plugin: string, signal: AbortSignal) {
         const active = () => { signal.throwIfAborted(); this.options.signal.throwIfAborted(); };
@@ -49,11 +54,14 @@ export class BackendConnections {
                 active();
                 if (!identifier(key) || !adapter || typeof adapter.request !== 'function' || typeof adapter.subscribe !== 'function' || typeof adapter.online !== 'function' || typeof adapter.label !== 'string' || !adapter.label.trim() || adapter.label.length > 160)
                     throw fail('Invalid backend');
+                if (adapter.managementResource !== undefined && !identifier(adapter.managementResource)) throw fail('Invalid management resource');
+                if (adapter.status !== undefined && typeof adapter.status !== 'function') throw fail('Invalid backend status');
                 const id = createHash('sha256').update(plugin + '\0' + key).digest('hex').slice(0, 32);
                 if (this.entries.has(id))
                     throw fail('Backend already registered', 409);
                 const entry: Entry = { id, plugin, adapter, controller: new AbortController() };
                 this.entries.set(id, entry);
+                if (adapter.managementResource) this.owners.set(id, { plugin, resource: adapter.managementResource });
                 const dispose = () => { entry.controller.abort(); if (this.entries.get(id) === entry)
                     this.entries.delete(id); signal.removeEventListener('abort', dispose); };
                 signal.addEventListener('abort', dispose, { once: true });
@@ -82,9 +90,18 @@ export class BackendConnections {
                 json(200, this.list());
                 return true;
             }
-            const match = /^\/api\/backends\/([a-f0-9]{32})\/(info|request|events|resource)$/.exec(url.pathname);
+            const match = /^\/api\/backends\/([a-f0-9]{32})\/(info|request|events|resource|owner)$/.exec(url.pathname);
             if (!match)
                 throw fail('Invalid backend route', 404);
+            if (match[2] === 'owner' && req.method === 'POST') {
+                this.options.signal.throwIfAborted();
+                const owner = this.owners.get(match[1]!);
+                if (!owner) throw fail('Backend owner unavailable', 410);
+                if (!this.options.reveal) throw fail('Desktop window unavailable', 501);
+                await this.options.reveal(owner.plugin, owner.resource);
+                json(200, { ok: true });
+                return true;
+            }
             const entry = this.entries.get(match[1]!);
             if (!entry || entry.controller.signal.aborted)
                 throw fail('Backend unavailable', 410);
@@ -96,7 +113,7 @@ export class BackendConnections {
             const current = () => { cancel!.signal.throwIfAborted(); if (this.entries.get(entry.id) !== entry)
                 throw fail('Backend changed', 409); };
             if (match[2] === 'info' && req.method === 'GET') {
-                json(200, { id: entry.id, label: entry.adapter.label, online: entry.adapter.online() });
+                json(200, { id: entry.id, label: entry.adapter.label, online: entry.adapter.online(), status: entry.adapter.status?.() ?? (entry.adapter.online() ? 'online' : 'offline') });
                 return true;
             }
             if (!entry.adapter.online())

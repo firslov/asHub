@@ -23,6 +23,7 @@ export interface ResourcePlan {
 export interface PluginResource {
     remote?: { conversationId(): string | null; actions: string[] };
     view(): unknown | Promise<unknown>;
+    onReveal?(): void;
     prepare(action: string, values: Record<string, unknown>): ResourcePlan | Promise<ResourcePlan>;
 }
 const identifier = (v: unknown) => typeof v === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(v);
@@ -56,6 +57,7 @@ export class PluginInteractions {
                 const key = pluginId + '/' + id;
                 if (this.entries.has(key))
                     throw Error('Plugin resource already registered');
+                if (resource.onReveal !== undefined && typeof resource.onReveal !== 'function') throw Error('Invalid reveal hook');
                 const entry = { pluginId, signal, resource };
                 this.entries.set(key, entry);
                 const dispose = () => { if (this.entries.get(key) === entry)
@@ -65,6 +67,13 @@ export class PluginInteractions {
                 signal.addEventListener('abort', dispose, { once: true });
                 return dispose;
             } });
+    }
+    reveal(pluginId: string, resourceId: string) {
+        this.signal.throwIfAborted();
+        const entry = this.entries.get(pluginId + '/' + resourceId);
+        if (!entry || entry.signal.aborted) return;
+        this.requireActive(pluginId);
+        entry.resource.onReveal?.();
     }
     catalog() { return [...this.entries.values()].filter(e=>!e.signal.aborted && e.resource.remote).map(e=>({pluginId:e.pluginId,resourceId:[...this.entries.entries()].find(([,v])=>v===e)![0].split('/')[1],sessionId:e.resource.remote!.conversationId()})); }
     async handle(req: IncomingMessage, res: ServerResponse, read: (req: IncomingMessage) => Promise<string>) {

@@ -11,6 +11,8 @@ export class RemoteAccount {
         this.epoch = 0;
         this.user = '';
         this.error = '';
+        this.discovery = 'idle';
+        this.opening = new Map();
         this.direct = new Agent({ headersTimeout: 30000, bodyTimeout: 45000 });
         if (this.gateway.protocol !== 'https:' && !(process.env.NODE_ENV === 'test' && this.gateway.hostname === '127.0.0.1'))
             throw Error('HTTPS gateway required');
@@ -44,15 +46,16 @@ export class RemoteAccount {
                 message = (await response.json()).error || message;
             }
             catch { }
-            if (response.status === 401 && cookie === this.cookie) {
-                this.clear();
-                this.error = '登录已过期，请重新登录';
-            }
+            this.current(epoch);
+            if (response.status === 401 && cookie && cookie === this.cookie) this.expire();
             throw fail(message, response.status);
         }
         return raw ? response : response.json();
     }
-    clear() { this.epoch++; this.cookie = ''; this.user = ''; for (const r of this.records.values())
+    expire() {
+        try { this.clear(); } finally { this.discovery = 'expired'; this.error = '登录已过期，请重新登录连接账号'; }
+    }
+    clear() { this.discovery = 'idle'; this.opening.clear(); this.epoch++; this.cookie = ''; this.user = ''; for (const r of this.records.values())
         r.registration.dispose(); this.records.clear(); this.backends.secrets.write('login', null); }
     async login(username, password) {
         if (!this.backends.secrets.available)
@@ -79,7 +82,14 @@ export class RemoteAccount {
                 this.user = '';
                 throw e;
             }
-            await this.refresh();
+            const accepted = this.epoch;
+            try { await this.refresh(); }
+            catch (e) {
+                // Authentication already succeeded. A discovery outage belongs on
+                // the account overview; expired/replaced credentials still fail closed.
+                if (!this.cookie || this.epoch !== accepted || this.discovery !== 'error') throw e;
+                this.current(accepted);
+            }
         }
         finally {
             this.loggingIn = false;
@@ -96,16 +106,22 @@ export class RemoteAccount {
     catch { } if (storageError)
         throw storageError; }
     async openDevice(id) {
+        if (this.opening.has(id)) return this.opening.get(id);
         const epoch = this.epoch, record = this.records.get(id);
         this.current(epoch);
         if (!this.cookie || !record) throw fail('设备已不可用，请刷新列表', 410);
-        // Recheck account membership and availability before opening a cached row.
-        await this.refresh();
-        this.current(epoch);
-        if (this.records.get(id) !== record) throw fail('设备已变更，请重新选择', 410);
-        if (!record.device.online) throw fail('电脑离线，请稍后再试', 503);
-        await record.registration.open();
-        this.current(epoch);
+        const task = (async () => {
+            // Never open a stale row on failed discovery, revoked membership or account switch.
+            await this.refresh();
+            this.current(epoch);
+            if (this.records.get(id) !== record) throw fail('设备已变更，请重新选择', 410);
+            if (!record.device.online) throw fail('电脑离线，请在目标电脑打开 asHub 并检查设备互联共享', 503);
+            await record.registration.open();
+            this.current(epoch);
+        })();
+        this.opening.set(id, task);
+        try { return await task; }
+        finally { if (this.opening.get(id) === task) this.opening.delete(id); }
     }
     async refresh() {
         if (!this.cookie)
@@ -113,6 +129,7 @@ export class RemoteAccount {
         if (this.refreshing && this.refreshEpoch === this.epoch)
             return this.refreshing;
         const epoch = this.epoch;
+        this.discovery = 'loading';
         const task = (async () => {
             try {
                 const devices = await this.call('api/devices');
@@ -128,23 +145,26 @@ export class RemoteAccount {
                 for (const d of valid) {
                     const old = this.records.get(d.id);
                     if (old) {
-                        old.device = d;
+                        old.device = d; old.confirmed = true;
                         continue;
                     }
-                    const record = { device: d };
+                    const record = { device: d, confirmed: true };
                     const owner = this;
-                    const adapter = { get label() { return String(record.device.name || '远程电脑').slice(0, 160); }, online: () => !!record.device.online,
+                    const adapter = { get label() { return String(record.device.name || '远程电脑').slice(0, 160); }, online: () => record.confirmed && !!record.device.online,
+                        status: () => !record.confirmed ? 'unknown' : record.device.online ? 'online' : 'offline',
+                        managementResource: 'connections',
                         request: (op, args, signal) => owner.call(`api/devices/${d.id}/rpc`, { op, args }, signal),
                         subscribe: (session, emit, signal) => owner.subscribe(d.id, session, emit, signal), resource: (args, signal) => owner.resource(d.id, args, signal) };
                     record.registration = this.backends.register(d.id, adapter);
                     this.records.set(d.id, record);
                 }
                 this.error = '';
+                this.discovery = 'ready';
             }
             catch (e) {
                 if (epoch === this.epoch) {
-                    for (const r of this.records.values())
-                        r.device = { ...r.device, online: false };
+                    for (const record of this.records.values()) record.confirmed = false;
+                    this.discovery = 'error';
                     this.error = e.message;
                 }
                 throw e;
@@ -175,6 +195,7 @@ export class RemoteAccount {
             clearTimeout(timer);
         }
         this.current(epoch);
+        if (response.status === 401) this.expire();
         if (!response.ok || !response.body)
             throw fail('对话连接失败', response.status);
         const reader = response.body.getReader(), decoder = new TextDecoder();

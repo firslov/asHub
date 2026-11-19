@@ -416,7 +416,7 @@ kbd {
 .extension-resource-review dd { margin:0; font-size:var(--fs-md); white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; }
 .extension-resource-confirm { padding-top:16px; border-top:1px solid var(--border-light); }
 .extension-resource[aria-busy=true] { opacity:.65; }
-.extension-resource-form label[hidden] { display:none; }
+.extension-resource-form .plugin-config-label[hidden] { display:none; }
 .extension-resource-link { display:inline-block; margin-top:8px; color:var(--accent); font-size:var(--fs-sm); text-decoration:none; }
 .extension-resource-link:hover { text-decoration:underline; }
 
@@ -426,3 +426,14 @@ kbd {
 .extension-authorization-details > summary:focus-visible { outline:2px solid var(--accent-border); outline-offset:3px; }
 .extension-authorization-details[open] > .extension-resource-review { margin:10px 0 16px; padding-left:12px; border-left:1px solid var(--border-light); }
 .extension-authorization-details .extension-resource-review dd { font-size:var(--fs-sm); color:var(--text-dim); }
+
+/* Generic grouped resources and directory fields; plugin content remains text-only. */
+.extension-resource-section + .extension-resource-section { margin-top:24px; padding-top:24px; border-top:1px solid var(--border-light); }
+.extension-resource-section-title { font-size:var(--fs-sm); font-weight:500; color:var(--text-dim); margin:0 0 14px; }
+.extension-resource-inline-actions { margin-top:14px; }
+.extension-resource-inline-actions > button { flex:0 1 auto; }
+.extension-resource-form .plugin-config-label { display:flex; flex-direction:column; gap:8px; min-width:0; font-size:var(--fs-sm); color:var(--text-dim); }
+.extension-directory-list { display:flex; flex-direction:column; gap:8px; }
+.extension-directory-row { display:flex; gap:12px; align-items:center; padding:10px 12px; background:var(--bg2); border:1px solid var(--border-light); border-radius:var(--radius-sm); }
+.extension-directory-row > span { flex:1; min-width:0; overflow-wrap:anywhere; line-height:1.6; }
+.extension-directory-row > button { flex-shrink:0; }

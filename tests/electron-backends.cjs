@@ -3,14 +3,14 @@ const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http
 const root=path.resolve(__dirname,'..'),profile=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-backends-ui-'));
 app.setPath('userData',profile);const deadline=setTimeout(()=>app.exit(1),90000);
 app.whenReady().then(async()=>{
- let server,windows=[];const controller=new AbortController(),streams=new Map(),streamEnds=new Map(),requests=[],opened=[],receipts=new Map();let sessionDelay=null,holdReceipt=false,releaseReceipt,heldReceiptId,removed=false,online=true,queue=[{id:'queue-message-000001',query:'排队消息',revision:1}],queueDelay=null,modelDelay=null,submits=0;
+ let server,windows=[];const controller=new AbortController(),streams=new Map(),streamEnds=new Map(),requests=[],opened=[],receipts=new Map();let sessionDelay=null,holdReceipt=false,releaseReceipt,heldReceiptId,submissionRevoked=false,deletedB=false,removed=false,online=true,queue=[{id:'queue-message-000001',query:'排队消息',revision:1}],queueDelay=null,modelDelay=null,submits=0;
  try{
   const {BackendConnections}=await import('../dist/extensions/backends.js');const registry=new BackendConnections({signal:controller.signal,open:id=>opened.push(id)});
   const frame=(name,payload={})=>({meta:{name},payload});
   const history=[frame('agent:info',{model:'deepseek-v4',provider:'deepseek'}),frame('agent:query',{query:'请查看结果'}),frame('agent:processing-start'),frame('agent:thinking',{text:'**分析结果**'}),frame('agent:tool-started',{toolCallId:'old',name:'read_file',input:{path:'report.md'}}),frame('agent:tool-completed',{toolCallId:'old',text:'done'}),frame('agent:response-chunk',{blocks:[{type:'text',text:'结果已就绪。公式：$x^2$'}]}),frame('agent:response-chunk',{blocks:[{type:'text',text:'\n\n![图片](chart.png)\n\n[报告](report.md)\n\n<img src="https://tracking.invalid/pixel" srcset="https://tracking.invalid/pixel2 2x">'}]}),frame('agent:response-segment',{text:'结果已就绪。公式：$x^2$\n\n![图片](chart.png)\n\n[报告](report.md)\n\n<img src="https://tracking.invalid/pixel" srcset="https://tracking.invalid/pixel2 2x">'}),frame('agent:processing-done'),frame('hub:replay-done')];
   const bind=key=>registry.bind('plugin',controller.signal).register(key,{label:key==='one'?'办公室 Mac':'工作站',online:()=>online,request:async(op,args)=>{
-   requests.push({key,op,args});if(op==='sessions'){if(sessionDelay){const held=sessionDelay;sessionDelay=null;return held;}return [{instanceId:'abcd',title:'项目主控'},{instanceId:'bcde',title:'技术审查'}].filter(s=>!removed||s.instanceId!=='abcd');}
-   if(op==='capabilities')return {projects:true,queue:true,queueActions:true,steering:true,thinking:true,sessionNetwork:true,sessionDelete:true,pluginResources:true};
+   requests.push({key,op,args});if(op==='sessions'){if(sessionDelay){const held=sessionDelay;sessionDelay=null;return held;}return [{instanceId:'abcd',title:'项目主控'},{instanceId:'bcde',title:'技术审查'}].filter(s=>(!removed||s.instanceId!=='abcd')&&(!deletedB||s.instanceId!=='bcde'));}
+   if(op==='capabilities')return {composerInputs:true,projects:true,queue:true,queueActions:true,steering:true,thinking:true,sessionNetwork:true,sessionDelete:true,pluginResources:true};
    if(op==='project-groups')return [{id:'project',name:'设计项目',sessionIds:['abcd','bcde'],pinnedSessionIds:['abcd']}];
    if(op==='queue'){if(queueDelay){const delay=queueDelay;queueDelay=null;return delay;}return queue;}
    if(op==='queue-withdraw'){queue=[];return {query:'排队消息'};}
@@ -19,7 +19,12 @@ app.whenReady().then(async()=>{
    if(op==='model')return {model:args.model,provider:args.provider};
    if(op==='thinking')return {model:'deepseek-v4',provider:'deepseek',supported:true,level:'high',levels:['low','high']};
    if(op==='set-thinking')return {level:args.level};
-   if(op==='submit'){if(!receipts.has(args.requestId)){submits++;receipts.set(args.requestId,{state:args.query==='new receipt'?'pending':'done',result:{ok:true}});}if(submits===1&&!receipts.get(args.requestId).dropped){receipts.get(args.requestId).dropped=true;throw Object.assign(Error('response lost'),{status:504});}return receipts.get(args.requestId);}
+   if(op==='submit'){if(submissionRevoked)throw Object.assign(Error('会话授权已失效'),{status:403});if(!receipts.has(args.requestId)){submits++;receipts.set(args.requestId,{state:args.query==='new receipt'?'pending':'done',result:{ok:true}});}if(submits===1&&!receipts.get(args.requestId).dropped){receipts.get(args.requestId).dropped=true;throw Object.assign(Error('response lost'),{status:504});}return receipts.get(args.requestId);}
+   if(op==='composer-input'){
+    if(args.action==='list')return [{id:'a'.repeat(32),revision:'v1',label:'语音输入',kind:'audio',maxBytes:4194304,maxDuration:60}];
+    return {state:'done',text:'测试转写'};
+   }
+   if(op==='session-delete'){assert.equal(args.session,'bcde');deletedB=true;return {state:'done'};}
    if(op==='request-status'){if(holdReceipt){holdReceipt=false;heldReceiptId=args.requestId;return new Promise(r=>releaseReceipt=r);}return receipts.get(args.requestId)||{state:'missing'};}
    if(op==='session-network')return {enabled:null,effective:true};if(op==='plugin-entries')return [];
    return {ok:true};
@@ -57,6 +62,15 @@ app.whenReady().then(async()=>{
   await js("document.querySelector('#query').value='电脑一草稿';document.querySelector('#query').dispatchEvent(new Event('input'))");
   const second=await make(b.id),js2=code=>second.webContents.executeJavaScript(code);await wait("document.querySelectorAll('#sessions button').length===2",js2);await js2("document.querySelector('[data-session-id=abcd]').click()");await wait("!document.querySelector('#send').disabled",js2);assert.equal(await js2("document.querySelector('#query').value"),'');
   await js2("document.querySelector('#query').value='电脑二草稿';document.querySelector('#query').dispatchEvent(new Event('input'))");await click('技术审查');await wait("!document.querySelector('#send').disabled");assert.equal(await js("document.querySelector('#query').value"),'');await click('项目主控');await wait("!document.querySelector('#send').disabled");assert.equal(await js("document.querySelector('#query').value"),'电脑一草稿');
+  const selectImage=name=>js(`(()=>{const files=new DataTransfer();files.items.add(new File(['image'],${JSON.stringify(name)},{type:'image/png'}));const input=document.querySelector('#upload');input.files=files.files;input.dispatchEvent(new Event('change'));})()`);
+  const holdImage=()=>js(`(()=>{const Native=window.FileReader;window.finishImage=null;window.FileReader=class extends Native{readAsDataURL(...args){window.finishImage=()=>{window.FileReader=Native;super.readAsDataURL(...args)};}};})()`);
+  await holdImage();await selectImage('会话 A 迟到.png');
+  await wait('!!window.finishImage');await click('技术审查');await wait("!document.querySelector('#send').disabled");
+  await js("finishImage()");await new Promise(r=>setTimeout(r,100));
+  assert.equal(await js("document.querySelector('#attachments').textContent"),'');
+  await click('项目主控');await wait("!document.querySelector('#send').disabled");
+  await wait("document.querySelector('#attachments').textContent.includes('会话 A 迟到.png')");
+  await click('会话 A 迟到.png ×');
   // A failed catalog read started in A cannot disconnect a newer B stream.
   let rejectCatalog;sessionDelay=new Promise((_r,reject)=>rejectCatalog=reject);const countCatalog=requests.filter(r=>r.op==='sessions').length;await js("document.querySelector('#refresh').click()");
   for(let n=0;n<100&&requests.filter(r=>r.op==='sessions').length===countCatalog;n++)await new Promise(r=>setTimeout(r,20));
@@ -65,7 +79,22 @@ app.whenReady().then(async()=>{
   await click('项目主控');await wait("!document.querySelector('#send').disabled");
   // Late model catalog cannot populate another conversation's modal.
   let releaseModel;modelDelay=new Promise(r=>releaseModel=r);await js("document.querySelector('#model').click()");await wait("document.querySelector('#dialog').open");await click('技术审查');releaseModel({providers:[{name:'wrong',models:[{id:'wrong-model'}]}]});await new Promise(r=>setTimeout(r,100));assert.equal(await js("document.querySelector('#dialog').open"),false);assert(!(await js("document.body.textContent")).includes('wrong-model'));
-  await click('项目主控');await wait("!document.querySelector('#send').disabled");await js("document.querySelector('#composer').requestSubmit()");await wait("document.querySelector('#notice').textContent.includes('response lost')");await click('重试原请求');await wait("document.querySelector('#receipt').hidden");assert.equal(submits,1,'retries reuse durable request id');assert.equal(await js("document.querySelector('#query').value"),'');
+  await click('项目主控');await wait("!document.querySelector('#send').disabled");
+  await js("document.querySelector('#composer').requestSubmit()");
+  await wait("document.querySelector('#notice').textContent.includes('response lost')");
+  const receiptKey='ash.backend.'+a.id+'.abcd.pending',firstReceipt=await js(`localStorage.getItem(${JSON.stringify(receiptKey)})`);
+  assert(firstReceipt);
+  // The original attempt ran. Revoking the session can reject a retry before
+  // the publisher reads the journal, so the rejection cannot settle the ID.
+  submissionRevoked=true;
+  await click('重试原请求');await wait("document.querySelector('#notice').textContent.includes('会话授权已失效')");
+  assert.equal(await js(`localStorage.getItem(${JSON.stringify(receiptKey)})`),firstReceipt);
+  assert.equal(await js("document.querySelector('#send').disabled"),true);
+  await js("document.querySelector('#query').value='核对期间的新草稿';document.querySelector('#query').dispatchEvent(new Event('input'))");
+  submissionRevoked=false;
+  await click('重试原请求');await wait("document.querySelector('#receipt').hidden");
+  assert.equal(submits,1,'all retries reuse the durable request id');
+  assert.equal(await js("document.querySelector('#query').value"),'核对期间的新草稿');
   // A completed old status lookup must not erase the replacement receipt.
   holdReceipt=true;await js("document.querySelector('#query').value='old receipt';document.querySelector('#composer').requestSubmit()");
   for(let n=0;n<100&&!releaseReceipt;n++)await new Promise(r=>setTimeout(r,20));assert(releaseReceipt);
@@ -97,7 +126,7 @@ app.whenReady().then(async()=>{
    const count=opened.length;
    await js(`(async()=>{const {mountResource}=await import(${JSON.stringify(moduleURL)});const host=document.createElement('div');host.id='connection-fixture';document.querySelector('#dialog-body').replaceChildren(host);document.querySelector('#dialog').showModal();window.connectionDisposer=mountResource(host,{pluginId:'fixture'},'connections',{request:async body=>(await fetch('/fixture-connections',{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined})).json()});})()`);
    await wait("!!document.querySelector('#connection-fixture .extension-resource-row > button')");
-   assert.equal(await js("document.querySelectorAll('#connection-fixture .extension-resource-row details').length"),0);
+   assert.equal(await js("document.querySelector('#connection-fixture .extension-resource-row > button').closest('.extension-resource-row').querySelectorAll('details').length"),0);
    await js("document.querySelector('#connection-fixture .extension-resource-row > button').click()");
    for(let n=0;n<100&&opened.length===count;n++)await new Promise(r=>setTimeout(r,20));assert.equal(opened.at(-1),a.id);assert.equal(opened.length,count+1);
    await js("connectionDisposer();document.querySelector('#dialog').close()");
@@ -106,18 +135,56 @@ app.whenReady().then(async()=>{
    await js("filteredDisposer();document.querySelector('#filtered-fixture').remove()");
   }
   win.setContentSize(760,620);await wait('innerWidth===760');assert(await js("document.documentElement.scrollWidth<=innerWidth"));
+  await js(fs.readFileSync(path.join(root,'tests/fixtures/media-recorder.js'),'utf8'));
+  const micReady="!document.querySelector('.composer-media').hidden&&!document.querySelector('.composer-media-button').disabled";
+  const draftBeforeReplay=await js("document.querySelector('#query').value");
+  await wait(micReady);await js("document.querySelector('.composer-media-button').click()");
+  await wait("document.querySelector('.composer-media').dataset.state==='recording'");
+  const replay=streams.get('one:abcd');
+  replay(frame('backend:reset'));
+  await wait("document.querySelector('#query').disabled");
+  await selectImage('同步期间选中的图片.png');
+  await wait("document.querySelector('#attachments').textContent.includes('同步期间选中的图片.png')");
+  assert(await js(micReady),'an ongoing recording can finish during same-session replay');
+  await js("document.querySelector('.composer-media-button').click()");
+  await wait("document.querySelector('#query').value.includes('测试转写') && mediaFixture.tracks.every(t=>t.stopped)");
+  assert(await js("document.querySelector('#query').disabled"),'transcription does not unlock message sends during replay');
+  replay(frame('hub:replay-done'));
+  await wait("!document.querySelector('#query').disabled");
+  await click('同步期间选中的图片.png ×');
+  await js(`document.querySelector('#query').value=${JSON.stringify(draftBeforeReplay)};document.querySelector('#query').dispatchEvent(new Event('input'))`);
+  await wait(micReady);await js("document.querySelector('.composer-media-button').click()");
+  await wait("document.querySelector('.composer-media').dataset.state==='recording'");
+  await js(`new MutationObserver((_records,observer)=>{if(document.querySelector('#notice').textContent.includes('不再共享')){window.stoppedOnRevocation=mediaFixture.tracks.every(t=>t.stopped);observer.disconnect()}}).observe(document.querySelector('#notice'),{childList:true})`);
   let releaseRemoved;modelDelay=new Promise(r=>releaseRemoved=r);await js("document.querySelector('#model').click()");await wait("document.querySelector('#dialog').open");removed=true;await js("document.querySelector('#refresh').click()");await wait("document.querySelector('#query').disabled&&!document.querySelector('#dialog').open");releaseRemoved({providers:[{name:'removed',models:[{id:'removed-model'}]}]});await new Promise(r=>setTimeout(r,50));assert(!(await js("document.body.textContent")).includes('removed-model'));assert.equal(await js("document.querySelector('#query').value"),'');
+  assert.equal(await js('window.stoppedOnRevocation'),true,'revocation releases the active microphone before displaying the notice');
   assert(await js("document.documentElement.scrollWidth<=innerWidth"));assert.equal(errors.length,0,errors.join('\n'));
   removed=false;await js("document.querySelector('#refresh').click()");await wait("!document.querySelector('#send').disabled");
   assert((await js("document.querySelector('#messages').children.length"))>0);
-  a.dispose();await js("document.querySelector('#refresh').click()");await wait("document.querySelector('#notice').textContent.includes('Backend unavailable')");
+  a.dispose();
+  await wait("document.querySelector('#query').disabled");
+  await js("document.querySelector('#refresh').click()");await wait("document.querySelector('#notice').textContent.includes('Backend unavailable')");
   assert.equal(await js("document.querySelector('#sessions').children.length"),0,'revoked connection retained the old account conversation list');assert.equal(await js("document.querySelector('#messages').children.length"),0);
   assert.equal(await js2("document.querySelector('#query').value"),'电脑二草稿');assert.equal(await js2("document.querySelector('#send').disabled"),false);
   // Explicit reconnect of the same immutable backend restores only its own session and draft.
   const restored=bind('one');assert.equal(restored.id,a.id);await js("document.querySelector('#refresh').click()");
   await wait("!document.querySelector('#send').disabled");assert.equal(await js("document.querySelector('#query').value"),'恢复草稿');
   assert.equal(await js2("document.querySelector('#query').value"),'电脑二草稿');
-  console.log('PASS isolated backend windows, files/images/math, late tool results, queue actions, immutable account routing, late model response, idempotent retry, one-time approvals, offline/reload recovery');
+  // Confirmed deletion clears the old composer before another conversation
+  // opens, and a selected image finishing late cannot recreate that draft.
+  await click('技术审查');await wait("!document.querySelector('#send').disabled");
+  await js("document.querySelector('#query').value='被删除对话的草稿';document.querySelector('#query').dispatchEvent(new Event('input'))");
+  await selectImage('已选图片.png');await wait("document.querySelector('#attachments').textContent.includes('已选图片.png')");
+  await holdImage();await selectImage('删除后到达.png');await wait('!!window.finishImage');
+  await js("document.querySelector('#settings').click()");await wait("document.querySelector('#dialog-body').textContent.includes('删除对话')");
+  await click('删除对话');await click('确认删除');
+  await wait("!document.querySelector('[data-session-id=bcde]')");
+  assert.equal(await js("document.querySelector('#connection').textContent"),'选择一个对话');
+  await js("finishImage()");await new Promise(r=>setTimeout(r,100));
+  assert.equal(await js("document.querySelector('#query').value"),'');
+  assert.equal(await js("document.querySelector('#attachments').textContent"),'');
+  assert.equal(await js("document.querySelector('#receipt').hidden"),true);
+  console.log('PASS isolated backend windows, files/images/math, late tool results, queue actions, immutable account routing, late model response, idempotent retry, held file selection, replay capture, revocation/deletion cleanup, one-time approvals, offline/reload recovery');
   controller.abort();for(const w of windows)w.destroy();server.closeAllConnections();server.close();clearTimeout(deadline);app.exit(0);
  }catch(e){console.error(e);if(windows[0]&&!windows[0].isDestroyed())console.error(await windows[0].webContents.executeJavaScript(`document.querySelector('.artifact-preview')?.outerHTML||document.body.innerText`));controller.abort();for(const w of windows)w.destroy();server?.closeAllConnections();server?.close();app.exit(1);}
 });

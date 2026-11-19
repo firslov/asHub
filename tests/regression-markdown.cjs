@@ -57,6 +57,30 @@ for (const remote of hasRemote ? [false, true] : [false]) {
     assert.equal(marked.parse('**执行：**5次 **预算：**3/48'), '<p><strong>执行：</strong>5次 <strong>预算：</strong>3/48</p>\n');
     assert.equal(marked.parse('**执行 `code` 和 *检查*：**5次'), '<p><strong>执行 <code>code</code> 和 <em>检查</em>：</strong>5次</p>\n');
   });
+  test(`${label}: Chinese bold labels before Latin text render without rewriting the source`, () => {
+    const { marked } = load(remote);
+    for (const suffix of ['OBJ 包必须完整解压', 'API 返回值', 'STL 不含颜色', 'abc', 'gpt-6', 'UTF-8']) {
+      const raw = `**注意：**${suffix}`;
+      assert.equal(marked.parse(raw), `<p><strong>注意：</strong>${suffix}</p>\n`);
+      const token = marked.lexer(raw)[0].tokens[0];
+      assert.equal(token.type, 'strong');
+      assert.equal(token.raw, '**注意：**');
+      assert.equal(token.text, '注意：');
+    }
+    assert.equal(marked.parse('- **注意：**OBJ 包\n- **接口：**API'), '<ul>\n<li><strong>注意：</strong>OBJ 包</li>\n<li><strong>接口：</strong>API</li>\n</ul>\n');
+    assert.match(marked.parse('| 提示 |\n| --- |\n| **注意：**OBJ 包 |'), /<td><strong>注意：<\/strong>OBJ 包<\/td>/);
+    assert.equal(marked.parse('**注意：**OBJ **接口：**API'), '<p><strong>注意：</strong>OBJ <strong>接口：</strong>API</p>\n');
+    assert.equal(marked.parse('**包含 `code` 和 *说明*：**API'), '<p><strong>包含 <code>code</code> 和 <em>说明</em>：</strong>API</p>\n');
+  });
+  test(`${label}: Latin-followed label streaming converges to historical rendering`, () => {
+    const { marked } = load(remote), baseline = load(remote, false).marked;
+    const source = '**注意：**OBJ 包必须完整解压，保留 PNG 和 EXR；STL 不含颜色。';
+    for (let i = 0; i <= source.length; i++) {
+      const prefix = source.slice(0, i), html = marked.parse(prefix);
+      if (i < '**注意：**'.length) assert.equal(html, baseline.parse(prefix));
+      else assert.equal(html, `<p><strong>注意：</strong>${prefix.slice('**注意：**'.length)}</p>\n`);
+    }
+  });
   test(`${label}: numeric label streaming prefixes converge without losing content`, () => {
     const { marked } = load(remote);
     const baseline = load(remote, false).marked;
@@ -87,7 +111,7 @@ for (const remote of hasRemote ? [false, true] : [false]) {
       '<https://example.com/**没有证据。**正式库>',
       '$**中文。**后文$', '$$**中文。**后文$$',
       String.raw`\(**中文。**后文\)`, String.raw`\[**中文。**后文\]`,
-      '**执行： **5次', '** 执行：**5次', '**English:**5', '**执行：**abc',
+      '**执行： **5次', '** 执行：**5次', '**English:**5', '**English:**OBJ',
       '***执行：**5次', '**执行：***5次', '**执行：**',
       '`**执行：**5次`', '```md\n**执行：**5次\n```', '    **执行：**5次',
       String.raw`\*\*执行：\*\*5次`, String.raw`**执行\*\*说明：**5次`,
@@ -95,6 +119,15 @@ for (const remote of hasRemote ? [false, true] : [false]) {
       '<span title="**执行：**5次">内容</span>',
       '[文档](https://example.com/**执行：**5)', '![图](image.png "**执行：**5")',
       '$**执行：**5$', String.raw`\(**执行：**5\)`, '**执行\n说明：**5次',
+      '**注意： **OBJ', '** 注意：**OBJ', '***注意：**OBJ', '**注意：***OBJ',
+      '**Note:**OBJ', '**中文\n注意：**OBJ',
+      '`**注意：**OBJ`', '```md\n**注意：**OBJ\n```', '    **注意：**OBJ',
+      String.raw`\*\*注意：\*\*OBJ`, String.raw`**注意\*\*说明：**OBJ`,
+      '<pre>**注意：**OBJ</pre>', '<code>**注意：**OBJ</code>',
+      '<span title="**注意：**OBJ">内容</span>',
+      '[文档](https://example.com/**注意：**OBJ)', '![图](image.png "**注意：**OBJ")',
+      '<https://example.com/**注意：**OBJ>', '$**注意：**OBJ$',
+      String.raw`\(**注意：**OBJ\)`, String.raw`\[**注意：**OBJ\]`,
       '**第一行\n第二行。**后文',
     ]) assert.equal(marked.parse(source), baseline.parse(source), source);
   });

@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up asHub mobile accounts
+After=ashub-mobile.service
+[Service]
+Type=oneshot
+User=ashub-mobile
+Group=ashub-mobile
+ExecStart=/usr/bin/node /opt/ashub-mobile/current/deploy/backup.mjs
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/ashub-mobile

@@ -10,13 +10,14 @@ export function validateResourceView(v) {
     if (!v || JSON.stringify(v).length > 262144 || !Array.isArray(v.rows) || v.rows.length > 100 || !Array.isArray(v.actions) || v.actions.length > 8)
         throw Error('Invalid plugin view');
     const action = a => { if (!a || !id(a.id) || !text(a.label, 120) || !a.values || typeof a.values !== 'object' || Array.isArray(a.values))
-        throw Error('Invalid plugin action'); };
+        throw Error('Invalid plugin action'); if (a.pendingLabel !== undefined && !text(a.pendingLabel, 200)) throw Error('Invalid pending label'); if (a.copyText !== undefined && !text(a.copyText)) throw Error('Invalid clipboard text'); };
     if (v.openConversation !== undefined && (!text(v.openConversation,100) || !/^[-a-zA-Z0-9]+$/.test(v.openConversation)))
         throw Error('Invalid conversation reference');
     v.actions.forEach(action);
     if (v.toggle !== undefined && (!v.toggle || !text(v.toggle.label,120) || typeof v.toggle.checked !== 'boolean' || !id(v.toggle.action) || (v.toggle.status !== undefined && !text(v.toggle.status,160))))
         throw Error('Invalid resource toggle');
     for (const r of v.rows) {
+        if ((r.section !== undefined && !text(r.section, 120)) || (r.inlineActions !== undefined && typeof r.inlineActions !== 'boolean')) throw Error('Invalid row presentation');
         if (r.conversationId !== undefined && (!text(r.conversationId, 100) || !/^[-a-zA-Z0-9]+$/.test(r.conversationId)))
             throw Error('Invalid conversation reference');
         if (!text(r.title, 200) || !text(r.detail ?? '') || !text(r.status ?? '', 300) || !Array.isArray(r.actions) || r.actions.length > 8)
@@ -30,7 +31,7 @@ export function validateResourceView(v) {
             throw Error('Invalid plugin form');
         const ids = new Set();
         for (const f of v.form.fields) {
-            if (!fieldId(f.id) || ids.has(f.id) || !text(f.label, 200) || !['text', 'password', 'textarea', 'number', 'select', 'checkbox', 'time', 'datetime-local'].includes(f.type) || !['string', 'number', 'boolean', 'undefined'].includes(typeof f.value))
+            if (!fieldId(f.id) || ids.has(f.id) || !text(f.label, 200) || !['text', 'password', 'textarea', 'number', 'select', 'checkbox', 'time', 'datetime-local', 'directories'].includes(f.type) || !['string', 'number', 'boolean', 'undefined'].includes(typeof f.value))
                 throw Error('Invalid plugin field');
             ids.add(f.id);
             if (f.when && (!fieldId(f.when.field) || !Array.isArray(f.when.values) || !f.when.values.every(v => text(v, 100))))
@@ -83,7 +84,11 @@ export function mountResource(container, feature, resourceId, options = {}) {
             clearTimeout(timer);
         }
     };
-    const button = (a) => { const b = node('button', 'p-btn extension-resource-action', a.label); b.type = 'button'; b.addEventListener('click', () => void send({ action: a.id, values: a.values })); return b; };
+    const button = (a) => { const b = node('button', 'p-btn extension-resource-action', a.label); b.type = 'button'; b.addEventListener('click', async () => {
+        if (a.copyText === undefined) { void send({ action: a.id, values: a.values }, a.pendingLabel); return; }
+        try { await navigator.clipboard.writeText(a.copyText); if (!disposed) feedback.textContent = local('已复制', 'Copied'); }
+        catch { if (!disposed) feedback.textContent = local('复制失败，请手动复制显示的地址', 'Copy failed; copy the displayed address manually'); }
+    }); return b; };
     const display = data => {
         if (disposed)
             return;
@@ -132,13 +137,13 @@ export function mountResource(container, feature, resourceId, options = {}) {
         view = next;
         render(view);
     };
-    const send = async (body) => {
+    const send = async (body, pendingLabel) => {
         if (busy || disposed)
             return;
         const focused = content.contains(document.activeElement) || reviewDialog?.contains(document.activeElement);
         busy = true;
         ++epoch;
-        feedback.textContent = '';
+        feedback.textContent = pendingLabel || '';
         content.setAttribute('aria-busy', 'true');
         for (const e of [...content.querySelectorAll('button,input,select,textarea'),...(reviewDialog?.querySelectorAll('button,input,select,textarea')??[])])
             e.disabled = true;
@@ -160,7 +165,7 @@ export function mountResource(container, feature, resourceId, options = {}) {
             content.removeAttribute('aria-busy');
             // An unchanged response may reuse the DOM; restore only applicable controls.
             for (const el of [...content.querySelectorAll('button,input,select,textarea'),...(reviewDialog?.querySelectorAll('button,input,select,textarea')??[])])
-                el.disabled = el.dataset.unavailable === 'true' || (!!reviewDialog && content.contains(el)) || !!el.closest('label[hidden]');
+                el.disabled = el.dataset.unavailable === 'true' || (!!reviewDialog && content.contains(el)) || !!el.closest('.plugin-config-label[hidden]');
             if (focused) restoreToggleFocus();
         }
     };
@@ -202,14 +207,14 @@ export function mountResource(container, feature, resourceId, options = {}) {
             const advanced = node('details', 'extension-resource-advanced');
             advanced.append(node('summary', '', local('高级选项', 'Advanced')));
             for (const f of v.form.fields) {
-                const label = node('label', 'plugin-config-label', f.label), control = node(f.type === 'textarea' ? 'textarea' : f.type === 'select' ? 'select' : 'input', 'p-input extension-field');
+                const label = node(f.type === 'directories' ? 'div' : 'label', 'plugin-config-label', f.label), control = node(f.type === 'textarea' || f.type === 'directories' ? 'textarea' : f.type === 'select' ? 'select' : 'input', 'p-input extension-field');
                 if (f.type === 'select')
                     for (const o of f.options) {
                         const opt = node('option', '', o.label);
                         opt.value = o.value;
                         control.append(opt);
                     }
-                else if (f.type !== 'textarea')
+                else if (f.type !== 'textarea' && f.type !== 'directories')
                     control.type = f.type;
                 if (f.type === 'checkbox')
                     control.checked = f.value === true;
@@ -221,6 +226,40 @@ export function mountResource(container, feature, resourceId, options = {}) {
                     control.maxLength = 8000;
                 }
                 label.append(control);
+                if (f.type === 'directories') {
+                    control.setAttribute('aria-label', f.label);
+                    const list = node('div', 'extension-directory-list');
+                    const paths = () => [...new Set(control.value.split('\n').map(p => p.trim()).filter(Boolean))];
+                    const draw = () => {
+                        list.replaceChildren();
+                        for (const value of paths()) {
+                            const row = node('div', 'extension-directory-row'), remove = node('button', 'p-btn', local('移除', 'Remove'));
+                            remove.type = 'button'; remove.setAttribute('aria-label', local('移除 ', 'Remove ') + value);
+                            remove.onclick = () => { control.value = paths().filter(p => p !== value).join('\n'); draw(); };
+                            row.append(node('span', '', value), remove); list.append(row);
+                        }
+                        if (!paths().length) list.append(node('p', 'extension-resource-detail', local('尚未选择目录', 'No directories selected')));
+                    };
+                    const pick = node('button', 'p-btn', local('添加目录', 'Add directory')); pick.type = 'button';
+                    const picker = window.electronAPI?.pickDirectory;
+                    control.hidden = !!picker;
+                    if (!picker) control.addEventListener('input', draw);
+                    pick.disabled = !picker; pick.dataset.unavailable = String(!picker);
+                    pick.onclick = async () => {
+                        pick.disabled = true;
+                        const token = epoch;
+                        try {
+                            const chosen = await picker();
+                            // Ignore native dialogs returning after navigation, submission or disposal.
+                            if (!disposed && !busy && epoch === token && label.isConnected && !label.hidden && chosen?.cwd) {
+                                control.value = [...new Set([...paths(), chosen.cwd])].join('\n'); draw();
+                            }
+                        } catch (e) { if (!disposed && label.isConnected) feedback.textContent = e.message; }
+                        finally { if (label.isConnected && !busy) pick.disabled = !picker || label.hidden; }
+                    };
+                    draw(); label.append(list, pick);
+                    if (!picker) label.append(node('p', 'extension-resource-detail', local('每行输入一个绝对路径；桌面客户端支持选择目录。', 'Enter one absolute path per line; the desktop app supports a directory picker.')));
+                }
                 (f.advanced ? advanced : form).append(label);
                 controls.set(f.id, { control, type: f.type });
                 if (f.when)
@@ -230,8 +269,8 @@ export function mountResource(container, feature, resourceId, options = {}) {
                 for (const { label, when } of conditions) {
                     label.hidden = !when.values.includes(String(controls.get(when.field)?.control.value));
                     // Hidden alternatives must not participate in browser form validation.
-                    for (const control of label.querySelectorAll('input,select,textarea'))
-                        control.disabled = label.hidden || busy;
+                    for (const control of label.querySelectorAll('button,input,select,textarea'))
+                        control.disabled = label.hidden || busy || control.dataset.unavailable === 'true';
                 }
             };
             form.addEventListener('change', visibility);
@@ -249,7 +288,17 @@ export function mountResource(container, feature, resourceId, options = {}) {
             content.append(form);
         }
         const rows = node('div', 'extension-resource-rows');
+        let section, sectionRows = rows;
         for (const r of v.rows) {
+            if (r.section !== section) {
+                section = r.section;
+                sectionRows = rows;
+                if (section) {
+                    const group = node('section', 'extension-resource-section');
+                    group.append(node('h2', 'extension-resource-section-title', section));
+                    sectionRows = node('div', 'extension-resource-section-rows'); group.append(sectionRows); rows.append(group);
+                }
+            }
             const row = node('article', 'extension-resource-row');
             row.append(node('h3', 'extension-resource-title', r.title));
             if (r.detail)
@@ -263,6 +312,11 @@ export function mountResource(container, feature, resourceId, options = {}) {
                 row.append(link);
             }
             // Reference an existing action; presentation never adds authority.
+            if (r.inlineActions) {
+                const controls = node('div', 'extension-resource-actions extension-resource-inline-actions');
+                for (const a of r.actions) controls.append(button(a));
+                row.append(controls); sectionRows.append(row); continue;
+            }
             const primary = r.actions.find(a => a.id === r.primaryAction);
             if (primary) row.append(button(primary));
             const secondary = r.actions.filter(a => a !== primary);
@@ -275,7 +329,7 @@ export function mountResource(container, feature, resourceId, options = {}) {
             menu.append(menuActions);
             if (secondary.length)
                 row.append(menu);
-            rows.append(row);
+            sectionRows.append(row);
         }
         content.append(rows);
     };

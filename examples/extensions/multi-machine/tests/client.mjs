@@ -74,3 +74,40 @@ test('device opening revalidates membership, rejects offline/removed devices, an
  f.account.clear();f.account.cookie='ash_mobile=new';
  delay.resolve(json(devices));await pending;assert.equal(f.opened.length,1);
 });
+
+test('discovery distinguishes loading/empty/unknown, preserves cached online facts and coalesces device opens',async t=>{
+ let response=json([{id:did,name:'Office',online:true}]);
+ const f=fixture(t,async()=>response);f.account.cookie='ash_mobile=old';
+ await f.account.refresh();assert.equal(f.account.discovery,'ready');
+ response=json({error:'unavailable'},502);await assert.rejects(f.account.refresh());
+ assert.equal(f.account.discovery,'error');assert.equal(f.account.records.get(did).device.online,true);assert.equal(f.registrations.get(did).status(),'unknown');assert.equal(f.registrations.get(did).online(),false);
+ await assert.rejects(f.account.openDevice(did));assert.equal(f.opened.length,0);
+ const held=deferred();response=held.promise;
+ const a=f.account.openDevice(did),b=f.account.openDevice(did);
+ assert.equal(f.account.discovery,'loading');assert.equal(f.registrations.get(did).online(),false,'a retry cannot prematurely confirm cached device status');assert.equal(f.registrations.get(did).status(),'unknown');assert(f.account.opening.has(did));held.resolve(json([{id:did,name:'Office',online:true}]));await Promise.all([a,b]);assert.deepEqual(f.opened,[did]);assert.equal(f.account.opening.size,0);
+ response=json([]);await f.account.refresh();assert.equal(f.account.discovery,'ready');assert.equal(f.account.records.size,0);
+});
+test('expired SSE login clears bindings; delayed 401 body cannot invalidate a newer login',async t=>{
+ let body,reading;const started=new Promise(r=>reading=r);
+ const f=fixture(t,async(url,init)=>{
+  if(url.pathname.endsWith('/login'))return json({},200,{'set-cookie':'ash_mobile=new'});
+  if(url.pathname.includes('/events'))return json({},401);
+  if(init.headers.Cookie==='ash_mobile=old')return {ok:false,status:401,json:()=>{reading();return new Promise(r=>body=r);}};
+  return json([{id:did2,name:'New',online:true}]);
+ });
+ f.account.cookie='ash_mobile=old';const stale=f.account.refresh().catch(e=>e);await started;
+ await f.account.login('new','pw');body({error:'expired'});await stale;
+ assert.equal(f.account.cookie,'ash_mobile=new');assert.equal(f.account.discovery,'ready');assert.equal(f.registrations.size,1);
+ await assert.rejects(f.account.subscribe(did2,'abc',()=>{},new AbortController().signal));
+ assert.equal(f.account.discovery,'expired');assert.equal(f.account.cookie,'');assert.equal(f.registrations.size,0);
+});
+
+test('successful login with failed first discovery keeps the new account actionable; 401 still expires it',async t=>{
+ let failure=502;
+ const f=fixture(t,async(url)=>url.pathname.endsWith('/login')?json({username:'new'},200,{'set-cookie':'ash_mobile=new'}):json({error:'discovery failed'},failure));
+ await f.account.login('new','pw');assert.equal(f.account.cookie,'ash_mobile=new');assert.equal(f.account.user,'new');assert.equal(f.account.discovery,'error');
+ const {connectionResource}=await import('../app.mjs');const resource=connectionResource(f.account);
+ await(await resource.prepare('connect-account',{})).execute();assert(resource.view().form);
+ await(await resource.prepare('login',{username:'new',password:'pw'})).execute();assert(!resource.view().form);assert.equal(resource.view().rows[0].status,'设备状态待确认');
+ failure=401;await assert.rejects(f.account.login('new','pw'));assert.equal(f.account.cookie,'');assert.equal(f.account.discovery,'expired');
+});

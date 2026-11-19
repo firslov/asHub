@@ -11,6 +11,7 @@
     "capabilities": [
       "application-lifecycle",
       "plugin-resources",
+      "resource-directory-fields",
       "backend-connections",
       "shared-conversations"
     ]

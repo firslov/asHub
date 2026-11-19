@@ -1,0 +1,25 @@
+{
+  "name": "ashub-remote",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test:rich-content": "node render-rich-content.cjs",
+    "test:webkit": "node render-detail-webkit.cjs && node render-scroll-webkit.cjs && node render-sidebar-webkit.cjs && node render-rich-content.cjs && node render-navigation.cjs && node render-session-actions.cjs && node render-keyboard.cjs",
+    "test:layout": "electron render-detail-test.cjs && electron render-layout-test.cjs && electron render-scroll-test.cjs && electron render-sidebar-test.cjs",
+    "test": "node --test test.mjs render-test.mjs regression-test.mjs && node hub-test.cjs",
+    "test:navigation": "node render-navigation.cjs",
+    "test:session-actions": "node render-session-actions.cjs",
+    "test:sync": "node render-sync.cjs",
+    "test:assistant": "node render-assistant.cjs",
+    "test:voice-input": "node --test voice-input-test.mjs && node ../tests/voice-input-browser.cjs && node ../tests/voice-pcm-browser.cjs",
+    "test:keyboard": "node render-keyboard.cjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

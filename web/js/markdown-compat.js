@@ -25,9 +25,10 @@
       if (/[\r\n]/u.test(text) || /\s$/u.test(text) || !han.test(text)) return;
       const beforeClose = text.at(-1);
       const cjkOpening = han.test(prevChar || '') && cjkPunctuation.test(text[0]);
-      // Chinese labels also commonly precede counts, e.g. **执行：**5次.
+      // Chinese labels can precede counts or Latin terms without a space,
+      // e.g. **执行：**5次 and **注意：**OBJ. Keep standard parsing first.
       const cjkClosing = cjkPunctuation.test(beforeClose) &&
-        /^[\p{Script=Han}\p{Decimal_Number}]/u.test(src.slice(close + 2));
+        /^[\p{Script=Han}\p{Decimal_Number}A-Za-z]/u.test(src.slice(close + 2));
       if (!cjkOpening && !cjkClosing) return;
       return {
         type: 'strong', raw: src.slice(0, close + 2), text,

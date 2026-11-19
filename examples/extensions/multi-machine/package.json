@@ -1,6 +1,6 @@
 {
   "name": "ashub-multi-machine",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "private": true,
   "description": "连接已授权的电脑，在手机或其他电脑上访问本机共享的对话。",

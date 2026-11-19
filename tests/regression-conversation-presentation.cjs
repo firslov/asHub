@@ -37,7 +37,7 @@ function renderer(client) {
   const context = rules('remote/public/conversation-presentation.js', { modelInfo: {}, usage: null, $: () => element });
   // Evaluate the actual binding and render function without booting account/session effects.
   vm.runInContext(source.match(/^const \{ toolActivityKey, usageMetrics \}[^\n]+/m)[0] + '\n'
-    + between(source, 'function renderUsage(p)', 'async function renderImage'), context);
+    + between(source, 'function renderUsage(p)', source.includes('async function renderImage') ? 'async function renderImage' : 'function renderImage'), context);
   return {
     element,
     render(payload, contextWindow) { context.modelInfo.contextWindow = contextWindow; context.renderUsage(payload); },

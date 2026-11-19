@@ -26,12 +26,13 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
     for (const [key, value] of Object.entries({ width:'18', height:'18', viewBox:'0 0 14 14', fill:'none', stroke:'currentColor', 'stroke-width':'1.3', 'stroke-linecap':'round', 'stroke-linejoin':'round', 'aria-hidden':'true' })) svg.setAttribute(key, value);
     const shape = document.createElementNS(svg.namespaceURI, 'path');
     const paths = {
+      microphone: 'M5 3a2 2 0 0 1 4 0v4a2 2 0 0 1-4 0ZM3 6v1a4 4 0 0 0 8 0V6M7 11v2M5 13h4',
       clock: 'M12.5 7a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0M7 3.5V7l2.5 1.5',
       browser: 'M3 2h8a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 11 12H3a1.5 1.5 0 0 1-1.5-1.5v-7A1.5 1.5 0 0 1 3 2ZM1.5 5.3h11M3.6 3.7h.6',
       devices: 'M1 2.5h7v6H1ZM4.5 8.5v2M2.5 10.5h4M10 5h3v7h-3Z',
       panel: 'M4 1.5h6A2.5 2.5 0 0 1 12.5 4v6a2.5 2.5 0 0 1-2.5 2.5H4A2.5 2.5 0 0 1 1.5 10V4A2.5 2.5 0 0 1 4 1.5ZM4.5 4.5h5M4.5 7h5M4.5 9.5h2.5',
     };
-    const icon = ['clock', 'browser', 'devices'].includes(definition.icon) ? definition.icon
+    const icon = ['clock', 'browser', 'devices', 'microphone'].includes(definition.icon) ? definition.icon
       : feature.capabilities?.includes('browser-pages') ? 'browser' : 'panel';
     shape.setAttribute('d', paths[icon]);
     svg.append(shape); trigger.append(svg);

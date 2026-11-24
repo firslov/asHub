@@ -171,12 +171,14 @@ app.whenReady().then(async () => {
         return {label:button.textContent,visible:b.height>=40 && b.top>=r.top && b.bottom<=r.bottom &&
           b.left>=r.left && b.right<=r.right && [b.top+8,b.bottom-8].every(y=>button.contains(document.elementFromPoint(b.x+b.width/2,y)))};
       });
-      return {buttons,scroll:d.scrollWidth,client:d.clientWidth,left:r.left,right:r.right,viewport:innerWidth};
+      return {buttons,scroll:d.scrollWidth,client:d.clientWidth,left:r.left,right:r.right,viewport:innerWidth,viewportHeight:innerHeight};
     })()`);
-    win.setMaximumSize(2000,800);
+    // Native window frames and constrained displays can reduce the content
+    // height. Keep the responsive widths exact and test the available height.
+    win.setMaximumSize(2000,720);
     for(const theme of ['light','dark'])for(const width of [1280,390,320]){
       await js('document.documentElement.dataset.theme='+JSON.stringify(theme));
-      win.setContentSize(width,720);await wait('innerWidth === '+width+' && innerHeight === 720');
+      win.setContentSize(width,720);await wait('innerWidth === '+width+' && innerHeight > 0 && innerHeight <= 720');
       await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
       const bounds=await readConsentLayout();
       assert(bounds.scroll<=bounds.client+1&&bounds.left>=-1&&bounds.right<=bounds.viewport+1,JSON.stringify({theme,width,...bounds}));

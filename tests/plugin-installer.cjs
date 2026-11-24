@@ -3,7 +3,10 @@ const {env,fs,path}=require('./harness.cjs'),{zip,plugin}=require('./plugin-zip-
 const manifest={schemaVersion:1,id:'sample-plugin',name:'Sample'};
 async function finish(installer,id){for(let i=0;i<200;i++){const j=installer.status(id);if(j.state!=='running')return j;await new Promise(r=>setTimeout(r,5));}throw Error('Timed out');}
 function fixture(run,extra={}) {
- const {runtimes,inUse,...envExtra}=extra,e=env({globals:{setTimeout,clearTimeout},...envExtra}),{PluginInstaller}=e.load('src/plugin-installer.ts'),file=path.join(e.dir,'settings.json');
+ const {runtimes,inUse,...envExtra}=extra,e=env({globals:{setTimeout,clearTimeout},...envExtra});
+ // Match the simulated macOS 14.4 platform in the synchronous host checks.
+ e.os.release=()=> '23.4.0';
+ const {PluginInstaller}=e.load('src/plugin-installer.ts'),file=path.join(e.dir,'settings.json');
  return {e,file,i:new PluginInstaller(file,run|| (async()=>{}),'darwin',inUse,undefined,10000,runtimes)};
 }
 test('confirmation and final commit reject a runtime different from the approved preview',async t=>{
@@ -350,6 +353,7 @@ test('missing declared Python prevents setup before any package or runtime side 
  const f=fixture(async()=>{calls++;},{runtimes});
  const requirements={...manifest,system:{minMacOS:'14.0.0'},runtimes:[{kind:'python',version:'>=3.12.0'}],setup:{script:'setup.mjs',description:'Prepare Python'}};
  const preview=await f.i.preview(zip(plugin({'release/setup.mjs':'// setup'},requirements)));
+ assert(preview.checks.some(c=>c.label==='host'&&c.ok),JSON.stringify(preview.checks));
  assert(!preview.canInstall);assert.match(preview.checks.find(c=>c.label==='runtime').detail,/not found/);assert.throws(()=>f.i.confirm(preview.token),/prerequisites/);
  assert.equal(calls,0);assert(!fs.existsSync(preview.target));await f.i.close();
 });

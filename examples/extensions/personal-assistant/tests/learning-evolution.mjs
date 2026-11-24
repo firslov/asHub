@@ -170,10 +170,10 @@ test('invalidated evidence or a changed target scope is rejected before persisti
 
 test('entry status follows actual inference, idle scans, cancellation and restart without extra calls',async t=>{
  const f=fixture(t),view=()=>new AssistantPanel(f.a).overview();
- assert.equal(view().toggle.status,'随交流逐步形成记忆');
- await f.a.learning.tick();assert.equal(f.calls(),0);assert.equal(view().toggle.status,'随交流逐步形成记忆');
+ assert.equal(view().toggle.status,'等待首次整理');
+ await f.a.learning.tick();assert.equal(f.calls(),0);assert.equal(view().toggle.status,'等待首次整理');
  const row=f.add('user','我的职业是一名大学教师');row.at=Date.now();
- await f.a.learning.tick();assert.equal(f.calls(),0);assert.equal(view().toggle.status,'等待空闲整理');
+ await f.a.learning.tick();assert.equal(f.calls(),0);assert.equal(view().toggle.status,'待整理 · 空闲后继续');
  row.at-=120000;let finish;
  f.answer(()=>new Promise(resolve=>finish=resolve));const task=f.a.learning.tick();assert(finish);
  assert.equal(view().toggle.status,'正在整理记忆…');
@@ -192,12 +192,15 @@ test('entry preserves retry and quota status across restart, then clears it afte
  t.mock.timers.enable({apis:['Date'],now:Date.now()});
  const f=fixture(t),view=()=>new AssistantPanel(f.a).overview();f.add('user','我喜欢简洁直接的回答方式');
  f.answer(()=>{throw Error('network unavailable');});await f.a.learning.tick();
- t.mock.timers.tick(60001);await f.a.learning.tick();assert.equal(view().toggle.status,'整理暂缓 · 稍后重试');
- f.restart();assert.equal(view().toggle.status,'整理暂缓 · 稍后重试');assert.equal(f.a.learning.inferenceSignal,undefined);
+ t.mock.timers.tick(60001);await f.a.learning.tick();const retry=view().toggle.status;
+ assert.match(retry,/^整理暂缓 · .*\d{2}:\d{2} 后重试$/);
+ f.restart();assert.equal(view().toggle.status,retry);assert.equal(f.a.learning.inferenceSignal,undefined);
  t.mock.timers.tick(120001);f.answer(()=>{throw Error('今日后台整理额度已用完');});await f.a.learning.tick();
- assert.equal(view().toggle.status,'今日整理已暂停 · 已有记忆可用');f.restart();assert.equal(view().toggle.status,'今日整理已暂停 · 已有记忆可用');
+ const quota=view().toggle.status;assert.match(quota,/^额度用完 · .*\d{2}:\d{2} 后继续$/);
+ assert.equal(f.a.store.activeMemories().length,0,'even with no memories, a failed request can consume the quota');
+ f.restart();assert.equal(view().toggle.status,quota);
  const calls=f.calls();await f.a.learning.tick();assert.equal(f.calls(),calls);
- t.mock.timers.tick(f.a.learning.health().retryAt-Date.now()+1);assert.equal(view().toggle.status,'等待空闲整理');
+ t.mock.timers.tick(f.a.learning.health().retryAt-Date.now()+1);assert.equal(view().toggle.status,'待整理 · 空闲后继续');
  f.answer(()=>({memories:[]}));await f.a.learning.tick();assert.match(view().toggle.status,/^最近整理/);assert.equal(f.a.learning.health().errorClass,null);
 });
 
@@ -216,11 +219,11 @@ test('interrupted eligible batches stay pending after re-enable or restart, with
     f.a.learning.pause();assert.equal(view().toggle.status,undefined);
     f.reauthorize();const c=f.a.learning.config();f.a.learning.configure(c.grantId,c);
    }
-   assert.equal(view().toggle.status,'等待空闲整理','unfinished work must not display the preceding successful batch');
+   assert.equal(view().toggle.status,'待整理 · 空闲后继续','unfinished work must not display the preceding successful batch');
    assert.equal(f.a.learning.health().lastSuccessAt,successAt);
    assert.equal(f.a.store.state('scan:a').cursor,first.id,'interruption never advances the cursor');
   } finally { finish({memories:[item(next.id,next.text)]});await pending; }
-  assert.equal(view().toggle.status,'等待空闲整理','late cancelled response must not clear pending state');
+  assert.equal(view().toggle.status,'待整理 · 空闲后继续','late cancelled response must not clear pending state');
   assert.equal(f.a.store.activeMemories().length,0,'cancelled response is not saved');
   f.answer(()=>({memories:[]}));await f.a.learning.tick();
   assert.equal(f.calls(),3);assert.equal(f.a.store.state('scan:a').cursor,next.id);
@@ -234,7 +237,7 @@ test('late success and failure from a stopped instance cannot replace the recove
   let resolveOld,rejectOld,resolveNew;
   f.answer(()=>new Promise((resolve,reject)=>{resolveOld=resolve;rejectOld=reject;}));
   const old=f.a.learning.tick();f.restart();
-  assert.equal(view().toggle.status,'等待空闲整理');
+  assert.equal(view().toggle.status,'待整理 · 空闲后继续');
   f.answer(()=>new Promise(resolve=>resolveNew=resolve));const fresh=f.a.learning.tick();
   assert.equal(view().toggle.status,'正在整理记忆…');
   if(phase==='completed'){resolveNew({memories:[item(q.id,q.text)]});await fresh;}
@@ -257,11 +260,11 @@ test('repeated disable and re-enable rejects a late error without duplicate disp
  for(let i=0;i<3;i++){
   f.a.learning.pause();assert.equal(view().toggle.status,undefined);assert.equal(view().toggle.checked,false);
   f.reauthorize();const c=f.a.learning.config();f.a.learning.configure(c.grantId,c);
-  assert.equal(view().toggle.status,'等待空闲整理');assert.equal(view().toggle.checked,true);
+  assert.equal(view().toggle.status,'待整理 · 空闲后继续');assert.equal(view().toggle.checked,true);
   await f.a.learning.tick();assert.equal(f.calls(),1,'old request must settle before another dispatch');
  }
  rejectOld(Error('late network failure'));await pending;
  assert.equal(f.a.learning.health().errorClass,null);assert(f.a.store.state('retry:a')==null);
- assert.equal(view().toggle.status,'等待空闲整理');assert.equal(f.a.learning.busy,false);
+ assert.equal(view().toggle.status,'待整理 · 空闲后继续');assert.equal(f.a.learning.busy,false);
  f.answer(()=>({memories:[]}));await f.a.learning.tick();assert.equal(f.calls(),2);assert.match(view().toggle.status,/^最近整理/);
 });

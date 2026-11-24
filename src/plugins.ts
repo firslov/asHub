@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { updateSettingsFile } from './settings-store.js';
 import { settingsValidationError } from './config-validation.js';
-import { readPluginManifest, pluginCompatibility, validatePluginNamespace, validatePluginConfig, PLUGIN_ENTRY_FILES, type NormalizedPluginManifest, type PluginCompatibility, type PluginHostEnvironment } from './extensions/manifest.js';
+import { readPluginManifest, pluginCompatibility, packageMetadataCompatibility, validatePluginNamespace, validatePluginConfig, PLUGIN_ENTRY_FILES, type NormalizedPluginManifest, type PluginCompatibility, type PluginHostEnvironment } from './extensions/manifest.js';
 export { validatePluginNamespace, PLUGIN_ENTRY_FILES } from './extensions/manifest.js';
 
 export const PLUGIN_DISABLED = 'ashub.plugins.disabled';
@@ -96,7 +96,7 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
     let resolved = spec, packageRoot: string | undefined;
     let manifest: NormalizedPluginManifest | undefined, compatibility: PluginCompatibility | undefined;
     let damagedAppId: string | undefined;
-    let metadata: { name?: string; description?: string; version?: string; configNamespaces?: string[]; packageName?: string } = {};
+    let metadata: { name?: string; description?: string; version?: string; configNamespaces?: string[]; packageName?: string; nodeRange?: unknown; packageOs?: unknown; packageCpu?: unknown } = {};
     // Backslashes and drive prefixes are Windows paths even when the first directory starts with @.
     const windowsPath = path.sep === '\\' && (spec.includes('\\') || /^[A-Za-z]:/.test(spec));
     const local = spec.startsWith('.') || path.isAbsolute(spec) || windowsPath || (spec.includes('/') && !spec.startsWith('@'));
@@ -109,6 +109,7 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
           if (typeof pkg.name === 'string') metadata.packageName = pkg.name;
           if (typeof pkg.version === 'string' && pkg.version.length < 80) metadata.version = pkg.version;
           if (typeof pkg.description === 'string') metadata.description = pkg.description.trim().slice(0, 300);
+          metadata.nodeRange = pkg.engines?.node; metadata.packageOs = pkg.os; metadata.packageCpu = pkg.cpu;
           manifest = readPluginManifest(packageRoot, pkg.name);
           if (manifest?.schemaVersion === 1 && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
             // Legacy explicit files retain their original identity and entry,
@@ -117,10 +118,12 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
           }
           if (manifest) {
             metadata.name = manifest.name; metadata.configNamespaces = manifest.configNamespaces;
-            compatibility = pluginCompatibility(manifest, host);
+            compatibility = pluginCompatibility(manifest, { ...host, nodeRange: metadata.nodeRange, packageOs: metadata.packageOs, packageCpu: metadata.packageCpu });
             // A synthetic non-executable identity keeps declarative-only
             // packages visible without pretending they have a session entry.
             resolved = path.join(packageRoot, manifest.entries.session ?? manifest.entries.application ?? 'index.mjs');
+          } else {
+            compatibility = packageMetadataCompatibility({ ...host, nodeRange: metadata.nodeRange, packageOs: metadata.packageOs, packageCpu: metadata.packageCpu });
           }
         }
       } catch (error) {

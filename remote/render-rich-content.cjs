@@ -20,7 +20,7 @@ const server=http.createServer((req,res)=>{
  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`http://127.0.0.1:${server.address().port}/mobile/`);
  bytes=Buffer.from(await page.evaluate(()=>{const c=document.createElement('canvas');c.width=4000;c.height=600;c.getContext('2d').fillRect(0,0,4000,600);return c.toDataURL().split(',')[1]}),'base64');
- await page.evaluate(()=>{for(const e of document.body.children)e.style.display='none';globalThis.testRoot=document.createElement('article');testRoot.className='message reply';testRoot.style.cssText='margin:16px;max-width:100%';document.body.append(testRoot);device='d'.repeat(43);session='abcdef';capabilities={artifacts:true,imageResources:true};});
+ await page.evaluate(()=>{for(const e of document.body.children)e.style.display='none';globalThis.testRoot=document.createElement('article');testRoot.className='message reply';testRoot.style.cssText='margin:16px;max-width:100%';document.body.append(testRoot);device='d'.repeat(43);devices=[{id:device,name:'Fixture',online:true}];deviceListReady=true;session='abcdef';capabilities={artifacts:true,imageResources:true};});
  const formula=String.raw`\[
 新目标仓位=原三均线目标仓位\times\min\left(1,\frac{3\%}{ATR_{14}/复权收盘价}\right)
 \]`;

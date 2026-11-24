@@ -104,15 +104,23 @@ function saveNavigation() {
 function projectFor(s) {
   return s && (s.projectId !== undefined ? groups.find(p => p.id === s.projectId) : groups.find(p => p.sessionIds.includes(s.instanceId)));
 }
+function pluginEntryFor(id) {
+  return pluginEntries.find(entry => entry.sessionId === id);
+}
+function pluginEntryIsShared(entry) {
+  return sessions.some(s => s.instanceId === entry.sessionId)
+    && pluginEntries.some(e => e.sessionId === entry.sessionId && e.pluginId === entry.pluginId
+      && e.key === entry.key && e.resource === entry.resource);
+}
 function projectMembers(project) {
-  const members = sessions.filter(s => s.projectId !== undefined ? s.projectId === project.id : project.sessionIds.includes(s.instanceId));
+  const members = sessions.filter(s => !pluginEntryFor(s.instanceId) && (s.projectId !== undefined ? s.projectId === project.id : project.sessionIds.includes(s.instanceId)));
   const pins = new Map((project.pinnedSessionIds || []).filter(id => members.some(s => s.instanceId === id)).map((id, i) => [id, i]));
   return members.sort((a, b) => (pins.get(a.instanceId) ?? pins.size) - (pins.get(b.instanceId) ?? pins.size));
 }
 function syncChatTitle() {
   const current = sessions.find(s => s.instanceId === session), project = projectFor(current);
   $('chat-title').textContent = session ? (current?.title || '新对话') : '';
-  const entry=pluginEntries.find(e=>e.sessionId===session), label = $('chat-project');
+  const entry = pluginEntryFor(session), label = $('chat-project');
   if (label) { label.textContent = entry?.description || project?.name || ''; label.hidden = !label.textContent; }
 }
 function rememberSession(id) {
@@ -188,6 +196,7 @@ function closeSource({retainWait = false} = {}) {
 function signOut() {
   composerMedia?.cancel(); saveDraft(); pendingChecks.clear(); authGeneration++; generation++; globalThis.AsHubFilePreview?.close(); menu(false); closeSource(); clearInterval(poll); poll = null;
   user = ''; device = ''; session = ''; devices = []; sessions = []; groups = []; viewFilter = 'browse'; capabilities = {}; capabilitiesDevice = ''; catalogRequest++; taskView++; images = []; sending = false; pendingSend = null;
+  resetPluginEntries(); renderPluginEntries();
   deviceListReady = false; sessionListDevice = ''; navigation = {recent: [], expanded: [], collapsed: [], last: ''}; restoreSession = false; navigationTouched = false;
   resetMessages(); renderAttachments(); notice();
   for (const id of ['sessions', 'devices', 'modal-body']) $(id).replaceChildren();
@@ -310,7 +319,7 @@ function sessionRow(s, project, context = false) {
     const marker = el('span', '置顶', 'session-pin'); marker.title = '已在电脑端置顶'; title.append(marker);
   }
   b.append(title);
-  const caption = [context ? (project?.name || (s.projectId ? '项目对话' : '独立对话')) : '', label].filter(Boolean).join(' · ');
+  const caption = [context ? (pluginEntryFor(s.instanceId)?.label || project?.name || (s.projectId ? '项目对话' : '独立对话')) : '', label].filter(Boolean).join(' · ');
   if (caption) b.append(el('small', caption));
   if (project && s.cwd && (s.projectExternal ?? (project.sessionIds.map(id => sessions.find(s => s.instanceId === id)).find(s => s?.cwd)?.cwd !== s.cwd))) {
     const row = el('div', undefined, 'session-entry'); row.dataset.sessionId = s.instanceId; row._sessionButton = b;
@@ -322,7 +331,7 @@ function sessionRow(s, project, context = false) {
   return b;
 }
 function renderNavigation() {
-  const nodes = [], recent = navigation.recent.map(id => sessions.find(s => s.instanceId === id)).filter(Boolean).slice(0, 3);
+  const nodes = [], recent = navigation.recent.map(id => sessions.find(s => s.instanceId === id)).filter(s => s && !pluginEntryFor(s.instanceId)).slice(0, 3);
   if (recent.length) {
     nodes.push(el('p', '最近使用', 'nav-section-label'));
     nodes.push(...recent.map(s => { const row = sessionRow(s, projectFor(s), true); const b = row._sessionButton || row; b.dataset.navKey = 'recent:' + s.instanceId; return row; }));
@@ -330,14 +339,17 @@ function renderNavigation() {
   const section = (id, title, members, project) => {
     const group = el('section', undefined, 'nav-group'); group.dataset.groupId = id;
     const opened = navigation.expanded.includes(id) || (!navigation.collapsed.includes(id) && (project ? projectFor(sessions.find(s => s.instanceId === (session || navigation.last)))?.id === id : !groups.length));
-    const did = device;
-    const toggle = button('', () => {
-      if (did !== device) return;
+    const did = device, epoch = authGeneration;
+    const toggle = el('button', '', 'nav-group-toggle');
+    toggle.type = 'button';
+    // Keep focus on this synchronous control so renderSessions can restore it.
+    toggle.onclick = () => {
+      if (epoch !== authGeneration || did !== device) return;
       cancelSessionRestore();
       if (opened) { navigation.expanded = navigation.expanded.filter(p => p !== id); navigation.collapsed = [...new Set([...navigation.collapsed, id])].slice(-100); }
       else { navigation.collapsed = navigation.collapsed.filter(p => p !== id); navigation.expanded = [...new Set([...navigation.expanded, id])].slice(-100); }
       saveNavigation(); renderSessions();
-    }, 'nav-group-toggle');
+    };
     toggle.dataset.navKey = 'group:' + id; toggle.setAttribute('aria-expanded', String(opened));
     toggle.append(el('span', '›', 'nav-chevron'), el('span', title, 'nav-group-name'), el('small', String(members.length), 'nav-count'));
     group.append(toggle);
@@ -349,17 +361,20 @@ function renderNavigation() {
         tasks.dataset.navKey = 'tasks:' + id; body.append(tasks);
       }
       body.append(...members.map(s => sessionRow(s, project)));
-      if (!members.length) body.append(el('p', '暂无共享对话，请在桌面端「设备互联 → 允许其他设备访问本机 → 设置共享目录」检查工作目录。', 'empty-list'));
+      if (!members.length) {
+        const hasDedicatedEntry = project && sessions.some(s => projectFor(s)?.id === id && pluginEntryFor(s.instanceId));
+        body.append(el('p', hasDedicatedEntry ? '暂无其他共享对话' : '暂无共享对话，请在桌面端「设备互联 → 允许其他设备访问本机 → 设置共享目录」检查工作目录。', 'empty-list'));
+      }
       group.append(body);
     }
     return group;
   };
   if (groups.length) nodes.push(el('p', '项目', 'nav-section-label'));
   nodes.push(...groups.map(p => section(p.id, p.name, projectMembers(p), p)));
-  const independent = sessions.filter(s => !pluginEntries.some(e=>e.sessionId===s.instanceId) && (s.projectId !== undefined ? !s.projectId : !projectFor(s)));
-  if (sessions.length || groups.length) nodes.push(section('@independent', '独立对话', independent));
+  const independent = sessions.filter(s => !pluginEntryFor(s.instanceId) && (s.projectId !== undefined ? !s.projectId : !projectFor(s)));
+  if (independent.length) nodes.push(section('@independent', '独立对话', independent));
   // A failed project catalog must not make already-authorized sessions inaccessible.
-  const unlisted = sessions.filter(s => s.projectId && !projectFor(s));
+  const unlisted = sessions.filter(s => s.projectId && !projectFor(s) && !pluginEntryFor(s.instanceId));
   if (unlisted.length) { nodes.push(el('p', '项目对话 · 信息待同步', 'nav-section-label')); nodes.push(...unlisted.map(s => sessionRow(s, null))); }
   return nodes;
 }
@@ -447,6 +462,11 @@ function confirmSessionDeletion(did, sid, title) {
 }
 if ($('session-actions')) $('session-actions').onclick = showSessionActions;
 let pluginEntryControls=[];
+function resetPluginEntries() {
+  pluginEntries = [];
+  pluginResourceDispose?.();
+  pluginResourceDispose = null;
+}
 function renderPluginEntries() {
   let host=$('plugin-entries');if(!host){host=el('nav','','plugin-entries');host.id='plugin-entries';$('sessions').before(host);}
   const live=pluginEntries.filter(e=>sessions.some(s=>s.instanceId===e.sessionId));
@@ -455,11 +475,11 @@ function renderPluginEntries() {
   for(const dispose of pluginEntryControls)dispose();pluginEntryControls=[];
   host.hidden=!live.length;host.replaceChildren(...live.map(e=>{
     const row=el('div','','plugin-entry');row.dataset.active=String(e.sessionId===session);row.dataset.sessionId=e.sessionId;
-    const did=device;
-    const open=button(e.label,()=>{if(device===did)void openSession(e.sessionId);},'plugin-entry-open');if(e.sessionId===session)open.setAttribute('aria-current','page');
-    const control=el('div','','plugin-entry-control'),g=generation;
+    const did=device,g=generation;
+    const valid=()=>device===did&&generation===g&&pluginEntryIsShared(e);
+    const open=button(e.label,()=>{if(valid())return openSession(e.sessionId);},'plugin-entry-open');if(e.sessionId===session)open.setAttribute('aria-current','page');
+    const control=el('div','','plugin-entry-control');
     row.append(open,control);
-    const valid=()=>device===did&&generation===g&&pluginEntries.some(x=>x.pluginId===e.pluginId&&x.key===e.key&&x.sessionId===e.sessionId);
     void import('./plugin-resource-view.js').then(({mountResource})=>{if(!valid()||!control.isConnected)return;pluginEntryControls.push(mountResource(control,{pluginId:e.pluginId},e.resource,{inlineToggle:true,onManage:()=>{if(valid())void openPluginResource(e);},
       request:async(body,signal)=>{
         if(!valid()||signal.aborted)throw Error('页面已切换');const requestId=body?crypto.randomUUID():undefined;
@@ -473,7 +493,7 @@ function renderPluginEntries() {
 async function openPluginResource(entry){
   const did=device,sid=entry.sessionId,g=generation;
   const container=el('div','','plugin-resource-container');modal(entry.label,[container]);const ticket=taskView;
-  const valid=()=>did===device && g===generation && ticket===taskView && $('modal').open;
+  const valid=()=>did===device && g===generation && ticket===taskView && $('modal').open && pluginEntryIsShared(entry);
   try{
     const {mountResource}=await import('./plugin-resource-view.js');if(!valid())return;
     pluginResourceDispose=mountResource(container,{pluginId:entry.pluginId},entry.resource,{
@@ -506,14 +526,16 @@ function renderSessions() {
   else {
     const members = selected ? projectMembers(selected) : [];
     const candidates = selected ? (query ? [...members, ...sessions.filter(s => !members.includes(s))] : members) : sessions;
-    const visible = candidates.filter(s => query ? [s.title || '新对话', projectFor(s)?.name || ''].some(text => text.toLocaleLowerCase().includes(query))
-      : (viewFilter !== 'all' || (!(s.projectId !== undefined ? s.projectId : projectFor(s)) && !pluginEntries.some(e=>e.sessionId===s.instanceId)))
+    const visible = candidates.filter(s => query ? [s.title || '新对话', projectFor(s)?.name || '', pluginEntryFor(s.instanceId)?.label || ''].some(text => text.toLocaleLowerCase().includes(query))
+      : (viewFilter !== 'all' || (!(s.projectId !== undefined ? s.projectId : projectFor(s)) && !pluginEntryFor(s.instanceId)))
       && (viewFilter !== 'attention' || ['approval', 'failed'].includes(sessionStatus(s)[0]))
       && (viewFilter !== 'running' || s.isProcessing || s.queuedCount > 0)
       && (viewFilter !== 'unread' || s.hasUnread));
     nodes = visible.map(s => sessionRow(s, projectFor(s), !!query || !selected && viewFilter !== 'all'));
   }
-  if (!nodes.length) nodes.push(el('p', sessions.length ? '没有符合条件的对话' : '暂无共享对话，请在桌面端「设备互联 → 允许其他设备访问本机 → 设置共享目录」添加工作目录', 'empty-list'));
+  if (!nodes.length && (viewFilter !== 'browse' || query || $('plugin-entries').hidden)) {
+    nodes.push(el('p', sessions.length ? '没有符合条件的对话' : '暂无共享对话，请在桌面端「设备互联 → 允许其他设备访问本机 → 设置共享目录」添加工作目录', 'empty-list'));
+  }
   list.replaceChildren(...nodes);
   list._navigationSignature = signature;
   if (focused) [...list.querySelectorAll('[data-nav-key]')].find(e => e.dataset.navKey === focused)?.focus({preventScroll:true});
@@ -526,10 +548,12 @@ async function refreshSessions() {
   const capabilityRead = capabilitiesDevice !== d ? rpc('capabilities').catch(() => null) : null;
   const list = await rpc('sessions'); if (d !== device || g !== generation || request !== catalogRequest) return;
   sessions = list; sessionListDevice = d; syncWorkspaceView();
-  navigation.recent = navigation.recent.filter(id => list.some(s => s.instanceId === id));
-  if (navigation.last && !list.some(s => s.instanceId === navigation.last)) { navigation.last = ''; restoreSession = false; }
+  const shared = new Set(list.map(s => s.instanceId));
+  pluginEntries = pluginEntries.filter(e => shared.has(e.sessionId));
+  navigation.recent = navigation.recent.filter(id => shared.has(id));
+  if (navigation.last && !shared.has(navigation.last)) { navigation.last = ''; restoreSession = false; }
   saveNavigation();
-  if (session && !list.some(s => s.instanceId === session)) { resetSession(); $('messages').replaceChildren(el('p', '此会话已关闭或不再共享')); renderSessions(); return; }
+  if (session && !shared.has(session)) { resetSession(); $('messages').replaceChildren(el('p', '此会话已关闭或不再共享')); renderSessions(); return; }
   // Conversations are usable as soon as they arrive; optional metadata must
   // not leave the mobile landing page blank while another RPC is pending.
   renderSessions();
@@ -543,6 +567,7 @@ async function refreshSessions() {
     if (result) {
       capabilities = result; capabilitiesDevice = d;
       if (!capabilities.projects) groups = [];
+      if (!capabilities.pluginResources) resetPluginEntries();
     } else metadataFailed = true;
   }
   // Access and rendering capabilities are ready. Project and plugin catalogs
@@ -564,7 +589,18 @@ async function refreshSessions() {
     try { const result = await rpc('project-groups'); if (d !== device || g !== generation || request !== catalogRequest) return; groups = result; }
     catch { if (d !== device || g !== generation || request !== catalogRequest) return; metadataFailed = true; }
   }
-  if(capabilities.pluginResources){try{const result=await rpc('plugin-entries');if(d!==device||g!==generation||request!==catalogRequest)return;pluginEntries=result;}catch{if(d!==device||g!==generation||request!==catalogRequest)return;metadataFailed=true;}}
+  if (capabilities.pluginResources) {
+    try {
+      const result = await rpc('plugin-entries');
+      if (d !== device || g !== generation || request !== catalogRequest) return;
+      if (!Array.isArray(result)) throw Error('无效的专属对话目录');
+      pluginEntries = result.filter(e => typeof e?.sessionId === 'string' && shared.has(e.sessionId)
+        && [e.pluginId, e.key, e.label, e.resource].every(value => typeof value === 'string' && value.trim()));
+    } catch {
+      if (d !== device || g !== generation || request !== catalogRequest) return;
+      metadataFailed = true;
+    }
+  }
   if (metadataFailed) notice(metadataWarning);
   else if ($('notice').textContent === metadataWarning) notice();
   renderSessions();
@@ -654,7 +690,7 @@ function resetSession() {
   $('modal').close(); $('modal-title').textContent = ''; $('modal-body').replaceChildren();
 }
 function resetDevice(next) {
-  pluginEntries=[];pluginResourceDispose?.();pluginResourceDispose=null;
+  resetPluginEntries();
   resetSession(); device = next; if (next) navigationTouched = false; loadNavigation(); if (user && device) storage.set(preferredDeviceKey(), device); sessionListDevice = ''; sessions = []; groups = []; viewFilter = 'browse'; capabilities = {}; capabilitiesDevice = ''; catalogRequest++; $('session-search').value = ''; sessionSearchExpanded = false; renderSessions();
   $('sessions').replaceChildren(); $('device-status').textContent = ''; $('new-chat').disabled = true;
 }

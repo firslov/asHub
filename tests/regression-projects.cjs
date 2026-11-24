@@ -150,6 +150,80 @@ test('legacy groups remain readable and allow explicitly setting a root without 
  assert.equal(store.list()[0].cwd,e.dir);assert.deepEqual([...store.list()[0].sessionIds],legacy.sessionIds);
 });
 
+test('legacy project name observation is durable; a later same-name project cannot claim earlier evidence', t => {
+  const {e,store,ProjectStore}=fixture(t), file=path.join(e.dir,'projects.json');
+  const raw=JSON.stringify([{id:'legacy',name:'行星',sessionIds:[]}]);
+  fs.writeFileSync(file,raw);
+  e.clock(1000);
+  assert.equal(store.list()[0].name,'行星');
+  assert.equal(fs.readFileSync(file,'utf8'),raw,'ordinary public reads leave the legacy file untouched');
+  assert.equal(store.listWithNameHistory()[0].nameSince,1000);
+  const evidenceAt=1500;
+  e.clock(2000);
+  const restarted=new ProjectStore(file);
+  assert(restarted.listWithNameHistory()[0].nameSince<evidenceAt,'startup observation survives restart without project edits');
+  restarted.update({action:'rename',id:'legacy',name:'银河'},()=>true);
+  const [,reuse]=restarted.update({action:'create',cwd:e.dir,name:'行星'},()=>true);
+  const [prior,newProject]=new ProjectStore(file).listWithNameHistory();
+  assert.deepEqual(JSON.parse(JSON.stringify(prior.nameHistory)),[{name:'行星',from:1000,to:2000}]);
+  assert(prior.nameHistory[0].from<evidenceAt&&evidenceAt<prior.nameHistory[0].to);
+  assert.equal(newProject.id,reuse.id);
+  assert(newProject.nameSince>evidenceAt);
+  for(const project of restarted.list())for(const key of ['nameHistory','nameSince','nameObserved'])assert(!(key in project));
+});
+
+test('simultaneous names remain visible as separate candidates and an old rename cannot inherit a stale interval', t => {
+  const {e,store}=fixture(t), file=path.join(e.dir,'projects.json');
+  e.clock(1000);
+  const [first]=store.update({action:'create',cwd:e.dir,name:'行星'},()=>true);
+  e.clock(1100);
+  const [,second]=store.update({action:'create',cwd:e.dir,name:'行星'},()=>true);
+  e.clock(1200);
+  assert.deepEqual([...store.listWithNameHistory()].filter(p=>p.name==='行星'&&p.nameSince<1200).map(p=>p.id),[first.id,second.id]);
+  store.update({action:'rename',id:first.id,name:'银河'},()=>true);
+  const oldClient=JSON.parse(fs.readFileSync(file,'utf8'));
+  oldClient[0].name='行星';
+  fs.writeFileSync(file,JSON.stringify(oldClient));
+  e.clock(1300);
+  const [corrected]=store.listWithNameHistory();
+  assert.equal(corrected.nameSince,1300);
+  assert.equal(corrected.nameHistory,undefined);
+  assert.equal(corrected.nameObserved,'行星');
+});
+
+test('deleting a same-name project does not retroactively disambiguate shared evidence', t => {
+  const {e,store,ProjectStore}=fixture(t), file=path.join(e.dir,'projects.json');
+  e.clock(1000);
+  const [remaining]=store.update({action:'create',cwd:e.dir,name:'A号'},()=>true);
+  e.clock(1100);
+  const [,removed]=store.update({action:'create',cwd:e.dir,name:'Ａ号'},()=>true);
+  const [,,unrelated]=store.update({action:'create',cwd:e.dir,name:'北辰'},()=>true);
+  e.clock(1500);
+  store.update({action:'delete',id:removed.id},()=>true);
+  e.clock(2000);
+  const projects=new ProjectStore(file).listWithNameHistory();
+  const survivor=projects.find(p=>p.id===remaining.id);
+  assert.equal(survivor.nameSince,1500);
+  assert.deepEqual(JSON.parse(JSON.stringify(survivor.nameHistory)),[{name:'A号',from:1000,to:1100}]);
+  assert.equal(projects.find(p=>p.id===unrelated.id).nameSince,1100);
+  assert(!fs.readFileSync(file,'utf8').includes('Ａ号'));
+});
+
+test('evicting a bounded historical alias leaves overlapping candidates usable only after the overlap', t => {
+  const {e,store}=fixture(t);
+  e.clock(1000);
+  const [old]=store.update({action:'create',cwd:e.dir,name:'海鸥'},()=>true);
+  e.clock(1100);
+  const [,matching]=store.update({action:'create',cwd:e.dir,name:'海鸥'},()=>true);
+  for(let i=0;i<17;i++) {
+    e.clock(1200+i*100);
+    store.update({action:'rename',id:old.id,name:`海鸥 ${i}`},()=>true);
+  }
+  const names=store.listWithNameHistory();
+  assert.equal(names.find(p=>p.id===old.id).nameHistory.length,16);
+  assert.equal(names.find(p=>p.id===matching.id).nameSince,1200);
+});
+
 test('an unchanged unavailable root does not block project metadata or membership edits', t => {
  const {e,store}=fixture(t),root=path.join(e.dir,'removable');fs.mkdirSync(root);
  const p=store.update({action:'create',name:'Project',cwd:root},()=>true)[0];fs.rmdirSync(root);
@@ -172,4 +246,44 @@ test('membership changes saved by an earlier desktop version do not invalidate p
  assert.deepEqual(groups[1].pinnedSessionIds ?? [],[]);
  store.update({action:'pin',id:b.id,sessionId:'moved',pinned:true},()=>true);
  assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')).map(p=>p.pinnedSessionIds),[['kept'],['moved']]);
+});
+
+test('legacy rename cannot make previously overlapping project names appear unique', t => {
+  const {e,store,ProjectStore}=fixture(t), file=path.join(e.dir,'projects.json');
+  e.clock(1000);const [first]=store.update({action:'create',cwd:e.dir,name:'同名'},()=>true);
+  e.clock(1100);const [,second]=store.update({action:'create',cwd:e.dir,name:'同名'},()=>true);
+  const [,,unrelated]=store.update({action:'create',cwd:e.dir,name:'不相关'},()=>true);
+  const legacy=JSON.parse(fs.readFileSync(file,'utf8'));legacy[1].name='旧客户端新名';fs.writeFileSync(file,JSON.stringify(legacy));
+  e.clock(1500);const rows=new ProjectStore(file).listWithNameHistory();
+  const survivor=rows.find(p=>p.id===first.id),renamed=rows.find(p=>p.id===second.id);
+  assert.equal(survivor.nameSince,1500);
+  assert.deepEqual(JSON.parse(JSON.stringify(survivor.nameHistory)),[{name:'同名',from:1000,to:1100}]);
+  assert(survivor.nameHistory[0].from<1050 && 1050<survivor.nameHistory[0].to);
+  assert(survivor.nameSince<1600);
+  assert.equal(rows.find(p=>p.id===unrelated.id).nameSince,1100);
+  assert.equal(renamed.nameSince,1500);assert.equal(renamed.nameObserved,'旧客户端新名');
+  assert.equal(rows.filter(p=>p.name==='同名' && p.nameSince<1200).length,0);
+  assert.equal(new ProjectStore(file).listWithNameHistory().find(p=>p.id===first.id).nameSince,1500);
+});
+
+test('deleted longer Chinese names preserve ambiguity for overlapping shorter names only', t => {
+  const {e,store}=fixture(t);e.clock(1000);
+  const [short]=store.update({action:'create',cwd:e.dir,name:'启明'},()=>true);
+  e.clock(1100);const [,long]=store.update({action:'create',cwd:e.dir,name:'启明星'},()=>true);
+  const [,,unrelated]=store.update({action:'create',cwd:e.dir,name:'天枢'},()=>true);
+  e.clock(1500);store.update({action:'delete',id:long.id},()=>true);
+  const rows=store.listWithNameHistory(), survivor=rows.find(p=>p.id===short.id);
+  assert.deepEqual(JSON.parse(JSON.stringify(survivor.nameHistory)),[{name:'启明',from:1000,to:1100}]);
+  assert.equal(survivor.nameSince,1500);assert.equal(rows.find(p=>p.id===unrelated.id).nameSince,1100);
+  assert(survivor.nameHistory[0].from<1050 && 1050<survivor.nameHistory[0].to);
+  assert(survivor.nameSince<1600);
+});
+
+test('evicting a longer Chinese alias protects overlapping shorter-name history', t => {
+  const {e,store}=fixture(t);e.clock(1000);
+  const [long]=store.update({action:'create',cwd:e.dir,name:'启明星'},()=>true);
+  e.clock(1100);const [,short]=store.update({action:'create',cwd:e.dir,name:'启明'},()=>true);
+  for(let i=0;i<17;i++) {e.clock(1200+i*100);store.update({action:'rename',id:long.id,name:`后续 ${i}`},()=>true);}
+  const survivor=store.listWithNameHistory().find(p=>p.id===short.id);
+  assert.equal(survivor.nameSince,1200);
 });

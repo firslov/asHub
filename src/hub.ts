@@ -27,6 +27,7 @@ import { ProjectService } from "./services/project-service.js";
 import { HostEvents } from "./services/host-events.js";
 import { handleHostQuery, HOST_CAPABILITIES } from "./transport/host-http.js";
 import { PluginInstaller, MAX_PLUGIN_ZIP } from './plugin-installer.js';
+import { RuntimeEnvironment } from './services/runtime-environment.js';
 import { HostOperations, type HostAccess } from "./host-operations.js";
 import { reasoningProfile, SessionThinking } from "./providers/reasoning.js";
 import { mobileReplayStart, mobileReplayFrame } from "./remote/replay.js";
@@ -66,7 +67,7 @@ import { isDeepStrictEqual } from "node:util";
 import { execFile } from "node:child_process";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
-import type { Bridge, BridgeFactory, BusEvent, ContextSnapshot, SessionKind, PermissionOutcome } from "./bridges/types.js";
+import type { BackgroundModelSelection, Bridge, BridgeFactory, BusEvent, ContextSnapshot, SessionKind, PermissionOutcome } from "./bridges/types.js";
 import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
 import { listAllProviders, resolveApiKey, anyProviderConfigured, reloadKeysFile, KEYS_PATH } from "agent-sh/auth";
 import { SessionStore, type AgentMessage } from "./history/session-store.js";
@@ -849,6 +850,9 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   const projects = new ProjectService(path.join(SESSIONS_DIR, "projects.json"), {
     sessions, events: hostEvents, deleteSession: id => deleteSession(sessions, id), expandHome,
   });
+  // Establish a durable lower bound before future conversation messages arrive.
+  try { projects.listWithNameHistory(); }
+  catch { console.warn('[hub] Could not initialize project name history.'); }
   const featureServices = createFeatureServices(hostEvents, lifecycle.signal);
   featureServicesBySessions.set(sessions, featureServices);
   opts.collaboration = new CollaborationTasks(path.join(SESSIONS_DIR, "collaboration"));
@@ -919,6 +923,23 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       }, undefined, 'queue', settled);
     },
   });
+  const currentBackgroundBridge = (s: Session, cwd: string) =>
+    !lifecycle.signal.aborted && sessions.get(s.id) === s && s.kind === 'agent' && s.cwd === cwd && !s._closing && !s._closed && !s.bridge?.readOnlyContext;
+  type SpecifiedBridge = Bridge & Required<Pick<Bridge,'backgroundModels'|'describeBackgroundModel'|'backgroundCompleteSpecified'>>;
+  const supportsSpecified = (bridge: Bridge | null | undefined): bridge is SpecifiedBridge =>
+    !!(bridge?.backgroundModels && bridge.describeBackgroundModel && bridge.backgroundCompleteSpecified);
+  const specifiedBackgroundBridge = async (id: string) => {
+    lifecycle.signal.throwIfAborted();
+    const session = sessions.get(id);
+    if (!session) return null;
+    const cwd = session.cwd;
+    if (!currentBackgroundBridge(session,cwd)) return null;
+    await session._ensureBridge?.();
+    lifecycle.signal.throwIfAborted();
+    const bridge = session.bridge;
+    if (!currentBackgroundBridge(session,cwd) || !supportsSpecified(bridge)) return null;
+    return { session, bridge, isCurrent: () => currentBackgroundBridge(session,cwd) && session.bridge === bridge };
+  };
   const background = new PluginBackground(path.join(SESSIONS_DIR, 'background-grants.json'), {
     targets: () => sessionService.list(projects).filter(s => s.kind === 'agent' && !s.readOnlyContext && !sessions.get(s.instanceId)?._closing && !sessions.get(s.instanceId)?._closed)
       .map(s => ({ id: s.instanceId, cwd: s.cwd, title: s.title, model: s.model, provider: s.provider, projectId: s.projectId, busy: s.isProcessing })),
@@ -928,16 +949,49 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       if (!s.store && fs.existsSync(file)) s.store = new SessionStore(file, { metaPath: sessionMetaPath(id) });
       return s.store;
     },
-    complete: async (id, messages, signal) => {
+    complete: async (id, messages, signal, onUsage) => {
       const s = sessions.get(id); if (!s || sessionBusy(s)) throw Error('Backend busy or unavailable');
       const binding = JSON.stringify([s.cwd, s.provider, s.model]);
       await s._ensureBridge?.(); signal.throwIfAborted();
       if (sessions.get(id) !== s || s._closed || s._closing || sessionBusy(s) || binding !== JSON.stringify([s.cwd, s.provider, s.model]) || !s.bridge.backgroundComplete) throw Error('Backend changed or unsupported');
-      const answer = await s.bridge.backgroundComplete(messages, signal, { model: s.model, provider: s.provider });
+      const answer = await s.bridge.backgroundComplete(messages, signal, { model: s.model, provider: s.provider }, onUsage);
       if (sessions.get(id) !== s || s._closed || s._closing || binding !== JSON.stringify([s.cwd, s.provider, s.model])) throw Error('Backend changed');
       return answer;
     },
+    supportsSpecified: (id: string) => {
+      const s = sessions.get(id);
+      return !!s && currentBackgroundBridge(s,s.cwd) && supportsSpecified(s.bridge);
+    },
+    models: async id => {
+      const backend = await specifiedBackgroundBridge(id);
+      if (!backend) return [];
+      const models = await backend.bridge.backgroundModels();
+      return backend.isCurrent() ? models : [];
+    },
+    describeSpecified: async (id: string, selection: BackgroundModelSelection) => {
+      const backend = await specifiedBackgroundBridge(id);
+      const endpoint = await backend?.bridge.describeBackgroundModel(selection);
+      return backend?.isCurrent() ? endpoint ?? null : null;
+    },
+    completeSpecified: async (id, messages, signal, selection, expectedIdentity, onUsage) => {
+      const session = sessions.get(id);
+      if (!session || sessionBusy(session)) throw Error('Backend busy or unavailable');
+      const backend = await specifiedBackgroundBridge(id);
+      signal.throwIfAborted();
+      if (!backend || backend.session !== session || !backend.isCurrent() || sessionBusy(session)) throw Error('后台模型不支持或对话已变化');
+      const result = await backend.bridge.backgroundCompleteSpecified(messages,signal,selection,expectedIdentity,onUsage);
+      signal.throwIfAborted();
+      if (!backend.isCurrent()) throw Error('Backend changed');
+      return result;
+    },
   }, lifecycle.signal);
+  hostEvents.subscribe(({kind,id})=>{
+    if(kind!=='sessions' || !id)return;
+    const session=sessions.get(id);
+    if(session && currentBackgroundBridge(session,session.cwd)) {
+      background.noteForegroundModelChange(id,session.cwd,session.provider,session.model);
+    }
+  });
   const conversationEntries = new ConversationEntries(path.join(SESSIONS_DIR,'plugin-conversations.json'), {
     exists:id=>!!sessions.get(id) && !sessions.get(id)?._closed && !sessions.get(id)?._closing,
     models:async()=>{
@@ -954,12 +1008,26 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   });
   opts.pluginConversation = (sessionId, pluginId, entryKeys) => conversationEntries.matchesSession(pluginId, entryKeys, sessionId);
   const interactions = new PluginInteractions(extensionMessages, id => extensions.requireActive('plugin-' + id), lifecycle.signal, (id, action) => extensions.run('plugin-' + id, action), background, conversationEntries, sharing);
+  const hostService = {
+    capabilities: () => JSON.parse(JSON.stringify(HOST_CAPABILITIES)),
+    snapshot: () => JSON.parse(JSON.stringify(hostSnapshot())),
+    subscribe: (listener: Parameters<HostEvents['subscribe']>[0]) => hostEvents.subscribe(listener),
+  };
   extensions = new ApplicationExtensionRegistry({ settingsFile: settingsPath(), capabilities: HOST_PLUGIN_CAPABILITIES,
     discover: () => installedApplicationDefinitions(settingsPath(), { enableBrowserPages: opts.enableBrowserPages, bindServices: (id, context) => ({
       ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('shared-conversations') ? {sharedConversations:sharing.bind(id,context.signal)} : {}),
       ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('backend-connections') ? {backends:backends.bind(id,context.signal)} : {}),
       ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('composer-inputs') ? {composerInputs:composerInputs.bind(id,context.signal)} : {}),
       ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('plugin-secrets') ? {secrets:backends.bind(id,context.signal).secrets} : {}),
+      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.id === 'ashub-personal-assistant' ? {host: Object.freeze({ ...hostService, projectNames: (entryKey: string, conversationId: string, grantId: string) => {
+        const grant = background.bind(id, context.signal).status(grantId);
+        if (grant.modelSessionId !== conversationId || grant.includedIds?.length !== 1 ||
+            grant.includedIds[0] !== conversationId || grant.excludedIds.includes(conversationId) ||
+            conversationEntries.bind(id, context.signal).get(entryKey) !== conversationId) {
+          throw Error('Project name history requires an authorized dedicated conversation');
+        }
+        return projects.listWithNameHistory();
+      } })} : {}),
       activities: pluginActivities.bind(id, context.signal),
       collaboration: Object.freeze({
         snapshot: (owner: string) => {
@@ -975,10 +1043,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       }),
       conversations: conversationEntries.bind(id, context.signal),
       background: background.bind(id, context.signal), messages: extensionMessages.bind(id, context.signal), interactions: interactions.bind(id, context.signal),
-    }), services: {
-      host: Object.freeze({ capabilities: () => JSON.parse(JSON.stringify(HOST_CAPABILITIES)), snapshot: () => JSON.parse(JSON.stringify(hostSnapshot())),
-        subscribe: (listener: Parameters<HostEvents['subscribe']>[0]) => hostEvents.subscribe(listener) }),
-    } }).filter(definition => !legacyMobile || !definition.capabilities?.includes('shared-conversations')), definitions: [
+    }), services: {host: Object.freeze(hostService)} }).filter(definition => !legacyMobile || !definition.capabilities?.includes('shared-conversations')), definitions: [
     ...(legacyMobile ? [legacyMobile.definition] : []),
     { id: 'quick-prompts', name: '快捷提示词', scope: 'frontend', ui: { panel: 'prompt-manager' } },
     { id: 'skills-marketplace', name: '技能市场', capabilities: ['skills.search', 'skills.install'], ui: { panel: 'skills-panel' },
@@ -1024,7 +1089,8 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         let result: unknown;
         if (req.method === 'POST' && query.get('action') === 'preview') {
           if (req.headers['content-type']?.split(';')[0] !== 'application/zip') throw Error('Select a ZIP archive');
-          result = await pluginInstaller.preview(await readLimitedBody(req, MAX_PLUGIN_ZIP));
+          const requestId = req.headers['x-ashub-preview-request'];
+          result = await pluginInstaller.preview(await readLimitedBody(req, MAX_PLUGIN_ZIP), typeof requestId === 'string' ? requestId : undefined);
         } else if (req.method === 'POST' && query.get('action') === 'restore') {
           const body = JSON.parse((await readLimitedBody(req, 1024)).toString('utf8'));
           if (typeof body?.id !== 'string') throw Error('Invalid extension id');
@@ -1035,9 +1101,13 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
         } else if (req.method === 'POST' && query.get('action') === 'confirm') {
           const body = JSON.parse((await readLimitedBody(req, 1024)).toString('utf8'));
           if (!body || typeof body.token !== 'string') throw Error('Invalid installation token');
-          result = pluginInstaller.confirm(body.token);
-        } else if (req.method === 'GET') result = query.get('action') === 'preview'
-          ? pluginInstaller.previewStatus(query.get('id') ?? '') : pluginInstaller.status(query.get('id') ?? '');
+          if (body.environmentRevision !== undefined && typeof body.environmentRevision !== 'string') throw Error('Invalid installation environment revision');
+          result = pluginInstaller.confirm(body.token, body.environmentRevision);
+        } else if (req.method === 'GET') {
+          const action = query.get('action');
+          result = action === 'previews' ? await pluginInstaller.listPreviews(query.get('requestId') ?? '') : action === 'preview'
+            ? await pluginInstaller.previewStatus(query.get('id') ?? '') : pluginInstaller.status(query.get('id') ?? '');
+        }
         else if (req.method === 'DELETE') { pluginInstaller.discard(query.get('id') ?? ''); result = { ok: true }; }
         else { res.writeHead(405); res.end('Method not allowed'); return; }
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(result));
@@ -2657,20 +2727,25 @@ function pickDir(res: http.ServerResponse): void {
     const { cmd, args } = candidates[idx];
     execFile(cmd, args, { timeout: 120_000 }, (err, stdout, stderr) => {
       if (err) {
-        // Tool not installed — fall back to the next candidate.
-        if ((err as NodeJS.ErrnoException).code === "ENOENT" && idx + 1 < candidates.length) {
-          tryNext(idx + 1);
+        const code = (err as { code?: string | number }).code;
+        // Tool not installed — fall back to the next candidate. Exhausting the
+        // candidates is an environment error, never a user cancellation.
+        if (code === "ENOENT") {
+          if (idx + 1 < candidates.length) { tryNext(idx + 1); return; }
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "No directory picker is available on this system" }));
           return;
         }
-        // An empty selection (and no unexpected stderr) means the user cancelled the dialog.
-        if (!stdout.trim() && (!stderr.trim() || /user cancel/i.test(stderr))) {
+        // Native picker tools use exit code 1 for an explicit empty selection.
+        // Timeouts, spawn failures and all other errors remain failures.
+        if (code === 1 && !stdout.trim() && (!stderr.trim() || /user cancel|cancelled|canceled/i.test(stderr))) {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ cancelled: true }));
           return;
         }
         console.error(`[hub] pick-dir failed (${cmd}):`, stderr || err);
-        res.statusCode = 500;
-        res.end(`pick-dir failed: ${stderr.trim() || err.message}`);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `pick-dir failed: ${stderr.trim() || err.message}` }));
         return;
       }
       const cwd = stdout.trim();
@@ -3413,7 +3488,14 @@ function gitBranchEndpoint(res: http.ServerResponse, session: Session): void {
     res.end(JSON.stringify({ branch: cached.branch }));
     return;
   }
-  execFile("git", ["-C", session.cwd, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 1000 }, (err, stdout) => {
+  const executable = new RuntimeEnvironment().resolveCommand('git');
+  if (!executable) {
+    if (_gitBranchCache.size > 500) _gitBranchCache.clear();
+    _gitBranchCache.set(session.cwd, { branch: null, ts: Date.now() });
+    res.end(JSON.stringify({ branch: null }));
+    return;
+  }
+  execFile(executable, ["-C", session.cwd, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 1000 }, (err, stdout) => {
     const trimmed = err ? "" : stdout.toString().trim();
     const branch = trimmed && trimmed !== "HEAD" ? trimmed : null;
     // Bound the map — cwds are few, but closed sessions would linger.

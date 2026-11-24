@@ -94,16 +94,17 @@ export function mountResource(container, feature, resourceId, options = {}) {
             if(options.inlineToggle){
                 closeReview();
                 const d=node('dialog','resource-toggle-confirm');reviewDialog=d;
-                target=node('div','extension-resource');d.append(target,feedback);document.body.append(d);
+                target=node('div','extension-resource resource-toggle-review');
+                target.tabIndex=0;
+                target.setAttribute('role','region');
+                target.setAttribute('aria-label',local('授权说明','Authorization summary'));
                 d.addEventListener('keydown',event=>event.stopPropagation());
                 d.addEventListener('cancel',event=>{event.preventDefault();if(!busy){closeReview();editing=false;render(view);}});
-                d.showModal();
             } else content.replaceChildren();
             const p = data.confirmation.preview;
             const title = node('h3', 'extension-resource-title', p.title);
             title.id = noticeId + '-title';
-            target.append(title);
-            reviewDialog?.setAttribute('aria-labelledby', title.id);
+            if (!reviewDialog) target.append(title);
             const review = fields => {
                 const dl = node('dl', 'extension-resource-review');
                 for (const f of fields) dl.append(node('dt', '', f.label), node('dd', '', f.value));
@@ -121,8 +122,15 @@ export function mountResource(container, feature, resourceId, options = {}) {
             yes.addEventListener('click', () => void send({ confirm: data.confirmation.id }));
             no.addEventListener('click', () => { closeReview(); editing = false; render(view); });
             actions.append(no, yes);
-            target.append(actions);
-            yes.focus();
+            if (reviewDialog) {
+                const footer = node('div', 'resource-toggle-footer');
+                footer.append(feedback, actions);
+                reviewDialog.setAttribute('aria-labelledby', title.id);
+                reviewDialog.append(title, target, footer);
+                document.body.append(reviewDialog);
+                reviewDialog.showModal();
+            } else target.append(actions);
+            yes.focus({ preventScroll: !!reviewDialog });
             return;
         }
         const next = validateResourceView(data.view);

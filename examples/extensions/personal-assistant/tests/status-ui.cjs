@@ -73,6 +73,7 @@ const root = path.resolve(__dirname, '../../../..');
                 const rect = status.getBoundingClientRect(), bounds = row.getBoundingClientRect();
                 assert(rect.top >= button.getBoundingClientRect().bottom - 1, 'status overlaps switch');
                 assert(rect.left >= bounds.left && rect.right <= bounds.right + 1 && row.scrollWidth <= row.clientWidth + 1, 'status overflows narrow entry');
+                assert(status.scrollWidth <= status.clientWidth + 1, 'status truncates the next retry or last completion time');
                 assert(button.getAttribute('aria-describedby') === status.id && button.title.includes(expected.status), 'full status is inaccessible');
                 assert(parseFloat(getComputedStyle(status).fontSize) <= 12, 'status is too prominent');
               }

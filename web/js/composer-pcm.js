@@ -9,11 +9,12 @@ export function wavBlob(chunks, samples) {
   ascii(36,'data');view.setUint32(40,samples*2,true);
   return new Blob([header,...chunks],{type:'audio/wav'});
 }
-function waitFor(promise,signal,timeout,message) {
+const captureError = (code, message) => Object.assign(Error(message), {code});
+function waitFor(promise,signal,timeout,error) {
   return new Promise((resolve,reject)=>{
     let timer;const done=(error)=>{clearTimeout(timer);signal.removeEventListener('abort',abort);error?reject(error):resolve();};
     const abort=()=>done(signal.reason || new DOMException('Aborted','AbortError'));
-    timer=setTimeout(()=>done(Error(message)),timeout);signal.addEventListener('abort',abort,{once:true});
+    timer=setTimeout(()=>done(error),timeout);signal.addEventListener('abort',abort,{once:true});
     if(signal.aborted)abort();Promise.resolve(promise).then(()=>done(),done);
   });
 }
@@ -21,9 +22,9 @@ export function waitForAudioRunning(context,signal) {
   return new Promise((resolve,reject)=>{
     let settled=false;
     const finish=error=>{if(settled)return;settled=true;clearTimeout(timer);context.removeEventListener('statechange',check);signal.removeEventListener('abort',abort);error?reject(error):resolve();};
-    const check=()=>{if(context.state==='running')finish();else if(context.state==='closed')finish(Error('录音已关闭'));};
+    const check=()=>{if(context.state==='running')finish();else if(context.state==='closed')finish(captureError('microphoneClosed','录音已关闭'));};
     const abort=()=>finish(signal.reason || new DOMException('Aborted','AbortError'));
-    const timer=setTimeout(()=>finish(Error('麦克风启动超时，请稍后重试')),10000);
+    const timer=setTimeout(()=>finish(captureError('microphoneTimeout','麦克风启动超时，请稍后重试')),10000);
     context.addEventListener('statechange',check);signal.addEventListener('abort',abort,{once:true});
     if(signal.aborted){abort();return;}
     check();if(settled)return;
@@ -34,13 +35,15 @@ export function waitForAudioRunning(context,signal) {
 }
 export async function createPcmRecorder(context,stream,{signal,maxBytes,maxDuration}) {
   const maxSamples=Math.min(Math.floor((maxBytes-44)/2),Math.floor(maxDuration*16000));
-  if(maxSamples<=0)throw Error('录音大小限制不足');
+  if(maxSamples<=0)throw captureError('recordingLimit','录音大小限制不足');
   signal.throwIfAborted();
-  await waitFor(context.audioWorklet.addModule(new URL('./composer-pcm-worklet.js',import.meta.url)),signal,5000,'无法加载录音组件，请刷新页面重试');
+  const loadError=captureError('recorderLoadFailed','无法加载录音组件，请刷新页面重试');
+  try { await waitFor(context.audioWorklet.addModule(new URL('./composer-pcm-worklet.js',import.meta.url)),signal,5000,loadError); }
+  catch { signal.throwIfAborted(); throw loadError; }
   signal.throwIfAborted();
   let source,node,chunks=[],samples=0,closed=false;
   const recorder={state:'inactive',mimeType:'audio/wav',get samples(){return samples;},
-    start(){signal.throwIfAborted();if(closed)throw Error('录音已关闭');this.state='recording';node.port.postMessage('start');},
+    start(){signal.throwIfAborted();if(closed)throw captureError('microphoneClosed','录音已关闭');this.state='recording';node.port.postMessage('start');},
     stop(){if(closed||this.state==='inactive')return;this.state='inactive';node.port.postMessage('stop');},
   };
   function dispose(){

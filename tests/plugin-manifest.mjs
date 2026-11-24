@@ -48,9 +48,9 @@ async function done(installer, id) {
   for (let i = 0; i < 200; i++) { const status = installer.status(id); if (status.state !== 'running') return status; await new Promise(resolve => setTimeout(resolve, 5)); }
   throw Error('Installer did not finish');
 }
-function installed(f, id, m, version = '1.0.0') {
+function installed(f, id, m, version = '1.0.0', packageExtra = {}) {
   const root = path.join(f.e.dir, 'extensions', id); fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: m.id, version }));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: m.id, version, ...packageExtra }));
   fs.writeFileSync(path.join(root, 'ashub-plugin.json'), JSON.stringify(m));
   for (const entry of Object.values(m.entries ?? (m.schemaVersion === 1 ? { session: 'index.mjs' } : {}))) {
     fs.mkdirSync(path.dirname(path.join(root, entry)), { recursive: true }); fs.writeFileSync(path.join(root, entry), 'export default () => {}');
@@ -196,6 +196,57 @@ test('application and dual-scope ZIPs expose explicit entry scopes without impor
   assert(both.sessionEnabled); assert(both.applicationSpecifier); assert(both.sessionSpecifier.endsWith('session.mjs')); assert.equal(checked.length, 3);
   await f.installer.close();
 });
+test('system/runtime declarations and package platform requirements are validated consistently', async () => {
+  const f = fixture();
+  const raw = { schemaVersion: 1, id: 'sample-plugin', platforms: ['darwin'], system: { minMacOS: '14.0.0', arch: ['arm64', 'x64'] }, runtimes: [{ kind: 'python', version: '>=3.12.0' }] };
+  const parsed = f.manifest.parsePluginManifest(raw, raw.id);
+  assert.deepEqual(JSON.parse(JSON.stringify(parsed.runtimes)), raw.runtimes);
+  assert(f.manifest.pluginCompatibility(parsed, { platform: 'darwin', arch: 'arm64', macOSVersion: '14.4.0', nodeVersion: '22.23.3' }).compatible);
+  assert(!f.manifest.pluginCompatibility(parsed, { platform: 'darwin', arch: 'ia32', macOSVersion: '14.4.0', nodeVersion: '22.23.3' }).compatible);
+  assert(!f.manifest.pluginCompatibility(parsed, { platform: 'darwin', arch: 'arm64', macOSVersion: '13.6.0', nodeVersion: '22.23.3' }).compatible);
+  assert(!f.manifest.pluginCompatibility(parsed, { platform: 'darwin', arch: 'arm64', darwinRelease: '22.6.0', nodeVersion: '22.23.3' }).compatible);
+  const mac26 = f.manifest.parsePluginManifest({ ...raw, system: { minMacOS: '26.0.0', arch: ['arm64'] } }, raw.id);
+  assert(f.manifest.pluginCompatibility(mac26, { platform: 'darwin', arch: 'arm64', darwinRelease: '25.0.0', nodeVersion: '22.23.3' }).compatible);
+  for (const invalid of [
+    { ...raw, system: { minMacOS: '14' } }, { ...raw, system: { arch: ['arm64', 'arm64'] } },
+    { ...raw, system: { arch: [['arm64']] } },
+    { ...raw, runtimes: [{ kind: 'python', version: '>=3.12' }, { kind: 'python', version: '>=3.13' }] },
+    { ...raw, runtimes: [{ kind: ['python'], version: '>=3.12' }] },
+    { ...raw, runtimes: [{ kind: 'shell', version: '*' }] }, { ...raw, runtimes: [{ kind: 'python', version: 'latest' }] },
+  ]) assert.throws(() => f.manifest.parsePluginManifest(invalid, raw.id));
+  const root = installed(f, 'sample-plugin', raw, '1.0.0', { engines: { node: '>=99' }, os: ['win32'], cpu: ['x64'] });
+  assert(root);
+  const entry = f.catalog.pluginCatalog(f.file, { platform: 'darwin', arch: 'arm64', nodeVersion: '22.23.3', darwinRelease: '23.5.0' })[0];
+  assert.equal(entry.compatibility.compatible, false); assert.equal(entry.sessionEnabled, false);
+  assert.match(entry.compatibilityError, /Node >=99 required/); assert.match(entry.compatibilityError, /package OS/); assert.match(entry.compatibilityError, /package CPU/);
+  await f.installer.close();
+});
+
+test('unrestricted npm OS and CPU declarations are accepted by preview and discovery', async t => {
+  for (const [label, os, cpu] of [['any', 'any', ['any']], ['empty lists', [], []]]) {
+    await t.test(label, async () => {
+      const f = fixture(), pkg = { name: 'sample-plugin', version: '1.0.0', os, cpu };
+      try {
+        const p = await f.installer.preview(zip(plugin({ 'release/package.json': JSON.stringify(pkg) }, { schemaVersion: 1, id: pkg.name })));
+        assert(p.canInstall, JSON.stringify(p.checks));
+        assert.equal((await done(f.installer, f.installer.confirm(p.token).id)).state, 'succeeded');
+        const item = f.catalog.pluginCatalog(f.file, { platform: 'linux', arch: 'x64' }).find(value => value.packageName === pkg.name);
+        assert(item?.sessionEnabled);
+      } finally { await f.installer.close(); }
+    });
+  }
+});
+
+test('manually copied manifestless packages enforce engines, OS and CPU metadata', async () => {
+  const f = fixture(), root = path.join(f.e.dir, 'extensions/legacy-plugin'); fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'legacy-plugin', version: '1.0.0', engines: { node: '>=99' }, os: ['win32'], cpu: ['x64'] }));
+  fs.writeFileSync(path.join(root, 'index.mjs'), 'export default () => {}');
+  const entry = f.catalog.pluginCatalog(f.file, { platform: 'darwin', arch: 'arm64', nodeVersion: '22.23.3' }).find(item => item.packageName === 'legacy-plugin');
+  assert(entry); assert.equal(entry.compatibility.compatible, false); assert.equal(entry.sessionEnabled, false);
+  assert.match(entry.compatibilityError, /Node >=99 required/); assert.match(entry.compatibilityError, /package OS/); assert.match(entry.compatibilityError, /package CPU/);
+  await f.installer.close();
+});
+
 test('unknown host API/capabilities fail closed in installer and manually copied catalog entries', async () => {
   let calls = 0; const f = fixture(async () => { calls++; });
   for (const requires of [{ hostApi: '>=99' }, { capabilities: ['os-sandbox'] }]) {
@@ -238,7 +289,7 @@ test('dependencies use package IDs, enforce enabled/version/compatibility, and r
   const dependent = { ...manifest, dependencies: [{ id: 'dependency-plugin', minVersion: '1.1.0' }] };
   const preview = await f.installer.preview(archive(dependent, { 'release/index.mjs': 'export default () => {}' })); assert(preview.canInstall);
   const dependency = f.catalog.pluginCatalog(f.file)[0]; f.catalog.setPluginEnabled(f.file, dependency.id, false);
-  assert.equal(f.installer.previewStatus(preview.token).canInstall, false); assert.throws(() => f.installer.confirm(preview.token), /prerequisites/);
+  assert.equal((await f.installer.previewStatus(preview.token)).canInstall, false); assert.throws(() => f.installer.confirm(preview.token), /prerequisites/);
   f.catalog.setPluginEnabled(f.file, dependency.id, true); installed(f, 'sample-plugin', dependent);
   assert(f.catalog.pluginCatalog(f.file).filter(p=>!p.bundled).every(entry => entry.compatibility.compatible));
   const cycle = { schemaVersion: 1, id: 'dependency-plugin', dependencies: [{ id: 'sample-plugin', minVersion: '1.0.0' }] };
@@ -337,4 +388,15 @@ test('multi-machine device icon validates on host and renderer without changing 
   const project=JSON.parse(fs.readFileSync(new URL('../examples/extensions/project-management/ashub-plugin.json',import.meta.url)));
   assert.notEqual(project.ui.panels[0].icon,plugin.ui.panels[0].icon);
  }finally{await f.installer.close();}
+});
+test('installer dependency comparison respects build metadata and prereleases', async t => {
+  for (const [version,expected] of [['1.2.0+mac-build',true],['2.0.0-beta.1',false]]) await t.test(version,async()=>{
+    const f=fixture();
+    installed(f,'custom-dependency',{schemaVersion:1,id:'dependency-plugin'},version);
+    const dependent={...manifest,dependencies:[{id:'dependency-plugin',minVersion:'1.2.0'}]};
+    try {
+      const result=await f.installer.preview(archive(dependent,{'release/index.mjs':'export default()=>{}'}));
+      assert.equal(result.checks.find(c=>c.label==='dependency')?.ok,expected,JSON.stringify(result.checks));
+    } finally {await f.installer.close();}
+  });
 });

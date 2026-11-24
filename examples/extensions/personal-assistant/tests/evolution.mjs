@@ -29,7 +29,8 @@ test('explicit correction keeps memory identity and topic aliases while obsolete
  const next=f.store.learn(f.value('用户已经搬到上海',{kind:'fact'}),f.source('current-city','u2',{certainty:'explicit'}),{alignment:{memoryId:first.id,revision:first.revision,relation:'revise'}});
  assert.equal(next.id,first.id);assert.equal(next.source.topic,'residence');assert.equal(next.source.refs.length,1);assert.match(next.content,/上海/);assert.equal(f.store.activeMemories().length,1);
  assert(f.store.history(next.id).some(version=>version.value.content.includes('北京')));
- const later=f.store.learn(f.value('用户仍然住在上海',{kind:'fact'}),f.source('current-city','u3',{certainty:'explicit'}));
+ const later=f.store.learn(f.value('用户仍然住在上海',{kind:'fact'}),f.source('current-city','u3',{certainty:'explicit'}),
+  {alignment:{memoryId:next.id,revision:next.revision,relation:'support'}});
  assert.equal(later.id,first.id);assert.equal(later.source.topic,'residence');
  f.store.forget(later.id,later.revision);
  assert.equal(f.store.learn(f.value('用户仍然住在上海',{kind:'fact'}),f.source('current-city','u4',{certainty:'explicit'})).state,'forgotten','topic alias cannot bypass a tombstone');

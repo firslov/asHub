@@ -23,10 +23,11 @@ const stored = { get: key => { try {
             localStorage.setItem('ash.backend.' + backend + '.' + key, value);
     }
     catch { } } };
-let session = '', generation = 0, source = null, ready = false, busy = false, online = false, sessions = [], groups = [], capabilities = {}, modelInfo = {}, images = [], reply = null, liveSegment = false, phase = null, turnOutcome = '', retry = null, queueTimer = null, renderTimer = null, modalGeneration = 0, disposeResource = null, catalogVersion = 0, queueVersion = 0, receiptTimer = null;
+let session = '', generation = 0, source = null, ready = false, busy = false, online = false, sessions = [], groups = [], pluginEntries = [], capabilities = {}, modelInfo = {}, images = [], reply = null, liveSegment = false, phase = null, turnOutcome = '', retry = null, queueTimer = null, renderTimer = null, modalGeneration = 0, disposeResource = null, catalogVersion = 0, queueVersion = 0, receiptTimer = null;
 const owners = new Map(), approvals = new Map(), imageDrafts = new Map();
 const SYNC_WAIT_MS = 12000;
 let syncWait = null, syncTimer = null, syncPhase = 'idle', suspended = false, invalidated = false, connectionNotice = '';
+let renderedSessions = '';
 const hidden = () => document.hidden || suspended;
 const text = (id, value) => { if ($(id).textContent !== value) $(id).textContent = value; };
 function syncStatus() {
@@ -88,10 +89,32 @@ function saveTheme(theme) { document.documentElement.dataset.theme = theme; stor
 saveTheme(stored.get('theme') || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light'));
 $('theme').onclick = () => saveTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 function renderSessions() {
-    const search = $('search').value.trim().toLowerCase(), nodes = [], placed = new Set();
-    const row = s => { const b = button(s.title || '未命名对话', () => openSession(s.instanceId)); b.dataset.sessionId = s.instanceId; b.classList.toggle('active', session === s.instanceId); b.title = s.title || s.instanceId; return b; };
+    const search = $('search').value.trim().toLowerCase(), nodes = [], dedicated = new Set();
+    const row = (s, entryLabel = '') => {
+        const b = button(entryLabel || s.title || '未命名对话', () => openSession(s.instanceId));
+        b.dataset.sessionId = s.instanceId;
+        b.classList.toggle('bw-dedicated-session', !!entryLabel);
+        if (session === s.instanceId) {
+            b.classList.add('active');
+            b.setAttribute('aria-current', 'page');
+        }
+        b.title = s.title || entryLabel || s.instanceId;
+        return b;
+    };
+    const shared = new Map(sessions.map(s => [s.instanceId, s]));
+    // Registered plugin conversations have a stable entry label even after a
+    // rename. The current shared list is still the source of accessible chats.
+    for (const entry of pluginEntries) {
+        const s = shared.get(entry?.sessionId);
+        if (!s || dedicated.has(s.instanceId) || typeof entry.label !== 'string' || !entry.label.trim())
+            continue;
+        dedicated.add(s.instanceId);
+        if (!search || [entry.label, s.title || ''].some(label => label.toLowerCase().includes(search)))
+            nodes.push(row(s, entry.label));
+    }
+    const placed = new Set(dedicated);
     for (const group of groups) {
-        const rows = sessions.filter(s => (group.sessionIds || []).includes(s.instanceId) || s.projectId === group.id).filter(s => !search || (group.name + ' ' + s.title).toLowerCase().includes(search));
+        const rows = sessions.filter(s => !dedicated.has(s.instanceId) && ((group.sessionIds || []).includes(s.instanceId) || s.projectId === group.id)).filter(s => !search || (group.name + ' ' + s.title).toLowerCase().includes(search));
         if (!rows.length)
             continue;
         const pins = group.pinnedSessionIds || [];
@@ -105,12 +128,36 @@ function renderSessions() {
     const rest = sessions.filter(s => !placed.has(s.instanceId) && (!search || String(s.title || '').toLowerCase().includes(search)));
     if (rest.length) {
         nodes.push(el('h3', '独立对话'));
-        nodes.push(...rest.map(row));
+        nodes.push(...rest.map(s => row(s)));
     }
-    $('sessions').replaceChildren(...nodes);
+    const signature = JSON.stringify(nodes.map(node => [node.tagName, node.textContent, node.dataset.sessionId, node.title, node.className]));
+    // Background reads can complete between pointer-down and pointer-up.
+    // Keep the buttons themselves when the rendered navigation is identical.
+    if (signature !== renderedSessions) {
+        const list = $('sessions'), focus = document.activeElement?.dataset.sessionId, scrollTop = list.scrollTop;
+        list.replaceChildren(...nodes);
+        renderedSessions = signature;
+        if (focus)
+            nodes.find(node => node.dataset.sessionId === focus)?.focus({ preventScroll: true });
+        list.scrollTop = scrollTop;
+    }
     $('title').textContent = sessions.find(s => s.instanceId === session)?.title || '选择一个对话';
 }
 $('search').oninput = renderSessions;
+async function refreshCatalog(version, operation, update, warning) {
+    try {
+        const value = await rpc(operation);
+        if (version !== catalogVersion)
+            return;
+        if (!Array.isArray(value))
+            throw Error('收到无法识别的列表');
+        update(value);
+        renderSessions();
+    } catch (error) {
+        if (version === catalogVersion && warning)
+            notice(warning + error.message);
+    }
+}
 async function refresh() {
     const version = ++catalogVersion, owner = generation, connection = source;
     const current = () => version === catalogVersion && owner === generation && connection === source;
@@ -140,12 +187,17 @@ async function refresh() {
             return;
         sessions = list;
         capabilities = caps;
-        renderSessions();
+        if (!caps.projects)
+            groups = [];
+        // A later reuse of the same identifier must be classified by fresh
+        // metadata once it has disappeared from the authorized list.
+        pluginEntries = caps.pluginResources ? pluginEntries.filter(entry => sessions.some(s => s.instanceId === entry?.sessionId)) : [];
         if (session && !sessions.some(s => s.instanceId === session)) {
             draft();
             closeSessionView();
             notice('此对话已关闭或不再共享');
         }
+        renderSessions();
         if (!session) {
             const last = stored.get('last');
             if (last && sessions.some(s => s.instanceId === last))
@@ -153,23 +205,13 @@ async function refresh() {
         }
         else if (!source && !hidden() && syncPhase !== 'limited')
             connect();
-        if (caps.projects) {
-            try {
-                const value = await rpc('project-groups');
-                if (version !== catalogVersion)
-                    return;
-                groups = value;
-                renderSessions();
-            }
-            catch (e) {
-                if (version === catalogVersion)
-                    notice('项目列表暂未刷新：' + e.message);
-            }
-        }
-        else {
-            groups = [];
-            renderSessions();
-        }
+        // Optional metadata must not delay the list, replay, or each other.
+        if (caps.projects)
+            void refreshCatalog(version, 'project-groups', value => { groups = value; }, '项目列表暂未刷新：');
+        if (caps.pluginResources)
+            void refreshCatalog(version, 'plugin-entries', value => {
+                pluginEntries = value.filter(entry => sessions.some(s => s.instanceId === entry?.sessionId));
+            });
         controls();
     }
     catch (e) {
@@ -180,7 +222,7 @@ async function refresh() {
                 closeSessionView();
                 invalidated = true;
                 syncPhase = 'invalid';
-                sessions = []; groups = []; capabilities = {};
+                sessions = []; groups = []; pluginEntries = []; capabilities = {};
                 renderSessions();
                 text('device-status', '连接已失效');
             } else {

@@ -23,7 +23,7 @@ test('close cleans completed plans and all simultaneous preview extractions',asy
  const f=fixture(t),ready=await f.installer.preview(payload());
  const pending=[f.installer.preview(payload()),f.installer.preview(payload())].map(task=>task.then(()=>false,error=>error.name));
  await f.installer.close();assert.deepEqual(await Promise.all(pending),['AbortError','AbortError']);assert.deepEqual(remaining(f),[]);
- assert.throws(()=>f.installer.previewStatus(ready.token),error=>error.status===404);assert.equal(fs.readFileSync(f.file,'utf8'),'{}');
+ await assert.rejects(f.installer.previewStatus(ready.token),error=>error.status===404);assert.equal(fs.readFileSync(f.file,'utf8'),'{}');
 });
 test('close waits for active setup cancellation and concurrent preview cleanup',async t=>{
  let entered;const ready=new Promise(resolve=>{entered=resolve});

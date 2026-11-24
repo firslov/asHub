@@ -12,10 +12,15 @@ const root = path.resolve(__dirname, '../web');
 const watchdog = setTimeout(() => app.exit(1), 30000);
 app.whenReady().then(async () => {
   let win, server;
+  const scopedPlugin = { id: 'scoped', name: '个人助手', enabled: true,
+    manifest: { sessionScope: { conversationEntries: ['assistant'] } },
+    sessions: [{ title: '专属对话', state: 'loaded' }] };
+  const scopedApplication = { id: 'plugin-scoped', pluginId: 'scoped', name: '个人助手', scope: 'application', enabled: true, state: 'active' };
   const plugins = [
     { id: 'one', name: '文献检索', source: '~/.agent-sh/extensions/literature/index.ts', enabled: true, sessions: [{ title: '论文综述', state: 'loaded', configNamespaces: ['literature'] }, { title: '资料整理', state: 'loaded' }] },
     { id: 'two', name: '文献检索', source: '~/.agent-sh/extensions/project-notify/index.ts', enabled: false, sessions: [] },
     { id: 'three', name: '资源查询', source: '~/.agent-sh/extensions/resource-search/index.ts', enabled: true, sessions: [{ title: '研究笔记', state: 'error', error: 'Required endpoint is not configured' }] },
+    scopedPlugin,
   ];
   plugins.push(
     { id: 'builtin:agent', name: 'agent-sh', builtin: true, required: true, description: 'plugins.descAgent', sessions: [{ title: '论文综述', state: 'loaded' }] },
@@ -43,7 +48,7 @@ app.whenReady().then(async () => {
       if (req.url === '/api/extensions') {
         const fixtures=['one','two'].map(pluginId=>({id:'plugin-'+pluginId,pluginId,name:'文献检索',scope:'frontend',enabled:pluginId==='two'||appFeatureEnabled,state:'active',
           ui:{version:1,panels:[{id:'panel',title:'Panel',components:[{type:'text',text:'Fixture'}]}]}}));
-        res.setHeader('Content-Type','application/json');res.end(JSON.stringify({version:1,features:fixtures}));return;
+        res.setHeader('Content-Type','application/json');res.end(JSON.stringify({version:1,features:[...fixtures, scopedApplication]}));return;
       }
       if (req.url === '/api/plugins') {
         if (req.method === 'PUT') { let body = ''; for await (const part of req) body += part;
@@ -88,8 +93,46 @@ app.whenReady().then(async () => {
       assert.equal(await js("document.querySelectorAll('#features-list [data-feature-id^=plugin-]').length"),0,
         'extensions must not appear in App features while local inventory is loading');
     } finally {releaseInventory();}
-    await wait(`document.querySelectorAll('.plugin-item').length === 6`);
+    await wait(`document.querySelectorAll('.plugin-item').length === ${plugins.length}`);
     await wait(`document.querySelector('[data-plugin-id="one"] [data-feature-id="plugin-one"]') && document.querySelector('[data-plugin-id="two"] [data-feature-id="plugin-two"]')`);
+    const scopedCard = `document.getElementById('plugin-configure-scoped')?.closest('.plugin-item')`;
+    assert(await js(`!${scopedCard}.querySelector(':scope > .plugin-status, :scope > .plugin-details')`),
+      'healthy conversation-scoped plugins omit redundant session telemetry');
+    assert(await js(`document.getElementById('plugin-configure-one').closest('.plugin-item').querySelectorAll('.plugin-session').length === 2`),
+      'ordinary plugins retain their per-session inventory');
+    scopedPlugin.sessions.push({ title: '加载异常的对话', state: 'error', error: 'Scoped extension failed to start' });
+    await js("document.getElementById('plugins-refresh').click()");
+    await wait(`${scopedCard}?.querySelector('.plugin-error')?.textContent === 'Scoped extension failed to start'`);
+    assert.equal(await js(`${scopedCard}.querySelector(':scope > .plugin-status').textContent`), '加载失败 1');
+    assert.equal(await js(`${scopedCard}.querySelectorAll('.plugin-session').length`), 1,
+      'scoped diagnostic details contain load errors only');
+    scopedPlugin.sessions = [];
+    await js("document.getElementById('plugins-refresh').click()");
+    await wait(`!document.getElementById('plugins-refresh').disabled && !${scopedCard}.querySelector(':scope > .plugin-status, :scope > .plugin-details')`);
+    const scopedError = `${scopedCard}.querySelector('.plugin-application-error')`;
+    const activationError = 'Could not open assistant storage <span data-fixture="error">';
+    scopedApplication.state = 'error'; scopedApplication.error = activationError;
+    await js("document.getElementById('plugins-refresh').click()");
+    await wait(`${scopedError}?.textContent === ${JSON.stringify(activationError)} && !${scopedError}.hidden`);
+    assert.equal(await js(`document.querySelectorAll('.plugin-application-error:not([hidden])').length`), 1,
+      'startup failure without any session appears only on its own card');
+    assert.equal(await js(`${scopedError}.childElementCount`), 0, 'error detail is rendered as text');
+    scopedApplication.enabled = scopedPlugin.enabled = false;
+    scopedApplication.state = 'inactive';
+    await js("document.getElementById('plugins-refresh').click()");
+    await wait(`!document.getElementById('plugins-refresh').disabled && ${scopedError}?.hidden && !${scopedError}.textContent`);
+    scopedApplication.enabled = scopedPlugin.enabled = true;
+    scopedApplication.state = 'active'; delete scopedApplication.error;
+
+    // Reading a broken manifest or missing entry can leave no scope metadata.
+    const manifest = scopedPlugin.manifest;
+    delete scopedPlugin.manifest;
+    scopedPlugin.compatibilityError = 'Missing package entry';
+    await js("document.getElementById('plugins-refresh').click()");
+    await wait(`${scopedCard}.querySelector(':scope > .plugin-status')?.textContent === 'Missing package entry'`);
+    scopedPlugin.manifest = manifest; delete scopedPlugin.compatibilityError;
+    await js("document.getElementById('plugins-refresh').click()");
+    await wait(`!document.getElementById('plugins-refresh').disabled && !${scopedCard}.querySelector(':scope > .plugin-status, :scope > .plugin-details')`);
     await js(`document.querySelector('.plugin-configure').click()`);
     const featureSwitch='[data-plugin-id="one"] .feature-toggle';
     await js(`{const b=document.querySelector('${featureSwitch}');b.focus();b.click();}`);
@@ -113,10 +156,10 @@ app.whenReady().then(async () => {
     await wait(`document.getElementById('plugins-message').textContent.includes('fixture failure')`);
     assert.equal(await js(`document.querySelector('.plugin-toggle').getAttribute('aria-checked')`), 'false');
     await js(`document.getElementById('plugins-refresh').click()`);
-    await wait(`document.querySelectorAll('.plugin-item').length === 6 && !document.getElementById('plugins-refresh').disabled`);
+    await wait(`document.querySelectorAll('.plugin-item').length === ${plugins.length} && !document.getElementById('plugins-refresh').disabled`);
     delay = 200;
     await js(`document.getElementById('plugins-refresh').click(); document.getElementById('plugins-close').click(); document.getElementById('plugins-toggle').click()`);
-    await wait(`document.querySelectorAll('.plugin-item').length === 6`);
+    await wait(`document.querySelectorAll('.plugin-item').length === ${plugins.length}`);
     await new Promise(r => setTimeout(r, 240));
     assert.equal(await js(`document.getElementById('plugins-overlay').hidden`), false);
     await js(`document.querySelector('.plugin-configure').click()`);

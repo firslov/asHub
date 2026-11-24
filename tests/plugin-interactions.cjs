@@ -235,3 +235,22 @@ test('sharing authorization is mandatory, desktop-only, idempotent and rolled ba
  const confirm={confirm:prepared.value.confirmation.id};assert.equal((await call(confirm,true)).status,409);assert.equal(attempts,0);
  assert.equal((await call(confirm)).status,409);assert.equal((await call(confirm)).status,409);assert.equal(attempts,1);assert.equal(sharing.bind('plugin',life.signal).scope(granted),null);life.abort();
 });
+
+test('3C model change requires desktop confirmation and revalidates after async lookup',async t=>{
+ const f=fixture();t.after(()=>f.messages.close());
+ const {PluginInteractions}=f.e.load('src/extensions/interactions.ts'),{PluginBackground}=f.e.load('src/extensions/background.ts');
+ const target={id:'abc123',cwd:f.e.dir,title:'Assistant',model:'foreground',provider:'mock',busy:false};
+ const selection={provider:'mock',model:'separate'},endpoint={identity:'a'.repeat(64),origin:'https://example.invalid'};let pause=false,release,enabled=true,executed=0;
+ const runtime={targets:()=>[target],store:()=>undefined,complete:async()=>'',models:async()=>{if(pause)await new Promise(r=>{release=r});return [selection]},describeSpecified:async()=>endpoint,completeSpecified:async()=>''};
+ const background=new PluginBackground(path.join(f.e.dir,'model-grants.json'),runtime,f.life.signal),api=background.bind('plugin',f.plugin.signal);
+ const id=background.approve('plugin',background.prepare('plugin',{modelSessionId:target.id,includedIds:[target.id],excludedIds:[],includeHistory:true,dailyCalls:4,followModel:true}));
+ const ui=new PluginInteractions(f.messages,()=>{},f.life.signal,async(_,run)=>run(),background);
+ ui.bind('plugin',f.plugin.signal).register('models',{remote:{conversationId:()=>target.id,actions:['change']},view:()=>({}),prepare:()=>({backgroundModelChange:{grantId:id,model:selection},validate:()=>{if(!enabled)throw Error('memory disabled')},execute:()=>{executed++;return {}}})});
+ const call=async(body,remote=false)=>{const res=new Res();await ui.handle(req(body,'/api/plugin-resources/plugin/models'+(remote?'?remoteSession=abc123':''),'POST'),res,async()=>JSON.stringify(body));return {status:res.statusCode,...res.json()};};
+ assert.equal((await call({action:'change',values:{}},true)).status,409);
+ const preview=await call({action:'change',values:{}});assert.equal(preview.status,200);assert.match(JSON.stringify(preview.confirmation.preview),/example.invalid/);assert.equal(api.status(id).modelRevision,0);
+ assert.equal((await call({confirm:preview.confirmation.id},true)).status,409);
+ pause=true;const pending=call({confirm:preview.confirmation.id});await new Promise(r=>setImmediate(r));enabled=false;release();const result=await pending;
+ assert.equal(result.status,409);assert.equal(api.status(id).modelRevision,0);assert.equal(executed,0);
+ enabled=true;pause=false;const next=await call({action:'change',values:{}});assert.equal((await call({confirm:next.confirmation.id})).status,200);assert.equal(api.status(id).modelRevision,1);assert.equal(executed,1);
+});

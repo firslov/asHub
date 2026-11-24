@@ -349,7 +349,9 @@ test('named entry metadata is bounded and preserves optional setup resources acr
 test('assistant is a conversation with a minimal memory popover, not a settings form',async t=>{
  const f=fixture(t),view=await f.p.overview();assert.equal(view.form,undefined);assert.equal(view.rows.length,0);
  assert.deepEqual(view.actions.map(a=>a.id),['authorize']);assert.throws(()=>f.p.prepare('configure-model',{}));
- f.authorize();assert.deepEqual((await f.p.overview()).actions.map(a=>a.id),['pause']);
+ f.authorize();const enabled=await f.p.overview();
+ assert.deepEqual(enabled.actions.map(a=>a.id),['enable-theme-overviews','pause']);
+ assert.equal(enabled.toggle.action,'pause');assert.equal(f.a.store.themeOverviewEnabled(),false);
 });
 
 test('fresh combined onboarding can explicitly skip memory and enter the created chat',async t=>{
@@ -372,11 +374,15 @@ test('removed memory UI routes reject without changing stored data or authorizat
  f.p.prepare('pause').execute();assert.equal(f.a.scope(id),null);assert.equal(f.a.store.get(row.id).state,'active');
  f.authorize();assert.equal(f.a.search(id,'蓝色').length,1);assert.equal(f.a.scope(f.targets[1].id),null);
 });
-test('old fixed-model grants expose only off and never upgrade without consent',t=>{
+test('the pilot can opt in under a fixed-model grant without upgrading that grant',t=>{
  const f=fixture(t),id=f.targets[0].id;
  const input={modelSessionId:id,includedIds:[id],excludedIds:[],includeHistory:true,dailyCalls:4};
  const grant=f.host.approve('assistant',f.host.prepare('assistant',input));f.a.learning.configure(grant,input);
- assert.deepEqual(f.p.overview().actions.map(a=>a.id),['pause']);
+ const view=f.p.overview();assert.deepEqual(view.actions.map(a=>a.id),['enable-theme-overviews','pause']);
+ assert.equal(view.toggle.action,'pause');assert.equal(f.a.store.themeOverviewEnabled(),false);
+ const action=view.actions.find(a=>a.id==='enable-theme-overviews');const enable=f.p.prepare(action.id,action.values);
+ assert(enable.preview);assert.equal(enable.backgroundAuthorization,undefined);enable.execute();
+ assert.equal(f.a.learning.config().grantId,grant);assert.equal(f.a.store.themeOverviewEnabled(),true);
  assert.notEqual(f.services.background.status(grant).followModel,true);
 });
 
@@ -451,4 +457,455 @@ test('long-lived assistant learns, recalls, corrects and resumes across compact,
  f.a.stop();const restored=new Assistant(f.services);
  try{await restored.learning.tick();assert.equal(f.calls(),3);assert.match(restored.search(sid,'我的年龄').find(x=>x.topic==='age').content,/35/);assert.equal(restored.learning.health().errorClass,null);assert(restored.learning.health().lastSuccessAt);}
  finally{restored.stop();}
+});
+
+function recalled(f,text,includeTool=false) {
+  const image={type:'image_url',image_url:{url:'data:image/png;base64,test'}};
+  const user={role:'user',content:[{type:'text',text},image]};
+  const request=includeTool?[user,{role:'tool',tool_call_id:'tool-1',content:[{type:'text',text:'工具结果'}]}]:[user];
+  const response=withMemory(request,f.a,f.targets[0].id);
+  if(response===request)return [];
+  assert.equal(response.at(-1).content[1],request.at(-1).content[0]);
+  if(includeTool){assert.equal(response[0],user);assert.equal(response.at(-1).tool_call_id,'tool-1');}
+  else assert.equal(response[0].content[2],image);
+  return JSON.parse(response.at(-1).content[0].text.split('\n')[1]).items;
+}
+
+test('hybrid request uses authorized bigrams and exact identifiers, not stale branches or the active prompt',async t=>{
+  const f=fixture(t),id=f.targets[0].id;
+  const before=await f.add('授权之前的换机编号是 PC-1201');
+  await new Promise(r=>setTimeout(r,3));
+  const grant=f.host.approve('assistant',f.host.prepare('assistant',{modelSessionId:id,includedIds:[id],excludedIds:[],includeHistory:false,dailyCalls:4}));
+  f.a.learning.configure(grant,{modelSessionId:id,includeHistory:false,includedIds:[id]});
+  const first=await f.add('扭矩设定为 23 牛米，写到验收单。');
+  await f.add('扭矩不应该超过 24 牛米。');
+  const branch=await f.add('已经报修，确认编号 AZ-1401 对应冷却泵。');
+  const similar=await f.add('已经报修，确认编号 AZ-1402 对应机床。');
+  const latest=await f.add('扭矩');
+  const base=recalled(f,'扭矩',true);
+  assert(base.some(x=>x.id===first && x.kind==='original' && x.confidence==='unverified-history'));
+  assert(!base.some(x=>x.id===latest));
+  const report=recalled(f,'帮我查编号 AZ-1401');
+  assert.deepEqual(report.map(x=>x.id),[branch]);
+  assert(!report.some(x=>x.id===similar));
+  assert(!recalled(f,'PC-1201').some(x=>x.id===before));
+  assert.deepEqual(recalled(f,'讲解彩虹的形成'),[]);
+  f.history.setActiveLeaf(first);
+  assert.deepEqual(recalled(f,'AZ-1401'),[]);
+  const reloadedHistory=new SessionStore(path.join(f.dir,'history.jsonl'));
+  const life=new AbortController();
+  const recoveredHost=new PluginBackground(path.join(f.dir,'grants.json'),{targets:()=>f.targets,store:()=>reloadedHistory,
+    complete:async()=>{throw Error('unexpected inference');}},life.signal);
+  const reloaded=new Assistant({...f.services,background:recoveredHost.bind('assistant',life.signal)});
+  try {
+    assert.deepEqual(recalled({...f,a:reloaded},'AZ-1401'),[]);
+    assert.deepEqual(recalled({...f,a:reloaded},'扭矩').map(x=>x.id),[first]);
+  } finally {reloaded.stop();life.abort();reloadedHistory.close?.();}
+  f.history.setActiveLeaf(latest);
+  assert.deepEqual(recalled(f,'AZ-1401').map(x=>x.id),[branch]);
+  f.services.background.revoke(grant);
+  assert.deepEqual(recalled(f,'扭矩'),[]);
+});
+
+test('forget excludes short evidence embedded in a new message, without matching unrelated identifiers',async t=>{
+  const f=fixture(t),id=f.targets[0].id; f.authorize();
+  const phrase='我的代号是青竹';
+  const first=await f.add(phrase+'。');
+  assert(recalled(f,'青竹').some(x=>x.id===first));
+  const stable=f.a.remember(id,{title:'代号',content:phrase,kind:'fact',subject:'user',topic:'codename',quote:phrase});
+  const independent=f.a.store.add({title:'竹林报告',content:'竹林报告按月提交',kind:'fact',scope:'personal'},{type:'user'},'active');
+  await f.add('你的代号是青竹，下面接着讨论归档。','assistant');
+  const copiedText='补充说明：我的代号是青竹，仅用于内部草稿。';
+  const copiedId=await f.add(copiedText);
+  const cached={id:copiedId,text:copiedText};
+  const unrelated={id:'unrelated',text:'竹林报告按月提交'};
+  f.a.store.setState('scan:'+id,{context:[cached,unrelated]});
+  f.a.store.setState('learning-result:'+id,{sourceIds:[copiedId],resume:{records:[cached]}});
+  const note=await f.add('归档标记 ZT1401 关联另一项独立的审计任务。');
+  const obsolete=await f.add('弃用归档标记 ZT-1401');
+  const archived=f.a.remember(id,{title:'归档标记',content:'归档标记 ZT-1401',kind:'fact',topic:'archive-id',quote:'弃用归档标记 ZT-1401'});
+  assert(recalled(f,'ZT-1401').length);
+  await f.add('请忘记'+phrase);
+  f.a.forgetFromChat(id,{...stable,quote:'请忘记'+phrase});
+  assert.deepEqual(f.a.store.state('scan:'+id)?.context,[unrelated]);
+  assert.equal(f.a.store.state('learning-result:'+id),null);
+  f.a.store.forget(archived.id,archived.revision);
+  const repeated=await f.add('后来补充：'+phrase+'，但这不是报告标题。');
+  const assistantCopy=await f.add('你确认过：你的代号是青竹。','assistant');
+  const attributed=await f.add('转述：用户的代号是青竹，仅用于内部草稿。');
+  const newlyLearnable=await f.add('测试实验台验收后要断电。');
+  const batch=f.a.learning.historyBatch(f.a.learning.config(),f.targets[0],'scan:guard-test');
+  assert(!batch.records.some(r=>[repeated,assistantCopy,attributed].includes(r.id)));
+  assert(batch.records.some(r=>r.id===newlyLearnable));
+  await f.add('好，那之前提到的内容呢？');
+  assert.deepEqual(recalled(f,'青竹'),[]);
+  assert.deepEqual(f.a.historySearch(id,'青竹'),[]);
+  assert.throws(()=>f.a.historyRead(id,repeated),/不再用于记忆/);
+  assert.throws(()=>f.a.historyRead(id,obsolete),/不再用于记忆/);
+  assert.deepEqual(recalled(f,'ZT1401').map(x=>x.id),[note]);
+  assert(f.a.read(id,independent.id));
+  f.a.stop();
+  const restored=new Assistant(f.services);
+  try {
+    assert.deepEqual(recalled({...f,a:restored},'青竹'),[]);
+    assert.deepEqual(recalled({...f,a:restored},'ZT1401').map(x=>x.id),[note]);
+    assert(restored.read(id,independent.id));
+  } finally {restored.stop();}
+});
+
+test('request dedup skips already-visible user messages and fills the freed slot',async t=>{
+  const f=fixture(t);f.authorize();
+  const shown='杉木档案的表格改用横向布局。';
+  const older=await f.add('杉木档案原件储存在南向隔间。');
+  await f.add(shown);
+  const request=[{role:'user',content:shown},{role:'user',content:'杉木档案'}];
+  const output=withMemory(request,f.a,f.targets[0].id);
+  assert.equal(output[0],request[0]);
+  assert.deepEqual(JSON.parse(output[1].content.split('\n')[1]).items.map(row=>row.id),[older]);
+});
+
+test('near-identical messages with different precise values keep both matching sources',async t=>{
+  const f=fixture(t), id=f.targets[0].id;f.authorize();
+  const a=await f.add('旧设备的恢复代码 RC-091B 已在管理员面板重新生成。');
+  const b=await f.add('旧设备的恢复代码 RC-091C 已在管理员面板重新生成。');
+  await f.add('旧设备的恢复代码 RC-091C 已在管理员面板重新生成。');
+  const codes=recalled(f,'RC-091B 和 RC-091C 两个恢复代码都是什么？');
+  assert.equal(codes.length,2);
+  assert(codes.some(x=>x.id===a));
+  assert(codes.some(x=>x.content.includes('RC-091C')));
+  const release=await f.add('版本 0.21.7 的下载附件已经校验。');
+  await f.add('版本 0.21.8 的下载附件已经校验。');
+  await f.add('版本 0.21.9 的下载附件已经校验。');
+  assert.deepEqual(recalled(f,'0.21.7').map(x=>x.id),[release]);
+  const gateway=await f.add('网关 v0.21.6 的发布负责人是甲。');
+  await f.add('网关 v0.21.7 的发布负责人是乙。');
+  assert.deepEqual(recalled(f,'网关 0.21.6 的发布负责人？').map(x=>x.id),[gateway]);
+  assert.deepEqual(recalled(f,'v0.21.6').map(x=>x.id),[gateway]);
+  const endpoint=await f.add('本机测试服务是 http://192.168.1.13:7878/healthz。');
+  await f.add('另一个服务是 http://192.168.1.13:8000/healthz。');
+  await f.add('另一台测试机是 192.168.1.14:7878。');
+  assert.deepEqual(recalled(f,'192.168.1.13:7878').map(x=>x.id),[endpoint]);
+  const hosts=recalled(f,'192.168.1.13');
+  assert.equal(hosts.length,2);
+  assert(hosts.every(x=>x.content.includes('192.168.1.13')));
+  const style=f.a.store.add({title:'回复偏好',content:'回答先给结论并保持简洁',kind:'preference',scope:'personal'},
+    {type:'user',context:{subject:'user'}},'active');
+  assert.equal(recalled(f,'帮我总结 BX-2022 的新发现').at(0)?.id,style.id);
+  assert(!recalled(f,'RC-091B').some(x=>x.id===b));
+  await f.add('冷却泵压差应设为 22 千帕，验收前复核。');
+  await f.add('冷却泵压差应设为 23 千帕，验收前复核。');
+  assert.equal(recalled(f,'冷却泵压差').filter(row=>row.kind==='original').length,2);
+});
+
+test('a forgotten sentence does not suppress a new fact with only a shared prefix',async t=>{
+  const f=fixture(t),id=f.targets[0].id;f.authorize();
+  const old='我决定本周的设计评审改到周三进行';
+  await f.add(old);
+  const entry=f.a.remember(id,{title:'评审日程',content:old,topic:'design-review-date',quote:old,kind:'fact'});
+  f.a.store.forget(entry.id,entry.revision);
+  const next='我决定本周的设计评审由李梅主持';
+  const source=await f.add(next);
+  assert.equal(f.a.historyRead(id,source).text,next);
+  assert.equal(recalled(f,'设计评审李梅')[0]?.id,source);
+  assert.equal(f.a.remember(id,{title:'评审主持人',content:next,topic:'design-review-host',quote:next,kind:'fact'}).state,'active');
+});
+
+test('corrected source does not appear beside its replacement; explicit historic text stays pageable',async t=>{
+  const f=fixture(t),id=f.targets[0].id;f.authorize();
+  const old=await f.add('我的常住城市是北京');
+  const row=f.a.remember(id,{title:'常住城市',content:'用户常住北京',subject:'user',topic:'residence',quote:'我的常住城市是北京',kind:'fact'});
+  await f.add('更正：我现在的常住城市是上海');
+  f.a.remember(id,{title:'常住城市',content:'用户现常住上海',subject:'user',topic:'residence',quote:'我现在的常住城市是上海',kind:'fact',
+    memoryId:row.id,revision:row.revision,relation:'revise'});
+  const items=recalled(f,'我现在的常住城市是哪里？');
+  assert.equal(items.length,1);
+  assert.match(items[0].content,/上海/);
+  assert.match(f.a.historyRead(id,old).text,/北京/);
+  const long=await f.add('长文校验。'.repeat(4500));
+  assert.equal(f.a.historyRead(id,long).more,true);
+  const sz=f.a.historyRead(id,long).nextOffset;
+  assert.equal(f.a.historyRead(id,long,sz).offset,sz);
+});
+
+test('legacy unavailable suppression keeps independent stable recall and cannot reopen on restart',async t=>{
+  const f=fixture(t),id=f.targets[0].id;
+  const forgotten=await f.add('尖峰限额是二十台');
+  await new Promise(r=>setTimeout(r,3));
+  const grant=f.host.approve('assistant',f.host.prepare('assistant',{modelSessionId:id,includedIds:[id],excludedIds:[],includeHistory:false,dailyCalls:4}));
+  f.a.learning.configure(grant,{modelSessionId:id,includeHistory:false,includedIds:[id]});
+  // Reproduce a pre-upgrade tombstone with only a source ID.
+  f.a.store.setState('ignored:'+id,[forgotten]);
+  await f.add('复述：尖峰限额是二十台，仅供草稿。');
+  const stable=f.a.store.add({title:'会议室约定',content:'会议室使用后需归位桌椅',kind:'fact',scope:'personal'},{type:'user'},'active');
+  assert.deepEqual(recalled(f,'尖峰限额'),[]);
+  assert.deepEqual(recalled(f,'会议室').map(x=>x.id),[stable.id]);
+  f.a.stop();
+  const restored=new Assistant(f.services);
+  try {
+    assert.deepEqual(recalled({...f,a:restored},'尖峰限额'),[]);
+    assert.equal(recalled({...f,a:restored},'会议室')[0]?.id,stable.id);
+  } finally {restored.stop();}
+});
+
+test('two-character evidence embedded in later user text stays forgotten after a full restart',async t=>{
+  const f=fixture(t),id=f.targets[0].id;f.authorize();
+  await f.add('你想用哪个称呼？','assistant');
+  const first=await f.add('汀兰');
+  assert.deepEqual(recalled(f,'汀兰呢').map(x=>x.id),[first]);
+  const row=f.a.remember(id,{title:'称呼',content:'用户希望称呼为汀兰',subject:'user',topic:'preferred-address',quote:'汀兰',kind:'preference'});
+  assert.equal(row.state,'active');
+  f.a.store.forget(row.id,row.revision);
+  const copy=await f.add('补充一下，汀兰是旧草案里的署名。');
+  const rule=await f.add('签字使用蓝色钢笔。');
+  const reloadHistory=new SessionStore(path.join(f.dir,'history.jsonl'));
+  const signal=new AbortController();
+  const host=new PluginBackground(path.join(f.dir,'grants.json'),{targets:()=>f.targets,store:()=>reloadHistory,
+    complete:async()=>{throw Error('no model call expected');}},signal.signal);
+  f.a.stop();
+  const restored=new Assistant({...f.services,background:host.bind('assistant',signal.signal)});
+  try {
+    assert.deepEqual(recalled({...f,a:restored},'汀兰'),[]);
+    assert.throws(()=>restored.historyRead(id,copy),/不再用于记忆/);
+    assert.deepEqual(recalled({...f,a:restored},'蓝色钢笔').map(x=>x.id),[rule]);
+  } finally {restored.stop();signal.abort();reloadHistory.close?.();}
+});
+
+const eventFact=(id,quote,fields={})=>({title:'报告模板',content:'长期使用蓝色报告模板',scope:'personal',
+  kind:'preference',subject:'user',certainty:'explicit',aliases:[],evidence:[{id,quote}],...fields});
+const processEvents=(f,grant,ids,context=[])=>{
+  f.targets[0].busy=false;
+  return f.a.learning.processBatch(f.a.learning.config(),f.targets[0],
+    f.services.background.read(grant,f.targets[0].id).entries.filter(row=>ids.includes(row.id)),new AbortController().signal,false,undefined,context);
+};
+
+test('full source identity prevents different excerpts of a replay from giving independent support',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.now()});
+  const f=fixture(t),grant=f.authorize(),id=f.targets[0].id;
+  const original='我往常写周报都把风险一栏放在前面，完成项放在后面。';
+  const one=await f.add(original);
+  const memory={title:'周报结构',content:'写周报时倾向先列风险',kind:'preference',certainty:'inferred'};
+  const firstQuote='我往常写周报都把风险一栏放在前面';
+  f.reply(()=>JSON.stringify({memories:[eventFact(one,firstQuote,memory)]}));
+  await processEvents(f,grant,[one]);
+  const prior=f.a.store.list('candidate')[0];
+  assert(prior);
+  t.mock.timers.tick(24*60*60*1000);
+  const repeat=await f.add(original);
+  const align={memoryId:prior.id,revision:prior.revision,relation:'support'};
+  f.reply(()=>JSON.stringify({memories:[eventFact(repeat,'完成项放在后面',{...memory,...align})]}));
+  await processEvents(f,grant,[repeat]);
+  assert.equal(f.a.store.get(prior.id).revision,prior.revision);
+  assert.equal(f.a.store.get(prior.id).state,'candidate');
+  const replay=f.services.background.read(grant,id).entries.find(row=>row.id===repeat);
+  assert.equal(f.a.learning.selectIncrement(f.a.learning.config(),f.targets[0],[replay])[0].role,'excluded');
+  t.mock.timers.tick(24*60*60*1000);
+  const independent='上周复盘周报后发现，把风险放到周报开头比较便于交流。';
+  const two=await f.add(independent);
+  f.reply(data=>{
+    assert(data.existing.some(row=>row.id===prior.id && row.priorEvidence?.text===firstQuote));
+    return JSON.stringify({memories:[eventFact(two,independent,{...memory,...align})]});
+  });
+  await processEvents(f,grant,[two]);
+  const current=f.a.store.get(prior.id);
+  assert.equal(current.state,'active');
+  assert.equal(current.revision,prior.revision+1);
+  assert.deepEqual(current.source.refs.map(ref=>ref.id),[one,two]);
+});
+
+test('a version inside a temporary sentence is not a boundary; explicit and unresolved changes differ',async t=>{
+  const f=fixture(t),grant=f.authorize();
+  const original='我长期使用蓝色报告模板。',first=await f.add(original);
+  f.reply(()=>JSON.stringify({memories:[eventFact(first,original)]}));
+  await processEvents(f,grant,[first]);
+  const prior=f.a.store.activeMemories()[0],align={memoryId:prior.id,revision:prior.revision,relation:'revise'};
+  const limited=await f.add('本次适配 v1.2.3 版固件，报告模板改用红色。');
+  f.reply(()=>JSON.stringify({memories:[eventFact(limited,'报告模板改用红色',{content:'长期使用红色报告模板',...align})]}));
+  await processEvents(f,grant,[limited]);
+  assert.equal(f.a.store.get(prior.id).revision,prior.revision);
+  const doubt=await f.add('报告模板以后可能会改成灰色，还没定。');
+  f.reply(()=>JSON.stringify({memories:[eventFact(doubt,'报告模板以后可能会改成灰色',{content:'长期使用灰色报告模板',...align})]}));
+  await processEvents(f,grant,[doubt]);
+  assert.equal(f.a.store.get(prior.id).revision,prior.revision);
+  assert.equal(f.a.store.list('candidate')[0]?.source.mode,'unresolved');
+  const real=await f.add('本次检查版本。今后报告模板改用红色。');
+  f.reply(()=>JSON.stringify({memories:[eventFact(real,'今后报告模板改用红色',{content:'长期使用红色报告模板',...align})]}));
+  await processEvents(f,grant,[real]);
+  assert.equal(f.a.store.get(prior.id).content,'长期使用红色报告模板');
+});
+
+test('a late clear correction gets a prior ID despite four unrelated event budgets',async t=>{
+  const f=fixture(t),grant=f.authorize(),id=f.targets[0].id;
+  const former='港区冷库温度上限为零下十度';
+  await f.add(former);
+  const target=f.a.remember(id,{title:'港区冷库温度上限',content:former,kind:'fact',topic:'old-storage-limit',quote:former,subject:'user'});
+  const topics=['防汛泵站','轨道机房','监控值班','实验档案'];
+  for(const [i,topic] of topics.entries())for(const [j,part] of ['甲区','乙区'].entries()){
+    const s=topic+'检测记录，'+part+'按周复核。';
+    await f.add(s);
+    f.a.remember(id,{title:topic+'检测记录'+part,content:s,kind:'fact',topic:'area-'+i+'-'+j,quote:s,subject:'user'});
+  }
+  const ids=[];
+  for(const topic of topics)ids.push(await f.add('换个话题，更新'+topic+'检测记录。'));
+  const edit='回到之前的港区冷库，更正温度上限为零下十二度。';
+  const newest=await f.add(edit);
+  const newContent='港区冷库温度上限改为零下十二度';
+  f.reply(data=>{
+    assert(data.events.length>=5);
+    assert(data.existing.length<=8);
+    const found=data.existing.find(row=>row.id===target.id);
+    assert(found,'an explicit late correction retains space for its old evidence');
+    return JSON.stringify({memories:[eventFact(newest,edit,{title:'港区冷库温度上限',kind:'fact',content:newContent,
+      memoryId:found.id,revision:found.revision,relation:'revise'})]});
+  });
+  await processEvents(f,grant,[...ids,newest]);
+  assert.equal(f.a.store.get(target.id).content,newContent);
+});
+
+test('forget during inference scrubs old identifiers from late candidates and their metadata, without losing independent work',async t=>{
+  const f=fixture(t),grant=f.authorize(),id=f.targets[0].id;
+  const original='我的皮箱编号是 CRATE-78。';
+  await f.add(original);
+  const old=f.a.remember(id,{title:'皮箱编号',content:original,kind:'fact',topic:'crate',quote:original,subject:'user'});
+  const invoice='我的皮箱发票经周静复核，统一使用纸质档案。',invoiceId=await f.add(invoice);
+  let release;
+  f.reply(data=>{
+    assert(data.existing.some(row=>row.id===old.id&&row.priorEvidence?.text===original));
+    return new Promise(resolve=>{release=resolve;});
+  });
+  const pending=processEvents(f,grant,[invoiceId]);
+  f.a.store.forget(old.id,old.revision);
+  release(JSON.stringify({memories:[
+    eventFact(invoiceId,invoice,{title:'箱柜测试记号',content:'标记为 CRATE-78',kind:'fact'}),
+    eventFact(invoiceId,invoice,{title:'发票档案',content:'发票使用纸质档案',aliases:['CRATE-78'],kind:'fact'}),
+    eventFact(invoiceId,invoice,{title:'发票档案',content:'发票经周静复核并使用纸质档案',kind:'fact'}),
+  ]}));
+  await pending;
+  assert.deepEqual(f.a.store.activeMemories().map(row=>row.content),['发票经周静复核并使用纸质档案']);
+  assert.equal(f.a.store.state('learning-result:'+id),null);
+  const restored=new Assistant(f.services);
+  try {
+    assert.deepEqual(restored.search(id,'CRATE-78'),[]);
+    assert.equal(restored.search(id,'周静')[0]?.title,'发票档案');
+  } finally {restored.stop();}
+});
+
+test('an English short denial retains its supporting question and cannot cross a narrowed grant',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.now()});
+  const f=fixture(t),grant=f.authorize(),id=f.targets[0].id;
+  const statement='I am vegetarian.', first=await f.add(statement);
+  f.reply(()=>JSON.stringify({memories:[eventFact(first,statement,{title:'Diet',content:'The user is vegetarian',kind:'fact'})]}));
+  await processEvents(f,grant,[first]);
+  const prior=f.a.store.activeMemories()[0];
+  const question=await f.add('Are you still vegetarian?','assistant');
+  t.mock.timers.tick(1000);
+  const narrowPlan=f.host.prepare('assistant',{modelSessionId:id,includeHistory:false,includedIds:[id],excludedIds:[],dailyCalls:4});
+  const answer=await f.add('not anymore');
+  const context=f.services.background.entry(grant,id,question);
+  f.reply(()=>JSON.stringify({memories:[eventFact(answer,'not anymore',{title:'Diet',kind:'fact',content:'The user is no longer vegetarian',
+    memoryId:prior.id,revision:prior.revision,relation:'contradict'})]}));
+  await processEvents(f,grant,[answer],[context]);
+  const denied=f.a.store.get(prior.id);
+  assert.equal(denied.source.mode,'contradicted');
+  assert.equal(denied.source.refs[0].contextId,question);
+  const narrow=f.host.approve('assistant',narrowPlan);
+  f.a.learning.configure(narrow,{modelSessionId:id,includeHistory:false,includedIds:[id]});
+  assert.deepEqual(f.services.background.valid(narrow,id,[question,answer]),[answer]);
+  f.a.stop();
+  const restored=new Assistant(f.services);
+  try {
+    const follow=await f.add('Is the vegetarian diet still on record?');
+    f.reply(data=>{
+      assert(!data.existing.some(row=>row.id===prior.id));
+      return '{"memories":[]}';
+    });
+    await processEvents({...f,a:restored},narrow,[follow]);
+  } finally {restored.stop();}
+});
+
+test('a durable decision in the same sentence is not swallowed by its preceding one-time trial',async t=>{
+  const f=fixture(t),grant=f.authorize(),id=f.targets[0].id;
+  const text='我的周报长期使用蓝色报告模板发布。';
+  await f.add(text);
+  const prior=f.a.remember(id,{title:'周报模板',content:text,kind:'preference',topic:'template',subject:'user',quote:text});
+  const align={memoryId:prior.id,revision:prior.revision,relation:'revise'};
+  const counter=await f.add('本次试用红版报告模板，以后仍用蓝色。');
+  f.reply(()=>JSON.stringify({memories:[eventFact(counter,'试用红版报告模板',{...align,content:'长期使用红色报告模板'})]}));
+  await processEvents(f,grant,[counter]);
+  assert.equal(f.a.store.get(prior.id).revision,prior.revision);
+  const update='本次试用已经结束，我决定以后所有周报都按红版发布。',end=await f.add(update);
+  const [record]=f.services.background.read(grant,id).entries.filter(row=>row.id===end);
+  assert.equal(f.a.learning.selectIncrement(f.a.learning.config(),f.targets[0],[record])[0].role,'user');
+  f.reply(()=>JSON.stringify({memories:[eventFact(end,'我决定以后所有周报都按红版发布',{...align,content:'长期使用红色报告模板'})]}));
+  await processEvents(f,grant,[end]);
+  assert.equal(f.a.store.get(prior.id).content,'长期使用红色报告模板');
+});
+
+test('forget cascades to short-answer derivatives of the same value, including after full restart',async t=>{
+  const f=fixture(t),grant=f.authorize(),id=f.targets[0].id;
+  const code='设备开箱代号是 RX-7057';
+  await f.add(code);
+  const original=f.a.remember(id,{title:'设备开箱代号',content:code,kind:'fact',topic:'device-code',subject:'user',quote:code});
+  const question=await f.add('你的设备恢复凭据是 RX-7057 吗？','assistant');
+  const answer=await f.add('还是长期用'),context=f.services.background.entry(grant,id,question);
+  f.reply(()=>JSON.stringify({memories:[eventFact(answer,'还是长期用',{title:'恢复凭据',kind:'fact',content:'长期使用的恢复凭据是 RX-7057',topic:'recovery-code'})]}));
+  await processEvents(f,grant,[answer],[context]);
+  const derivative=f.a.store.activeMemories().find(row=>row.id!==original.id);
+  assert.equal(derivative?.source.refs[0].contextId,question);
+  const unaffectedText='服务器退役记录由戴宁复核。';
+  await f.add(unaffectedText);
+  const independent=f.a.remember(id,{title:'服务器退役',content:unaffectedText,kind:'fact',topic:'retirement',subject:'user',quote:unaffectedText});
+  f.a.store.forget(original.id,original.revision);
+  assert.equal(f.a.store.get(derivative.id).state,'forgotten');
+  f.a.stop();
+  const restored=new Assistant(f.services);
+  try {
+    assert.equal(restored.read(id,independent.id).content,unaffectedText);
+    assert.deepEqual(recalled({...f,a:restored},'RX-7057'),[]);
+    const follow=await f.add('设备的恢复凭据是哪个？');
+    f.reply(data=>{
+      assert(!data.existing.some(item=>[original.id,derivative.id].includes(item.id)));
+      return '{"memories":[]}';
+    });
+    await processEvents({...f,a:restored},grant,[follow]);
+  } finally {restored.stop();}
+});
+
+test('late explicit evidence cannot replace a later same-timestamp decision on the active branch',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.now()});
+  const f=fixture(t),grant=f.authorize(),id=f.targets[0].id;
+  const defaultText='我默认周报模板使用蓝色。';
+  await f.add(defaultText);
+  const prior=f.a.remember(id,{title:'周报模板',content:defaultText,kind:'preference',topic:'report-template',subject:'user',quote:defaultText});
+  t.mock.timers.tick(1000);
+  const older='更正，今后周报模板使用红色。',early=await f.add(older);
+  const newer='收回刚才变更，今后周报模板使用灰色。',late=await f.add(newer);
+  f.reply(()=>JSON.stringify({memories:[eventFact(late,newer,{content:'周报模板使用灰色',memoryId:prior.id,revision:prior.revision,relation:'revise'})]}));
+  await processEvents(f,grant,[late]);
+  const revised=f.a.store.get(prior.id);
+  assert.equal(revised.content,'周报模板使用灰色');
+  f.reply(()=>JSON.stringify({memories:[eventFact(early,older,{content:'周报模板使用红色',memoryId:prior.id,revision:revised.revision,relation:'revise'})]}));
+  await processEvents(f,grant,[early]);
+  assert.equal(f.a.store.get(prior.id).revision,revised.revision);
+  assert.equal(f.a.store.get(prior.id).content,revised.content);
+});
+
+test('a temporary qualifier before a long continuation cannot disappear from the cited conclusion',async t=>{
+  const f=fixture(t),grant=f.authorize(),id=f.targets[0].id;
+  const baseline='我默认报告模板使用蓝色。';
+  await f.add(baseline);
+  const prior=f.a.remember(id,{title:'报告模板',content:baseline,kind:'preference',topic:'template',subject:'user',quote:baseline});
+  const tail='报告模板改用红色';
+  const record=await f.add('本次预演，'+ '布局'.repeat(1670)+'，'+tail+'。');
+  const c=f.a.learning.config(), key='scan:'+id;
+  const first=f.a.learning.historyBatch(c,f.targets[0],key);
+  assert.equal(first.state.partial.id,record);
+  f.a.learning.commitScan(key,first.state,id);
+  const later=f.a.learning.historyBatch(c,f.targets[0],key);
+  assert(later.records[0].offset>=3000);
+  assert(later.records[0].text.includes(tail));
+  const row=f.a.store.get(prior.id);
+  f.a.learning.applyResult(c,f.targets[0],later.records,{memories:[eventFact(record,tail,{content:'报告模板长期改用红色',
+    memoryId:row.id,revision:row.revision,relation:'revise'})]},[row],[],false,later.context);
+  assert.equal(f.a.store.get(prior.id).content,baseline);
+  assert.equal(f.a.store.get(prior.id).revision,prior.revision);
 });

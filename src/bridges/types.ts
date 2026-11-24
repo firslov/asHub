@@ -6,6 +6,7 @@
  *
  * New backends (e.g. claude-code) just implement this interface.
  */
+import type { SummaryUsage } from "../history/summary-client.js";
 
 export type PermissionOutcome = "approved" | "denied" | "unconfirmed";
 
@@ -16,6 +17,9 @@ export interface BusEvent {
 }
 
 export type SessionKind = "agent" | "terminal" | "ash-terminal";
+
+export interface BackgroundModelSelection { provider: string; model: string }
+export interface BackgroundModelEndpoint { identity: string; origin: string }
 
 export interface ConversationAccess {
   signal?(id: string, requestKey: string, message?: string, signal?: AbortSignal): Promise<unknown>;
@@ -106,7 +110,10 @@ export interface Bridge {
   uninstallPlugin?(id: string): void;
   getPluginStatus?(): import("../plugins.js").PluginStatus[];
   /** Tool-free, abortable background inference; does not mutate conversation history. */
-  backgroundComplete?(messages: Array<{ role: string; content: string }>, signal: AbortSignal, expected: { model?: string; provider?: string }): Promise<string>;
+  backgroundComplete?(messages: Array<{ role: string; content: string }>, signal: AbortSignal, expected: { model?: string; provider?: string }, onUsage?: (usage: SummaryUsage) => void): Promise<string>;
+  backgroundModels?(): Promise<BackgroundModelSelection[]>;
+  describeBackgroundModel?(selection: BackgroundModelSelection): Promise<BackgroundModelEndpoint | null>;
+  backgroundCompleteSpecified?(messages: Array<{ role: string; content: string }>, signal: AbortSignal, selection: BackgroundModelSelection, expectedIdentity?: string, onUsage?: (usage: SummaryUsage) => void): Promise<string>;
 
   getRestoreState?(): Record<string, unknown> | undefined;
 

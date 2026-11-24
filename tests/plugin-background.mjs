@@ -309,3 +309,162 @@ test('history predecessor follows the current branch after rewind and store rest
  assert.equal(f.api.entry(grant,'a',fresh).previousId,question);
  assert.equal(f.api.entry(grant,'a',question).previousId,null);
 });
+
+test('3C model changes preserve authorization and quota, persist safely, and execute the selected model',async t=>{
+ const f=fixture(t),chosen={provider:'private',model:'compact'},options=[{...chosen,apiKey:'never-expose'}];let used;
+ f.runtime.models=async()=>options;f.runtime.describeSpecified=async()=>({identity:'a'.repeat(64),origin:'https://example.invalid'});f.runtime.completeSpecified=async(_id,_messages,_signal,selection)=>{used=selection;return 'selected';};
+ const id=f.approve({includedIds:['a'],excludedIds:[],followModel:true,dailyCalls:4}),before=f.api.status(id);
+ assert.deepEqual(await f.api.models(id),[chosen]);assert(!JSON.stringify(await f.api.models(id)).includes('never-expose'));
+ await f.api.infer(id,[{role:'user',content:'first'}]);
+ const plan=await f.host.prepareModelChange('plugin',{grantId:id,model:chosen});assert(plan.fields.some(x=>x.value.includes('1 / 4')));
+ assert.equal(await f.host.approveModelChange('plugin',plan),id);const changed=f.api.status(id);
+ assert.equal(changed.modelRevision,1);assert.deepEqual(changed.backgroundModel,chosen);assert.equal(changed.since,before.since);assert.deepEqual(changed.includedIds,before.includedIds);assert.equal(changed.calls,1);
+ const disk=JSON.parse(fs.readFileSync(path.join(f.dir,'grants.json'),'utf8'));assert.deepEqual(JSON.parse(disk.grants[0].modelBinding),['a',f.dir]);assert.notEqual(disk.grants[0].modelBinding,JSON.stringify(['a',f.dir,'mock','tiny']));
+ f.targets[0].model='new-foreground';assert.equal(await f.api.infer(id,[{role:'user',content:'second'}]),'selected');assert.deepEqual(used,chosen);
+ const restored=new PluginBackground(path.join(f.dir,'grants.json'),f.runtime,f.shutdown.signal).bind('plugin',f.session.signal);
+ assert.equal(restored.status(id).calls,2);assert.deepEqual(restored.status(id).backgroundModel,chosen);assert.equal(restored.status(id).modelTarget.model,'compact');
+ assert.throws(()=>f.host.bind('other',f.session.signal).status(id));await assert.rejects(()=>f.host.bind('other',f.session.signal).models(id));
+});
+
+test('3C stale plans, async races, and old late completions cannot commit',async t=>{
+ const f=fixture(t),sel={provider:'mock',model:'alternate'};f.runtime.models=async()=>[sel];f.runtime.describeSpecified=async()=>({identity:'a'.repeat(64),origin:'https://example.invalid'});let release;
+ f.runtime.complete=()=>new Promise(r=>{release=r});f.runtime.completeSpecified=async()=> 'new';
+ const id=f.approve({includedIds:['a'],excludedIds:[],followModel:true,dailyCalls:4});
+ const pending=f.api.infer(id,[{role:'user',content:'old'}]);const p=await f.host.prepareModelChange('plugin',{grantId:id,model:sel});const stale=await f.host.prepareModelChange('plugin',{grantId:id,model:null});
+ await f.host.approveModelChange('plugin',p);release('late');await assert.rejects(pending);await assert.rejects(()=>f.host.approveModelChange('plugin',stale),/变化/);
+ assert.equal(f.api.status(id).calls,1);assert.equal(await f.api.infer(id,[{role:'user',content:'new'}]),'new');
+ let resume;f.runtime.models=()=>new Promise(r=>{resume=r});const delayed=f.host.prepareModelChange('plugin',{grantId:id,model:sel});
+ await f.host.approveModelChange('plugin',await f.host.prepareModelChange('plugin',{grantId:id,model:null}));resume([sel]);await assert.rejects(delayed,/变化/);
+});
+
+test('3C missing models do not lock the run slot or fall back, and capability loss preserves history',async t=>{
+ const f=fixture(t),sel={provider:'mock',model:'alternate'};let options=[sel],runs=0;f.runtime.models=async()=>options;f.runtime.describeSpecified=async()=>({identity:'a'.repeat(64),origin:'https://example.invalid'});f.runtime.completeSpecified=async()=>{runs++;return 'ok'};
+ const id=f.approve({includedIds:['a'],excludedIds:[],followModel:true,dailyCalls:4});await f.host.approveModelChange('plugin',await f.host.prepareModelChange('plugin',{grantId:id,model:sel}));
+ options=[];await assert.rejects(()=>f.api.infer(id,[{role:'user',content:'x'}]),/不可用/);assert.equal(f.calls(),0);assert.equal(f.api.status(id).calls,0);assert.doesNotThrow(()=>f.api.read(id,'a'));
+ options=[sel];assert.equal(await f.api.infer(id,[{role:'user',content:'x'}]),'ok');assert.equal(runs,1);
+ options=[];await f.host.approveModelChange('plugin',await f.host.prepareModelChange('plugin',{grantId:id,model:null}));assert.equal(await f.api.infer(id,[{role:'user',content:'x'}]),'{}');
+});
+
+test('3C whitelist prevents policy injection and malformed persisted policy fails closed',async t=>{
+ const f=fixture(t),id=f.approve({includedIds:['a'],excludedIds:[],backgroundModel:{provider:'p',model:'m'},modelRevision:9});
+ const status=f.api.status(id);assert.equal(status.backgroundModel,null);assert.equal(status.modelRevision,0);
+ const file=path.join(f.dir,'grants.json'),data=JSON.parse(fs.readFileSync(file,'utf8'));data.grants[0].backgroundModel={provider:'p',model:'m'};data.grants[0].modelRevision=1;data.grants[0].followModel=true;fs.writeFileSync(file,JSON.stringify(data));
+ assert.throws(()=>new PluginBackground(file,f.runtime,f.shutdown.signal).bind('plugin',f.session.signal).status(id),/Invalid persisted model policy/);
+});
+
+test('3C final synchronous validation prevents a late-confirmed policy write',async t=>{
+ const f=fixture(t),sel={provider:'mock',model:'alternate'};let release,waiting=false;
+ f.runtime.models=async()=>{if(waiting)await new Promise(r=>{release=r});return [sel]};f.runtime.describeSpecified=async()=>({identity:'a'.repeat(64),origin:'https://example.invalid'});f.runtime.completeSpecified=async()=>'';
+ const id=f.approve({includedIds:['a'],excludedIds:[],followModel:true});const plan=await f.host.prepareModelChange('plugin',{grantId:id,model:sel});
+ let allowed=true;waiting=true;const pending=f.host.approveModelChange('plugin',plan,()=>{if(!allowed)throw Error('disabled')});allowed=false;release();await assert.rejects(pending,/disabled/);assert.equal(f.api.status(id).modelRevision,0);
+});
+
+test('3C endpoint identity changes require renewed confirmation and cannot spend quota',async t=>{
+ const f=fixture(t),sel={provider:'mock',model:'alternate'};let identity='a'.repeat(64),expected;
+ f.runtime.models=async()=>[sel];f.runtime.describeSpecified=async()=>({identity,origin:'https://example.invalid'});f.runtime.completeSpecified=async(_id,_messages,_signal,_selection,pin)=>{expected=pin;return 'ok'};
+ const id=f.approve({includedIds:['a'],excludedIds:[],followModel:true});
+ const stale=await f.host.prepareModelChange('plugin',{grantId:id,model:sel});identity='b'.repeat(64);await assert.rejects(()=>f.host.approveModelChange('plugin',stale),/端点/);assert.equal(f.api.status(id).modelRevision,0);
+ await f.host.approveModelChange('plugin',await f.host.prepareModelChange('plugin',{grantId:id,model:sel}));identity='c'.repeat(64);await assert.rejects(()=>f.api.infer(id,[{role:'user',content:'x'}]),/端点/);assert.equal(f.api.status(id).calls,0);assert.doesNotThrow(()=>f.api.read(id,'a'));
+ identity='b'.repeat(64);assert.equal(await f.api.infer(id,[{role:'user',content:'x'}]),'ok');assert.equal(expected,identity);
+});
+
+test('3C counts provider-reported tokens across model policies without estimating unavailable usage', async t => {
+  t.mock.timers.enable({ apis:['Date'], now:new Date('2030-03-04T23:59:00Z') });
+  const f = fixture(t), selection = { provider:'mock', model:'alternate' };
+  f.runtime.models = () => [selection];
+  f.runtime.describeSpecified = async () => ({ identity:'a'.repeat(64), origin:'https://example.invalid' });
+  f.runtime.complete = async (_id, _messages, _signal, report) => {
+    report({ inputTokens:100, outputTokens:12 });
+    return '{}';
+  };
+  f.runtime.completeSpecified = async (_id, _messages, _signal, _selection, _identity, report) => {
+    report({ inputTokens:50, outputTokens:8 });
+    return '{}';
+  };
+  const id = f.approve({ includedIds:['a'], excludedIds:[], followModel:true, dailyCalls:4 });
+  const infer = (api = f.api) => api.infer(id,[{ role:'user', content:'synthetic source' }]);
+  assert.equal(f.api.status(id).tokenUsage, undefined);
+  await infer();
+  await f.host.approveModelChange('plugin', await f.host.prepareModelChange('plugin', { grantId:id, model:selection }));
+  await infer();
+  f.runtime.completeSpecified = async () => { throw Error('provider unavailable'); };
+  await assert.rejects(infer(), /provider unavailable/);
+  const restored = new PluginBackground(path.join(f.dir,'grants.json'),f.runtime,f.shutdown.signal).bind('plugin',f.session.signal);
+  assert.equal(restored.status(id).calls, 3);
+  assert.deepEqual(restored.status(id).tokenUsage, { inputTokens:150, outputTokens:20, reportedCalls:2 });
+  t.mock.timers.tick(60_000);
+  assert.equal(restored.status(id).calls, 0);
+  assert.equal(restored.status(id).tokenUsage, undefined);
+});
+
+test('summary uses the provider usage frame even when it follows the final text frame', async () => {
+  const observed = [];
+  let finishReason = 'stop';
+  const client = { async stream() {
+    return (async function* () {
+      yield { choices:[{ delta:{ content:'{}' }, finish_reason:finishReason }] };
+      yield { choices:[], usage:{ prompt_tokens:8, completion_tokens:2 } };
+    })();
+  } };
+  const run = () => generateSummary(client,[{ role:'user', content:'test' }],new AbortController().signal, {
+    onUsage:usage=>observed.push(usage),
+  });
+  assert.equal(await run(), '{}');
+  assert.deepEqual(observed,[{ inputTokens:8, outputTokens:2 }]);
+  finishReason = 'length';
+  await assert.rejects(run(), /Incomplete summary/);
+  assert.deepEqual(observed,[{ inputTokens:8, outputTokens:2 }, { inputTokens:8, outputTokens:2 }]);
+});
+
+test('a failed statistics write preserves the paid reply, the durable allowance and the grant', async t => {
+  const f = fixture(t), id = f.approve();
+  const rename = fs.renameSync;
+  let failStatsWrite = false;
+  t.mock.method(fs, 'renameSync', (source, destination) => {
+    if (failStatsWrite && destination === path.join(f.dir,'grants.json')) {
+      failStatsWrite = false;
+      throw Error('temporary statistics write failure');
+    }
+    return rename(source,destination);
+  });
+  f.runtime.complete = async (_id, _messages, _signal, report) => {
+    report({ inputTokens:21, outputTokens:5 });
+    failStatsWrite = true;
+    return 'paid result';
+  };
+  assert.equal(await f.api.infer(id,[{ role:'user', content:'synthetic source' }]), 'paid result');
+  assert.equal(f.api.status(id).calls, 1);
+  assert.doesNotThrow(() => f.api.read(id,'a'));
+  const restored = new PluginBackground(path.join(f.dir,'grants.json'),f.runtime,f.shutdown.signal).bind('plugin',f.session.signal);
+  assert.equal(restored.status(id).calls, 1);
+  assert.equal(restored.status(id).tokenUsage, undefined);
+});
+
+test('3C persists real foreground changes across A–B–A only for grants that use the foreground', async t => {
+  const f = fixture(t);
+  const id = f.approve({ includedIds:['a'], excludedIds:[], followModel:true, dailyCalls:4 });
+  const before = f.api.status(id);
+  const switchTo = model => {
+    f.targets[0].model = model;
+    f.host.noteForegroundModelChange('a', f.dir, 'mock', model);
+  };
+  switchTo('tiny');
+  assert.equal(f.api.status(id).modelRevision, 0);
+  switchTo('y'.repeat(201));
+  switchTo('tiny');
+  const restored = new PluginBackground(path.join(f.dir,'grants.json'),f.runtime,f.shutdown.signal).bind('plugin',f.session.signal);
+  const after = restored.status(id);
+  assert.equal(after.modelRevision, 2);
+  assert.equal(after.since, before.since);
+  assert.equal(after.calls, 0);
+  assert.deepEqual(after.modelTarget, before.modelTarget);
+
+  const model = { provider:'specified', model:'independent' };
+  f.runtime.models = () => [model];
+  f.runtime.describeSpecified = async () => ({ identity:'a'.repeat(64), origin:'https://example.invalid' });
+  f.runtime.completeSpecified = async () => 'ok';
+  await f.host.approveModelChange('plugin', await f.host.prepareModelChange('plugin', { grantId:id, model }));
+  switchTo('changed again');
+  assert.equal(f.api.status(id).modelRevision, 3);
+  assert.equal(await f.api.infer(id,[{ role:'user', content:'test' }]), 'ok');
+});

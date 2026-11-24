@@ -33,9 +33,9 @@ export function applicability(value) {
 
 // Exact content identity, not a semantic similarity guess. Keep word boundaries
 // and meaningful punctuation (decimal points, signs, code operators).
-export function memoryIdentity(row) {
+export function memoryIdentity(row, {legacy = false} = {}) {
   const c = memoryContext(row.scope, row.source);
   const domain = ['user','assistant'].includes(c.subject) ? null : c.projectId ?? c.conversationId;
-  const content = row.content.normalize('NFKC').trim().replace(/\s+/g,' ').replace(/[。.!！?？]+$/u,'');
+  const content = row.content.normalize('NFKC').trim().replace(/\s+/g,' ').replace(legacy ? /[。.!！?？]+$/u : /。+$/u,'');
   return JSON.stringify([row.kind, c.subject, domain, content]);
 }

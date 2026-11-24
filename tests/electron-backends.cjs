@@ -4,14 +4,29 @@ const root=path.resolve(__dirname,'..'),profile=fs.mkdtempSync(path.join(os.tmpd
 app.setPath('userData',profile);const deadline=setTimeout(()=>app.exit(1),90000);
 app.whenReady().then(async()=>{
  let server,windows=[];const controller=new AbortController(),streams=new Map(),streamEnds=new Map(),requests=[],opened=[],receipts=new Map();let sessionDelay=null,holdReceipt=false,releaseReceipt,heldReceiptId,submissionRevoked=false,deletedB=false,removed=false,online=true,queue=[{id:'queue-message-000001',query:'排队消息',revision:1}],queueDelay=null,modelDelay=null,submits=0;
+ let releaseProjects, assistantShared=true, entriesUnavailable=false, entriesDelay=null;
+ let projectGate=new Promise(resolve=>releaseProjects=resolve);
+ const assistantEntries=[
+   {pluginId:'assistant-plugin',key:'assistant',resource:'assistant',sessionId:'cdef',label:'个人助手'},
+   {pluginId:'assistant-plugin',key:'duplicate',resource:'assistant',sessionId:'cdef',label:'重复助手'},
+   {pluginId:'assistant-plugin',key:'unshared',resource:'assistant',sessionId:'defa',label:'未共享助手'},
+ ];
  try{
   const {BackendConnections}=await import('../dist/extensions/backends.js');const registry=new BackendConnections({signal:controller.signal,open:id=>opened.push(id)});
   const frame=(name,payload={})=>({meta:{name},payload});
   const history=[frame('agent:info',{model:'deepseek-v4',provider:'deepseek'}),frame('agent:query',{query:'请查看结果'}),frame('agent:processing-start'),frame('agent:thinking',{text:'**分析结果**'}),frame('agent:tool-started',{toolCallId:'old',name:'read_file',input:{path:'report.md'}}),frame('agent:tool-completed',{toolCallId:'old',text:'done'}),frame('agent:response-chunk',{blocks:[{type:'text',text:'结果已就绪。公式：$x^2$'}]}),frame('agent:response-chunk',{blocks:[{type:'text',text:'\n\n![图片](chart.png)\n\n[报告](report.md)\n\n<img src="https://tracking.invalid/pixel" srcset="https://tracking.invalid/pixel2 2x">'}]}),frame('agent:response-segment',{text:'结果已就绪。公式：$x^2$\n\n![图片](chart.png)\n\n[报告](report.md)\n\n<img src="https://tracking.invalid/pixel" srcset="https://tracking.invalid/pixel2 2x">'}),frame('agent:processing-done'),frame('hub:replay-done')];
   const bind=key=>registry.bind('plugin',controller.signal).register(key,{label:key==='one'?'办公室 Mac':'工作站',online:()=>online,request:async(op,args)=>{
-   requests.push({key,op,args});if(op==='sessions'){if(sessionDelay){const held=sessionDelay;sessionDelay=null;return held;}return [{instanceId:'abcd',title:'项目主控'},{instanceId:'bcde',title:'技术审查'}].filter(s=>(!removed||s.instanceId!=='abcd')&&(!deletedB||s.instanceId!=='bcde'));}
-   if(op==='capabilities')return {composerInputs:true,projects:true,queue:true,queueActions:true,steering:true,thinking:true,sessionNetwork:true,sessionDelete:true,pluginResources:true};
-   if(op==='project-groups')return [{id:'project',name:'设计项目',sessionIds:['abcd','bcde'],pinnedSessionIds:['abcd']}];
+   requests.push({key,op,args});if(op==='sessions'){
+    if(sessionDelay){const held=sessionDelay;sessionDelay=null;return held;}
+    const rows=[{instanceId:'abcd',title:'项目主控'},{instanceId:'bcde',title:'技术审查'}].filter(s=>(!removed||s.instanceId!=='abcd')&&(!deletedB||s.instanceId!=='bcde'));
+    if(key==='two'||assistantShared)rows.push({instanceId:'cdef',title:key==='one'?'工作助理重新命名':'个人助手',...(key==='one'?{projectId:'project'}:{})});
+    return rows;
+   }
+   if(op==='capabilities')return {composerInputs:true,projects:true,queue:true,queueActions:true,steering:true,thinking:true,sessionNetwork:true,sessionDelete:true,pluginResources:key==='one'};
+   if(op==='project-groups'){
+    if(key==='one'&&projectGate)await projectGate;
+    return [{id:'project',name:'设计项目',sessionIds:key==='one'?['abcd','bcde','cdef']:['abcd','bcde'],pinnedSessionIds:['abcd']}];
+   }
    if(op==='queue'){if(queueDelay){const delay=queueDelay;queueDelay=null;return delay;}return queue;}
    if(op==='queue-withdraw'){queue=[];return {query:'排队消息'};}
    if(op==='queue-update'){assert(['edit','promote'].includes(args.action));queue=queue.map(m=>({...m,query:args.query??m.query,delivery:args.action==='promote'?'steer':'queue',revision:m.revision+1}));return queue[0];}
@@ -26,7 +41,12 @@ app.whenReady().then(async()=>{
    }
    if(op==='session-delete'){assert.equal(args.session,'bcde');deletedB=true;return {state:'done'};}
    if(op==='request-status'){if(holdReceipt){holdReceipt=false;heldReceiptId=args.requestId;return new Promise(r=>releaseReceipt=r);}return receipts.get(args.requestId)||{state:'missing'};}
-   if(op==='session-network')return {enabled:null,effective:true};if(op==='plugin-entries')return [];
+   if(op==='session-network')return {enabled:null,effective:true};
+   if(op==='plugin-entries'){
+    if(entriesDelay){const held=entriesDelay;entriesDelay=null;return held;}
+    if(entriesUnavailable)throw Object.assign(Error('plugin entries unavailable'),{status:503});
+    return assistantEntries;
+   }
    return {ok:true};
   },subscribe:async(sid,emit,signal)=>{const keyId=key+':'+sid;streams.set(keyId,emit);history.forEach(emit);await new Promise(r=>{streamEnds.set(keyId,r);signal.addEventListener('abort',r,{once:true});});if(streams.get(keyId)===emit){streams.delete(keyId);streamEnds.delete(keyId);}},resource:async args=>{const data=args.path?.endsWith('.png')?Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1f8AAAAASUVORK5CYII=','base64'):Buffer.from('# 测试报告\n已生成。');return {data:args.method==='HEAD'?new Uint8Array():data,size:data.length,type:'application/octet-stream',version:'v1'};}});
   const a=bind('one'),b=bind('two');
@@ -47,7 +67,51 @@ app.whenReady().then(async()=>{
   const win=await make(a.id),js=code=>win.webContents.executeJavaScript(code);
   const wait=async(condition,exec=js)=>{for(let i=0;i<150;i++){if(await exec(condition))return;await new Promise(r=>setTimeout(r,30));}throw Error('Timed out: '+condition);};
   const click=text=>js(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(text)});if(!b)throw Error('Button missing: '+${JSON.stringify(text)});b.click()})()`);
-  await wait("document.querySelectorAll('#sessions button').length===2");await click('项目主控');await wait("!document.querySelector('#send').disabled");await wait("!!document.querySelector('.katex')");await wait("document.querySelector('.bw-message.assistant img')?.naturalWidth===1");
+  const assistantRow='#sessions .bw-dedicated-session';
+  await wait(`document.querySelector(${JSON.stringify(assistantRow)})?.textContent==='个人助手'`);
+  assert.equal(await js("document.querySelector('#sessions h3')?.textContent"),'独立对话','slow project metadata does not gate the assistant');
+  assert.equal(await js("document.querySelector('#sessions').firstElementChild.dataset.sessionId"),'cdef');
+  assert.equal(await js("document.querySelectorAll('[data-session-id=cdef]').length"),1);
+  assert.equal(await js("document.querySelector('[data-session-id=defa]')"),null);
+  await click('个人助手');await wait("!document.querySelector('#send').disabled");
+  assert.equal(await js("document.querySelector('#title').textContent"),'工作助理重新命名');
+  assert.equal(await js("document.querySelector('[data-session-id=cdef]').getAttribute('aria-current')"),'page');
+  await js("document.querySelector('#query').value='个人助手的草稿';document.querySelector('#query').dispatchEvent(new Event('input'))");
+  projectGate=null;releaseProjects();await wait("document.querySelector('#sessions h3')?.textContent==='设计项目'");
+  assert.equal(await js("document.querySelectorAll('[data-session-id=cdef]').length"),1,'the project must not duplicate the assistant');
+  await js("document.querySelector('#search').value='重新命名';document.querySelector('#search').dispatchEvent(new Event('input'))");
+  assert.deepEqual(await js("[...document.querySelectorAll('#sessions button')].map(button=>button.textContent)"),['个人助手']);
+  await js("document.querySelector('#search').value='个人助手';document.querySelector('#search').dispatchEvent(new Event('input'))");
+  assert.equal(await js("document.querySelectorAll('#sessions button').length"),1);
+  await js("document.querySelector('#search').value='';document.querySelector('#search').dispatchEvent(new Event('input'))");
+
+  // Catalog failure leaves a live assistant usable, while removal of the
+  // shared chat invalidates the entry even if old metadata arrives later.
+  await js("window.assistantButton=document.querySelector('.bw-dedicated-session');window.assistantButton.focus()");
+  entriesUnavailable=true;
+  const failedEntries=requests.filter(r=>r.op==='plugin-entries').length;
+  await js("document.querySelector('#refresh').click()");
+  for(let n=0;n<100&&requests.filter(r=>r.op==='plugin-entries').length===failedEntries;n++)await new Promise(r=>setTimeout(r,20));
+  await js("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+  assert(await js("window.assistantButton===document.querySelector('.bw-dedicated-session')&&document.activeElement===window.assistantButton"),'unchanged refresh preserves the assistant button and its keyboard focus');
+  assert.equal(await js("document.querySelector('[data-session-id=cdef]').getAttribute('aria-current')"),'page');
+  assert.equal(await js("document.querySelector('#query').value"),'个人助手的草稿');
+  let releaseEntries;
+  entriesDelay=new Promise(resolve=>releaseEntries=resolve);
+  await js("document.querySelector('#refresh').click()");
+  for(let n=0;n<100&&entriesDelay;n++)await new Promise(r=>setTimeout(r,20));
+  assert.equal(entriesDelay,null);
+  assistantShared=false;await js("document.querySelector('#refresh').click()");
+  await wait("!document.querySelector('[data-session-id=cdef]')&&document.querySelector('#title').textContent==='选择一个对话'");
+  assert.equal(await js("document.querySelector('#send').disabled"),true);
+  releaseEntries(assistantEntries);
+  assistantShared=true;await js("document.querySelector('#refresh').click()");
+  await wait("!document.querySelector('#send').disabled&&!!document.querySelector('[data-session-id=cdef]')");
+  assert.equal(await js("document.querySelector('.bw-dedicated-session')"),null,'stale entries must not classify a newly shared catalog');
+  assert.equal(await js("document.querySelector('#query').value"),'个人助手的草稿');
+  entriesUnavailable=false;await js("document.querySelector('#refresh').click()");
+  await wait("document.querySelector('.bw-dedicated-session')?.getAttribute('aria-current')==='page'");
+  await click('项目主控');await wait("!document.querySelector('#send').disabled");await wait("!!document.querySelector('.katex')");await wait("document.querySelector('.bw-message.assistant img')?.naturalWidth===1");
   assert.equal(external.length,0,'remote HTML cannot make tracking image requests');assert.equal((await js("document.querySelector('.bw-message.assistant').textContent")).split('结果已就绪').length-1,1,'live chunks and replay segments are not duplicated');assert.equal(await js('typeof window.electronAPI'),'undefined');assert.equal(await js('typeof require'),'undefined');
   assert(await js("document.querySelector('.bw-message.assistant img').src.includes('/resource?')"));
   await js("document.querySelector('.bw-message.assistant a').click()");await wait("document.querySelector('.artifact-preview')?.textContent.includes('测试报告')");await js('AsHubFilePreview.close()');
@@ -60,7 +124,11 @@ app.whenReady().then(async()=>{
   await wait("!!document.querySelector('.bw-phase-time')");assert((await js("document.querySelectorAll('.bw-phase')[2].textContent")).includes('处理异常'));assert((await js("document.querySelectorAll('.bw-phase')[2].textContent")).includes('读取文件'));
   await wait("document.querySelector('#queue').textContent.includes('排队消息')");await click('编辑');await js("document.querySelector('#dialog textarea').value='修改后的排队消息'");await click('保存');await wait("document.querySelector('#queue').textContent.includes('修改后的排队消息')");await click('插队');await wait("document.querySelector('#queue').textContent.includes('等待接入')");let releaseQueue;queueDelay=new Promise(r=>releaseQueue=r);const beforeQueue=requests.filter(r=>r.op==='queue').length;streams.get('one:abcd')(frame('agent:queue-updated'));await wait('true');for(let n=0;n<100&&requests.filter(r=>r.op==='queue').length===beforeQueue;n++)await new Promise(r=>setTimeout(r,20));await click('撤回');await wait("!document.querySelector('#queue').textContent");releaseQueue([{id:'queue-message-000001',query:'stale queue',revision:1}]);await new Promise(r=>setTimeout(r,80));assert.equal(await js("document.querySelector('#queue').textContent"),'');assert(requests.some(r=>r.op==='queue-withdraw'));
   await js("document.querySelector('#query').value='电脑一草稿';document.querySelector('#query').dispatchEvent(new Event('input'))");
-  const second=await make(b.id),js2=code=>second.webContents.executeJavaScript(code);await wait("document.querySelectorAll('#sessions button').length===2",js2);await js2("document.querySelector('[data-session-id=abcd]').click()");await wait("!document.querySelector('#send').disabled",js2);assert.equal(await js2("document.querySelector('#query').value"),'');
+  const second=await make(b.id),js2=code=>second.webContents.executeJavaScript(code);await wait("document.querySelectorAll('#sessions button').length===3",js2);
+  assert.equal(await js2("document.querySelector('.bw-dedicated-session')"),null);
+  await wait("document.querySelector('[data-session-id=cdef]')?.previousElementSibling?.textContent==='独立对话'",js2);
+  assert(!requests.some(r=>r.key==='two'&&r.op==='plugin-entries'),'older devices should not need the optional catalog');
+  await js2("document.querySelector('[data-session-id=abcd]').click()");await wait("!document.querySelector('#send').disabled",js2);assert.equal(await js2("document.querySelector('#query').value"),'');
   await js2("document.querySelector('#query').value='电脑二草稿';document.querySelector('#query').dispatchEvent(new Event('input'))");await click('技术审查');await wait("!document.querySelector('#send').disabled");assert.equal(await js("document.querySelector('#query').value"),'');await click('项目主控');await wait("!document.querySelector('#send').disabled");assert.equal(await js("document.querySelector('#query').value"),'电脑一草稿');
   const selectImage=name=>js(`(()=>{const files=new DataTransfer();files.items.add(new File(['image'],${JSON.stringify(name)},{type:'image/png'}));const input=document.querySelector('#upload');input.files=files.files;input.dispatchEvent(new Event('change'));})()`);
   const holdImage=()=>js(`(()=>{const Native=window.FileReader;window.finishImage=null;window.FileReader=class extends Native{readAsDataURL(...args){window.finishImage=()=>{window.FileReader=Native;super.readAsDataURL(...args)};}};})()`);
@@ -135,6 +203,7 @@ app.whenReady().then(async()=>{
    await js("filteredDisposer();document.querySelector('#filtered-fixture').remove()");
   }
   win.setContentSize(760,620);await wait('innerWidth===760');assert(await js("document.documentElement.scrollWidth<=innerWidth"));
+  assert(await js("document.querySelector('.bw-dedicated-session').getBoundingClientRect().width<=document.querySelector('#sessions').clientWidth"));
   await js(fs.readFileSync(path.join(root,'tests/fixtures/media-recorder.js'),'utf8'));
   const micReady="!document.querySelector('.composer-media').hidden&&!document.querySelector('.composer-media-button').disabled";
   const draftBeforeReplay=await js("document.querySelector('#query').value");
@@ -184,7 +253,7 @@ app.whenReady().then(async()=>{
   assert.equal(await js("document.querySelector('#query').value"),'');
   assert.equal(await js("document.querySelector('#attachments').textContent"),'');
   assert.equal(await js("document.querySelector('#receipt').hidden"),true);
-  console.log('PASS isolated backend windows, files/images/math, late tool results, queue actions, immutable account routing, late model response, idempotent retry, held file selection, replay capture, revocation/deletion cleanup, one-time approvals, offline/reload recovery');
+  console.log('PASS dedicated assistant entry, stale metadata and old peers, isolated backend windows, files/images/math, late tool results, queue actions, immutable account routing, late model response, idempotent retry, held file selection, replay capture, revocation/deletion cleanup, one-time approvals, offline/reload recovery');
   controller.abort();for(const w of windows)w.destroy();server.closeAllConnections();server.close();clearTimeout(deadline);app.exit(0);
  }catch(e){console.error(e);if(windows[0]&&!windows[0].isDestroyed())console.error(await windows[0].webContents.executeJavaScript(`document.querySelector('.artifact-preview')?.outerHTML||document.body.innerText`));controller.abort();for(const w of windows)w.destroy();server?.closeAllConnections();server?.close();app.exit(1);}
 });

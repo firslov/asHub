@@ -311,6 +311,66 @@ app.whenReady().then(async () => {
         await capture('chat-' + width + '-' + mode);
       }
     }
+    async function checkToolbar() {
+      await resize(1440);
+      await js("import('/js/i18n.js').then(m=>m.setLang('zh'))");
+      const toolbarOutput = process.env.ASHUB_TOOLBAR_VISUAL_DIR;
+      const captureToolbar = async (name) => {
+        if (!toolbarOutput) return;
+        await js('document.fonts.ready.then(()=>true)');
+        await sleep(250);
+        fs.mkdirSync(toolbarOutput, { recursive: true });
+        const shot = await win.webContents.capturePage();
+        assert(!shot.isEmpty());
+        fs.writeFileSync(path.join(toolbarOutput, name + '.png'), shot.toPNG());
+      };
+      const railOrder = () => js(`Array.from(document.querySelectorAll('#toolbar .toolbar-btn:not(#rail-labels-toggle)'))
+        .filter(button=>button.getClientRects().length).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)
+        .map(button=>button.id)`);
+      const railNames = (plugins, settings) => js(`['plugins-toggle','config-toggle'].every((id,i)=>{
+        const button=document.getElementById(id), name=${JSON.stringify([plugins, settings])}[i];
+        return button.ariaLabel===name && getComputedStyle(button,'::after').content.includes(name);
+      })`);
+      const compactOrder = await railOrder();
+      const sidebarWasCollapsed = await js("document.querySelector('.app').classList.contains('sidebar-collapsed')");
+      assert(await railNames('插件', '设置'), 'key tools are named in the compact rail');
+      await theme('light');
+      await captureToolbar('toolbar-1440-light-compact');
+      win.focus();
+      win.webContents.focus();
+      await js("document.getElementById('rail-labels-toggle').focus()");
+      for (const type of ['keyDown','char','keyUp']) win.webContents.sendInputEvent({type,keyCode:type==='char'?'\r':'Enter'});
+      await until(()=>js("document.getElementById('rail-labels-toggle').ariaPressed==='true'"),'keyboard expands tool names');
+      const expandedRail = await js(`({focused:document.activeElement.id, keyboard:document.activeElement.matches(':focus-visible'),
+        width:document.querySelector('#toolbar').offsetWidth, name:getComputedStyle(document.getElementById('files-toggle'),'::after').content,
+        title:document.getElementById('files-toggle').title, settingsDirection:getComputedStyle(document.getElementById('config-toggle')).flexDirection})`);
+      assert(expandedRail.focused==='rail-labels-toggle' && expandedRail.keyboard && expandedRail.width===160 &&
+        expandedRail.name.includes(expandedRail.title) && expandedRail.settingsDirection==='row', JSON.stringify(expandedRail));
+      assert.deepEqual(await railOrder(), compactOrder, 'label mode keeps the visible entry order');
+      await captureToolbar('toolbar-1440-light-expanded');
+      await theme('dark');
+      await js("import('/js/i18n.js').then(m=>m.setLang('en'))");
+      assert(await railNames('Plugins', 'Settings'));
+      await captureToolbar('toolbar-1440-dark-expanded');
+      await js("document.getElementById('config-toggle').click()");
+      await until(()=>js("!document.getElementById('config-overlay').hidden"),'settings opens from the named rail');
+      await js("document.getElementById('config-close').click()");
+      await js("document.querySelector('.app').classList.add('sidebar-collapsed')");
+      for (const width of [320, 390]) {
+        await resize(width);
+        assert(await railNames('Plugins', 'Settings'));
+        assert(await js(`document.getElementById('rail-labels-toggle').offsetWidth===0 && document.querySelector('#toolbar').offsetWidth===52 &&
+          document.documentElement.scrollWidth<=innerWidth && document.querySelector('#toolbar').scrollWidth<=52`), 'compact rail fits at '+width);
+        await captureToolbar('toolbar-'+width+'-dark-compact');
+      }
+      await resize(1440);
+      assert(await js("document.querySelector('#toolbar').offsetWidth===160"), 'wide layout restores the saved mode');
+      await js("document.getElementById('rail-labels-toggle').click()");
+      assert(await js("document.querySelector('#toolbar').offsetWidth===52 && document.getElementById('rail-labels-toggle').ariaPressed==='false' && localStorage.getItem('ash.toolbar.labels')==='0'"));
+      assert.deepEqual(await railOrder(), compactOrder);
+      await js("document.querySelector('.app').classList.toggle('sidebar-collapsed',"+sidebarWasCollapsed+");import('/js/i18n.js').then(m=>m.setLang('zh'))");
+    }
+
     if (!baseline) {
       const other = ids[1];
       const background = bridges.get(other);
@@ -810,6 +870,7 @@ app.whenReady().then(async () => {
       );
     }
     await assertRetiredEntryAbsent();
+    if (!baseline) await checkToolbar();
     console.log(
       'PASS workspace reading layout, native browser, permissions, toolbar placement and window restoration',
     );

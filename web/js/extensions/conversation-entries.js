@@ -9,8 +9,11 @@ const host=document.createElement('nav');host.className='conversation-entries';h
 host.setAttribute('aria-label','Plugin conversations');
 document.querySelector('.sidebar-head')?.after(host);
 let entries=[],epoch=0,signature='',welcome=null,resourceDialog=null;
+let latestRefresh;
 let controls=[];
 const text=(zh,en)=>lang.value==='zh'?zh:en;
+const sameEntry=(a,b)=>a.pluginId===b.pluginId&&a.key===b.key;
+const sameResource=(a,b)=>sameEntry(a,b)&&a.sessionId===b.sessionId&&a.resource===b.resource;
 function closeWelcome(restoreFocus=false){
   if(!welcome)return;
   const old=welcome;welcome=null;old.dispose?.();old.element.remove();
@@ -32,16 +35,23 @@ function openWelcome(entry){
   const state={entry,element,underlay,wasInert:underlay?.inert,focus:document.activeElement,active:activeSessionId.peek(),dispose:null};
   welcome=state;if(underlay)underlay.inert=true;main.append(element);close.focus();
   const navigate=async id=>{
-    await refresh();
+    let pending=refresh();
+    while(welcome===state){
+      await pending;
+      if(pending===latestRefresh)break;
+      // Focus or an invalidation can supersede the read that navigation started.
+      pending=latestRefresh;
+    }
     if(welcome!==state)return;
-    const current=entries.find(e=>e.pluginId===entry.pluginId&&e.key===entry.key);
+    const current=entries.find(e=>sameEntry(e,entry));
     if(!current||current.sessionId!==id)throw Error(text('对话已变化，请重新打开入口','Conversation changed; reopen the entry'));
     closeWelcome();openTab(id);
   };
   state.dispose=mountResource(content,{pluginId:entry.pluginId},entry.setupResource||entry.resource,{openConversation:navigate,onComplete:navigate});
 }
 function openPanel(entry){
-  closeWelcome();closeOtherPanels();resourceDialog?.close();
+  if(!entries.some(e=>sameResource(e,entry)))return;
+  closeWelcome();closeOtherPanels();resourceDialog?.dialog.close();
   const dialog=document.createElement('dialog');dialog.className='conversation-resource-dialog';dialog.setAttribute('aria-label',entry.label);
   // Keep modal keys away from chat shortcuts; retain native Escape and focus traversal.
   dialog.addEventListener('keydown',event=>event.stopPropagation());
@@ -49,8 +59,8 @@ function openPanel(entry){
   const title=document.createElement('h2');title.className='p-title';title.textContent=entry.label;
   const header=document.createElement('header');header.className='p-head';header.append(title,close);
   const content=document.createElement('div');content.className='p-body extension-resource-host';dialog.append(header,content);document.body.append(dialog);
-  let dispose;const cleanup=()=>{dispose?.();dialog.remove();if(resourceDialog===dialog)resourceDialog=null;};close.onclick=()=>dialog.close();dialog.addEventListener('close',cleanup,{once:true});
-  dispose=mountResource(content,{pluginId:entry.pluginId},entry.resource);resourceDialog=dialog;dialog.dataset.pluginId=entry.pluginId;dialog.showModal();close.focus();
+  let dispose;const cleanup=()=>{dispose?.();dialog.remove();if(resourceDialog?.dialog===dialog)resourceDialog=null;};close.onclick=()=>dialog.close();dialog.addEventListener('close',cleanup,{once:true});
+  dispose=mountResource(content,{pluginId:entry.pluginId},entry.resource);resourceDialog={dialog,entry};dialog.showModal();close.focus();
 }
 
 function render(){
@@ -68,7 +78,23 @@ function render(){
     controls.push(mountResource(control,{pluginId:e.pluginId},e.resource,{inlineToggle:true,onManage:()=>e.sessionId?openPanel(e):openWelcome(e)}));
   }
 }
-async function refresh(){const token=++epoch;try{const response=await fetch('/api/plugin-conversations',{cache:'no-store'});if(!response.ok)throw Error('Entries unavailable');const data=await response.json();if(token!==epoch)return;if(!Array.isArray(data))return;entries=data;if(resourceDialog&&!entries.some(e=>e.pluginId===resourceDialog.dataset.pluginId))resourceDialog.close();if(welcome&&!entries.some(e=>e.pluginId===welcome.entry.pluginId&&e.key===welcome.entry.key))closeWelcome();if(JSON.stringify(conversationEntries.peek())!==JSON.stringify(data))conversationEntries.value=data;render();}catch{/* Keep the last successful catalog on transient network failure. */}}
+function refresh(){
+  const token=++epoch;
+  latestRefresh=(async()=>{
+    try{
+      const response=await fetch('/api/plugin-conversations',{cache:'no-store'});
+      if(!response.ok)throw Error('Entries unavailable');
+      const data=await response.json();
+      if(token!==epoch||!Array.isArray(data))return;
+      entries=data;
+      if(resourceDialog&&!entries.some(e=>sameResource(e,resourceDialog.entry)))resourceDialog.dialog.close();
+      if(welcome&&!entries.some(e=>sameEntry(e,welcome.entry)))closeWelcome();
+      if(JSON.stringify(conversationEntries.peek())!==JSON.stringify(data))conversationEntries.value=data;
+      render();
+    }catch{/* Keep the last successful catalog on transient network failure. */}
+  })();
+  return latestRefresh;
+}
 effect(()=>{const active=activeSessionId.value;lang.value;if(welcome&&active!==welcome.active)closeWelcome();render();});
 document.addEventListener('ash:panel-opening',()=>closeWelcome());
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&welcome){event.preventDefault();event.stopImmediatePropagation();closeWelcome(true);}},{capture:true});

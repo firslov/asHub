@@ -108,22 +108,60 @@ const server=http.createServer((req,res)=>{
     await page.evaluate(home=>{session=home?'':'member2';renderSessions();menu(!home)},home);
     await page.waitForTimeout(250);
     const geometry=await page.evaluate(()=>{
-     const side=$('sidebar'),list=$('sessions');side.scrollTop=600;const before=side.scrollTop;renderSessions();const after=side.scrollTop;side.scrollTop=side.scrollHeight;
+     const side=$('sidebar'),list=$('sessions');side.scrollTop=600;const before=side.scrollTop;
+     const activity=groups[0].activities[0];activity.state=activity.state==='waiting'?'running':'waiting';renderSessions();
+     const after=side.scrollTop;side.scrollTop=side.scrollHeight;
      const b=side.getBoundingClientRect(),a=$('account').getBoundingClientRect();
      return {before,after,footer:a.bottom<=b.bottom+1,nested:list.scrollHeight>list.clientHeight+1,overflow:document.documentElement.scrollWidth>innerWidth};
     });
     assert(geometry.before>=599&&Math.abs(geometry.after-geometry.before)<2&&!geometry.nested&&!geometry.overflow&&geometry.footer,JSON.stringify({width,height,home,geometry}));
    }
   }
-  await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{session='';renderSessions();$('sidebar').scrollTop=0});
-  await page.locator('[data-group-id="alpha"] .nav-group-toggle').focus();await page.evaluate(()=>renderSessions());
-  assert.equal(await page.evaluate(()=>document.activeElement.dataset.navKey),'group:alpha','refresh preserves keyboard focus');
+  const projectToggle=page.locator('[data-group-id="alpha"] .nav-group-toggle');
+  const visualDir=process.env.ASHUB_NAV_VISUAL_DIR;
+  if(visualDir)fs.mkdirSync(visualDir,{recursive:true});
+  for(const width of [390,320]){
+   await page.setViewportSize({width,height:844});
+   for(const theme of ['dark','light']){
+    await page.evaluate(theme=>{
+     document.documentElement.dataset.theme=theme;
+     session='';menu(false);renderSessions();$('sidebar').scrollTop=0;
+    },theme);
+    await page.locator('#new-chat').focus();
+    // On macOS WebKit, Option+Tab includes buttons in tab navigation.
+    await page.keyboard.press(process.platform==='darwin'&&process.env.NAV_ENGINE!=='chromium'?'Alt+Tab':'Tab');
+    assert.equal(await page.evaluate(()=>document.activeElement.dataset.navKey||document.activeElement.id),'group:alpha','Tab reaches the project heading');
+    const geometry=await projectToggle.evaluate(toggle=>{
+     const status=toggle.nextElementSibling;
+     const range=document.createRange();range.selectNodeContents(status);
+     const lines=range.getClientRects();
+     const box=toggle.getBoundingClientRect(), sidebar=$('sidebar').getBoundingClientRect();
+     const {outlineStyle,outlineWidth,outlineOffset}=getComputedStyle(toggle);
+     const outline=parseFloat(outlineWidth)+parseFloat(outlineOffset);
+     return {
+      expanded:toggle.getAttribute('aria-expanded')==='true',
+      focused:toggle.matches(':focus-visible')&&outlineStyle==='solid'&&parseFloat(outlineWidth)>=2,
+      fits:box.left-outline>=sidebar.left&&box.right+outline<=sidebar.right&&box.top-outline>=sidebar.top&&box.bottom+outline<=sidebar.bottom,
+      lines:lines.length, gap:lines[0]?.top-box.bottom-outline,
+     };
+    });
+    if(visualDir)await page.screenshot({path:path.join(visualDir,`remote-project-focus-${width}-${theme}.png`),animations:'disabled'});
+    assert(geometry.expanded&&geometry.focused&&geometry.fits&&geometry.lines>1&&geometry.gap>=2,JSON.stringify({width,theme,geometry}));
+   }
+  }
+  await page.keyboard.press('Enter');
+  assert.equal(await projectToggle.getAttribute('aria-expanded'),'false','Enter collapses the focused project');
+  await page.keyboard.press('Space');
+  assert.equal(await projectToggle.getAttribute('aria-expanded'),'true','Space reopens the project without losing focus');
+  await page.evaluate(()=>{const activity=groups[0].activities[0];activity.label='项目状态已刷新 · '+activity.label;renderSessions()});
+  assert(await projectToggle.evaluate(e=>e.matches(':focus-visible')),'updated catalog preserves visible keyboard focus');
+  await page.setViewportSize({width:390,height:844});
   await page.evaluate(()=>{document.documentElement.style.setProperty('--viewport-height','360px');sessionSearchExpanded=true;renderSessions();$('sidebar').scrollTop=$('sidebar').scrollHeight});
   assert(await page.evaluate(()=>$('account').getBoundingClientRect().bottom<=361),'keyboard does not trap footer');
   await page.evaluate(()=>{document.documentElement.style.removeProperty('--viewport-height');sessionSearchExpanded=false;renderSessions();$('sidebar').scrollTop=0;document.documentElement.dataset.theme='dark'});
   await page.waitForTimeout(300);
   assert.equal(await page.locator('.session-name').first().evaluate(e=>getComputedStyle(e).color),'rgb(235, 231, 220)','dark text must remain legible');
   await page.screenshot({path:'/tmp/ashub-navigation-dark.png'});
-  assert.deepEqual(errors,[]);console.log('PASS navigation: WebKit/Chromium PWA, project pins, two-tap open, global search, recent shortcuts, draft/reload restoration, revoked access, long lists, focus, 320/390/landscape/iPad and keyboard layout');
+  assert.deepEqual(errors,[]);console.log('PASS navigation: WebKit/Chromium PWA, project pins, two-tap open, global search, recent shortcuts, draft/reload restoration, revoked access, long lists, 320/390 light/dark keyboard focus and project expansion, landscape/iPad and keyboard layout');
  }finally{await browser.close();server.closeAllConnections();server.close()}
 })().catch(e=>{console.error(e);server.closeAllConnections();server.close();process.exitCode=1});

@@ -43,10 +43,12 @@ for(const relation of ['revise','contradict']) test(`forgetting after repeated $
 
 test('candidate archival, restoration and a manual correction retain enough provenance for complete forgetting',t=>{
   const f=fixture(t);let row;
-  for(let n=1;n<=12;n++)row=f.store.learn(value(n),{...source(n),certainty:'inferred'});
+  // Rewind the last evidence each time while keeping the proposition, so it
+  // remains an observation and its historical source IDs still accumulate.
+  for(let n=1;n<=12;n++)row=f.store.learn(value(1),{...source(n),certainty:'inferred'},{priorValid:()=>false});
   for(let n=100;n<200;n++)f.store.learn(value(n),{...source(n),topic:'other-'+n,certainty:'inferred'});
   assert.equal(f.store.get(row.id).state,'retired');
-  row=f.store.learn(value(13),source(13));
+  row=f.store.learn(value(1),source(13));
   assert.equal(row.state,'active');
   for(let n=1;n<=12;n++)row=f.store.edit(row.id,row.revision,{...row,title:'用户确认的岗位 '+n});
   assert.equal(f.store.history(row.id).length,10);

@@ -14,7 +14,9 @@ export function initPluginInstall(panel, onInstalled) {
   };
   const storageKey = 'ashub.pluginInstallJob';
   const previewKey = 'ashub.pluginInstallPreview';
+  const uploadKey = 'ashub.pluginInstallUpload';
   const remember = id => { try { if (id) sessionStorage.setItem(storageKey, id); else sessionStorage.removeItem(storageKey); } catch {} };
+  const rememberUpload = id => { try { if (id) sessionStorage.setItem(uploadKey, id); else sessionStorage.removeItem(uploadKey); } catch {} };
   const rememberPreview = id => {
     previewToken = id || '';
     try { if (id) sessionStorage.setItem(previewKey, id); else sessionStorage.removeItem(previewKey); } catch {}
@@ -63,12 +65,22 @@ export function initPluginInstall(panel, onInstalled) {
         cancel.textContent = t('loading');
         try {
           if (token) await api(`?id=${encodeURIComponent(token)}`, { method: 'DELETE' });
-          preview = job = null; remember(null); rememberPreview(null); error = '';
+          preview = job = null; remember(null); rememberPreview(null); rememberUpload(null); error = '';
         } catch (e) { error = e.message; }
         finally { busy = false; paint(); if (!preview && !job && !previewToken) choose.focus(); }
       });
       actions.append(cancel);
       if (preview && !job) {
+        const recheck = el('button', 'p-btn', t('plugins.recheck'));
+        recheck.type = 'button';
+        recheck.addEventListener('click', async () => {
+          if (busy) return;
+          busy = true; error = ''; phase = 'checking'; paint();
+          try { preview = await api(`?action=preview&id=${encodeURIComponent(preview.token)}`); }
+          catch (e) { error = e.message; }
+          finally { busy = false; phase = ''; paint(); }
+        });
+        actions.append(recheck);
         const confirm = el('button', 'p-btn-primary', t(preview.previousVersion ? 'plugins.confirmUpgrade' : 'plugins.confirmInstall'));
         confirm.type = 'button'; confirm.disabled = !preview.canInstall;
         confirm.addEventListener('click', async () => {
@@ -76,10 +88,10 @@ export function initPluginInstall(panel, onInstalled) {
           busy = true; error = ''; phase = 'preparing'; paint();
           // The preview token is also the job ID. Persist it before submitting:
           // the server may start setup even if its response is lost or we reload.
-          const token = preview.token;
+          const { token, environmentRevision } = preview;
           remember(token);
           try {
-            job = await api('?action=confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+            job = await api('?action=confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, environmentRevision }) });
             remember(job.id); phase = ''; paint(); void poll();
           } catch (e) {
             error = e.message;
@@ -101,13 +113,19 @@ export function initPluginInstall(panel, onInstalled) {
     try {
       job = await api(`?id=${encodeURIComponent(job.id)}`);
       error = job.error || ''; busy = job.state === 'running'; phase = '';
+      if (job.state === 'succeeded') { remember(null); rememberPreview(null); }
       if (!notified && job.state === 'succeeded') { notified = true; onInstalled(); }
       paint();
       if (busy) pollTimer = setTimeout(poll, 1000);
     } catch (e) {
       // A lost response is not a failed install. Keep polling the same job.
       error = `${t('plugins.installReconnect')} ${e.message}`;
-      if (e.status === 404) { busy = false; job.state = 'failed'; paint(); return; }
+      if (e.status === 404) {
+        busy = false;
+        if (job.state === 'succeeded') { remember(null); error = ''; }
+        else job.state = 'failed';
+        paint(); return;
+      }
       paint(); pollTimer = setTimeout(poll, 3000);
     }
   };
@@ -115,12 +133,26 @@ export function initPluginInstall(panel, onInstalled) {
     if (!file || busy || preview || previewToken || job) return;
     error = ''; notified = false;
     if (!file.name.toLowerCase().endsWith('.zip') || !file.size || file.size > 32 * 1024 * 1024) { error = t('plugins.zipLimit'); paint(); return; }
+    let requestId;
     busy = true; phase = 'checking'; paint();
     try {
-      preview = await api('?action=preview', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
-      rememberPreview(preview.token);
+      requestId = crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('');
+      rememberUpload(requestId);
+      preview = await api('?action=preview', { method: 'POST', headers: { 'Content-Type': 'application/zip', 'X-ASHub-Preview-Request': requestId }, body: file });
+      rememberPreview(preview.token); rememberUpload(null);
     }
-    catch (e) { error = e.message; }
+    catch (e) {
+      error = e.message;
+      // Recover only this upload, never another window's or an older ZIP's plan.
+      try {
+        for (let attempt = 0; requestId && attempt < 6; attempt++) {
+          if (await recoverPreview(requestId)) break;
+          if (e.status || attempt === 5) break;
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      } catch { /* Keep the original upload error. */ }
+      if (e.status) rememberUpload(null);
+    }
     finally { busy = false; phase = ''; input.value = ''; paint(); }
   };
   choose.addEventListener('click', () => input.click());
@@ -137,10 +169,27 @@ export function initPluginInstall(panel, onInstalled) {
       else { error = e.message; if (e.status === 404) rememberPreview(null); }
     } finally { busy = !!job; phase = ''; paint(); if (job) void poll(); }
   };
+  const recoverPreview = async requestId => {
+    const candidates = await api(`?action=previews&requestId=${encodeURIComponent(requestId)}`);
+    if (!Array.isArray(candidates) || !candidates.length) return false;
+    const candidate = candidates[0];
+    preview = await api(`?action=preview&id=${encodeURIComponent(candidate.token)}`);
+    if (preview.requestId !== requestId) { preview = null; return false; }
+    rememberPreview(preview.token); rememberUpload(null); error = ''; return true;
+  };
   try {
-    const id = sessionStorage.getItem(storageKey), token = sessionStorage.getItem(previewKey);
+    const id = sessionStorage.getItem(storageKey), token = sessionStorage.getItem(previewKey), uploadId = sessionStorage.getItem(uploadKey);
     if (id) { job = { id, state: 'running' }; busy = true; void poll(); }
     else if (token) void restorePreview(token);
+    else if (uploadId) {
+      busy = true; phase = 'checking'; paint();
+      void (async () => {
+        for (let attempt = 0; attempt < 6; attempt++) {
+          if (await recoverPreview(uploadId)) return;
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      })().catch(e => { error = e.message; }).finally(() => { busy = false; phase = ''; paint(); });
+    }
   } catch {}
   paint();
 }

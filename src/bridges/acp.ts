@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
 import { Translator } from "./translator.js";
 import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy, PermissionOutcome } from "./types.js";
+import { RuntimeEnvironment } from "../services/runtime-environment.js";
 
 interface JsonRpcMessage {
   jsonrpc: "2.0";
@@ -132,9 +133,10 @@ export class AcpBridge extends EventEmitter implements Bridge {
 
     // Windows .cmd shims need cmd.exe escaping; native executables take an argument vector.
     const launch: typeof spawn = process.platform === "win32" ? createRequire(import.meta.url)("cross-spawn") : spawn;
+    const env = new RuntimeEnvironment({ env: extra.env }).commandEnvironment();
     this.child = launch(extra.command, extra.args ?? [], {
       cwd: opts.cwd ?? process.cwd(),
-      env: extra.env ?? process.env,
+      env,
       stdio: ["pipe", "pipe", "inherit"],
     });
 
@@ -147,7 +149,9 @@ export class AcpBridge extends EventEmitter implements Bridge {
       this.settlePermissions();
       this.emit("closed");
     });
-    const transportFailed = (err: Error) => this.failTransport(err);
+    const transportFailed = (err: NodeJS.ErrnoException) => this.failTransport(err.code === 'ENOENT'
+      ? Error(`ACP command not found: ${extra.command}. Install it, add its standard installation path, or configure an absolute path.`)
+      : err);
     this.child.on("error", transportFailed);
     this.child.stdin?.on?.("error", transportFailed);
     this.child.stdout?.on?.("error", transportFailed);

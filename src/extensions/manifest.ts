@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { satisfies, valid, validRange } from 'semver';
 
 export const HOST_PLUGIN_API_VERSION = '1.0.0';
@@ -38,6 +39,8 @@ export function pluginRelativePath(value: unknown): string {
   return value;
 }
 export interface PluginDependency { id: string; minVersion: string }
+export interface PluginRuntimeRequirement { kind: 'python' | 'git'; version: string }
+export interface PluginSystemRequirements { minMacOS?: string; arch?: string[] }
 /** Deliberately limited JSON Schema subset. Unknown keywords are rejected. */
 export interface PluginConfigSchema {
   type: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean';
@@ -47,6 +50,7 @@ export interface PluginConfigSchema {
 }
 interface ManifestBase {
   id: string; name?: string; platforms?: string[]; minNode?: string; dependencies?: PluginDependency[];
+  system?: PluginSystemRequirements; runtimes?: PluginRuntimeRequirement[];
   setup?: { script: string; description: string }; permissions?: string[]; defaults?: Record<string, Record<string, unknown>>;
 }
 export interface PluginManifestV1 extends ManifestBase { schemaVersion: 1 }
@@ -61,7 +65,7 @@ export type PluginManifest = PluginManifestV1 | PluginManifestV2;
 export interface NormalizedPluginManifest extends ManifestBase {
   sessionScope?: PluginSessionScope;
   schemaVersion: 1 | 2; entries: { session?: string; application?: string };
-  requires: { hostApi: string; capabilities: string[] }; dependencies: PluginDependency[];
+  requires: { hostApi: string; capabilities: string[] }; dependencies: PluginDependency[]; runtimes: PluginRuntimeRequirement[];
   configSchema?: Record<string, PluginConfigSchema>;
   configNamespaces: string[]; ui?: PluginDeclarativeUI;
 }
@@ -195,7 +199,7 @@ export function validatePluginConfig(schema: PluginConfigSchema, value: unknown,
 export function parsePluginManifest(raw: unknown, packageName: string, legacySessionEntry = 'index.mjs'): NormalizedPluginManifest {
   if (!object(raw) || ![1, 2].includes(raw.schemaVersion) || !safeId.test(raw.id) || raw.id !== packageName) throw Error('Invalid installation manifest');
   const m = raw;
-  if (m.schemaVersion === 2) keys(m, ['schemaVersion', 'id', 'name', 'platforms', 'minNode', 'dependencies', 'setup', 'permissions', 'defaults', 'entries', 'requires', 'configSchema', 'configNamespaces', 'ui', 'sessionScope'], 'manifest field');
+  if (m.schemaVersion === 2) keys(m, ['schemaVersion', 'id', 'name', 'platforms', 'minNode', 'dependencies', 'system', 'runtimes', 'setup', 'permissions', 'defaults', 'entries', 'requires', 'configSchema', 'configNamespaces', 'ui', 'sessionScope'], 'manifest field');
   if (m.name !== undefined) text(m.name, 100);
   if (m.platforms !== undefined && (!Array.isArray(m.platforms) || !m.platforms.length || !m.platforms.every((v: unknown) => ['darwin', 'win32', 'linux'].includes(v as string)))) throw Error('Invalid platforms');
   if (m.minNode !== undefined && (typeof m.minNode !== 'string' || !/^\d+\.\d+\.\d+$/.test(m.minNode) || !valid(m.minNode))) throw Error('Invalid minimum Node version');
@@ -205,6 +209,26 @@ export function parsePluginManifest(raw: unknown, packageName: string, legacySes
     for (const d of m.dependencies) {
       if (!object(d) || !safeId.test(d.id) || d.id === m.id || seen.has(d.id) || typeof d.minVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(d.minVersion) || !valid(d.minVersion)) throw Error('Invalid plugin dependencies');
       keys(d, ['id', 'minVersion'], 'dependency field'); seen.add(d.id);
+    }
+  }
+  let system: PluginSystemRequirements | undefined;
+  if (m.system !== undefined) {
+    if (!object(m.system)) throw Error('Invalid system requirements');
+    keys(m.system, ['minMacOS', 'arch'], 'system requirement');
+    if (m.system.minMacOS !== undefined && (typeof m.system.minMacOS !== 'string' || !valid(m.system.minMacOS))) throw Error('Invalid minimum macOS version');
+    if (m.system.arch !== undefined && (!Array.isArray(m.system.arch) || !m.system.arch.length || new Set(m.system.arch).size !== m.system.arch.length
+      || !m.system.arch.every((value: unknown) => typeof value === 'string' && ['arm64', 'x64', 'arm', 'ia32', 'ppc64', 's390x', 'riscv64', 'loong64'].includes(value)))) throw Error('Invalid system architectures');
+    system = { ...(m.system.minMacOS ? { minMacOS: m.system.minMacOS } : {}), ...(m.system.arch ? { arch: [...m.system.arch] } : {}) };
+  }
+  const runtimes: PluginRuntimeRequirement[] = [];
+  if (m.runtimes !== undefined) {
+    if (!Array.isArray(m.runtimes) || m.runtimes.length > 5) throw Error('Invalid runtime requirements');
+    const seen = new Set<string>();
+    for (const requirement of m.runtimes) {
+      if (!object(requirement) || (requirement.kind !== 'python' && requirement.kind !== 'git') || seen.has(requirement.kind)
+        || typeof requirement.version !== 'string' || !validRange(requirement.version)) throw Error('Invalid runtime requirements');
+      keys(requirement, ['kind', 'version'], 'runtime requirement');
+      seen.add(requirement.kind); runtimes.push({ kind: requirement.kind, version: requirement.version });
     }
   }
   if (m.permissions !== undefined && (!Array.isArray(m.permissions) || m.permissions.length > 10 || !m.permissions.every((v: unknown) => { text(v); return true; }))) throw Error('Invalid permission hints');
@@ -269,7 +293,7 @@ export function parsePluginManifest(raw: unknown, packageName: string, legacySes
   // v1 field named ui/configSchema into a new v2 host contribution.
   return {
     schemaVersion: m.schemaVersion, id: m.id, name: m.name, platforms: m.platforms, minNode: m.minNode,
-    setup: m.setup, permissions: m.permissions, defaults: m.defaults,
+    system, runtimes, setup: m.setup, permissions: m.permissions, defaults: m.defaults,
     entries, requires: { hostApi, capabilities: [...new Set(capabilities)] }, dependencies: m.dependencies ?? [], configNamespaces,
     ...(m.schemaVersion === 2 ? { ui: m.ui, configSchema: m.configSchema, ...(m.sessionScope ? { sessionScope: { conversationEntries: [...m.sessionScope.conversationEntries] } } : {}) } : {}),
   } as NormalizedPluginManifest;
@@ -292,15 +316,46 @@ export function readPluginManifest(root: string, packageName?: string): Normaliz
 }
 export interface PluginCompatibility { compatible: boolean; errors: string[] }
 export interface PluginHostEnvironment {
-  platform?: string; nodeVersion?: string; hostApiVersion?: string; capabilities?: readonly string[];
+  platform?: string; arch?: string; nodeVersion?: string; nodeRange?: unknown;
+  packageOs?: unknown; packageCpu?: unknown; darwinRelease?: string; macOSVersion?: string;
+  hostApiVersion?: string; capabilities?: readonly string[];
   dependencies?: ReadonlyMap<string, { version?: string; enabled: boolean; compatible?: boolean }>;
+}
+export function packageMetadataCompatibility(host: PluginHostEnvironment = {}): PluginCompatibility {
+  const errors: string[] = [], platform = host.platform ?? process.platform, node = host.nodeVersion ?? process.versions.node, arch = host.arch ?? process.arch;
+  if (host.nodeRange !== undefined && (typeof host.nodeRange !== 'string' || !validRange(host.nodeRange) || !satisfies(node, host.nodeRange))) errors.push(`Node ${String(host.nodeRange)} required`);
+  const packagePlatform = (value: unknown, actual: string, label: string) => {
+    if (value === undefined) return;
+    const list = Array.isArray(value) ? value : [value];
+    if (!list.every(item => typeof item === 'string' && !!item)) { errors.push(`Invalid package ${label} requirement`); return; }
+    if (list.length === 1 && list[0] === 'any') return;
+    const allowed = list.filter(item => !item.startsWith('!')), denied = list.filter(item => item.startsWith('!')).map(item => item.slice(1));
+    if ((allowed.length && !allowed.includes(actual)) || denied.includes(actual)) errors.push(`Unsupported package ${label}: ${actual}`);
+  };
+  packagePlatform(host.packageOs, platform, 'OS'); packagePlatform(host.packageCpu, arch, 'CPU');
+  return { compatible: errors.length === 0, errors };
 }
 export function pluginCompatibility(manifest: NormalizedPluginManifest, host: PluginHostEnvironment = {}): PluginCompatibility {
   const errors: string[] = [];
-  const platform = host.platform ?? process.platform, node = host.nodeVersion ?? process.versions.node;
+  const platform = host.platform ?? process.platform, node = host.nodeVersion ?? process.versions.node, arch = host.arch ?? process.arch;
   const capabilities = new Set(host.capabilities ?? HOST_PLUGIN_CAPABILITIES);
   if (manifest.platforms && !manifest.platforms.includes(platform)) errors.push(`Unsupported platform: ${platform}`);
+  if (manifest.system?.arch && !manifest.system.arch.includes(arch)) errors.push(`Unsupported CPU architecture: ${arch}`);
+  if (manifest.system?.minMacOS && platform === 'darwin') {
+    if (host.macOSVersion) {
+      if (!valid(host.macOSVersion) || !satisfies(host.macOSVersion, `>=${manifest.system.minMacOS}`)) errors.push(`macOS ${manifest.system.minMacOS} or newer required`);
+    } else {
+      // Catalogue discovery stays synchronous. Darwin's major version reliably
+      // rejects older macOS releases; the installer also checks sw_vers exactly.
+      const darwinMajor = Number((host.darwinRelease ?? os.release()).split('.')[0]);
+      const macMajor = darwinMajor >= 25 ? darwinMajor + 1 : darwinMajor >= 20 ? darwinMajor - 9 : 10;
+      const macMinor = darwinMajor < 20 ? darwinMajor - 4 : 0;
+      const [requiredMajor, requiredMinor] = manifest.system.minMacOS.split('.').map(Number);
+      if (!Number.isFinite(darwinMajor) || macMajor < requiredMajor || (macMajor === 10 && requiredMajor === 10 && macMinor < requiredMinor)) errors.push(`macOS ${manifest.system.minMacOS} or newer required`);
+    }
+  }
   if (!satisfies(node, `>=${manifest.minNode ?? '22.12.0'}`)) errors.push(`Node ${manifest.minNode ?? '22.12.0'} or newer required`);
+  errors.push(...packageMetadataCompatibility(host).errors);
   if (!satisfies(host.hostApiVersion ?? HOST_PLUGIN_API_VERSION, manifest.requires.hostApi)) errors.push(`Host API ${manifest.requires.hostApi} required`);
   for (const capability of manifest.requires.capabilities) if (!capabilities.has(capability)) errors.push(`Unsupported host capability: ${capability}`);
   if (host.dependencies) for (const dep of manifest.dependencies) {

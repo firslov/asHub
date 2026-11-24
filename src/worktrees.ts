@@ -2,13 +2,17 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { RuntimeEnvironment } from "./services/runtime-environment.js";
 
+const runtimes = new RuntimeEnvironment();
 const git = (cwd: string, args: string[]) => new Promise<string>((resolve, reject) => {
-  execFile("git", ["-C", cwd, ...args], { timeout: 30000, maxBuffer: 2 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+  const executable = runtimes.resolveCommand("git");
+  if (!executable) { reject(new Error("Git is not available. Install Git or configure its standard installation path.")); return; }
+  execFile(executable, ["-C", cwd, ...args], { timeout: 30000, maxBuffer: 2 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
     if (error) reject(new Error(stderr.trim() || error.message)); else resolve(stdout.trim());
   });
 });
-export interface WorkspaceInfo { root: string; branch?: string; git: boolean }
+export interface WorkspaceInfo { root: string; branch?: string; git: boolean; gitError?: string }
 const cache = new Map<string, { until: number; value: Promise<WorkspaceInfo> }>();
 export function workspaceInfo(cwd: string): Promise<WorkspaceInfo> {
   const found = cache.get(cwd); if (found && found.until > Date.now()) return found.value;
@@ -18,7 +22,10 @@ export function workspaceInfo(cwd: string): Promise<WorkspaceInfo> {
       const repo = await git(cwd, ["rev-parse", "--show-toplevel"]);
       const branch = await git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => "HEAD (detached)");
       return { root: await fs.realpath(repo), branch, git: true };
-    } catch { return { root, git: false }; }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { root, git: false, ...(message.startsWith("Git is not available") ? { gitError: message } : {}) };
+    }
   })();
   cache.set(cwd, { until: Date.now() + 30000, value });
   if (cache.size > 256) cache.delete(cache.keys().next().value!);

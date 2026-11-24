@@ -68,6 +68,8 @@ SSE data contains `{version:1, epoch, revision, kind?, id?}`. Kinds are `session
 
 The session shape in the snapshot matches legacy `GET /sessions`; projects match `/api/projects`. Snapshots reflect current in-process state, not a cross-process transaction with arbitrary external file edits. Legacy HTTP routes and the v1 plugin handler names remain supported. Only explicit 404/405/501 indicates an older host; authentication or server failures must not be treated as capability absence.
 
+The installed personal assistant can verify project names through `host.projectNames(entryKey, conversationId, grantId)`. The host checks that the plugin owns the live entry and holds the current background grant for that conversation alone. The call returns the current observation time and up to 16 previous name intervals per project. Times are UTC milliseconds. A legacy project gains an observation time when the host first sees its name. Public HTTP and ordinary plugin snapshots expose current names only.
+
 Application extension states are `inactive`, `starting`, `active`, `stopping` and `error`. An enabled extension can still be unavailable during startup or after failure. A failed optional extension does not block core session routes. Feature disable preserves stored data. The remote gateway intentionally does not forward these unrestricted local host/plugin-management routes; it retains its permission-filtered remote protocol.
 
 
@@ -97,6 +99,8 @@ Queued collaboration tasks keep a stable queue ID across user edits, so editing 
 Application plugins may declare the additive `plugin-resources` and `authorized-messages` capabilities. The host exposes no calendar or task-specific operations: recurrence, catch-up rules, templates and job history remain plugin code.
 
 `ctx.services.dataDirectory` is a stable package-scoped local directory. `ctx.services.interactions.register(id, {view, prepare})` registers a bounded declarative resource; the manifest renders it with `{type:"resource", id}`. A panel may use the built-in `clock`, `panel`, `browser`, or `devices` icon. Older browser-capable packages using the generic panel icon receive the browser glyph automatically. A resource view contains `actions`, `rows`, optional `note`, and an optional form. Forms accept text, password, textarea, number, checkbox, select, time and datetime-local controls, optional advanced groups, and `when:{field,values}` visibility conditions. `refresh:false` holds a detail view until the user navigates back. A row's `conversationId` creates a host-generated local conversation link. Arbitrary HTML, scripts, event names and URLs are not accepted.
+
+Desktop forms can set `compact:true` to show resource actions below the form. A desktop form's optional `guidance` list holds up to eight text entries with `detail`, an optional disclosure `summary`, and an optional `when:{field,values}` condition. The entry appears below the field named by `after`, or below Submit when `after` is omitted. Guidance adds no submitted values or permissions.
 
 `prepare(action, values)` returns `{preview?, authorization?, execute(grantId?)}`. The host renders the preview, appends its own authorization scope, and issues a short-lived, resource-scoped confirmation token. Only confirmation creates a grant and invokes the prepared commit. Duplicate confirmation shares one result. Plugin stop/disposal invalidates pending confirmations. Commits participate in the application registry's in-flight operation tracking; failed commits revoke newly created grants. Plugins must recheck their own revision/version before mutation.
 
@@ -141,7 +145,13 @@ The grant covers current and future active agent conversations except exclusions
 - `background.infer(grantId, messages, signal?)` makes a separate, tool-free request through the approved model. It accepts 1–8 system/user messages and at most 16000 serialized characters; output budget is 4096 tokens with a 60-second deadline. Busy model sources and concurrent requests for the same plugin are rejected for later retry. It does not append history or acquire permission to call tools.
 - `background.revoke(grantId)` cancels the package's running background request and removes the grant.
 
+A dedicated single-conversation grant can change its inference policy when the conversation backend supports independent execution. `background.models(grantId)` resolves the live catalog for that authorized conversation and returns only `{provider, model}` descriptors. `background.status(grantId)` includes `modelRevision`, which defaults to zero for older grants, and `backgroundModel`, which holds the independently selected model or `null`. Read-only backends and backends without a separate inference route yield no independent model choices.
+
+Submit a desktop resource plan with `backgroundModelChange: {grantId, model}`. Pass `null` for follow-conversation mode. The host shows the selected service and confirms that the destination still matches when the user approves. The change keeps the existing grant ID, history boundary, and daily allowance. It cancels the running request and advances `modelRevision`. In follow and legacy fixed modes, the host also records actual foreground model changes in the grant. A switch away and back still invalidates results from the previous revision after restart. Independent inference uses its own client with the owning conversation's network policy. A changed destination requires another confirmation. Codex's host-managed local proxy uses its configured upstream identity across restarts. Other local endpoints include the port in their identity.
+
 Each grant permits 1–24 requests per UTC day; reservation is persisted before inference, and failed/cancelled calls count. Application/plugin shutdown, model-session disposal and caller cancellation abort related requests. Consumers must also check scope, lifetime and their own revisions before storing asynchronous results. The API gives a count/input/output ceiling, not an exact monetary cost guarantee.
+
+When the provider reports input and output tokens for a stream, `background.status(grantId).tokenUsage` contains their current UTC-day totals and the number of requests with reported usage. Requests without a usage frame still count toward the daily allowance.
 
 The personal-assistant example uses this capability for incremental, source-backed learning, bounded recall and user-feedback-based strategy revision. No assistant-specific memory or self-evolution logic is embedded in the host.
 
@@ -385,6 +395,10 @@ rows can declare `section` (a text heading grouping consecutive rows) and
 `copyText` to copy that exact text on a user click; no plugin action runs.
 `pendingLabel` (up to 200 characters) provides contextual status while a resource action
 is pending; controls remain disabled to prevent duplicate submissions.
+A desktop row can declare `qr: {label, modules}` for a QR code. `modules` contains
+the QR's square matrix as rows of `0` and `1` characters. The desktop adds a
+quiet zone and draws the matrix locally. Include readable text for older hosts
+and for users who cannot scan. Do not encode credentials.
 A form field with `type: "directories"` uses a newline-separated string value,
 shows removable paths and offers the existing desktop directory picker. Without
 the native bridge it accepts absolute paths as text. Picking a path grants no

@@ -194,6 +194,36 @@ test('application stop revokes existing session tools and a late disposal cannot
   });
 });
 
+test('the memory status tool clears an expired quota notice and omits health after pause', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-20T23:59:00Z') });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assistant-memory-status-'));
+  const target = { id: 'a', instanceId: 'a', kind: 'agent', cwd: dir };
+  const active = start({ dataDirectory: dir, conversations: { get: () => 'a' }, background: {
+    status: () => ({ includedIds: ['a'] }), targets: () => [target], revoke() {},
+  }, host: { snapshot: () => ({ sessions: [target], projects: [] }) } });
+  t.after(() => { active.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const { assistant } = active, tools = new Map();
+  activateSession({ services: { dataDirectory: dir }, list: () => ['session:current-id'], call: () => 'a',
+    bus: { onPipe() {} }, agent: { registerTool: tool => tools.set(tool.name, tool), registerInstruction() {}, adviseInstruction() {} }, advise() {},
+  });
+  assistant.store.setState('learning', { enabled: true, grantId: 'fixture', modelSessionId: 'a' });
+  const blocked = { errorClass: 'quota', retryAt: Date.now() + 60000, failures: 1, backlog: true, lastSuccessAt: null };
+  assistant.store.setState('learning:health', blocked);
+  const status = async () => JSON.parse((await tools.get('assistant_memory_status').execute({})).content);
+  assert.match((await status()).learningNote, /预算已用完/);
+  t.mock.timers.tick(60000);
+  const restored = await status();
+  assert.equal(restored.health.errorClass, null);
+  assert.equal(restored.health.backlog, true);
+  assert.doesNotMatch(restored.learningNote ?? '', /预算已用完/);
+  assert.deepEqual(assistant.store.state('learning:health'), blocked, 'reading does not write persisted health');
+  assistant.learning.pause();
+  const paused = await status();
+  assert.equal(paused.automatic, false);
+  assert.equal(paused.health, undefined);
+  assert.equal(paused.learningNote, undefined);
+});
+
 test('explicit user recreation is allowed after forgetting', t => {
   const f = fixture(t), row = f.db.add(input(), user, 'active');
   f.db.forget(row.id, row.revision);

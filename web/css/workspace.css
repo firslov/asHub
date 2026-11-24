@@ -65,7 +65,7 @@
 .sidebar-new-btn:hover { background: var(--surface-selected); border-color: var(--accent-border); }
 .sidebar-new-btn:active { box-shadow: inset 0 1px 2px var(--border-light); }
 
-.toolbar { background: var(--bg2); border-left: 0; }
+.toolbar { background: var(--bg2); border-left: 0; transition-property: background-color; }
 .toolbar .toolbar-btn { border-radius: var(--radius-md); color: var(--text-mid); }
 .toolbar .toolbar-btn:hover { background: var(--bg-elevated); color: var(--text); }
 .toolbar .toolbar-btn.active {
@@ -206,6 +206,43 @@ dialog.artifact-preview { font-family: var(--font-sans); box-shadow: var(--shado
 .toolbar > :is(#plugins-toggle,#mobile-access-toggle,#config-toggle) { order: 3; }
 .toolbar > #plugins-toggle, .toolbar > #prompt-toggle { margin-top: 6px; }
 .toolbar > :is(.toolbar-sep,#export-btn,#lang-toggle,#theme-toggle) { order: 4; }
+.toolbar > .rail-labels-toggle { display: none; }
+.toolbar > :where(#plugins-toggle, #config-toggle) {
+  width: calc(100% - 8px);
+  height: 42px;
+  flex-direction: column;
+  gap: 1px;
+  padding-inline: 0;
+}
+.toolbar > :where(#plugins-toggle, #config-toggle)::after {
+  content: attr(title) / "";
+  font: 11px/1.2 var(--font-sans);
+  white-space: nowrap;
+}
+@media (min-width: 1100px) {
+  .toolbar > .rail-labels-toggle { display: flex; order: 0; }
+  .toolbar > .rail-labels-toggle[aria-pressed="true"] { background: var(--surface-selected); color: var(--accent-dim); }
+  :root[data-tool-labels] { --toolbar-w: 160px; }
+  [data-tool-labels] .toolbar > .toolbar-btn:not(.rail-labels-toggle) {
+    width: calc(100% - 16px);
+    height: 36px;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 8px;
+    padding-inline: 8px;
+  }
+  [data-tool-labels] .toolbar > .toolbar-btn > svg { flex: none; }
+  [data-tool-labels] .toolbar > .toolbar-btn[title]:not(.rail-labels-toggle, .rail-more)::after {
+    content: attr(title) / "";
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: var(--fs-xs)/1.25 var(--font-sans);
+    text-align: start;
+  }
+  [data-tool-labels] .toolbar > .extension-menu[aria-label]::after { content: attr(aria-label) / ""; }
+}
 .toolbar-btn.rail-unpinned { display: none; }
 .toolbar .rail-more { flex-direction: column; height: 40px; gap: 0; font: 10px/1.2 var(--font-sans); }
 .toolbar .rail-more[hidden] { display: none; }

@@ -14,14 +14,18 @@
  * the real fix in front of the reader before tsc gets a chance to mislead.
  *
  * Exact versions and Git commits are checked; every declared dependency must
- * at least be present. Ranges are left to npm — reimplementing semver here
- * risks false positives that would block every build.
+ * at least be present. Also check the local TypeScript launcher used by build.
+ * Ranges are left to npm to avoid false positives.
  */
-const { readFileSync } = require("node:fs");
+const { accessSync, constants, readFileSync, statSync } = require("node:fs");
 const { join } = require("node:path");
 
 const root = join(__dirname, "..");
-const declared = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).dependencies ?? {};
+const { dependencies = {}, devDependencies = {} } = JSON.parse(
+  readFileSync(join(root, "package.json"), "utf8"),
+);
+const declared = { ...dependencies };
+if (devDependencies.typescript) declared.typescript = devDependencies.typescript;
 const problems = [];
 
 for (const [name, spec] of Object.entries(declared)) {
@@ -51,12 +55,22 @@ for (const [name, spec] of Object.entries(declared)) {
         problems.push(`${name}: installed Git commit is missing or stale (expected ${commit.slice(0, 7)})`);
       }
     }
+    if (name === "typescript") {
+      const launcher = process.platform === "win32" ? "tsc.cmd" : "tsc";
+      try {
+        const executable = join(root, "node_modules", ".bin", launcher);
+        if (!statSync(executable).isFile()) throw Error("TypeScript launcher is not a file");
+        accessSync(executable, constants.X_OK);
+      } catch {
+        problems.push(`${name}: npm launcher node_modules/.bin/${launcher} is missing or unusable`);
+      }
+    }
   }
 }
 
 if (problems.length > 0) {
   console.error("\nnode_modules does not match package.json:\n");
   for (const problem of problems) console.error(`  - ${problem}`);
-  console.error("\nRun `npm install` (or `npm ci` for a clean install), then build again.\n");
+  console.error("\nRun `npm ci --include=dev --bin-links`, then build again.\n");
   process.exit(1);
 }

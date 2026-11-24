@@ -37,7 +37,16 @@ app.whenReady().then(async () => {
     await win.loadURL(base);
     const js = async code => {try{return await win.webContents.executeJavaScript(code);}catch(e){console.error('Renderer expression:',code);throw e;}};
     const wait = async code => { for (let i = 0; i < 160; i++) { if (await js(code)) return; await new Promise(r => setTimeout(r, 25)); } throw Error('Timed out: ' + code); };
-    const click = label => js('(()=>{const b=Array.from(document.querySelectorAll(".extension-resource button")).find(b=>b.textContent===' + JSON.stringify(label) + ');if(!b)throw Error("Button missing");if(b.closest("details"))b.closest("details").open=true;b.click()})()');
+    const holdCatalog=()=>js(`(()=>{
+      const fetchEntry=window.fetch.bind(window), pending=[];
+      window.heldCatalog={pending,restore(){window.fetch=fetchEntry;for(const release of pending.splice(0))release();}};
+      window.fetch=(input,init)=>{
+        const request=fetchEntry(input,init);
+        if(new URL(String(input),location.href).pathname!=='/api/plugin-conversations')return request;
+        return new Promise((resolve,reject)=>pending.push(()=>request.then(resolve,reject)));
+      };
+    })()`);
+    const click = label => js('(()=>{const b=Array.from(document.querySelectorAll(".resource-toggle-confirm button")).find(b=>b.textContent===' + JSON.stringify(label) + ');if(!b)throw Error("Button missing");b.click()})()');
     await js('(async()=>{localStorage.setItem("ash.lang","zh");(await import("/js/i18n.js")).setLang("zh")})()');
     await wait('!!document.querySelector(".conversation-entry-open")');
     await wait('!document.querySelector(".extension-menu") || document.querySelector(".extension-menu").hidden===true');
@@ -114,7 +123,16 @@ app.whenReady().then(async () => {
     assert.match(consent,/不读取其他对话/);assert.match(consent,/每天最多 4 次后台处理/);
     const consentLimits=await js('document.querySelector(".conversation-welcome .extension-authorization-details").textContent');
     assert.match(consentLimits,/单次请求上限/);assert.match(consentLimits,/16000/);assert.match(consentLimits,/4096/);
-    await welcomeClick('确认');await wait('!document.querySelector(".conversation-welcome")');
+    // Invalidations or a focus event can start a newer catalog read while the
+    // confirmation already created the assistant and is waiting to navigate.
+    await holdCatalog();
+    await welcomeClick('确认');
+    await wait('window.heldCatalog.pending.length>0 && !document.querySelector(".conversation-welcome .extension-resource-confirm")');
+    await js('window.welcomeCatalogReads=window.heldCatalog.pending.length;window.dispatchEvent(new Event("focus"))');
+    await wait('window.heldCatalog.pending.length>window.welcomeCatalogReads');
+    await js('Promise.all(window.heldCatalog.pending.splice(0,window.welcomeCatalogReads).map(release=>release()))');
+    await js('window.heldCatalog.restore()');
+    await wait('!document.querySelector(".conversation-welcome")');
     const assistantId=(await call('/api/plugin-conversations'))[0].sessionId;
     await wait('(async()=> (await import("/js/session-manager.js")).activeSessionId.value === '+JSON.stringify(assistantId)+')()');
     assert.equal(await js('!!document.querySelector(".conversation-welcome")'),false);
@@ -141,18 +159,43 @@ app.whenReady().then(async () => {
     await js('document.querySelector(".resource-inline-toggle").focus();document.querySelector(".resource-inline-toggle").click()');
     await wait('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="false"');
     assert(await js('document.activeElement===document.querySelector(".resource-inline-toggle")'),'pausing retains keyboard focus');
+    assert.equal(await js('!!document.querySelector(".resource-inline-manage")'),false,'management is hidden without live ordinary authorization');
     assert.equal(await js('!!document.querySelector("dialog[open]")'),false);
     await js('document.querySelector(".resource-inline-toggle").click()');
     await wait('!!document.querySelector(".resource-toggle-confirm[open]")');
     assert.equal(await js('document.querySelector(".resource-inline-toggle").getAttribute("aria-checked")'), 'false');
-    win.setMaximumSize(2000,720);
+    const readConsentLayout=()=>js(`(()=>{
+      const d=document.querySelector('.resource-toggle-confirm'),r=d.getBoundingClientRect();
+      const buttons=[...d.querySelectorAll('button')].map(button=>{
+        const b=button.getBoundingClientRect();
+        return {label:button.textContent,visible:b.height>=40 && b.top>=r.top && b.bottom<=r.bottom &&
+          b.left>=r.left && b.right<=r.right && [b.top+8,b.bottom-8].every(y=>button.contains(document.elementFromPoint(b.x+b.width/2,y)))};
+      });
+      return {buttons,scroll:d.scrollWidth,client:d.clientWidth,left:r.left,right:r.right,viewport:innerWidth};
+    })()`);
+    win.setMaximumSize(2000,800);
     for(const theme of ['light','dark'])for(const width of [1280,390,320]){
       await js('document.documentElement.dataset.theme='+JSON.stringify(theme));
-      win.setContentSize(width,800);await wait('innerWidth === '+width+' && innerHeight > 0 && innerHeight <= 720');
+      win.setContentSize(width,720);await wait('innerWidth === '+width+' && innerHeight === 720');
       await js('document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))');
-      const bounds=await js('(()=>{const p=document.querySelector(".resource-toggle-confirm"),r=p.getBoundingClientRect();return {scroll:p.scrollWidth,client:p.clientWidth,left:r.left,right:r.right,viewport:innerWidth}})()');
+      const bounds=await readConsentLayout();
       assert(bounds.scroll<=bounds.client+1&&bounds.left>=-1&&bounds.right<=bounds.viewport+1,JSON.stringify({theme,width,...bounds}));
       if(shots)fs.writeFileSync(path.join(shots,'assistant-consent-'+theme+'-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
+      if(width>600)continue;
+      assert.deepEqual(bounds.buttons,[{label:'取消',visible:true},{label:'确认',visible:true}],JSON.stringify({theme,width,...bounds}));
+      await js('document.querySelector(".resource-toggle-confirm summary").focus()');
+      win.webContents.sendInputEvent({type:'keyDown',keyCode:'Space'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Space'});
+      await wait('document.querySelector(".resource-toggle-confirm details").open');
+      await js('document.querySelector(".resource-toggle-review").focus()');
+      const scrollable=await js(`(()=>{const r=document.querySelector('.resource-toggle-review');return {client:r.clientHeight,scroll:r.scrollHeight,focused:document.activeElement===r}})()`);
+      assert(scrollable.focused,JSON.stringify({theme,width,...scrollable}));
+      if(scrollable.scroll>scrollable.client){
+        win.webContents.sendInputEvent({type:'keyDown',keyCode:'PageDown'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'PageDown'});
+        await wait('(()=>{const r=document.querySelector(".resource-toggle-review");return r.scrollTop>0&&r.scrollHeight-r.clientHeight-r.scrollTop<=1})()');
+      }
+      assert.deepEqual((await readConsentLayout()).buttons,bounds.buttons,'expanded details must keep both buttons fully reachable');
+      if(shots)fs.writeFileSync(path.join(shots,'assistant-consent-details-'+theme+'-'+width+'.png'),(await win.webContents.capturePage()).toPNG());
+      await js(`(()=>{const review=document.querySelector('.resource-toggle-review');review.querySelector('details').open=false;review.scrollTop=0;document.querySelector('.resource-toggle-confirm .p-btn-primary').focus()})()`);
     }
     // Escape in the permission dialog must never cancel the running chat.
     await js(`(async()=>{
@@ -185,6 +228,37 @@ app.whenReady().then(async () => {
     await new Promise(r=>setTimeout(r,400));
     await js('document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))');
     if(shots)fs.writeFileSync(path.join(shots,'assistant-inline-switch.png'),(await win.webContents.capturePage()).toPNG());
+    // The optional desktop management entry keeps the ordinary memory switch.
+    await wait('!!document.querySelector(".conversation-entry .resource-inline-manage")');
+    const themeOn='enable-theme-overviews',themeOff='disable-theme-overviews';
+    let state=(await call(resource)).view;
+    assert(state.toggle.checked&&state.actions.some(row=>row.id===themeOn),'pilot is off after granting ordinary memory');
+    await js('document.querySelector(".conversation-entry .resource-inline-manage").click()');
+    const dialogClick=label=>js('(()=>{const b=[...document.querySelectorAll(".conversation-resource-dialog[open] button")].find(n=>n.textContent==='+JSON.stringify(label)+');if(!b)throw Error("Pilot button missing");b.click()})()');
+    await wait('document.querySelector(".conversation-resource-dialog[open]")?.textContent.includes("开启主题概览试点")');
+    await dialogClick('开启主题概览试点');
+    await wait('document.querySelector(".conversation-resource-dialog .extension-resource-confirm")?.textContent.includes("确认")');
+    const details=await js('document.querySelector(".conversation-resource-dialog .extension-resource-review").textContent');
+    assert.match(details,/项目决策.*协作偏好/);
+    assert.match(details,/最多 4 次.*最多占 1 次/);
+    await dialogClick('取消');
+    assert((await call(resource)).view.actions.some(row=>row.id===themeOn),'cancel leaves pilot off');
+    await dialogClick('开启主题概览试点');
+    await wait('!!document.querySelector(".conversation-resource-dialog .extension-resource-confirm")');
+    await dialogClick('确认');
+    await wait('document.querySelector(".conversation-resource-dialog[open]")?.textContent.includes("关闭主题概览试点")');
+    const remoteRoute=resource+'?remoteSession='+encodeURIComponent(assistantId);
+    state=(await call(remoteRoute)).view;
+    assert.equal(state.toggle.checked,true);
+    assert.deepEqual(state.actions.map(row=>row.id),['pause']);
+    const denied=await fetch(base+remoteRoute,{method:'POST',headers:{'Content-Type':'application/json',Origin:base},
+      body:JSON.stringify({action:themeOff,values:{}})});
+    assert.equal(denied.status,409,'remote client cannot change desktop pilot');
+    await dialogClick('关闭主题概览试点');
+    await wait('document.querySelector(".conversation-resource-dialog[open]")?.textContent.includes("开启主题概览试点")');
+    assert((await call(resource)).view.toggle.checked,'turning off the pilot preserves ordinary memory');
+    await js('document.querySelector(".conversation-resource-dialog[open]").close()');
+    await wait('!document.querySelector(".conversation-resource-dialog")');
     // A second renderer shares the host state. Polling must update the first
     // window's switch without discarding its keyboard focus.
     const peer=new BrowserWindow({show:false,width:1280,height:800,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
@@ -244,7 +318,33 @@ app.whenReady().then(async () => {
       dispose();host.remove();other.remove();
     })()`);
     await js('('+require('./assistant-health-scenario.cjs').toString()+')({moduleUrl:"/js/extensions/resource-view.js"})');
-    console.log('PASS dedicated assistant UI: ZIP install, explicit creation/grant, one persistent entry, in-app navigation, pause, themes, disable/re-enable and 1280/390/320 layouts');
+    // Replace the named conversation before this window receives the catalog
+    // changes. Even a stale click that reaches the host must leave the new grant active.
+    await wait('document.querySelector(".resource-inline-toggle")?.getAttribute("aria-checked")==="false"');
+    await js('document.querySelector(".resource-inline-toggle").click()');
+    await wait('!!document.querySelector(".resource-toggle-confirm[open]")');
+    await click('确认');
+    await wait('!!document.querySelector(".resource-inline-manage")');
+    await js('document.querySelector(".conversation-entry .resource-inline-manage").click()');
+    await wait('document.querySelector(".conversation-resource-dialog[open]")?.textContent.includes("关闭长期记忆")');
+    await holdCatalog();
+    const removed=await fetch(base+'/'+assistantId+'/',{method:'DELETE'});
+    assert.equal(removed.status,200);
+    const setup=resource.replace(/assistant$/,'welcome');
+    const replacement=await call(setup,{action:'create-assistant',values:{model:JSON.stringify({provider:'mock',model:'tiny'}),memory:true}});
+    await call(setup,{confirm:replacement.confirmation.id});
+    const replacementId=(await call('/api/plugin-conversations'))[0].sessionId;
+    assert(replacementId&&replacementId!==assistantId);
+    await dialogClick('关闭长期记忆');
+    await wait('document.querySelector(".conversation-resource-dialog[open] .plugins-message")?.textContent.includes("设置已变化")');
+    assert((await call(resource)).view.toggle.checked,'a stale click cannot pause the replacement grant');
+    await js('window.heldCatalog.restore();window.dispatchEvent(new Event("focus"))');
+    await wait('!document.querySelector(".conversation-resource-dialog[open]")');
+    const replacementRoute=resource+'?remoteSession='+encodeURIComponent(replacementId);
+    const currentPause=(await call(replacementRoute)).view.actions.find(a=>a.id==='pause');
+    const paused=await call(replacementRoute,{action:currentPause.id,values:currentPause.values});
+    assert.equal(paused.view.toggle.checked,false,'the currently bound remote switch can still pause memory');
+    console.log('PASS dedicated assistant UI: ZIP install, explicit creation/grant, concurrent directory refresh, stale dialog rejection, desktop theme pilot, pause, themes, disable/re-enable and 1280/390/320 layouts');
     win.destroy();await hub.shutdown();clearTimeout(timeout);app.exit(0);
   }catch(error){console.error(error);win?.destroy();try{await hub?.shutdown();}catch{}clearTimeout(timeout);app.exit(1);}
 });

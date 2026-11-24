@@ -67,3 +67,23 @@ test('ACP on Windows uses an argv-aware launcher for shims and paths containing 
  assert.equal(invocation[0],command);assert.deepEqual(invocation[1],args);
  assert(!invocation[2].shell);assert.equal(invocation[2].cwd,e.dir);
 });
+
+test('ACP resolves a command using its configured child PATH',()=>{
+ const fs=require('node:fs'),path=require('node:path');
+ const sentinel=Error('fixture stopped before spawn');
+ let launched;
+ const e=env({globals:{process:{...process,platform:'linux',env:{}}},modules:{
+  'node:child_process':{spawn(file,_args,options){launched={file,env:options.env};throw sentinel;}}
+ }});
+ const name='ashub-acp-path-fixture';
+ const outer=path.join(e.dir,'outer'),child=path.join(e.dir,'child');
+ for(const dir of [outer,child]){
+  fs.mkdirSync(dir);fs.writeFileSync(path.join(dir,name),'fixture',{mode:0o755});
+ }
+ e.context.process.env.PATH=outer;
+ const {AcpBridge}=e.load('src/bridges/acp.ts');
+ assert.throws(()=>new AcpBridge({cwd:e.dir,extra:{command:name,env:{PATH:child}}}),err=>err===sentinel);
+ assert.equal(launched.file,name);
+ assert.equal(launched.env.PATH.split(path.delimiter)[0],child);
+ assert(!launched.env.PATH.split(path.delimiter).includes(outer));
+});

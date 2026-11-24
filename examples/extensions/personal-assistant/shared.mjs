@@ -1,4 +1,7 @@
 import { retrieve } from './retrieval.mjs';
+import { themeRecall } from './context.mjs';
+import { completeHistory, eligibleOriginal, originalGuard } from './history-retrieval.mjs';
+import { sensitiveHistory } from './forgotten-history.mjs';
 import { observedAt } from './memory-context.mjs';
 import { Learning } from './learning.mjs';
 import path from 'node:path';
@@ -52,16 +55,34 @@ export class Assistant {
     return groups.map(([id,title])=>({id,title,items:rows.filter(r=>group(r)===id)}));
   }
   historySearch(id,query) {
-    this.require(id);const c=this.learning.config();const ignored=new Set(this.store.state('ignored:'+id)??[]);
+    const hits=this.evidenceSearch(id,query);
+    const c=this.learning.config(),api=this.services.background;
+    if(!this.dedicated)return hits;
+    const guard=originalGuard(this,id,c.grantId);
+    return hits.filter(hit=>{
+      if(hit.role!=='user'||sensitiveHistory.test(hit.text))return false;
+      try{return eligibleOriginal(completeHistory(api,c.grantId,id,hit.id,guard.hasRules),guard);}
+      catch{return false;}
+    });
+  }
+  evidenceSearch(id,query) {
+    this.require(id);const c=this.learning.config(),ignored=new Set(this.store.state('ignored:'+id)??[]);
     return this.services.background.search(c.grantId,id,query).filter(r=>!ignored.has(r.id));
   }
   historyRead(id,sourceId,offset=0) {
     this.require(id);if((this.store.state('ignored:'+id)??[]).includes(sourceId))throw Error('该来源不再用于记忆');
-    return this.services.background.entry(this.learning.config().grantId,id,sourceId,offset);
+    const {grantId}=this.learning.config(),api=this.services.background;
+    if(this.dedicated) {
+      const guard=originalGuard(this,id,grantId);
+      if(!eligibleOriginal(completeHistory(api,grantId,id,sourceId,guard.hasRules),guard))throw Error('该来源不再用于记忆');
+    }
+    const page=api.entry(grantId,id,sourceId,offset);
+    if(this.dedicated && sensitiveHistory.test(page.text))throw Error('该来源不再用于记忆');
+    return page;
   }
   remember(id,args) {
     this.require(id);const c=this.learning.config();
-    const records=this.historySearch(id,args.quote).filter(r=>r.role==='user' && r.text.includes(args.quote));
+    const records=this.evidenceSearch(id,args.quote).filter(r=>r.role==='user' && r.text.includes(args.quote));
     if(!records.length)throw Error('找不到当前授权对话中的原文，请重新搜索核对');
     const record=records.at(-1),target=this.learning.api.targets(c.grantId).find(t=>t.id===id);
     let alignment, alignedPrior;
@@ -88,10 +109,16 @@ export class Assistant {
     const original=record.id===this.services.background.latestUser(c.grantId,id)?source:null;
     const renewalTarget=original?.role==='user' && !original.more ? explicitMemoryIntent(original.text,args.quote,'remember') : null;
     const explicitRequest=!!renewalTarget && targetContent(renewalTarget)===targetContent(checked.value.content);
-    const row=this.store.learn(checked.value,checked.source,{explicitRequest,priorValid:this.learning.validator(),...(alignment?{alignment}:{})});return {id:row.id,state:row.state,revision:row.revision};
+    if(this.dedicated && !explicitRequest && originalGuard(this,id,c.grantId).matches(source.text)) {
+      const prior=this.store.forgottenCopy({...checked.value,source:checked.source});
+      if(prior)return {id:prior.id,state:prior.state,revision:prior.revision};
+      throw Error('原文包含已遗忘内容；请明确要求重新记住');
+    }
+    this.learning.guardForegroundUpdate(c,target,checked,alignment);
+    const row=this.store.learn(checked.value,checked.source,{explicitRequest,priorValid:this.learning.validator(),revisionOrder:this.learning.revisionOrder(c,target),...(alignment?{alignment}:{})});return {id:row.id,state:row.state,revision:row.revision};
   }
   forgetFromChat(id,args) {
-    this.require(id);const rows=this.historySearch(id,args.quote).filter(r=>r.role==='user' && r.id===this.services.background.latestUser(this.learning.config().grantId,id) && r.text.includes(args.quote));
+    this.require(id);const rows=this.evidenceSearch(id,args.quote).filter(r=>r.role==='user' && r.id===this.services.background.latestUser(this.learning.config().grantId,id) && r.text.includes(args.quote));
     const original=rows.length ? this.services.background.entry(this.learning.config().grantId,id,rows.at(-1).id) : null;
     const target=original?.role==='user' && !original.more ? explicitMemoryIntent(original.text,args.quote,'forget') : null;
     if(!target)throw Error('需要用户明确的遗忘要求');
@@ -153,7 +180,11 @@ export class Assistant {
   }
   search(id, query, limit = 8) {
     if (typeof query !== 'string' || query.length > 500 || !Number.isSafeInteger(limit) || limit < 1 || limit > 12) throw Error('查询最多 500 字符，每次返回 1–12 条');
-    return retrieve(this, this.require(id).session, query, limit).map(publicMemory);
+    const session=this.require(id).session;
+    const rows=retrieve(this,session,query,limit).map(publicMemory);
+    let theme=null;
+    try { theme=themeRecall(this,session,query); } catch { /* Pilot failure must not break memory search. */ }
+    return theme ? [theme,...rows].slice(0,limit) : rows;
   }
 }
 export const publicMemory = row => ({ id: row.id, title: row.title, content: row.content, kind: row.kind, ...(row.source.topic?{topic:row.source.topic}:{}), scope: 'global', context: row.source.context, observedAt: observedAt(row), revision: row.revision, updatedAt: row.updated, source: row.source.type === 'learned' ? { type:'learned', mode:row.source.mode, at:row.source.at, sources:row.source.refs.map(r=>({conversationId:r.conversationId,id:r.id})) } : row.source });

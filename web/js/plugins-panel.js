@@ -1,5 +1,5 @@
 import { mountFeatureControls } from './extensions/feature-controls.js';
-import { refreshFeatures } from './extensions/feature-state.js';
+import { features, refreshFeatures } from './extensions/feature-state.js';
 import { initPluginInstall } from './plugin-install.js';
 import { t } from './i18n.js';
 import { registerPanel } from './panel-manager.js';
@@ -30,6 +30,16 @@ async function request(options, url = '/api/plugins') {
 function restoreSwitchFocus(id, wasFocused) {
   if (wasFocused && document.activeElement === document.body) document.getElementById(id)?.focus();
 }
+function renderApplicationErrors(snapshot) {
+  const failed = new Map(snapshot.features.filter(f => f.pluginId && f.state === 'error').map(f => [f.pluginId, f]));
+  for (const row of list.querySelectorAll('[data-plugin-application-id]')) {
+    const failure = failed.get(row.dataset.pluginApplicationId);
+    const text = failure ? failure.error || t('plugins.errors') : '';
+    if (row.textContent !== text) row.textContent = text;
+    row.hidden = !text;
+  }
+}
+features.subscribe(renderApplicationErrors);
 function render(plugins, restorable = []) {
   const focused = document.activeElement;
   renderedCatalog = JSON.stringify([plugins, restorable]);
@@ -108,11 +118,17 @@ function render(plugins, restorable = []) {
     } else head.append(toggle);
     const source = node('div', 'plugin-description', plugin.builtin ? t(plugin.description) : plugin.description);
     const sessions = plugin.sessions || [];
+    // The dedicated entry already identifies where a scoped plugin runs.
+    // Keep load failures available without repeating its healthy session list.
+    const scoped = !plugin.builtin && !!plugin.manifest?.sessionScope?.conversationEntries?.length;
+    const failedSessions = sessions.filter(s => s.state === 'error');
+    const diagnosticSessions = scoped ? failedSessions : sessions;
     const loaded = sessions.filter(s => s.state === 'loaded').length;
-    const failed = sessions.filter(s => s.state === 'error').length;
+    const failed = failedSessions.length;
     const summary = node('div', 'plugin-status', sessions.length
       ? `${t('plugins.loadedCount')} ${loaded}${failed ? ` · ${t('plugins.errors')} ${failed}` : ''}${sessions.some(s => s.state === 'loading') ? ` · ${t('loading')}` : ''}`
       : t('plugins.inactiveSession'));
+    if (scoped) summary.textContent = failed ? `${t('plugins.errors')} ${failed}` : '';
     if (plugin.builtin) {
       const counts = new Map();
       for (const session of sessions) counts.set(session.state, (counts.get(session.state) || 0) + 1);
@@ -121,14 +137,26 @@ function render(plugins, restorable = []) {
         : t('plugins.bundledHint');
       if (plugin.enabled === false) summary.textContent = `${t('plugins.disabled')} · ${summary.textContent}`;
     }
-    if (plugin.includedApp && plugin.compatibilityError) summary.textContent = plugin.compatibilityError;
-    if (plugin.bundled) summary.textContent = sessions.length || plugin.compatibilityError
-      ? `${t('plugins.includedSource')} · ${summary.textContent}` : t('plugins.includedSource');
-    item.append(head); if (source.textContent) item.append(source); item.append(summary);
-    if (sessions.length) {
+    if (plugin.compatibilityError) summary.textContent = plugin.compatibilityError;
+    if (plugin.bundled) {
+      const hasSummary = scoped ? !!summary.textContent : sessions.length || plugin.compatibilityError;
+      summary.textContent = hasSummary ? `${t('plugins.includedSource')} · ${summary.textContent}` : t('plugins.includedSource');
+    }
+    item.append(head);
+    if (source.textContent) item.append(source);
+    if (summary.textContent) item.append(summary);
+    // Activation can fail before a scoped conversation ever exists, so the
+    // session inventory cannot report this error.
+    if (!plugin.builtin && !plugin.compatibilityError) {
+      const failure = node('pre', 'plugin-application-error');
+      failure.dataset.pluginApplicationId = plugin.id;
+      failure.hidden = true;
+      item.append(failure);
+    }
+    if (diagnosticSessions.length) {
       const details = node('details', 'plugin-details');
       details.append(node('summary', '', t('plugins.sessionState')));
-      for (const session of sessions) {
+      for (const session of diagnosticSessions) {
         const row = node('div', 'plugin-session');
         row.append(node('span', '', session.title), node('span', 'plugin-status', t(`plugins.${session.state}`)));
         if (session.error) row.append(node('pre', 'plugin-error', session.error));
@@ -139,6 +167,7 @@ function render(plugins, restorable = []) {
     if (editor) item.append(editor);
     (plugin.builtin ? builtinSection : list).append(item);
   }
+  renderApplicationErrors(features.snapshot());
   refreshFeatureRows();
   if (field) {
     const input = document.getElementById(field.id);

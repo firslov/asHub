@@ -13,7 +13,10 @@ html,body.backend-workspace { height:100%; overflow:hidden; }
 #sessions{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;overscroll-behavior:contain;}
 #sessions h3{margin:18px 8px 5px;font-size:11px;font-weight:500;color:var(--text-dim);}
 #sessions button{display:block;max-width:100%;width:100%;border:0;background:transparent;text-align:left;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;margin:2px 0;padding:8px 10px;font-size:13px;}
+#sessions button.bw-dedicated-session{min-height:38px;padding-inline:11px;border:1px solid var(--border);background:var(--bg-elevated);font-weight:600;}
+#sessions button.bw-dedicated-session:hover{background:var(--bg3);}
 #sessions button.active{background:var(--accent-soft);color:var(--accent);font-weight:550;}
+#sessions button.bw-dedicated-session.active{border-color:var(--accent-border);background:var(--accent-soft);}
 .backend-workspace main{margin:10px 10px 10px 0;border:1px solid var(--border);border-radius:20px;background:var(--bg);min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;}
 .backend-workspace main>header{display:flex;align-items:center;gap:12px;padding:16px 24px;border-bottom:1px solid var(--border);}
 .backend-workspace main>header>div{flex:1;min-width:0;}#title{font-size:15px;font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}#connection{font-size:11px;color:var(--text-dim);}

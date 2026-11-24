@@ -48,7 +48,13 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
     const fields = [];
     for (const component of definition.components) {
       if (component.type === 'resource') {
-        const resource = node('div', 'extension-resource-host');body.append(resource);disposers.push(mountResource(resource, feature, component.id, {openConversation:openTab}));
+        const resource = node('div', 'extension-resource-host');body.append(resource);
+        disposers.push(mountResource(resource, feature, component.id, {openConversation:openTab, onTitle(title) {
+          if (!title) return;
+          heading.textContent = trigger.title = title;
+          trigger.setAttribute('aria-label', title);
+          close.setAttribute('aria-label', t('features.close'));
+        }}));
       } else if (component.type === 'text' || component.type === 'status') {
         const block = node('p', component.type === 'text' ? 'extension-text' : `extension-status tone-${component.tone || 'neutral'}`, component.text);
         if (component.type === 'status') block.setAttribute('role', 'status'); body.append(block);

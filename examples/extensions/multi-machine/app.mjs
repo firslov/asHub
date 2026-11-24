@@ -1,9 +1,26 @@
 import { DeviceSharing } from './sharing.mjs';
 import { RemoteAccount } from './client.mjs';
+import { QrCode } from './vendor-qrcodegen.mjs';
 const action = (id, label, values = {}) => ({ id, label, values });
 const stateLabels = { online: '在线', revoked: '授权已撤销，请重新验证', replaced: '连接已被接替', error: '连接异常', connecting: '连接中' };
 const rootsOf = value => [...new Set(String(value || '').split('\n').map(x => x.trim()).filter(Boolean))];
 const impact = '新增目录中的对话将对手机和其他电脑可见；移除目录后，仅不再被任何已授权目录（含其子目录）覆盖的对话会隐藏。不会删除本地对话，也不会改变工具权限。保存后远程连接会短暂重连。';
+
+function publicMobileEntry(gateway) {
+    try {
+        const url = new URL(gateway || 'https://ashub.aihao.world/mobile/');
+        if (url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash) return url.href;
+    } catch {}
+    return '';
+}
+
+function mobileEntryQr(entry) {
+    if (!entry || entry.length > 512) return undefined;
+    const qr = QrCode.encodeText(entry, QrCode.Ecc.MEDIUM);
+    const modules = Array.from({ length: qr.size }, (_, y) =>
+        Array.from({ length: qr.size }, (_, x) => qr.getModule(x, y) ? '1' : '0').join(''));
+    return { label: '用手机相机扫码打开', modules };
+}
 
 // Account policy, presentation and directory-change semantics belong to the plugin.
 // The host only renders bounded controls and confirms the actual directory grant.
@@ -52,18 +69,22 @@ export function connectionResource(account, sharing) {
                 ...(r.device.online || unknown ? { primaryAction: 'open' } : {}),
             });
         }
-        if (local) rows.push({ section: localSection, title: local.deviceName || '本机',
-            status: (local.username ? '共享账号：' + local.username + ' · ' : '') + (local.enabled ? stateLabels[local.status] || '等待连接' : '已关闭'),
-            detail: [local.error, sharing.recovery ? '请保存账号恢复码：' + sharing.recovery : '',
-                '已授权目录：\n' + (local.roots.join('\n') || '尚未授权'),
-                '本机共享同时供手机和其他电脑使用。关闭后，两者均无法访问本机；本地对话及连接其他电脑不受影响。',
-                '手机入口：' + (local.gateway || 'https://ashub.aihao.world/mobile/')].filter(Boolean).join('\n\n'),
-            inlineActions: true, actions: [
-                ...(local.enabled ? [action('edit-sharing', '设置共享目录'), action('disable-sharing', '关闭本机访问'), action('bind-sharing', '重新验证 / 切换共享账号')]
-                    : [action('bind-sharing', '允许访问本机')]),
-                ...(sharing.recovery ? [action('ack-recovery', '恢复码已保存')] : []),
-            ],
-        });
+        if (local) {
+            const entry = publicMobileEntry(local.gateway);
+            if (entry) rows.push({ section: localSection, title: '手机入口', detail: entry,
+                qr: mobileEntryQr(entry), actions: [] });
+            rows.push({ section: localSection, title: local.deviceName || '本机',
+                status: (local.username ? '共享账号：' + local.username + ' · ' : '') + (local.enabled ? stateLabels[local.status] || '等待连接' : '已关闭'),
+                detail: [local.error, sharing.recovery ? '请保存账号恢复码：' + sharing.recovery : '',
+                    '已授权目录：\n' + (local.roots.join('\n') || '尚未授权'),
+                    '本机共享同时供手机和其他电脑使用。关闭后，两者均无法访问本机；本地对话及连接其他电脑不受影响。'].filter(Boolean).join('\n\n'),
+                inlineActions: true, actions: [
+                    ...(local.enabled ? [action('edit-sharing', '设置共享目录'), action('disable-sharing', '关闭本机访问'), action('bind-sharing', '重新验证 / 切换共享账号')]
+                        : [action('bind-sharing', '允许访问本机')]),
+                    ...(sharing.recovery ? [action('ack-recovery', '恢复码已保存')] : []),
+                ],
+            });
+        }
         return { actions: [], rows };
     };
     return { view, onReveal: account.showDevices, prepare: async (id, values) => {

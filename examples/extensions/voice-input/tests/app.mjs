@@ -56,7 +56,7 @@ test('TokenHub config is inferred from the exact endpoint, with safe legacy rest
  await transcribe({...config,model:hunyuan.model},audio(),async(_,opts)=>{assert(opts.body instanceof FormData);return Response.json({text:'compatible provider'});});
  let registered,resource;const saved=JSON.stringify(hunyuan);
  activate({signal:new AbortController().signal,services:{secrets:{read:()=>saved},interactions:{register:(_,r)=>resource=r},composerInputs:{supportsPcmWav:true, register:(_,r)=>{registered=r;return()=>{};}}}});
- assert(registered);assert(!JSON.stringify(resource.view()).includes(hunyuan.apiKey));assert.match(resource.view().note,/TokenHub API Key/);
+ assert(registered);assert(!JSON.stringify(resource.view()).includes(hunyuan.apiKey));assert.match(resource.view().form.guidance.find(g=>g.summary).detail,/TokenHub API Key/);
 });
 test('TokenHub failures do not leak response bodies, retry, or accept partial/wrong output',async()=>{
  for(const status of [401,403,429,500]) {
@@ -89,6 +89,68 @@ function configuredSettings() {
  }});
  return {resource,lifecycle,set failWrites(value){failWrites=value;},get saved(){return saved;},get active(){return active;},get registrations(){return registrations;},get disposals(){return disposals;}};
 }
+test('composer descriptors include English guidance and retain the configured destination', async () => {
+ const f = configuredSettings();
+ assert.equal(f.active.label, '语音输入');
+ assert.equal(f.active.labelEn, 'Voice input');
+ assert.match(f.active.descriptionEn, /tokenhub\.tencentmaas\.com.*draft only/);
+ (await f.resource.prepare('save', {mode:'default'})).execute();
+ assert.match(f.active.descriptionEn, /asHub and Tencent Hunyuan/);
+ assert(!JSON.stringify(f.active).includes(hunyuan.apiKey));
+ const hostname = [63, 63, 63, 61].map(length => 'a'.repeat(length)).join('.');
+ const host = hostname + ':65535';
+ (await f.resource.prepare('save', {mode:'custom', endpoint:`https://${host}/transcribe`, model:'fixture', apiKey:'fixture-key'})).execute();
+ assert(f.active.descriptionEn.includes(host));
+ assert(f.active.descriptionEn.length <= 300, 'the longest accepted endpoint fits the host label limit');
+});
+test('transcription failures expose stable codes without provider response details', async () => {
+ const wav = {...audio(), mimeType:'audio/wav'};
+ const noUpload = async () => assert.fail('unexpected audio upload');
+ const errorResponse = status => async () => new Response('private provider detail', {status});
+ const cases = [
+  ['formatUnsupported', transcribe(config, {...audio(), mimeType:'text/plain'}, noUpload)],
+  ['providerAuth', transcribe(config, audio(), errorResponse(401))],
+  ['hunyuanAuth', transcribe(hunyuan, audio(), errorResponse(403))],
+  ['providerFailure', transcribe(config, audio(), errorResponse(502))],
+  ['providerEmpty', transcribe(config, audio(), async () => new Response(null))],
+  ['providerTooLarge', transcribe(config, audio(), async () => new Response('a'.repeat(128001)))],
+  ['providerInvalid', transcribe(config, audio(), async () => new Response('{'))],
+  ['hunyuanIncomplete', transcribe(hunyuan, audio(), async () => Response.json({status:'processing'}))],
+  ['freeWav', transcribeWithDefault(audio(), noUpload)],
+  ['freeNetwork', transcribeWithDefault(wav, async () => { throw Error('private provider detail'); })],
+  ['freeQuota', transcribeWithDefault(wav, errorResponse(429))],
+  ['freeUnavailable', transcribeWithDefault(wav, errorResponse(503))],
+ ];
+ await Promise.all(cases.map(([code, failure]) => assert.rejects(failure, error => error.code === code && !error.message.includes('private provider detail'))));
+});
+test('settings and previews use the requested locale without changing secret handling', async () => {
+ const f = configuredSettings(), en = {locale:'en'}, zh = {locale:'zh'};
+ const english = f.resource.view(en), chinese = f.resource.view();
+ assert.equal(english.title, 'Voice input');
+ assert.equal(chinese.title, '语音输入');
+ assert.equal(english.form.submit, 'Save');
+ assert.equal(english.form.fields[0].options[1].label, 'Custom transcription');
+ const [free, custom, hunyuanHelp, draftHelp] = english.form.guidance;
+ assert.equal(free.after, 'mode');
+ assert.deepEqual(free.when, {field:'mode', values:['default']});
+ assert.match(free.detail, /Tencent Hunyuan.*shared quota.*No API key/);
+ assert.equal(custom.after, 'mode');
+ assert.deepEqual(custom.when, {field:'mode', values:['custom']});
+ assert.match(custom.detail, /directly to your endpoint.*may charge/);
+ assert.equal(hunyuanHelp.summary, 'Tencent Hunyuan setup');
+ assert.deepEqual(hunyuanHelp.when, custom.when);
+ for (const value of [hunyuan.endpoint, hunyuan.model, 'TokenHub API key']) assert(hunyuanHelp.detail.includes(value));
+ assert.match(draftHelp.detail, /draft.*Mobile access uses this computer/);
+ assert(!JSON.stringify(english).includes(hunyuan.apiKey));
+ await assert.rejects(f.resource.prepare('save', {...hunyuan, endpoint:'http://example.test'}, en), /Use HTTPS/);
+ await assert.rejects(f.resource.prepare('save', {...hunyuan, endpoint:'http://example.test'}, zh), /必须使用 HTTPS/);
+ const prepared = await f.resource.prepare('save', {mode:'custom', endpoint:hunyuan.endpoint, model:hunyuan.model}, en);
+ assert.equal(prepared.preview.title, 'Configure voice input');
+ assert(!JSON.stringify(prepared.preview).includes(hunyuan.apiKey));
+ assert.equal(prepared.execute(undefined, zh).title, '语音输入');
+ assert.deepEqual(JSON.parse(f.saved), hunyuan);
+ assert.equal((await f.resource.prepare('clear', {}, en)).preview.title, 'Clear custom transcription settings');
+});
 test('a stale save confirmation cannot restore a cleared TokenHub credential',async()=>{
  const f=configuredSettings();
  const oldSave=await f.resource.prepare('save',{endpoint:hunyuan.endpoint,model:hunyuan.model});

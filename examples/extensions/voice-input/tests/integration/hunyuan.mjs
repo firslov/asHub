@@ -14,7 +14,7 @@ test('TokenHub plugin through desktop HTTP and real remote gateway: formats, sco
   if(String(url)!==config.endpoint)return originalFetch(url,opts);
   transforms++;assert.equal(opts.headers.Authorization,'Bearer '+expectedKey);assert.equal(opts.headers['Content-Type'],'application/json');assert.equal(opts.redirect,'error');
   assert.deepEqual(JSON.parse(opts.body),{model:config.model,data:Buffer.from('test audio').toString('base64')});
-  return new Promise(resolve=>finish=()=>resolve(Response.json({status:'completed',output:{text:'remote transcript'}})));
+  return new Promise(resolve=>finish=(response=Response.json({status:'completed',output:{text:'remote transcript'}}))=>resolve(response));
  };
  let settings,saved=JSON.stringify(config);
  const plugin=activate({signal:controller.signal,services:{secrets:{available:true,read:()=>saved,write:(_,value)=>saved=value},interactions:{register:(_,r)=>settings=r},composerInputs:media.bind('speech',controller.signal)}});
@@ -49,6 +49,8 @@ test('TokenHub plugin through desktop HTTP and real remote gateway: formats, sco
  // Exercise the same plugin from the desktop's local HTTP route first.
  const localBase='http://127.0.0.1:'+local.address().port;
  const [localInput]=await (await fetch(localBase+'/aaaa/composer-inputs')).json();
+ assert.equal(localInput.labelEn,'Voice input');
+ assert.match(localInput.descriptionEn,/tokenhub\.tencentmaas\.com/);
  for(const mimeType of ['audio/wav','audio/mp4; codecs=mp4a.40.2','audio/mp4;codecs=opus','audio/webm;codecs=opus','audio/ogg;codecs=opus']) {
   const route=localBase+'/aaaa/composer-inputs/'+localInput.id+'/'+randomUUID();
   const r=await fetch(route,{method:'POST',body:JSON.stringify({revision:localInput.revision,data:Buffer.from('test audio').toString('base64'),mimeType})});
@@ -58,6 +60,8 @@ test('TokenHub plugin through desktop HTTP and real remote gateway: formats, sco
  const beforeRemote=transforms;
  const rpc=(args,cookie=user.cookie)=>request('api/devices/'+identity.deviceId+'/rpc',{op:'composer-input',args:{session:'aaaa',...args}},cookie);
  const list=await rpc({action:'list'});assert.equal(list.status,200,JSON.stringify(list));assert.equal(list.data.length,1);
+ assert.equal(list.data[0].labelEn,localInput.labelEn);
+ assert.equal(list.data[0].descriptionEn,localInput.descriptionEn);
  assert.equal((await rpc({action:'list'},other.cookie)).status,404);assert.equal((await rpc({action:'list',session:'bbbb'})).status,403);
  const [input]=list.data,args={input:input.id,requestId:randomUUID(),revision:input.revision,data:Buffer.from('test audio').toString('base64'),mimeType:'audio/mp4'};
  assert.equal((await rpc({...args,action:'start'})).data.state,'pending');assert.equal((await rpc({...args,action:'start'})).data.state,'pending');assert.equal(transforms,beforeRemote+1);
@@ -99,6 +103,15 @@ test('TokenHub plugin through desktop HTTP and real remote gateway: formats, sco
  const obsoleteResult=(await rpc({...obsolete,action:'status'})).data;assert.equal(obsoleteResult.state,'cancelled');assert.equal(obsoleteResult.text,undefined);
  assert.equal((await rpc({...rerecorded,action:'status'})).data.state,'pending');rerecordedFinish();
  await wait(async()=>(await rpc({...rerecorded,action:'status'})).data.state==='done');assert.equal((await rpc({...rerecorded,action:'status'})).data.text,'remote transcript');
+ const rejected={...rerecorded,requestId:randomUUID()};
+ assert.equal((await rpc({...rejected,action:'start'})).data.state,'pending');
+ finish(new Response('private provider detail',{status:403}));
+ const failure=await wait(async()=>{
+  const result=(await rpc({...rejected,action:'status'})).data;
+  if(result.state==='error')return result;
+ });
+ assert.equal(failure.errorCode,'hunyuanAuth');assert.match(failure.error,/TokenHub API Key/);
+ assert(!JSON.stringify(failure).includes('private provider detail'));
  assert(!fs.existsSync(path.join(dir,'remote-requests.json')),'media/audio are not journaled as message sends');
  bound.revoke(grant);assert.notEqual((await rpc({action:'list'})).status,200);
 });

@@ -162,6 +162,16 @@ test('skill install serializes target mutations and shutdown drains accepted wor
   assert.equal(finished, true); assert.equal(service.pendingCount, 0);
 });
 
+test('skill install distinguishes missing Git and never invokes the command runner', async () => {
+  const e = env(); let commands = 0;
+  const service = market(e, { resolveCommand: () => undefined, execFile: () => { commands++; throw Error('must not run'); } });
+  const result = await invoke(service, 'installSkill', { id: 'github:owner/demo' });
+  assert.equal(result.statusCode, 500); assert.match(result.json().error, /Git is not available/); assert.equal(commands, 0);
+  const legacy = path.join(e.dir, 'skills/legacy'); skill(legacy); fs.mkdirSync(path.join(legacy, '.git'));
+  const listed = await invoke(service, 'listInstalledSkills', {}, '/api/skills/installed');
+  assert.equal(listed.statusCode, 200); assert(listed.json().installed.some(item => item.name === 'legacy'));
+});
+
 test('sparse skill update rollback retains the old skill and releases the operation lock', async () => {
   let rejectRename = true;
   const e = env({ modules: { 'node:fs': { ...fs, promises: { ...fs.promises, rename: async (source, dest) => {

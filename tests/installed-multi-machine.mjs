@@ -10,7 +10,8 @@ const {PluginInstaller}=await import('../dist/plugin-installer.js'),{installedAp
 test.after(()=>fs.rmSync(home,{recursive:true,force:true}));
 test('real optional ZIP validates, installs and activates application service without any session extension',async t=>{
  const settings=path.join(home,'settings.json');fs.writeFileSync(settings,'{}');const installer=new PluginInstaller(settings);t.after(()=>installer.close());
- const root=new URL('../examples/extensions/multi-machine/',import.meta.url),files=['package.json','package-lock.json','ashub-plugin.json','app.mjs','client.mjs','sharing.mjs','publisher.mjs','transport.mjs','README.md'];
+ const root=new URL('../examples/extensions/multi-machine/',import.meta.url);
+ const pkg=JSON.parse(fs.readFileSync(new URL('package.json',root),'utf8')),files=['package.json',...pkg.files];
  const bytes=zip(Object.fromEntries(files.map(name=>['multi/'+name,fs.readFileSync(new URL(name,root),'utf8')])));
  const preview=await installer.preview(bytes);assert(preview.canInstall,JSON.stringify(preview.checks));const job=installer.confirm(preview.token);
  for(let i=0;i<600&&installer.status(job.id).state==='running';i++)await new Promise(r=>setTimeout(r,50));assert.equal(installer.status(job.id).state,'succeeded',installer.status(job.id).error);
@@ -18,7 +19,7 @@ test('real optional ZIP validates, installs and activates application service wi
  const signal=new AbortController(),backends=new BackendConnections({signal:signal.signal}),resources=new Map();
  const definitions=()=>installedApplicationDefinitions(settings,{bindServices:(_id,ctx)=>({backends:backends.bind(_id,ctx.signal),sharedConversations:{registerStatus(){},open(){throw Error('No grant');}},interactions:{register:(id,resource)=>resources.set(id,resource)}})});
  const registry=new ApplicationExtensionRegistry({settingsFile:settings,definitions:[],discover:definitions});t.after(async()=>{signal.abort();await registry.close();});await registry.start();
- const feature=registry.snapshot().features.find(f=>f.pluginId===entry.id);await registry.setPluginEnabled(entry.id,true);const resource=resources.get('connections');assert(resource);const initial=resource.view();assert(!initial.form);const view=await(await resource.prepare('connect-account',{})).execute();assert(view.form.fields.some(f=>f.type==='password'));assert.equal(backends.list().length,0);
+ const feature=registry.snapshot().features.find(f=>f.pluginId===entry.id);await registry.setPluginEnabled(entry.id,true);const resource=resources.get('connections');assert(resource);const initial=resource.view();assert(!initial.form);assert(initial.rows.some(row=>row.qr?.modules.length>0));const view=await(await resource.prepare('connect-account',{})).execute();assert(view.form.fields.some(f=>f.type==='password'));assert.equal(backends.list().length,0);
  const plan=await resource.prepare('login',{username:'test',password:'private-test'});assert(!JSON.stringify(plan.preview).includes('private-test'));await assert.rejects(plan.execute(),/加密存储/);
  await registry.setEnabled(feature.id,false);assert.equal(backends.list().length,0);
 });

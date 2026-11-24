@@ -8,6 +8,7 @@ asHub owns the durable conversation model, project membership, host authorizatio
 | --- | --- | --- |
 | Composition and legacy adapters | Construct per-Hub services; retain existing HTTP/Bridge contracts | `src/hub.ts` |
 | Core services | Session registry, creation/restoration, model configuration, project commands and source-bound host operations | `src/services/` |
+| Runtime environment | Bounded external-tool discovery, fixed-argument version probes and setup path injection without mutating global PATH | `src/services/runtime-environment.ts` |
 | Transport | Versioned host queries/events, project and optional feature HTTP adapters | `src/transport/` |
 | Application extensions | One lifecycle per Hub, installed manifest discovery, enable state, compatibility and cleanup | `src/extensions/` |
 | Session extensions | Register tools/providers with each agent-sh kernel, bind host calls to the requesting conversation | `src/plugin-runtime.ts`, `src/bridges/ash.ts` |

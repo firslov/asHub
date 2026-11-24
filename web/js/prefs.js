@@ -3,6 +3,7 @@ import { lang, setLang, t } from "./i18n.js";
 const LS_THEME = "ash-theme";
 const LS_SIDEBAR = "ash.sidebar-collapsed";
 const LS_SIDEBAR_W = "ash.sidebar-width";
+const LS_TOOL_LABELS = "ash.toolbar.labels";
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 480;
 
@@ -69,11 +70,24 @@ try {
 
 themeToggle?.addEventListener("click", toggleTheme);
 document.addEventListener("langchange", updateThemeLabel);
+const toolLabels = document.getElementById("rail-labels-toggle");
+const showToolLabels = (shown) => {
+  if (shown) document.documentElement.dataset.toolLabels = "";
+  else delete document.documentElement.dataset.toolLabels;
+  toolLabels?.setAttribute("aria-pressed", String(shown));
+};
+try { showToolLabels(localStorage.getItem(LS_TOOL_LABELS) === "1"); } catch {}
+toolLabels?.addEventListener("click", () => {
+  const shown = toolLabels.getAttribute("aria-pressed") !== "true";
+  showToolLabels(shown);
+  try { localStorage.setItem(LS_TOOL_LABELS, shown ? "1" : "0"); } catch {}
+});
 // Detached tabs share the preference; avoid writing it back on a storage event.
 window.addEventListener("storage", (event) => {
   if (event.key === LS_THEME && THEMES.includes(event.newValue ?? "")) {
     setTheme(event.newValue, false);
   }
+  if (event.key === LS_TOOL_LABELS || event.key === null) showToolLabels(event.newValue === "1");
 });
 
 const setSidebarCollapsed = (on, persist = true) => {

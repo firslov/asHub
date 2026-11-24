@@ -8,10 +8,31 @@ test('separate overview sections, explicit sharing controls and phone entry with
  const resource=connectionResource(account,sharing);assert.equal(resource.remote,undefined);
  const view=resource.view();assert(!view.form);assert.deepEqual([...new Set(view.rows.map(r=>r.section))],['访问其他电脑','允许其他设备访问本机']);
  assert.equal(view.rows[0].title,'controller');account.user='';assert.equal(resource.view().rows[0].title,'已登录连接账号','restored credentials without a username must not look signed out');const local=view.rows.at(-1);assert.match(local.status,/publisher/);assert(local.inlineActions);
- assert(local.actions.some(a=>a.id==='disable-sharing'));assert(!local.actions.some(a=>a.id==='copy-entry'));assert.match(local.detail,/https:\/\/example.test\/mobile\//);
+ assert(local.actions.some(a=>a.id==='disable-sharing'));assert(!local.actions.some(a=>a.id==='copy-entry'));assert.match(view.rows.find(r=>r.title==='手机入口').detail,/https:\/\/example.test\/mobile\//);
  await (await resource.prepare('open',{device})).execute();assert.deepEqual(opened,[device]);
  await assert.rejects(resource.prepare('open',{device:'https://untrusted.invalid'}),/无效/);
  account.records.get(device).device.online=false;assert.deepEqual(resource.view().rows[1].actions,[]);
+});
+test('phone QR follows the public gateway and excludes credentials and private state',()=>{
+ const account={cookie:'controller-credential',user:'controller',records:new Map()};
+ const local={gateway:'https://example.test/mobile/',enabled:true,status:'online',roots:['/private-root'],username:'publisher'};
+ const resource=connectionResource(account,{status:()=>local,recovery:'account-recovery'});
+ const row=()=>resource.view().rows.find(r=>r.title==='手机入口');
+ const first=row().qr;
+ assert(first.label);assert(first.modules.length>=21);
+ assert(first.modules.every(r=>r.length===first.modules.length && /^[01]+$/.test(r)));
+ assert.equal(row().detail,'https://example.test/mobile/');
+ local.gateway='https://example.test/another/';
+ assert.notDeepEqual(row().qr.modules,first.modules);
+ local.gateway='https://example.test/mobile/';
+ account.cookie='different-token';local.username='different-account';local.roots=['/other-root'];
+ assert.deepEqual(row().qr,first);
+ for(const invalid of ['https://user:secret@example.test/mobile/', 'https://example.test/?token=secret', 'https://example.test/#secret', 'http://localhost/mobile/', 'javascript:secret']) {
+  local.gateway=invalid;
+  assert.equal(row(),undefined);assert.doesNotMatch(JSON.stringify(resource.view()),/secret|localhost/);
+ }
+ local.gateway='https://example.test/'+ 'a'.repeat(520);
+ assert.equal(row().qr,undefined);assert(row().detail.includes(local.gateway));
 });
 test('daily directory edit is separate, cancellation is inert, delta is reviewed and sharing/account operations stay independent',async()=>{
  let configured,updated,disabled=0,revision={};

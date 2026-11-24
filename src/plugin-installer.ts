@@ -8,7 +8,8 @@ import { satisfies, validRange } from 'semver';
 import { updateSettingsFile } from './settings-store.js';
 import { PLUGIN_AUTO_APPROVE } from './plugin-approvals.js';
 import { pluginCatalog, readPluginSettings, bundledPluginId, includedPackageIds, restorableApps, BUNDLED_ENABLED, BUNDLED_REMOVED, PLUGIN_DISABLED, PLUGIN_ENTRY_FILES } from './plugins.js';
-import { readPluginManifest, pluginCompatibility, validatePluginEntries, type NormalizedPluginManifest } from './extensions/manifest.js';
+import { readPluginManifest, pluginCompatibility, packageMetadataCompatibility, validatePluginEntries, type NormalizedPluginManifest } from './extensions/manifest.js';
+import { RuntimeEnvironment, type RuntimeProvider } from './services/runtime-environment.js';
 
 export const MAX_PLUGIN_ZIP = 32 * 1024 * 1024;
 const MAX_EXPANDED = 128 * 1024 * 1024, TTL = 30 * 60_000;
@@ -28,9 +29,9 @@ function relative(v: unknown): string {
 }
 function atLeast(actual: string, minimum: string) {
   if (!version.test(actual) || !/^\d+\.\d+\.\d+$/.test(minimum)) return false;
-  const a = actual.split(/[.+-]/).slice(0, 3).map(Number), b = minimum.split('.').map(Number);
-  for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i]! > b[i]!; }
-  return !actual.includes('-');
+  // Keep preview checks consistent with the catalog's SemVer constraints:
+  // build metadata does not lower a release, and prereleases need explicit opt-in.
+  return satisfies(actual, `>=${minimum}`);
 }
 async function extractZip(data: Buffer, dest: string) {
   const zip = await new Promise<yauzl.ZipFile>((resolve, reject) => yauzl.fromBuffer(data, { lazyEntries: true, strictFileNames: true }, (e, z) => e ? reject(e) : resolve(z!)));
@@ -63,9 +64,15 @@ async function extractZip(data: Buffer, dest: string) {
   });
 }
 interface Check { label: string; ok: boolean; detail: string }
+interface EnvironmentCheck {
+  checks: Check[];
+  setupEnv: NodeJS.ProcessEnv;
+  revision: string;
+}
 interface Plan {
-  token: string; directory: string; packageRoot: string; id: string; name: string; version: string; entry?: string; manifestFingerprint?: string; packageMetadata: string;
-  manifest?: NormalizedPluginManifest; nodeRange?: string; npm: boolean; target: string; previous: string; expiresAt: number; checks: Check[];
+  token: string; requestId?: string; directory: string; packageRoot: string; id: string; name: string; version: string; entry?: string; manifestFingerprint?: string; packageMetadata: string;
+  manifest?: NormalizedPluginManifest; nodeRange?: string; packageOs?: unknown; packageCpu?: unknown;
+  npm: boolean; target: string; previous: string; expiresAt: number; environment: EnvironmentCheck; environmentRefresh: number;
 }
 export interface PluginInstalledNotice { readonly jobId: string; readonly packageId: string; readonly name: string; readonly version: string; readonly target: string }
 interface Job { notificationError?: string; id: string; name: string; version: string; state: 'running' | 'succeeded' | 'failed'; step: string; error?: string; backup?: string; restartRequired: boolean }
@@ -92,17 +99,21 @@ function fingerprint(target: string): string {
   if (!st.isDirectory() || st.isSymbolicLink()) throw Error('Existing installation is not a managed directory');
   return createHash('sha256').update(`${st.dev}:${st.ino}:`).update(fs.readFileSync(path.join(target, 'package.json'))).digest('hex');
 }
-function npmCLI(): string | undefined {
-  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
-    if (!dir || !path.isAbsolute(dir)) continue;
-    for (const file of [path.join(dir, 'node_modules/npm/bin/npm-cli.js'), path.join(dir, '../lib/node_modules/npm/bin/npm-cli.js'), path.join(dir, 'npm')]) {
-      try { const real = fs.realpathSync(file); if (real.endsWith('npm-cli.js') && fs.statSync(real).isFile()) return real; } catch {}
-    }
-  }
+// Runtime providers may be injected or take time to terminate. Cancellation
+// ends the preview promptly while the real provider also receives the signal.
+function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => { cleanup(); reject(signal.reason); };
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    signal.addEventListener('abort', abort, { once: true });
+    task.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+    if (signal.aborted) abort();
+  });
 }
-export async function runPluginSetup(script: string, args: string[], cwd: string, home: string, dataDir: string, signal: AbortSignal) {
+export async function runPluginSetup(script: string, args: string[], cwd: string, home: string, dataDir: string, signal: AbortSignal, extraEnv: NodeJS.ProcessEnv = {}) {
   signal.throwIfAborted();
-  const childEnv: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', AGENT_SH_HOME: home, ASHUB_PLUGIN_DATA: dataDir };
+  const env = { ...process.env, ...extraEnv, ELECTRON_RUN_AS_NODE: '1', AGENT_SH_HOME: home, ASHUB_PLUGIN_DATA: dataDir };
+  const childEnv = new RuntimeEnvironment({ env }).commandEnvironment();
   // npm 12 rejects inherited CLI script policies for project installs, even
   // with --ignore-scripts. This invocation deliberately runs no lifecycle
   // scripts; retain registry/proxy settings and leave the parent env untouched.
@@ -132,19 +143,20 @@ export class PluginInstaller {
   private jobs = new Map<string, Job>();
   private active?: Promise<void>;
   private previews = 0;
+  private previewRefreshSequence = 0;
   private previewTasks = new Set<Promise<unknown>>();
+  private previewRequests = new Map<string, ReturnType<PluginInstaller['previewStatus']>>();
   private closing?: Promise<void>;
   private controller = new AbortController();
   private base: string;
   constructor(private settingsFile: string, private run = runPluginSetup, private platform: string = process.platform, private inUse: (target: string) => boolean = () => false,
-    private onInstalled?: (notice: PluginInstalledNotice) => void | Promise<void>, private notificationTimeoutMs = 10_000) {
+    private onInstalled?: (notice: PluginInstalledNotice) => void | Promise<void>, private notificationTimeoutMs = 10_000,
+    private runtimes: RuntimeProvider = new RuntimeEnvironment()) {
     if (!Number.isFinite(notificationTimeoutMs) || notificationTimeoutMs <= 0) throw new Error('Invalid installation notification timeout');
     this.base = path.join(path.dirname(settingsFile), 'plugin-install');
   }
   private cleanup() {
-    for (const [token, p] of this.plans) if (p.expiresAt < Date.now() && this.jobs.get(token)?.state !== 'running') {
-      fs.rmSync(p.directory, { recursive: true, force: true }); this.plans.delete(token); this.jobs.delete(token);
-    }
+    for (const [token, p] of this.plans) if (p.expiresAt < Date.now() && this.jobs.get(token)?.state !== 'running') this.removePlan(token);
   }
   private target(id: string, packageName: string): string {
     const root = path.join(path.dirname(this.settingsFile), 'extensions');
@@ -165,7 +177,7 @@ export class PluginInstaller {
     fingerprint(target);
     return target;
   }
-  private checks(p: Plan): Check[] {
+  private staticChecks(p: Plan): Check[] {
     const m = p.manifest, checks: Check[] = [];
     const included = p.previous ? undefined : pluginCatalog(this.settingsFile).find(app => app.bundled && app.packageName === p.id);
     const previousSource = p.previous ? p.target : included?.packageRoot;
@@ -173,8 +185,11 @@ export class PluginInstaller {
     checks.push({ label: 'platform', ok: !m?.platforms || m.platforms.includes(this.platform), detail: m?.platforms?.join(', ') ?? 'Any' });
     checks.push({ label: 'node', ok: atLeast(process.versions.node, m?.minNode ?? '22.12.0') && (!p.nodeRange || satisfies(process.versions.node, p.nodeRange)), detail: `Node ${process.versions.node} / ${p.nodeRange ?? '>= ' + (m?.minNode ?? '22.12.0')}` });
     if (m) {
-      const compatibility = pluginCompatibility(m, { platform: this.platform });
+      const compatibility = pluginCompatibility(m, { platform: this.platform, nodeRange: p.nodeRange, packageOs: p.packageOs, packageCpu: p.packageCpu });
       checks.push({ label: 'host', ok: compatibility.compatible, detail: compatibility.errors.join('; ') || 'Host API and requested capabilities supported' });
+    } else if (p.packageOs !== undefined || p.packageCpu !== undefined) {
+      const compatibility = packageMetadataCompatibility({ platform: this.platform, packageOs: p.packageOs, packageCpu: p.packageCpu });
+      checks.push({ label: 'host', ok: compatibility.compatible, detail: compatibility.errors.join('; ') || 'Package platform requirements supported' });
     }
     const installed = m?.dependencies.length ? pluginCatalog(this.settingsFile, { platform: this.platform }) : [];
     for (const dep of m?.dependencies ?? []) {
@@ -189,19 +204,62 @@ export class PluginInstaller {
       }
       checks.push({ label: 'dependency', ok, detail: `${dep.id} >= ${dep.minVersion}${found ? ` (${found})` : ''}` });
     }
-    if (p.npm) checks.push({ label: 'npm', ok: !!npmCLI(), detail: 'npm ci --omit=dev --ignore-scripts --no-audit --no-fund' });
     return checks;
   }
-  preview(data: Buffer) {
-    const task = this.createPreview(data);
+  private async checkEnvironment(p: Plan): Promise<EnvironmentCheck> {
+    const signal=this.controller.signal; signal.throwIfAborted();
+    const checks = this.staticChecks(p), setupEnv: NodeJS.ProcessEnv = {};
+    const runtimes: Array<[kind: string, location: string | undefined, version: string | undefined]> = [];
+    if (p.npm) {
+      const npm = await abortable(this.runtimes.probeNpm(signal),signal);
+      checks.push({ label: 'npm', ok: npm.ok, detail: npm.detail });
+      if (npm.ok && npm.path) setupEnv.ASHUB_NPM_CLI = npm.path;
+      runtimes.push(['npm', npm.path, npm.version]);
+    }
+    if (p.manifest?.system?.minMacOS && this.platform === 'darwin') {
+      const system = await abortable(this.runtimes.probeMacOS(p.manifest.system.minMacOS,signal),signal);
+      checks.push({ label: 'system', ok: system.ok, detail: system.detail });
+    }
+    for (const requirement of p.manifest?.runtimes ?? []) {
+      const runtime = await abortable(requirement.kind === 'python' ? this.runtimes.probePython(requirement.version,signal) : this.runtimes.probeGit(requirement.version,signal),signal);
+      checks.push({ label: 'runtime', ok: runtime.ok, detail: `${requirement.kind} ${requirement.version}: ${runtime.detail}` });
+      if (runtime.ok && runtime.path) setupEnv[requirement.kind === 'python' ? 'ASHUB_RUNTIME_PYTHON' : 'ASHUB_RUNTIME_GIT'] = runtime.path;
+      runtimes.push([requirement.kind, runtime.path, runtime.version]);
+    }
+    const revision = createHash('sha256').update(JSON.stringify(runtimes)).digest('hex');
+    return { checks, setupEnv, revision };
+  }
+  private prerequisites(p: Plan) {
+    const dynamic = p.environment.checks.filter(check => check.label === 'npm' || check.label === 'runtime' || check.label === 'system');
+    return [...this.staticChecks(p), ...dynamic].every(check => check.ok);
+  }
+  preview(data: Buffer, requestId?: string) {
+    if (requestId !== undefined && !/^[A-Za-z0-9-]{16,80}$/.test(requestId)) throw Error('Invalid preview request ID');
+    if (requestId) {
+      const existing = [...this.plans.values()].find(plan => plan.requestId === requestId);
+      if (existing) return this.previewStatus(existing.token, false);
+      const pending = this.previewRequests.get(requestId);
+      if (pending) return pending;
+    }
+    const task = this.createPreview(data, requestId);
     this.previewTasks.add(task);
+    if (requestId) {
+      this.previewRequests.set(requestId, task);
+      void task.then(() => this.previewRequests.delete(requestId), () => this.previewRequests.delete(requestId));
+    }
     void task.then(() => this.previewTasks.delete(task), () => this.previewTasks.delete(task));
     return task;
   }
-  private async createPreview(data: Buffer) {
+  private async createPreview(data: Buffer, requestId?: string) {
     this.controller.signal.throwIfAborted(); this.cleanup();
     if (!data.length || data.length > MAX_PLUGIN_ZIP) throw Error('ZIP must be between 1 byte and 32 MB');
-    if (this.plans.size + this.previews >= 3) throw Error('Close an existing installation preview first');
+    // Keep finished jobs available for polling without reserving staging slots.
+    let staged = this.previews;
+    for (const token of this.plans.keys()) {
+      const job = this.jobs.get(token);
+      if (!job || job.state === 'running') staged++;
+    }
+    if (staged >= 3) throw Error('Close an existing installation preview first');
     const token = randomUUID(), directory = path.join(this.base, 'staging', token), unpack = path.join(directory, 'unpack');
     this.previews++;
     try {
@@ -233,41 +291,76 @@ export class PluginInstaller {
         // The catalog ID and disabled setting are bound to the canonical entry.
         if (previousEntry && previousEntry !== (entry ?? 'index.mjs')) throw Error('Plugin entry changed; update this package manually to preserve its settings and enable state');
       }
-      const p: Plan = { token, directory, packageRoot: root, id: pkg.name, name: manifest?.name ?? pkg.name, version: pkg.version, entry, manifestFingerprint, packageMetadata: packageMetadata(pkg), manifest, nodeRange, npm,
-        target, previous: fingerprint(target), expiresAt: Date.now() + TTL, checks: [] };
-      p.checks = this.checks(p); this.plans.set(token, p);
-      return this.previewStatus(token);
+      const p: Plan = { token, requestId, directory, packageRoot: root, id: pkg.name, name: manifest?.name ?? pkg.name, version: pkg.version, entry, manifestFingerprint, packageMetadata: packageMetadata(pkg), manifest, nodeRange, packageOs: pkg.os, packageCpu: pkg.cpu, npm,
+        target, previous: fingerprint(target), expiresAt: Date.now() + TTL, environment: { checks: [], setupEnv: {}, revision: '' }, environmentRefresh: 0 };
+      p.environment = await this.checkEnvironment(p); this.controller.signal.throwIfAborted(); this.plans.set(token, p);
+      return await this.previewStatus(token, false);
     } catch (e) { this.plans.delete(token); fs.rmSync(directory, { recursive: true, force: true }); throw e; }
     finally { this.previews--; }
   }
-  previewStatus(token: string) {
+  previewStatus(token: string, refresh = true) {
+    const task = this.readPreviewStatus(token, refresh);
+    this.previewTasks.add(task);
+    void task.then(() => this.previewTasks.delete(task), () => this.previewTasks.delete(task));
+    return task;
+  }
+  private async readPreviewStatus(token: string, refresh = true) {
     this.cleanup();
     if (this.jobs.has(token)) throw Object.assign(Error('Installation already submitted'), { status: 409 });
     const p = this.plans.get(token);
     if (!p) throw Object.assign(Error('Preview expired; select the ZIP again'), { status: 404 });
     if (fingerprint(p.target) !== p.previous) throw Error('Installed plugin changed; select the ZIP again');
-    p.checks = this.checks(p);
-    return { token, name: p.name, version: p.version, target: p.target, previousVersion: p.previous ? json(path.join(p.target, 'package.json')).version : null,
-      legacy: !p.manifest, checks: p.checks, canInstall: p.checks.every(c => c.ok), npm: p.npm, setup: p.manifest?.setup ?? null,
-      manifest: p.manifest, compatibility: p.manifest ? pluginCompatibility(p.manifest, { platform: this.platform }) : undefined,
+    if (refresh) {
+      const sequence = ++this.previewRefreshSequence;
+      const environment = await this.checkEnvironment(p);
+      this.cleanup();
+      if (this.jobs.has(token)) throw Object.assign(Error('Installation already submitted'), { status: 409 });
+      if (this.plans.get(token) !== p) throw Object.assign(Error('Preview expired; select the ZIP again'), { status: 404 });
+      if (fingerprint(p.target) !== p.previous) throw Error('Installed plugin changed; select the ZIP again');
+      // A slower probe may have started before another window's completed refresh.
+      if (sequence > p.environmentRefresh) {
+        p.environment = environment;
+        p.environmentRefresh = sequence;
+      }
+    }
+    const { checks, revision: environmentRevision } = p.environment;
+    return { token, requestId: p.requestId, name: p.name, version: p.version, target: p.target, previousVersion: p.previous ? json(path.join(p.target, 'package.json')).version : null,
+      legacy: !p.manifest, checks, environmentRevision, canInstall: checks.every(c => c.ok), npm: p.npm, setup: p.manifest?.setup ?? null,
+      manifest: p.manifest, compatibility: p.manifest ? pluginCompatibility(p.manifest, { platform: this.platform, nodeRange: p.nodeRange, packageOs: p.packageOs, packageCpu: p.packageCpu }) : undefined,
       permissions: p.manifest?.permissions ?? [], defaults: p.manifest?.defaults ?? {}, expiresAt: p.expiresAt };
   }
+  async listPreviews(requestId: string) {
+    if (!/^[A-Za-z0-9-]{16,80}$/.test(requestId)) return [];
+    // The upload may still be checking runtimes after its window reloads.
+    await this.previewRequests.get(requestId);
+    this.cleanup();
+    return [...this.plans.values()].filter(plan => plan.requestId === requestId && !this.jobs.has(plan.token))
+      .map(plan => ({ token: plan.token, requestId: plan.requestId, name: plan.name, version: plan.version, expiresAt: plan.expiresAt }));
+  }
   discard(token: string) {
-    if (this.jobs.get(token)?.state === 'running') throw Error('Installation is running');
+    const job = this.jobs.get(token);
+    if (job?.state === 'running') throw Error('Installation is running');
+    // Closing a finished result in one window must not stop polling in others.
+    if (!job) this.removePlan(token);
+  }
+  private removePlan(token: string) {
     const p = this.plans.get(token); if (p) fs.rmSync(p.directory, { recursive: true, force: true });
     this.plans.delete(token); this.jobs.delete(token);
   }
   status(id: string) { this.cleanup(); const j = this.jobs.get(id); if (!j) throw Object.assign(Error('Installation not found; refresh the plugin list'), { status: 404 }); return { ...j }; }
-  confirm(token: string) {
+  confirm(token: string, environmentRevision?: string) {
     this.controller.signal.throwIfAborted(); this.cleanup();
-    const existing = this.jobs.get(token); if (existing) return { ...existing };
     const p = this.plans.get(token); if (!p) throw Error('Preview expired; select the ZIP again');
+    if (environmentRevision !== undefined && environmentRevision !== p.environment.revision) {
+      throw Object.assign(Error('Installation preview changed; refresh the preview and confirm again'), { status: 409 });
+    }
+    const existing = this.jobs.get(token); if (existing) return { ...existing };
     if (this.active) throw Error('Another plugin is being installed');
     if (fingerprint(p.target) !== p.previous) throw Error('Installed plugin changed; select the ZIP again');
-    if (!this.checks(p).every(c => c.ok)) throw Error('Resolve the prerequisites and select the ZIP again');
+    if (!this.prerequisites(p)) throw Error('Resolve the prerequisites and refresh the installation preview');
     const job: Job = { id: token, name: p.name, version: p.version, state: 'running', step: 'preparing', restartRequired: true };
     this.jobs.set(token, job);
-    this.active = this.install(p, job).finally(() => { this.active = undefined; });
+    this.active = this.install(p, job, p.environment).finally(() => { this.active = undefined; });
     return { ...job };
   }
   restore(id: string): void {
@@ -323,18 +416,31 @@ export class PluginInstaller {
       if (backup && target) fs.renameSync(backup, target);
       throw error;
     }
+    // Upgrade plans refer to the previous target fingerprint. Once removed,
+    // retire only affected plans so they no longer consume preview slots.
+    if (target) for (const [token, plan] of this.plans) {
+      if (plan.target !== target || this.jobs.has(token)) continue;
+      plan.expiresAt = 0;
+      try { this.removePlan(token); } catch { /* Expired cleanup can retry. */ }
+    }
   }
-  private async install(p: Plan, job: Job) {
+  private async install(p: Plan, job: Job, approved: EnvironmentCheck) {
     const home = path.dirname(this.settingsFile), signal = this.controller.signal;
     let backup: string | undefined, placed = false, committed = false;
     try {
+      job.step = 'checking'; const current = await this.checkEnvironment(p);
+      signal.throwIfAborted();
+      if (!current.checks.every(check => check.ok)) throw Error('External runtime prerequisites are no longer available; refresh the preview and retry');
+      if (current.revision !== approved.revision) throw Error('External runtime selection changed; select the ZIP again and confirm the new preview');
+      if (fingerprint(p.target) !== p.previous) throw Error('Installed plugin changed before setup');
+      if (!this.staticChecks(p).every(c => c.ok)) throw Error('A plugin dependency or active task changed before setup');
       const data = path.join(home, 'plugin-data', p.id); fs.mkdirSync(data, { recursive: true, mode: 0o700 });
       if (p.npm) {
-        job.step = 'dependencies'; const cli = npmCLI(); if (!cli) throw Error('npm is unavailable');
-        await this.run(cli, ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], p.packageRoot, home, data, signal);
+        job.step = 'dependencies'; const cli = approved.setupEnv.ASHUB_NPM_CLI; if (!cli) throw Error('npm is unavailable');
+        await this.run(cli, ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], p.packageRoot, home, data, signal, approved.setupEnv);
       }
       if (p.manifest?.setup) {
-        job.step = 'setup'; await this.run(path.join(p.packageRoot, p.manifest.setup.script), [], p.packageRoot, home, data, signal);
+        job.step = 'setup'; await this.run(path.join(p.packageRoot, p.manifest.setup.script), [], p.packageRoot, home, data, signal, approved.setupEnv);
       }
       signal.throwIfAborted(); job.step = 'validating';
       validateApprovedPackage(p);
@@ -351,16 +457,19 @@ export class PluginInstaller {
         if (!fs.statSync(path.join(p.packageRoot, entry)).isFile()) throw Error('Plugin entry missing after setup');
       }
       signal.throwIfAborted(); job.step = 'installing';
-      // Syntax checks are awaited, so repeat approval checks immediately before
-      // the synchronous placement/commit window as well.
+      const final = await this.checkEnvironment(p);
+      if (!final.checks.every(c => c.ok)) throw Error('A plugin dependency or external runtime changed during setup');
+      if (final.revision !== approved.revision) throw Error('External runtime selection changed during setup');
+      // Recheck the package after the final awaited probes, immediately before placement.
+      signal.throwIfAborted();
       validateApprovedPackage(p);
       if (p.manifest) {
         if (createHash('sha256').update(fs.readFileSync(path.join(p.packageRoot, 'ashub-plugin.json'))).digest('hex') !== p.manifestFingerprint) throw Error('Plugin manifest changed during setup');
         validatePluginEntries(p.packageRoot, p.manifest);
         if (p.manifest.schemaVersion === 1 && PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(p.packageRoot, n))) !== p.entry) throw Error('Plugin entry changed during setup');
       } else if (fs.existsSync(path.join(p.packageRoot, 'ashub-plugin.json')) || PLUGIN_ENTRY_FILES.find(n => fs.existsSync(path.join(p.packageRoot, n))) !== p.entry) throw Error('Plugin entry or manifest changed during setup');
-      if (fingerprint(p.target) !== p.previous) throw Error('Installed plugin changed during setup');
-      if (!this.checks(p).every(c => c.ok)) throw Error('A plugin dependency changed during setup');
+      if (fingerprint(p.target) !== p.previous) throw Error('Installed plugin changed during final runtime checks');
+      if (!this.staticChecks(p).every(c => c.ok)) throw Error('A plugin dependency or active task changed during final runtime checks');
       const replacedBundle = !p.previous && pluginCatalog(this.settingsFile).find(app => app.bundled && app.packageName === p.id);
       fs.mkdirSync(path.dirname(p.target), { recursive: true });
       if (p.previous) {
@@ -400,6 +509,11 @@ export class PluginInstaller {
       try { fs.rmSync(p.directory, { recursive: true, force: true }); } catch {}
     }
     if (committed) {
+      for (const [token, obsolete] of this.plans) {
+        if (obsolete.target !== p.target || this.jobs.has(token)) continue;
+        obsolete.expiresAt = 0;
+        try { this.removePlan(token); } catch { /* Retry when expired plans are cleaned up. */ }
+      }
       // Package and settings are already committed. Notification failure must
       // never roll back the package or turn a successful installation into failure.
       if (this.onInstalled) {
@@ -426,7 +540,7 @@ export class PluginInstaller {
       const results = await Promise.allSettled([active ?? Promise.resolve(), ...this.previewTasks]);
       const errors: unknown[] = results[0]?.status === 'rejected' ? [results[0].reason] : [];
       for (const key of [...this.plans.keys()]) {
-        try { this.discard(key); } catch (error) { errors.push(error); }
+        try { this.removePlan(key); } catch (error) { errors.push(error); }
       }
       if (errors.length) throw new AggregateError(errors, 'Plugin installer cleanup failed');
     })();

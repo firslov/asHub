@@ -4,7 +4,7 @@ import { ExplicitApprovals } from "../host-operations.js";
 import { conversationTools } from "../conversation-tools.js";
 import { logCompaction } from "../history/compaction-diagnostics.js";
 import { historyTool } from "../history/history-reader.js";
-import { generateSummary, type SummaryClient } from "../history/summary-client.js";
+import { generateSummary, type SummaryClient, type SummaryUsage } from "../history/summary-client.js";
 /**
  * AshBridge — runs agent-sh's kernel in-process and forwards bus events.
  *
@@ -24,22 +24,22 @@ import { configureDeepSeek } from "../providers/deepseek.js";
 import { guardCodexRetries, withSilentCodexRetries } from "../providers/codex-retry.js";
 import { EventEmitter } from "node:events";
 import { setTimeout as waitForRetry } from "node:timers/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { CodexUsage } from "../providers/codex-usage.js";
 import * as fs from "node:fs";
 import { updateSettingsFile } from "../settings-store.js";
 import { ASHUB_IDENTITY, ASHUB_ACTION_SCOPE, buildAshubFrontendPrompt } from "../prompts/ashub.js";
 import path from "node:path";
 import * as os from "node:os";
-import { createCore, type AgentShellCore, runSubagent, type ToolDefinition } from "agent-sh";
+import { createCore, LlmClient, type AgentShellCore, runSubagent, type ToolDefinition } from "agent-sh";
 import { activateAgent } from "agent-sh/agent";
 import { builtinPluginCatalog, type PluginStatus } from "../plugins.js";
 import { PluginRuntime, prepareScopedHandlers, preparePluginRegistrations } from "../plugin-runtime.js";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
 import { CodexProviderHost, codexStatus } from "../providers/codex.js";
-import { getSettings, reloadSettings, CONFIG_DIR } from "agent-sh/settings";
+import { getSettings, reloadSettings, resolveProvider, CONFIG_DIR } from "agent-sh/settings";
 import { resolveApiKey } from "agent-sh/auth";
-import type { Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
+import type { BackgroundModelSelection, Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
 import { Shell } from "agent-sh/shell";
 import { registerShellHandlers } from "agent-sh/shell/host";
 import { type Terminal, BridgedTerminal, headlessTerminal, surfaceFromTerminal } from "agent-sh/shell/terminal";
@@ -301,6 +301,14 @@ let _firstBridge = true;
 // ── todolist tool ─────────────────────────────────────────────────
 
 type TodoStatus = "pending" | "in_progress" | "done";
+type CatalogModel = ReasoningModel & { modalities?: string[] };
+interface SpecifiedBackgroundEndpoint {
+  apiKey: string;
+  baseURL: string;
+  buildRequestHeaders?: (info: { sessionId: string }) => Record<string, string>;
+  origin: string;
+  identity: string;
+}
 interface TodoItem {
   title: string;
   status: TodoStatus;
@@ -384,6 +392,7 @@ export class AshBridge extends EventEmitter implements Bridge {
   readonly readOnlyContext = false;
   private thinking?: SessionThinking;
   private backgroundControllers = new Set<AbortController>();
+  private specifiedBackgroundControllers = new Set<AbortController>();
   private compactionControllers = new Set<AbortController>();
 
   constructor(opts: BridgeOpts) {
@@ -399,6 +408,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     this.complete = scoped(this.complete);
     const backgroundComplete = scoped(this.backgroundComplete);
     this.backgroundComplete = (...args) => withSilentCodexRetries(() => backgroundComplete(...args));
+    const specifiedComplete = scoped(this.backgroundCompleteSpecified);
+    this.backgroundCompleteSpecified = (...args) => withSilentCodexRetries(() => specifiedComplete(...args));
     this.compact = scoped(this.compact);
     this.drainQueue = scoped(this.drainQueue);
     this.reloadProviders = scoped(this.reloadProviders);
@@ -2540,7 +2551,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     await this.backendActivation;
   }
 
-  async backgroundComplete(messages: Array<{ role: string; content: string }>, signal: AbortSignal, expected: { model?: string; provider?: string }): Promise<string> {
+  async backgroundComplete(messages: Array<{ role: string; content: string }>, signal: AbortSignal, expected: { model?: string; provider?: string }, onUsage?: (usage: SummaryUsage) => void): Promise<string> {
     await this.initPromise; signal.throwIfAborted();
     if (!this.core || this.closed) throw Error('Backend unavailable');
     const controller = new AbortController(); this.backgroundControllers.add(controller);
@@ -2553,10 +2564,82 @@ export class AshBridge extends EventEmitter implements Bridge {
       const profile = reasoningProfile({ id: active.model, provider: active.provider });
       return await generateSummary(this.core.handlers.call('llm:get-client') as SummaryClient, messages, combined, {
         model: active.model, maxTokens: 4096, timeoutMs: 60000,
+        onUsage,
         params: profile?.levels.includes('low') ? nativeReasoningParams(profile, 'low') : {},
         headers: endpoint?.buildRequestHeaders?.({ sessionId: `${this.opts.sessionId}:background` }),
       });
     } finally { this.backgroundControllers.delete(controller); controller.abort(); }
+  }
+
+  private backgroundCatalog(): CatalogModel[] {
+    if (!this.core || this.closed) return [];
+    const models = (this.core.handlers.call('agent:get-models') ?? []) as CatalogModel[];
+    const codex = this.codexHost ? codexStatus() : null;
+    return models.filter(model => model.provider && model.id && (!model.modalities || model.modalities.includes('text')) &&
+      (!codex || model.provider !== this.codexHost?.lastRegisteredProviderId || (codex.providerId === model.provider && codex.configured)));
+  }
+
+  private specifiedEndpoint(model: CatalogModel): SpecifiedBackgroundEndpoint | null {
+    const endpoint = this.core?.handlers.call('agent:resolve-endpoint', { provider: model.provider, id: model.id }) as
+      { apiKey?: string; baseURL?: string; buildRequestHeaders?: SpecifiedBackgroundEndpoint['buildRequestHeaders'] } | undefined;
+    if (!endpoint?.apiKey || (!endpoint.baseURL && model.provider !== 'openai')) return null;
+    try {
+      const baseURL = new URL(endpoint.baseURL ?? 'https://api.openai.com/v1');
+      if (!['http:', 'https:'].includes(baseURL.protocol) || baseURL.username || baseURL.password) return null;
+      // Only normalize the proxy whose upstream this host owns. An ordinary
+      // loopback port can belong to an entirely different local service.
+      const service = new URL(baseURL);
+      if (this.codexHost?.lastRegisteredProviderId === model.provider &&
+          ['127.0.0.1', '[::1]', 'localhost'].includes(baseURL.hostname) && !resolveProvider(model.provider)?.baseURL) {
+        const settings = getSettings() as unknown as Record<string, { upstreamURL?: string } | undefined>;
+        service.href = new URL(settings['codex-provider']?.upstreamURL ?? 'https://chatgpt.com/backend-api/codex/responses').href;
+      }
+      const identity = createHash('sha256').update(JSON.stringify([model.provider,service.href])).digest('hex');
+      return { apiKey:endpoint.apiKey, baseURL:baseURL.href, buildRequestHeaders:endpoint.buildRequestHeaders, origin:service.origin, identity };
+    } catch { return null; }
+  }
+
+  async backgroundModels(): Promise<BackgroundModelSelection[]> {
+    await this.initPromise;
+    return this.backgroundCatalog().filter(model=>this.specifiedEndpoint(model)).map(({provider,id})=>({provider,model:id}));
+  }
+
+  async describeBackgroundModel(selection: BackgroundModelSelection) {
+    await this.initPromise;
+    const model = this.backgroundCatalog().find(m=>m.provider===selection.provider && m.id===selection.model);
+    const endpoint = model && this.specifiedEndpoint(model);
+    return endpoint ? { identity:endpoint.identity, origin:endpoint.origin } : null;
+  }
+
+  async backgroundCompleteSpecified(messages: Array<{ role: string; content: string }>, signal: AbortSignal, selection: BackgroundModelSelection, expectedIdentity?: string, onUsage?: (usage: SummaryUsage) => void): Promise<string> {
+    await this.initPromise; signal.throwIfAborted();
+    const model = this.backgroundCatalog().find(m=>m.provider===selection.provider && m.id===selection.model);
+    const endpoint = model && this.specifiedEndpoint(model);
+    if (!model || !endpoint) throw Error('所选后台模型不可用，请检查提供商配置');
+    if (expectedIdentity !== undefined && endpoint.identity !== expectedIdentity) throw Error('后台模型服务已变化，请重新确认');
+    const controller = new AbortController();
+    this.specifiedBackgroundControllers.add(controller);
+    const combined = AbortSignal.any([signal,controller.signal]);
+    try {
+      // The foreground shared client can be reconfigured while chat switches models.
+      const client = new LlmClient({ model:model.id, apiKey:endpoint.apiKey, baseURL:endpoint.baseURL });
+      guardLlmUnicode(client);
+      guardCodexRetries(client, () => {});
+      const profile = reasoningProfile(model);
+      const result = await generateSummary(client as unknown as SummaryClient, messages, combined, {
+        model:model.id, maxTokens:4096, timeoutMs:60000,
+        onUsage,
+        params:profile?.levels.includes('low') ? nativeReasoningParams(profile,'low') : {},
+        headers:endpoint.buildRequestHeaders?.({sessionId:`${this.opts.sessionId}:background`}),
+      });
+      combined.throwIfAborted();
+      const current = this.backgroundCatalog().find(m=>m.provider===selection.provider && m.id===selection.model);
+      const verified = current && this.specifiedEndpoint(current);
+      if (verified?.identity !== endpoint.identity || verified.baseURL !== endpoint.baseURL || verified.apiKey !== endpoint.apiKey) {
+        throw Error('后台模型配置已变化，本次结果未保存');
+      }
+      return result;
+    } finally { this.specifiedBackgroundControllers.delete(controller); controller.abort(); }
   }
 
   async complete(
@@ -2684,6 +2767,7 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   private releaseResources(): void {
     for (const controller of this.backgroundControllers) controller.abort();
+    for (const controller of this.specifiedBackgroundControllers) controller.abort();
     for (const controller of this.compactionControllers) controller.abort();
     this.explicitApprovals?.cancel();
     this.requests?.end();

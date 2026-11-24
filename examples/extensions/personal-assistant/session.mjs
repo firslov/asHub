@@ -31,11 +31,15 @@ export default function activate(ctx) {
       : scope ? '仅可召回已授权的记忆，后台自动整理未开启。'
       : a.dedicated && a.conversationId() === id ? '长期记忆已关闭，不读取或召回已保存记忆。可通过个人助手标签右侧的记忆开关开启，并在桌面确认授权；已有聊天和记忆保留。'
       : '此对话未启用个人助手记忆。';
-    const health=automatic ? a.learning.health() : undefined;
+    const recordedHealth = automatic ? a.learning.health() : undefined;
+    // Quota can reopen while the chat is busy, before the next learning tick.
+    const quotaExpired = recordedHealth?.errorClass === 'quota' &&
+      Number.isFinite(recordedHealth.retryAt) && recordedHealth.retryAt <= Date.now();
+    const health = quotaExpired ? { ...recordedHealth, errorClass: null, retryAt: null, failures: 0 } : recordedHealth;
     return { connected: !!scope, scopes: scope ? ['global'] : [], automatic, note, ...(health?{health}:{}),
       ...(health?.errorClass ? {learningNote:health.errorClass==='quota'?'今日整理预算已用完，未处理记录将在后续继续整理；已保存记忆仍可召回。':health.errorClass==='capacity'?'记忆整理遇到容量限制，部分新信息尚未保存；不要声称已经记住，可依照用户明确要求在对话中忘记不再需要的记忆。':'后台整理暂缓，将按重试时间恢复；不要声称未整理的信息已经保存。'}:{}) };
   });
-  register('assistant_memory_search', '搜索个人助手的长期记忆，支持中文。重要事实请核对来源和时间，未命中不代表不存在。', {
+  register('assistant_memory_search', '搜索个人助手的长期记忆，支持中文。主题概览没有可读取的概览 ID；使用 evidence.memoryId 和 evidence.sourceId 分别通过 memory_read 和 history_read 核对；重要事实核对来源和时间，未命中不代表不存在。', {
     query: { type: 'string', maxLength: 500 }, limit: { type: 'integer', minimum: 1, maximum: 12 },
   }, ['query'], (a, args) => a.search(id, args.query, args.limit ?? 8));
   register('assistant_memory_read', '按搜索结果中的真实 ID 读取可用记忆及其来源、范围和修订号。', { id: { type: 'string' } }, ['id'], (a, args) => a.read(id, args.id));

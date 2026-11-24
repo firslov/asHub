@@ -4,7 +4,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readBodyWithSignal } from '../transport/body-reader.js';
 import { ExtensionMessages, type MessageGrant } from '../services/extension-messages.js';
-import { PluginBackground, singleConversationBackgroundPreview, type BackgroundGrantInput } from './background.js';
+import { PluginBackground, singleConversationBackgroundPreview, type BackgroundGrantInput, type BackgroundModelChange } from './background.js';
+export interface ResourceRequestContext { readonly locale: 'zh' | 'en' }
 export interface ResourcePlan {
     preview?: {
         title: string;
@@ -16,15 +17,17 @@ export interface ResourcePlan {
     sharingAuthorization?: SharingInput;
     authorization?: MessageGrant;
     backgroundAuthorization?: BackgroundGrantInput;
+    backgroundModelChange?: BackgroundModelChange;
     entryAuthorization?: EntryInput;
     entryBackground?: {dailyCalls:number; includeHistory:boolean; followModel:boolean};
-    execute(grantId?: string): unknown | Promise<unknown>;
+    validate?(): void;
+    execute(grantId?: string, context?: ResourceRequestContext): unknown | Promise<unknown>;
 }
 export interface PluginResource {
     remote?: { conversationId(): string | null; actions: string[] };
-    view(): unknown | Promise<unknown>;
+    view(context?: ResourceRequestContext): unknown | Promise<unknown>;
     onReveal?(): void;
-    prepare(action: string, values: Record<string, unknown>): ResourcePlan | Promise<ResourcePlan>;
+    prepare(action: string, values: Record<string, unknown>, context?: ResourceRequestContext): ResourcePlan | Promise<ResourcePlan>;
 }
 const identifier = (v: unknown) => typeof v === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(v);
 const clone = (value: unknown) => {
@@ -45,7 +48,7 @@ export class PluginInteractions {
         context: string;
         entry: object;
         expires: number;
-        run: () => Promise<unknown>;
+        run: (requestContext: ResourceRequestContext) => Promise<unknown>;
         result?: Promise<unknown>;
     }>();
     constructor(private messages: ExtensionMessages, private requireActive: (pluginId: string) => void, private signal: AbortSignal, private run: <T>(pluginId: string, action: () => T | Promise<T>) => Promise<T> = async (_id, action) => action(), private background?: PluginBackground, private conversations?: ConversationEntries, private sharing?: SharedConversations) { }
@@ -91,6 +94,7 @@ export class PluginInteractions {
                 throw Error('Plugin resource unavailable');
             const remoteSession = new URL(req.url ?? '/', 'http://localhost').searchParams.get('remoteSession');
             const context = remoteSession === null ? 'desktop' : 'remote:' + remoteSession;
+            const requestContext: ResourceRequestContext = Object.freeze({ locale: req.headers['x-ashub-locale'] === 'en' ? 'en' : 'zh' });
             const guard = () => { if(remoteSession !== null && (!remoteSession || entry.resource.remote?.conversationId() !== remoteSession)) throw Error('Remote resource outside authorized conversation'); this.signal.throwIfAborted(); entry.signal.throwIfAborted(); this.requireActive(entry.pluginId); if (this.entries.get(key) !== entry)
                 throw Error('Plugin resource changed'); };
             guard();
@@ -105,7 +109,7 @@ export class PluginInteractions {
             };
             let result: unknown;
             if (req.method === 'GET')
-                result = { view: clone(await entry.resource.view()) };
+                result = { view: clone(await entry.resource.view(requestContext)) };
             else if (req.method === 'POST') {
                 const raw = await readBodyWithSignal(req, read, this.signal);
                 if (raw.length > 65536)
@@ -121,19 +125,19 @@ export class PluginInteractions {
                     const p = this.pending.get(input.confirm);
                     if (!p || p.key !== key || p.context !== context || p.entry !== entry || p.expires < Date.now())
                         throw Error('Confirmation expired; review again');
-                    p.result ??= Promise.resolve().then(p.run);
+                    p.result ??= Promise.resolve().then(() => p.run(requestContext));
                     result = await p.result;
                 }
                 else {
                     if (!identifier(input.action) || !input.values || typeof input.values !== 'object' || Array.isArray(input.values))
                         throw Error('Invalid action');
                     if (remoteSession !== null && !entry.resource.remote?.actions.includes(input.action)) throw Error('请在桌面端完成此操作');
-                    const plan = await entry.resource.prepare(input.action, clone(input.values));
+                    const plan = await entry.resource.prepare(input.action, clone(input.values), requestContext);
                     guard();
                     if (!plan || typeof plan.execute !== 'function')
                         throw Error('Invalid action plan');
-                    if (remoteSession !== null && (plan.authorization || plan.backgroundAuthorization || plan.entryAuthorization || plan.sharingAuthorization)) throw Error('请在桌面端确认授权');
-                    if ([plan.authorization,plan.backgroundAuthorization,plan.entryAuthorization,plan.sharingAuthorization].filter(Boolean).length > 1) throw Error('Conflicting authorizations');
+                    if (remoteSession !== null && (plan.authorization || plan.backgroundAuthorization || plan.backgroundModelChange || plan.entryAuthorization || plan.sharingAuthorization)) throw Error('请在桌面端确认授权');
+                    if ([plan.authorization,plan.backgroundAuthorization,plan.backgroundModelChange,plan.entryAuthorization,plan.sharingAuthorization].filter(Boolean).length > 1) throw Error('Conflicting authorizations');
                     if(plan.entryBackground !== undefined && (!plan.entryBackground || Object.keys(plan.entryBackground).some(k=>!['dailyCalls','includeHistory','followModel'].includes(k)) || !Number.isInteger(plan.entryBackground.dailyCalls) || plan.entryBackground.dailyCalls < 1 || plan.entryBackground.dailyCalls > 24 || typeof plan.entryBackground.includeHistory !== 'boolean' || plan.entryBackground.followModel !== true || !plan.entryAuthorization || !this.background)) throw Error('Invalid entry background authorization');
                     const entryBackground = plan.entryBackground ? {dailyCalls:plan.entryBackground.dailyCalls,includeHistory:plan.entryBackground.includeHistory,followModel:plan.entryBackground.followModel} : undefined;
                     const sharing = plan.sharingAuthorization ? this.sharing?.prepare(entry.pluginId, plan.sharingAuthorization) : undefined;
@@ -144,20 +148,23 @@ export class PluginInteractions {
                     if (plan.authorization && plan.backgroundAuthorization) throw Error('Conflicting authorizations');
                     if (plan.backgroundAuthorization && !this.background) throw Error('Background services unavailable');
                     const background = plan.backgroundAuthorization ? this.background!.prepare(entry.pluginId, plan.backgroundAuthorization) : undefined;
-                    const backgroundPreview = background ?? (entryBackground && conversation ? singleConversationBackgroundPreview(entryBackground, {
+                    if (plan.backgroundModelChange && !this.background) throw Error('Background services unavailable');
+                    const modelChange=plan.backgroundModelChange ? await this.background!.prepareModelChange(entry.pluginId,plan.backgroundModelChange) : undefined;
+                    guard();
+                    const backgroundPreview: {fields:Array<{label:string;value:string}>;details?:Array<{label:string;value:string}>} | undefined = background ?? modelChange ?? (entryBackground && conversation ? singleConversationBackgroundPreview(entryBackground, {
                         title: conversation.entry.spec.label, model: conversation.input.model, provider: conversation.input.provider,
                     }, conversation.createsConversation, 'confirmation') : undefined);
-                    const run = () => this.run(entry.pluginId, async () => {
+                    const run = (actionContext: ResourceRequestContext) => this.run(entry.pluginId, async () => {
                         guard();
-                        let grantId = sharing ? this.sharing!.approve(entry.pluginId, sharing) : conversation ? await this.conversations!.approve(entry.pluginId,conversation) : authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : undefined;
+                        let grantId = sharing ? this.sharing!.approve(entry.pluginId, sharing) : conversation ? await this.conversations!.approve(entry.pluginId,conversation) : authorization ? this.messages.approve(entry.pluginId, authorization) : background ? this.background!.approve(entry.pluginId, background) : modelChange ? await this.background!.approveModelChange(entry.pluginId,modelChange,()=>{guard();plan.validate?.();}) : undefined;
                         let entryBackgroundGrant: string | undefined;
                         try {
                             if(entryBackground){guard(); const sid=grantId!; entryBackgroundGrant=this.background!.approve(entry.pluginId,this.background!.prepare(entry.pluginId,{...entryBackground,modelSessionId:sid,includedIds:[sid],excludedIds:[]}));grantId=entryBackgroundGrant;}
-                            return { view: clone(await plan.execute(grantId)) };
+                            return { view: clone(await plan.execute(grantId, actionContext)) };
                         }
                         catch (error) {
                             if(entryBackgroundGrant)try{this.background!.bind(entry.pluginId,entry.signal).revoke(entryBackgroundGrant);}catch{}
-                            if (grantId && !conversation)
+                            if (grantId && !conversation && !modelChange)
                                 try {
                                     if (sharing) this.sharing!.revoke(entry.pluginId, grantId);
                                     else if (background) this.background!.bind(entry.pluginId, entry.signal).revoke(grantId);
@@ -167,7 +174,7 @@ export class PluginInteractions {
                             throw error;
                         }
                     });
-                    if (plan.preview || authorization || background || conversation || sharing) {
+                    if (plan.preview || authorization || background || modelChange || conversation || sharing) {
                         if (this.pending.size >= 100)
                             throw Error('Too many pending confirmations');
                         const preview = clone(plan.preview ?? { title: sharing ? '允许访问本机 / Share conversations' : backgroundPreview ? '授权后台处理 / Authorize background processing' : conversation ? '新建专属对话 / Create conversation' : '授权消息投递 / Authorize messages', fields: [] });
@@ -185,7 +192,7 @@ export class PluginInteractions {
                         result = { confirmation: { id, preview } };
                     }
                     else
-                        result = await run();
+                        result = await run(requestContext);
                 }
             }
             else {

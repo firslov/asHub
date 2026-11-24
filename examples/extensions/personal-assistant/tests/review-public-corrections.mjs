@@ -92,6 +92,35 @@ test('public remember still accepts a complete quotation located beyond a long r
  assert.equal(result.state,'active');assert.deepEqual(f.a.store.get(result.id).source.refs.map(ref=>[ref.id,ref.quote]),[[source.id,quote]]);
 });
 
+test('foreground evidence respects a newer explicit denial queued while space was full',async t=>{
+ for(const reaffirm of [false,true])await t.test(reaffirm?'newer reaffirmation may supersede it':'historical evidence cannot consume its revision',async t=>{
+  const f=fixture(t);publicHistory(f);const old=await occupation(f);
+  let slot;
+  for(let i=0;i<100;i++)slot=f.a.store.add({title:'提案',content:'待确认事项 '+i,kind:'fact',scope:'personal'},{type:'model-proposal'});
+  const previous=f.add('user','此前我确认过，职业是一名大学教师');
+  const denial=f.add('user','我已不再从事大学教学工作');
+  f.answer(()=>({memories:[item(denial.id,denial.text,{memoryId:old.id,revision:old.revision,relation:'contradict'})]}));
+  await f.a.learning.tick();
+  assert.equal(f.a.store.state('deferred:a').length,1);
+  const args={title:old.title,content:old.content,kind:old.kind,topic:old.source.topic,subject:'user'};
+  assert.throws(()=>f.a.remember('a',{...args,quote:previous.text}),/较新的纠正/);
+  assert.throws(()=>f.a.remember('a',{...args,quote:previous.text,memoryId:old.id,revision:old.revision,relation:'support'}),/较新的纠正/);
+  assert.equal(f.a.store.get(old.id).revision,old.revision);
+
+  const local=f.a.remember('a',{...args,quote:previous.text,scope:'local',topic:'local-occupation'});
+  assert.notEqual(local.id,old.id,'independent scope is still available');
+  if(reaffirm){
+   const newer=f.add('user','我收回刚才的变更，现在仍然是一名大学教师');
+   f.a.remember('a',{...args,quote:newer.text,memoryId:old.id,revision:old.revision,relation:'support'});
+  }
+  f.restart();
+  f.a.store.forget(slot.id,slot.revision);
+  const restored=f.a.learning.flushDeferred(f.a.learning.config(),f.target,new AbortController().signal);
+  assert.equal(restored,reaffirm?0:1);
+  assert.equal(f.a.store.get(old.id).state,reaffirm?'active':'candidate');
+ });
+});
+
 test('public correction consumes real authorized host history and persists independently of the background model',async t=>{
  const {PluginBackground}=await import('../../../../dist/extensions/background.js');
  const {SessionStore}=await import('../../../../dist/history/session-store.js');

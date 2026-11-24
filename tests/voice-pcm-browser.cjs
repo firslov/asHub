@@ -69,11 +69,22 @@ await page.waitForSelector('.composer-media:not([hidden])');
  await page.evaluate(()=>{hold=false;permissionHold=true;});await button.click();await page.waitForFunction(()=>!!globalThis.grant);await page.locator('.composer-media-cancel').click();await page.evaluate(()=>{permissionHold=false;grant();});await page.waitForTimeout(100);await page.waitForFunction(()=>captures.every(c=>c.closedSuccessfully)&&tracks.every(t=>t.readyState==='ended'));
  // Worklet and UI both enforce duration; the resulting file remains bounded.
  await page.evaluate(async()=>{duration=1;await controller.refresh();});const count=await page.evaluate(()=>uploads.length);await record();await idle();assert.equal(await page.evaluate(()=>uploads.length),count+1);
- // If the audio engine supplies no samples, report that fact and release it.
+ // A silent AudioWorklet preserves the draft and reports missing PCM audio in
+ // the active language, just as an empty MediaRecorder result does.
  silentWorklet=true;
  await page.evaluate(async()=>{duration=60;await controller.refresh();});const noAudioCount=await page.evaluate(()=>uploads.length);
- await record();await idle();assert.match(await page.locator('.composer-media-status').textContent(),/未收到麦克风音频/);assert.equal(await page.evaluate(()=>uploads.length),noAudioCount);
- await page.waitForFunction(()=>captures.every(c=>c.closedSuccessfully)&&tracks.every(t=>t.readyState==='ended'));silentWorklet=false;
+ for(const [locale,message] of [['zh-CN',/未收到麦克风音频/],['en',/no (?:microphone )?audio/i]]){
+  await page.evaluate(lang=>{document.documentElement.lang=lang;document.dispatchEvent(new Event('langchange'));},locale);
+  await query.fill('Preserve this draft 草稿');
+  await record();await idle();
+  const status=await page.locator('.composer-media-status').textContent();
+  assert.match(status,message);
+  if(locale==='en')assert.doesNotMatch(status,/\p{Script=Han}/u);
+  assert.equal(await query.inputValue(),'Preserve this draft 草稿');
+  assert.equal(await page.evaluate(()=>uploads.length),noAudioCount);
+  await page.waitForFunction(()=>captures.every(c=>c.closedSuccessfully)&&tracks.every(t=>t.readyState==='ended'));
+ }
+ silentWorklet=false;
  // The free descriptor must select PCM on desktop browsers with MediaRecorder.
  await page.evaluate(async()=>{
   Object.defineProperties(navigator, {userAgent:{value:'Desktop test'}, maxTouchPoints:{value:0}});

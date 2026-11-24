@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execFile as nodeExecFile } from "node:child_process";
+import { RuntimeEnvironment } from "./runtime-environment.js";
 
 export interface SkillsMarketplaceDependencies {
   settingsPath(): string;
@@ -12,6 +13,7 @@ export interface SkillsMarketplaceDependencies {
   invalidateGlobalSkillsCache(): void;
   fetch?: typeof globalThis.fetch;
   execFile?: typeof nodeExecFile;
+  resolveCommand?: (command: string) => string | undefined;
   homedir?: () => string;
   now?: () => number;
   onChanged?: () => void;
@@ -23,6 +25,13 @@ type SkillRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promis
 export function createSkillsMarketplaceService(dependencies: SkillsMarketplaceDependencies) {
   const { settingsPath, getSettings, invalidateGlobalSkillsCache } = dependencies;
   const execFile = dependencies.execFile ?? nodeExecFile;
+  const runtime = new RuntimeEnvironment();
+  const resolveCommand = dependencies.resolveCommand ?? (command => runtime.resolveCommand(command));
+  const gitExecutable = () => {
+    const executable = resolveCommand('git');
+    if (!executable) throw Error('Git is not available. Install Git or configure its standard installation path.');
+    return executable;
+  };
   const homedir = dependencies.homedir ?? (() => os.homedir());
   const now = dependencies.now ?? (() => Date.now());
   const fetch: typeof globalThis.fetch = (...args) => (dependencies.fetch ?? globalThis.fetch)(...args);
@@ -290,7 +299,9 @@ export function createSkillsMarketplaceService(dependencies: SkillsMarketplaceDe
     } catch { /* Legacy full-repository installs may only have a git remote. */ }
     if (!fs.existsSync(path.join(dir, ".git"))) return;
     const origin = await new Promise<string>(resolve => {
-      execFile("git", ["-C", dir, "config", "--get", "remote.origin.url"], { timeout: 5000 }, (err, stdout) => resolve(err ? "" : stdout.trim()));
+      const executable = resolveCommand('git');
+      if (!executable) { resolve(''); return; }
+      execFile(executable, ["-C", dir, "config", "--get", "remote.origin.url"], { timeout: 5000 }, (err, stdout) => resolve(err ? "" : stdout.trim()));
     });
     return skillSourceId(origin);
   }
@@ -432,7 +443,7 @@ export function createSkillsMarketplaceService(dependencies: SkillsMarketplaceDe
       // Check git availability on first install
       try {
         await new Promise<void>((resolve, reject) => {
-          execFile("git", ["--version"], { timeout: 5_000 }, (err) => {
+          execFile(gitExecutable(), ["--version"], { timeout: 5_000 }, (err) => {
             err ? reject(err) : resolve();
           });
         });
@@ -450,7 +461,7 @@ export function createSkillsMarketplaceService(dependencies: SkillsMarketplaceDe
         let sameSource = source === expected;
         if (!source && !isSparseSkills && fs.existsSync(path.join(dest, ".git"))) {
           const origin = await new Promise<string>((resolve) => {
-            execFile("git", ["-C", dest, "config", "--get", "remote.origin.url"], { timeout: 5000 }, (err, stdout) => resolve(err ? "" : stdout.trim()));
+            execFile(gitExecutable(), ["-C", dest, "config", "--get", "remote.origin.url"], { timeout: 5000 }, (err, stdout) => resolve(err ? "" : stdout.trim()));
           });
           const normalize = (url: string) => url.replace(/^git@([^:]+):/, "https://$1/").replace(/\.git\/?$/, "").replace(/\/$/, "");
           sameSource = normalize(origin) === normalize(cloneUrl);
@@ -459,14 +470,14 @@ export function createSkillsMarketplaceService(dependencies: SkillsMarketplaceDe
       }
       if (fs.existsSync(dest) && !isSparseSkills) {
         await new Promise<void>((resolve, reject) => {
-          execFile("git", ["-C", dest, "pull", "--ff-only"], { timeout: 30_000 }, (err) => {
+          execFile(gitExecutable(), ["-C", dest, "pull", "--ff-only"], { timeout: 30_000 }, (err) => {
             err ? reject(err) : resolve();
           });
         });
       } else if (isSparseSkills) {
         const tmpDir = await fs.promises.mkdtemp(path.join(skillDir, `.tmp-${skillName}-`));
         const runGit = (args: string[]) => new Promise<void>((resolve, reject) => {
-          execFile("git", args, { timeout: 60_000 }, err => err ? reject(err) : resolve());
+          execFile(gitExecutable(), args, { timeout: 60_000 }, err => err ? reject(err) : resolve());
         });
         let safeToCleanup = true;
         try {
@@ -491,7 +502,7 @@ export function createSkillsMarketplaceService(dependencies: SkillsMarketplaceDe
         } finally { if (safeToCleanup) await fs.promises.rm(tmpDir, { recursive: true, force: true }); }
       } else {
         await new Promise<void>((resolve, reject) => {
-          execFile("git", ["clone", "--depth", "1", cloneUrl, dest], { timeout: 60_000 }, (err) => {
+          execFile(gitExecutable(), ["clone", "--depth", "1", cloneUrl, dest], { timeout: 60_000 }, (err) => {
             err ? reject(err) : resolve();
           });
         });

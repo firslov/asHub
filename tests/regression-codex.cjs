@@ -231,7 +231,7 @@ function delayedCodexBridge() {
   Object.assign(b,{
     closed:false,initPromise:Promise.resolve(),backendRegistered:true,queryQueue:[],queuedIds:[],
     codexHost:{sync(){started();return pending;},close(){}},
-    _subagents:new Map(),backgroundControllers:new Set(),compactionControllers:new Set(),pendingPermissions:new Map(),permissionSessionApproved:new Set(),shellExchanges:[],
+    _subagents:new Map(),backgroundControllers:new Set(),specifiedBackgroundControllers:new Set(),compactionControllers:new Set(),pendingPermissions:new Map(),permissionSessionApproved:new Set(),shellExchanges:[],
     core:{kill(){},handlers:{call(){return []; }},bus:{emit(name){
       emitted.push(name);
       if(name==='agent:submit') {
@@ -329,8 +329,10 @@ test('cancel settles preparation immediately and its late completion cannot sett
 
 test('close settles a preparing submission without waiting for provider synchronization',async()=>{
   const {b,release,syncing,emitted}=delayedCodexBridge();
+  const specified=new AbortController();b.specifiedBackgroundControllers.add(specified);
   const outcome=b.submit('Old').then(()=>null,error=>error);await syncing;
   await b.submit('Queued');b.close();
+  assert(specified.signal.aborted,'closing a bridge cancels its independently configured organizer request');
   const result=await Promise.race([outcome,new Promise(r=>setImmediate(()=>r(null)))]);
   assert.match(String(result),/closed/);
   assert.equal(b.isProcessing(),false);assert.equal(b.queryQueue.length,0);

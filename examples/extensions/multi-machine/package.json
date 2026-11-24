@@ -19,7 +19,8 @@
     "package-lock.json",
     "publisher.mjs",
     "transport.mjs",
-    "sharing.mjs"
+    "sharing.mjs",
+    "vendor-qrcodegen.mjs"
   ],
   "scripts": {
     "test": "node --test tests/*.mjs"

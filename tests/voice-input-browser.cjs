@@ -1,6 +1,6 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {webkit,chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
-const root=path.resolve(__dirname,'..','remote/public'),device='A'.repeat(43),input={id:'a'.repeat(32),revision:'fixture-v1',label:'语音输入',description:'转写服务 · 最长 60 秒 · 仅写入草稿',kind:'audio',maxDuration:60,maxBytes:4194304};
+const root=path.resolve(__dirname,'..','remote/public'),device='A'.repeat(43),input={id:'a'.repeat(32),revision:'fixture-v1',label:'语音输入',labelEn:'Voice input',description:'转写服务 · 最长 60 秒 · 仅写入草稿',descriptionEn:'Transcription · Up to 60 seconds · Draft only',kind:'audio',maxDuration:60,maxBytes:4194304};
 let result='转写完成 English',hold=false,starts=0,sends=0;const requests=[],jobs=new Map();
 const server=http.createServer(async(req,res)=>{
  const u=new URL(req.url,'http://localhost');res.setHeader('Content-Type','application/json');
@@ -203,6 +203,79 @@ const server=http.createServer(async(req,res)=>{
     if(status===403) assert.match(await page.locator('.composer-media-status').textContent(),/共享权限已失效/);
     await page.unroute('**/rpc',interrupt);
   }
+  // The remote page is Chinese today. Exercise the shared component with both
+  // document languages, including switching it without touching an active ticket.
+  const changeLanguage=lang=>page.evaluate(lang=>{
+    document.documentElement.lang=lang;
+    document.dispatchEvent(new CustomEvent('langchange',{detail:{lang:lang.split('-')[0]}}));
+  },lang);
+  const voiceStatus=page.locator('.composer-media-status'),voiceCancel=page.locator('.composer-media-cancel');
+  const expectStatus=async (pattern,english)=>{
+    await page.waitForFunction(({source,flags})=>new RegExp(source,flags).test(document.querySelector('.composer-media-status').textContent),
+      {source:pattern.source,flags:pattern.flags},{timeout:2000});
+    if(english)assert.doesNotMatch(await voiceStatus.textContent(),/\p{Script=Han}/u);
+  };
+  const stages={
+    'zh-CN': {recording:/录音/, interrupted:/录音中断/, empty:/未取得录音数据/, denied:/麦克风.*授权/, waiting:/等待麦克风授权/, processing:/正在转写/, cancelled:/已取消.*草稿保留/, cancel:/取消/, providerAuth:/转写服务.*(?:认证|密钥|鉴权)/},
+    en: {recording:/recording/i, interrupted:/interrupt|unexpectedly stopped/i, empty:/no (?:audio|recording)|(?:audio|recording).*empty/i, denied:/microphone.*(?:access|permission|denied)/i, waiting:/(?:wait|request).*microphone|microphone.*(?:access|permission)/i, processing:/transcrib/i, cancelled:/cancel(?:led|ed).*draft/i, cancel:/cancel/i, providerAuth:/authentication|API key/i},
+  };
+  for(const [locale,words] of Object.entries(stages)){
+    const english=locale==='en',draft='Preserve this draft 草稿';
+    const beforeErrors=starts,beforeSends=sends;
+    await changeLanguage(locale);await query.fill(draft);
+    assert.equal(await mic.getAttribute('aria-label'),english?input.labelEn:input.label);
+    assert.equal(await mic.getAttribute('title'),english?input.descriptionEn:input.description);
+    await page.evaluate(()=>{mediaFixture.permission='allow';mediaFixture.emptyRecording=false;});
+    await button.click();
+    await page.waitForFunction(()=>document.querySelector('.composer-media').dataset.state==='recording');
+    await expectStatus(words.recording,english);
+    assert.match(await voiceCancel.textContent(),words.cancel);
+    await page.evaluate(()=>mediaFixture.recorders.at(-1).stop());
+    await expectStatus(words.interrupted,english);
+    assert.equal(await query.inputValue(),draft);
+    await page.evaluate(()=>mediaFixture.emptyRecording=true);
+    await button.click();await button.click();
+    await expectStatus(words.empty,english);
+    assert.equal(await query.inputValue(),draft);
+    await page.evaluate(()=>{mediaFixture.permission='deny';mediaFixture.emptyRecording=false;});
+    await button.click();await expectStatus(words.denied,english);
+    assert.equal(await query.inputValue(),draft);
+    assert.equal(starts,beforeErrors,'interruption, empty recording and denied permission never upload');
+    assert.equal(sends,beforeSends);
+
+    await page.evaluate(()=>{mediaFixture.permission='hold';mediaFixture.grant=null;});
+    await button.click();await page.waitForFunction(()=>!!mediaFixture.grant);
+    await expectStatus(words.waiting,english);
+    const alternate=english?'zh-CN':'en';await changeLanguage(alternate);
+    await expectStatus(stages[alternate].waiting,!english);
+    assert.equal(await page.locator('.composer-media').getAttribute('data-state'),'permission');
+    await changeLanguage(locale);await voiceCancel.tap();
+    await expectStatus(words.cancelled,english);
+    await page.evaluate(()=>{mediaFixture.permission='allow';mediaFixture.grant();});
+    await page.waitForFunction(()=>mediaFixture.tracks.every(track=>track.stopped));
+    assert.equal(await query.inputValue(),draft);
+
+    hold=true;await button.click();await button.click();
+    await expectStatus(words.processing,english);
+    await voiceCancel.tap();await expectStatus(words.cancelled,english);
+    assert.equal(await query.inputValue(),draft);
+    assert.equal(sends,beforeSends);
+
+    const providerDenied=async route=>{
+      const {op,args}=route.request().postDataJSON();
+      if(op==='composer-input'&&args.action==='start')
+        return route.fulfill({json:{state:'error',error:'旧版转写认证提示',errorCode:'providerAuth'}});
+      return route.continue();
+    };
+    await page.route('**/rpc',providerDenied);
+    try{
+      await button.click();await button.click();
+      await expectStatus(words.providerAuth,english);
+      assert.equal(await query.inputValue(),draft);
+      assert.equal(sends,beforeSends);
+    }finally{await page.unroute('**/rpc',providerDenied);}
+  }
+  await changeLanguage('zh-CN');
   await page.setViewportSize({width:390,height:844});await page.evaluate(()=>menu(false));await page.waitForTimeout(200);await page.screenshot({path:'/tmp/ashub-voice-'+engine+'.png'});
   const native=await page.evaluate(async()=>{
     const Recorder=mediaFixture.NativeRecorder, type=['audio/mp4','audio/webm;codecs=opus','audio/webm'].find(t=>Recorder?.isTypeSupported(t));
@@ -213,6 +286,6 @@ const server=http.createServer(async(req,res)=>{
     recording.start();await new Promise(r=>setTimeout(r,350));recording.stop();oscillator.stop();destination.stream.getTracks().forEach(t=>t.stop());const value=await result;await context.close();return value;
   });
   assert(native.bytes>0,JSON.stringify(native));console.log('Native synthetic recording:',native);
-  assert.deepEqual(errors,[]);console.log('PASS '+engine+' iPhone PWA: tap-to-record/finish, visible draft, MP4, sync readiness, interrupted capture, late responses, edit/IME, session isolation, permission/cancel/background/pagehide, manual send, 320/390/844px');
+  assert.deepEqual(errors,[]);console.log('PASS '+engine+' iPhone PWA: tap-to-record/finish, visible draft, MP4, sync readiness, interrupted capture, late responses, edit/IME, session isolation, permission/cancel/background/pagehide, manual send, 320/390/844px, zh/en voice feedback and draft retention');
  }finally{await browser.close();server.closeAllConnections();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;server.close();});

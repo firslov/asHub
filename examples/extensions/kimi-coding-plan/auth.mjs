@@ -82,9 +82,9 @@ export class Credentials {
       ).trim();
     } catch {}
     return {
-      "User-Agent": "asHub-kimi-coding-plan/0.2.1",
+      "User-Agent": "asHub-kimi-coding-plan/0.2.2",
       "X-Msh-Platform": "asHub",
-      "X-Msh-Version": "0.2.1",
+      "X-Msh-Version": "0.2.2",
       ...(device && /^[\x20-\x7e]{1,200}$/.test(device)
         ? { "X-Msh-Device-Id": device }
         : {}),

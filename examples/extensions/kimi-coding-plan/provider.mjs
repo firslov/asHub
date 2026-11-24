@@ -47,12 +47,31 @@ export function registration(models) {
     echoReasoning: true,
   }));
 }
+function prepareMessages(messages) {
+  let prepared = messages;
+  for (const [index, message] of messages.entries()) {
+    if (message?.role !== "assistant" ||
+      (!Object.hasOwn(message, "reasoning") && !Object.hasOwn(message, "reasoning_details"))) continue;
+    // Older providers can leave opaque reasoning metadata in the transcript.
+    // Kimi expects reasoning_content, and even unused fields count toward the
+    // request size. Keep the original message for other providers and replay.
+    const normalized = { ...message };
+    if (typeof normalized.reasoning_content !== "string" && typeof message.reasoning === "string") {
+      normalized.reasoning_content = message.reasoning;
+    }
+    delete normalized.reasoning;
+    delete normalized.reasoning_details;
+    if (prepared === messages) prepared = messages.slice();
+    prepared[index] = normalized;
+  }
+  return prepared;
+}
 export function prepare(body, models, effort = "default") {
   if (!body || !Array.isArray(body.messages) || typeof body.model !== "string")
     throw Error("无效的模型请求");
   const model = models.find((m) => m.id === body.model);
   if (!model) throw Error("Kimi 模型不可用，请执行 /kimi-refresh");
-  const out = { ...body };
+  const out = { ...body, messages: prepareMessages(body.messages) };
   delete out.reasoning_effort;
   delete out.reasoning;
   delete out.thinking;

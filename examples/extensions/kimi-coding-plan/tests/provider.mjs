@@ -65,6 +65,36 @@ test("request preserves tools, images and reasoning history; maps effort and out
   assert.equal(body.reasoning_effort, "ultra");
   assert.equal(prepare(body, catalog(raw)).thinking, undefined);
 });
+test("switching from Codex strips foreign reasoning metadata without dropping Kimi history or attachments", () => {
+  const toolCalls = [{ id: "call1", type: "function", function: { name: "lookup", arguments: "{}" } }];
+  const details = [{ type: "reasoning.encrypted", format: "openai-responses-v1", data: "A".repeat(2100000) }];
+  const toolResult = { role: "tool", tool_call_id: "call1", content: "ok" };
+  const user = { role: "user", content: [
+    { type: "text", text: "Describe the image" },
+    { type: "image_url", image_url: { url: "data:image/png;base64,AA==" } },
+  ] };
+  const messages = [
+    { role: "user", content: "Look it up" },
+    { role: "assistant", content: null, tool_calls: toolCalls, reasoning_content: "native", reasoning: "alias", reasoning_details: details },
+    toolResult,
+    { role: "assistant", content: "Done", reasoning: "history from an older adapter" },
+    user,
+  ];
+  assert(Buffer.byteLength(JSON.stringify(messages)) > 2 * 1024 * 1024);
+  const result = prepare({ model: "k3", messages }, catalog(raw));
+  assert.equal(Object.hasOwn(result.messages[1], "reasoning_details"), false);
+  assert.deepEqual(result.messages, [
+    messages[0],
+    { role: "assistant", content: null, tool_calls: toolCalls, reasoning_content: "native" },
+    toolResult,
+    { role: "assistant", content: "Done", reasoning_content: "history from an older adapter" },
+    user,
+  ]);
+  assert(Buffer.byteLength(JSON.stringify(result.messages)) < 2 * 1024 * 1024);
+  assert.equal(messages[1].reasoning_details, details, "the live and stored transcript must remain untouched");
+  assert.equal(result.messages[2], toolResult);
+  assert.equal(result.messages[4], user);
+});
 test("unsupported effort is rejected per model instead of silently fabricating a level", () => {
   for (const [model, effort] of [
     ["fast", "low"],

@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-1. asHub → 插件 → 安装插件，选择 `ashub-kimi-coding-plan-0.2.1.zip`。安装器自动安装锁定的 npm 依赖，无安装脚本。
+1. asHub → 插件 → 安装插件，选择 `ashub-kimi-coding-plan-0.2.2.zip`。安装器自动安装锁定的 npm 依赖，无安装脚本。
 2. 在对话中输入 `/kimi-login`，浏览器会打开 Kimi 官方授权页。登录并确认授权后，插件自动保存凭据、刷新模型；`/kimi-login cancel` 可取消。也可直接复用本机官方 Kimi Code CLI 的 `kimi login` 登录，无需复制凭据。账号需具备 Kimi Coding Plan 权益，网页登录成功不代表拥有套餐权限。
 3. 新开对话，或在空闲对话中重新加载插件。模型选择器选择 provider `kimi-coding-plan` 下的模型。
 4. `/kimi-status` 查看状态；登录更新或模型变化后运行 `/kimi-refresh`。这些命令需要启用内置斜杠命令组件；关闭该组件不影响模型使用，可通过插件菜单重新加载。
@@ -38,7 +38,7 @@
 
 ## 行为与边界
 
-- 保留原生流式协议、工具调用、图片消息和工具轮次中的 `reasoning_content`。
+- 保留原生流式协议、工具调用、图片消息和工具轮次中的 `reasoning_content`。切换到 Kimi 时，从请求副本中移除其他提供商的专用推理元数据。
 - 本地适配器只监听 `127.0.0.1`，使用随机认证密钥，拒绝浏览器 Origin 请求；插件停用时关闭监听并取消请求。
 - 保留 asHub 对话的网络代理上下文；不修改系统代理。启动发现有时间上限，离线不会无限等待；网络恢复后可 `/kimi-refresh`。
 - 本地登录失效及 OAuth `invalid_grant` 会明确提示重新登录，不再伪装为可重试的网络故障；服务端限流等待及重试提示会传递给 SDK。
@@ -50,13 +50,13 @@
 
 Node 22：`npm ci --ignore-scripts && npm test`。
 
-运行包含真实 asHub 加载器的全部 44 项测试：
+运行包含真实 asHub 加载器的全部测试：
 
 ```sh
 ASHUB_TEST_ROOT=/绝对路径/asHub npm test
 ```
 
-集成测试使用临时配置和模拟上游，不调用真实账号。未设置 `ASHUB_TEST_ROOT` 时跳过该项，其余 43 项仍可单独运行。
+集成测试使用临时配置和模拟上游。未设置 `ASHUB_TEST_ROOT` 时跳过该项，其余测试可单独运行。
 
 已验证 macOS / Node 22 的登录复用、模型发现、凭据刷新；自动测试覆盖刷新并发、取消、凭据保护、模型能力、流式透传、超时和停用。另通过 asHub 0.21.1 / agent-sh 0.16.1 的真实插件加载器和 LlmClient 验证模拟工具调用。源码使用跨平台 Node API；Windows / Linux 未进行实机测试。
 

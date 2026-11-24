@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "ashub-desktop-control",
+  "name": "桌面控制",
+  "platforms": [
+    "darwin"
+  ],
+  "minNode": "22.12.0",
+  "system": {
+    "minMacOS": "14.0.0",
+    "arch": ["arm64", "x64"]
+  },
+  "runtimes": [
+    { "kind": "python", "version": ">=3.12.0" }
+  ],
+  "setup": {
+    "script": "scripts/ashub-setup.mjs",
+    "description": "检查本机 Python 3.12+，创建独立虚拟环境，并从 GitHub 固定提交及 PyPI 安装桌面控制和 OCR 组件"
+  },
+  "permissions": [
+    "需要 macOS 14 或更新版本及 Python 3.12+",
+    "安装后需在系统设置中手动授予辅助功能及屏幕录制权限，并选择允许操作的应用"
+  ],
+  "defaults": {
+    "desktop-control": {
+      "enabled": false,
+      "allowedApps": []
+    }
+  }
+}

@@ -49,8 +49,9 @@ Installation is staged outside the extension discovery directory. Active tasks u
 ## Plugin packages
 
 - Project management 0.2.0: no additional runtime; creating, configuring, detaching, archiving and deleting conversations still requires explicit authorization.
-- Desktop control 0.3.4 (separately distributed ZIP): macOS 14+, arm64/x64 and Python 3.12+ are declared in its manifest and checked in the preview. The setup script creates an isolated desktop-control environment and installs its pinned arc-cua revision and OCR dependencies. Runtime status performs an explicit Python/import health check; a stale `.complete` marker alone is not treated as healthy. `/desktop install` and ZIP setup rebuild a damaged environment in staging and only replace it after validation. System accessibility/screen-recording permissions and allowed apps remain user controlled.
-- WeChat 0.3.4 (separately distributed ZIP): install desktop control 0.3.4 first; setup verifies its Python/OCR runtime health. Configuration starts disabled and read-only unless existing user settings say otherwise. Installation never reads or sends WeChat messages.
+- Scheduled Tasks and Voice Input ship with the desktop app and start disabled. Enable them in **Plugins → Local extensions**. Existing manual installations take precedence and retain their settings.
+- Desktop Control 0.3.5 ships with the macOS app only and starts disabled. Enable it in **Plugins → Local extensions**, start a new conversation, and run `/desktop install` to prepare the driver. The plugin requires macOS 14+, arm64 or x64, and Python 3.12+. This command and the standalone ZIP setup install the pinned arc-cua revision and OCR dependencies into an isolated environment. They validate the Python imports before replacing a damaged environment. Users manage accessibility and screen recording permissions and choose which apps to allow.
+- The standalone WeChat 0.3.4 ZIP requires enabled Desktop Control 0.3.4 or newer. Run `/desktop install` before installing WeChat so its setup can verify the Python and OCR environment. WeChat starts disabled and read-only by default.
 
 Only the desktop/local authenticated management interface exposes installation. The mobile relay does not expose the installer.
 

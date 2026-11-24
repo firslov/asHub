@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { PluginBackground } from '../dist/extensions/background.js';
+import { acquireLedgerLock } from '../dist/extensions/ledger-lock.js';
 import { SessionStore } from '../dist/history/session-store.js';
 import { generateSummary } from '../dist/history/summary-client.js';
 function fixture(t) {
@@ -255,13 +257,194 @@ test('failed and cancelled provider requests remain charged across renewed grant
 
 test('usage must be durably saved before provider work and persistence failure fails closed',async t=>{
  const f=fixture(t),id=f.approve(),file=path.join(f.dir,'grants.json');
- // Replace the fixture's target file with a directory to force atomic rename
- // failure. No provider work may begin without durable accounting.
+ // Replace the ledger with a directory. No provider work may begin without
+ // durable accounting against the previously committed authorization.
  fs.unlinkSync(file);fs.mkdirSync(file);
  await assert.rejects(()=>f.api.infer(id,[{role:'user',content:'not persisted'}]));
  assert.equal(f.calls(),0);
  assert.throws(()=>f.api.status(id));assert.throws(()=>f.approve());
  assert.equal(fs.readdirSync(f.dir).some(name=>name.endsWith('.tmp')),false);
+});
+
+test('quota reservation rejects changed ledger bytes even when inode, size and mtime still match', async t => {
+  const f = fixture(t), id = f.approve(), file = path.join(f.dir, 'grants.json');
+  const time = new Date('2026-01-01T00:00:00Z');
+  fs.utimesSync(file, time, time);
+  const restored = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  const before = fs.lstatSync(file, { bigint: true });
+  const previous = fs.readFileSync(file, 'utf8');
+  const changed = previous.replaceAll('"pluginId":"plugin"', '"pluginId":"pluGin"');
+  assert.notEqual(previous, changed);
+  fs.writeFileSync(file, changed);
+  fs.utimesSync(file, time, time);
+  const after = fs.lstatSync(file, { bigint: true });
+  assert.deepEqual([after.ino, after.size, after.mtimeNs], [before.ino, before.size, before.mtimeNs]);
+  await assert.rejects(() => restored.infer(id, [{ role: 'user', content: 'Synthetic request' }]), /ledger no longer matches/);
+  assert.equal(f.calls(), 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), changed);
+  assert.throws(() => restored.read(id, 'a'), /ledger no longer matches/);
+});
+
+test('quota reservation keeps support for a previously persisted ledger behind a symlink', { skip: process.platform === 'win32' }, async t => {
+  const f = fixture(t), id = f.approve(), file = path.join(f.dir, 'grants.json');
+  const original = path.join(f.dir, 'original.json');
+  fs.renameSync(file, original);
+  fs.symlinkSync('original.json', file);
+  const restored = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  assert.equal(restored.status(id).calls, 0);
+  await restored.infer(id, [{ role: 'user', content: 'Synthetic request' }]);
+  assert.equal(f.calls(), 1);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).usage[0].calls, 1);
+  assert.equal(JSON.parse(fs.readFileSync(original, 'utf8')).usage[0].calls, 0);
+});
+
+for (const failure of ['write', 'rename']) test(`a temporary quota ${failure} EIO rejects the request before dispatch and preserves authorized history`, async t => {
+  const f = fixture(t), id = f.approve({ dailyCalls: 2 }), file = path.join(f.dir, 'grants.json');
+  const [source] = await f.store.appendMessages([{ role: 'user', content: 'Existing authorized history' }]);
+  const request = [{ role: 'user', content: 'Synthetic request' }];
+  await f.api.infer(id, request);
+  const committed = fs.readFileSync(file, 'utf8');
+  let fail = true;
+  const failureError = Object.assign(Error(`Temporary quota ${failure} failed`), { code: 'EIO' });
+  if (failure === 'write') {
+    const write = fs.writeFileSync;
+    t.mock.method(fs, 'writeFileSync', (target, ...args) => {
+      if (fail && typeof target === 'string' && target.startsWith(file + '.') && target.endsWith('.tmp')) {
+        fail = false;
+        write(target, 'partial');
+        throw failureError;
+      }
+      return write(target, ...args);
+    });
+  } else {
+    const rename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', (source, destination) => {
+      if (fail && destination === file) {
+        fail = false;
+        throw failureError;
+      }
+      return rename(source, destination);
+    });
+  }
+  await assert.rejects(() => f.api.infer(id, request), { code: 'EIO' });
+  assert.equal(f.calls(), 1, 'the failed reservation must not reach the provider');
+  assert.equal(fs.readFileSync(file, 'utf8'), committed);
+  assert(!fs.readdirSync(f.dir).some(name => name.endsWith('.tmp')));
+  assert.deepEqual(f.api.read(id, 'a').entries.map(entry => entry.id), [source]);
+  assert.throws(() => f.api.read(id, 'b'), /outside/);
+  assert.equal(f.api.status(id).calls, 1);
+  await f.api.infer(id, request);
+  assert.equal(f.calls(), 2);
+  const restored = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  assert.equal(restored.status(id).calls, 2);
+  await assert.rejects(() => restored.infer(id, request), /额度/);
+});
+
+test('quota rename EIO stays closed if the committed ledger cannot be verified', async t => {
+  for (const damage of ['missing', 'corrupt', 'replaced', 'unreadable']) await t.test(damage, async t => {
+    const f = fixture(t), id = f.approve(), file = path.join(f.dir, 'grants.json');
+    const rename = fs.renameSync, read = fs.readFileSync;
+    const request = [{ role: 'user', content: 'Synthetic request' }];
+    const fail = t.mock.method(fs, 'renameSync', (source, destination) => {
+      if (destination !== file) return rename(source, destination);
+      if (damage === 'missing') fs.unlinkSync(file);
+      else if (damage === 'corrupt') fs.writeFileSync(file, 'corrupt');
+      else if (damage === 'replaced') {
+        fs.copyFileSync(file, file + '.replacement');
+        rename(file + '.replacement', file);
+      } else {
+        t.mock.method(fs, 'readFileSync', (target, ...args) => {
+          if (target === file) throw Object.assign(Error('Ledger read failed'), { code: 'EIO' });
+          return read(target, ...args);
+        });
+      }
+      throw Object.assign(Error('Temporary quota rename failed'), { code: 'EIO' });
+    });
+    await assert.rejects(() => f.api.infer(id, request), { code: 'EIO' });
+    fail.mock.restore();
+    assert.throws(() => f.api.read(id, 'a'), { code: 'EIO' });
+    await assert.rejects(() => f.api.infer(id, request), { code: 'EIO' });
+    assert.equal(f.calls(), 0);
+  });
+});
+
+test('an ambiguous quota commit or failed revocation EIO remains fail-closed', async t => {
+  await t.test('rename committed before its error', async t => {
+    const f = fixture(t), id = f.approve(), file = path.join(f.dir, 'grants.json');
+    const rename = fs.renameSync, request = [{ role: 'user', content: 'Synthetic request' }];
+    t.mock.method(fs, 'renameSync', (source, destination) => {
+      rename(source, destination);
+      if (destination === file) throw Object.assign(Error('Uncertain quota commit'), { code: 'EIO' });
+    });
+    await assert.rejects(() => f.api.infer(id, request), { code: 'EIO' });
+    assert.throws(() => f.api.read(id, 'a'), { code: 'EIO' });
+    assert.equal(f.calls(), 0);
+    const restored = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+    assert.equal(restored.status(id).calls, 1, 'a possibly committed reservation must not be refunded');
+  });
+  for (const damage of ['missing', 'corrupt', 'replaced']) await t.test(`the temporary file is ${damage} at rename failure`, async t => {
+    const f = fixture(t), id = f.approve(), file = path.join(f.dir, 'grants.json');
+    const rename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', (source, destination) => {
+      if (destination !== file) return rename(source, destination);
+      if (damage === 'missing') fs.unlinkSync(source);
+      else if (damage === 'corrupt') fs.writeFileSync(source, 'partial');
+      else {
+        fs.copyFileSync(source, source + '.replacement');
+        rename(source + '.replacement', source);
+      }
+      throw Object.assign(Error('Uncertain quota commit'), { code: 'EIO' });
+    });
+    await assert.rejects(() => f.api.infer(id, [{ role: 'user', content: 'Synthetic request' }]), { code: 'EIO' });
+    assert.throws(() => f.api.read(id, 'a'), { code: 'EIO' });
+    assert.equal(f.calls(), 0);
+  });
+  await t.test('revocation failed before commit', t => {
+    const f = fixture(t), id = f.approve(), file = path.join(f.dir, 'grants.json');
+    const write = fs.writeFileSync;
+    t.mock.method(fs, 'writeFileSync', (target, ...args) => {
+      if (typeof target === 'string' && target.startsWith(file + '.') && target.endsWith('.tmp')) {
+        throw Object.assign(Error('Revocation write failed'), { code: 'EIO' });
+      }
+      return write(target, ...args);
+    });
+    assert.throws(() => f.api.revoke(id), { code: 'EIO' });
+    assert.throws(() => f.api.read(id, 'a'), { code: 'EIO' });
+    assert.equal(f.calls(), 0);
+  });
+});
+
+test('a committed quota survives rename metadata changes and optional identity sampling failures', async t => {
+  const f = fixture(t), id = f.approve({ dailyCalls: 3 }), file = path.join(f.dir, 'grants.json');
+  const rename = fs.renameSync, lstat = fs.lstatSync;
+  const request = [{ role: 'user', content: 'Synthetic request' }];
+  let changes = 0, failSample = false, failRename = false;
+  t.mock.method(fs, 'renameSync', (source, destination) => {
+    if (destination !== file) return rename(source, destination);
+    if (failRename) throw Object.assign(Error('Temporary quota rename failed'), { code: 'EIO' });
+    rename(source, destination);
+    // The target can have different metadata after a successful rename.
+    const time = new Date(1_000_000 + 1_000 * ++changes);
+    fs.utimesSync(file, time, time);
+    failSample = changes === 2;
+  });
+  t.mock.method(fs, 'lstatSync', (target, ...args) => {
+    if (target === file && failSample) {
+      failSample = false;
+      throw Object.assign(Error('Optional identity sample failed'), { code: 'EIO' });
+    }
+    return lstat(target, ...args);
+  });
+  await f.api.infer(id, request);
+  await f.api.infer(id, request);
+  assert.equal(f.calls(), 2);
+  assert.equal(f.api.status(id).calls, 2);
+  failRename = true;
+  await assert.rejects(() => f.api.infer(id, request), { code: 'EIO' });
+  assert.throws(() => f.api.read(id, 'a'), { code: 'EIO' }, 'no automatic recovery without a trusted committed identity');
+  assert.equal(f.calls(), 2);
+  const restored = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  assert.equal(restored.status(id).calls, 2);
 });
 
 test('history entry identifies its direct predecessor without skipping tools or generated messages',async t=>{
@@ -438,6 +621,146 @@ test('a failed statistics write preserves the paid reply, the durable allowance 
   const restored = new PluginBackground(path.join(f.dir,'grants.json'),f.runtime,f.shutdown.signal).bind('plugin',f.session.signal);
   assert.equal(restored.status(id).calls, 1);
   assert.equal(restored.status(id).tokenUsage, undefined);
+});
+
+for (const change of ['revoked', 'unreadable']) test(`late statistics leave the ${change} ledger untouched and preserve the paid reply`, async t => {
+  const f = fixture(t), id = f.approve(), file = path.join(f.dir, 'grants.json');
+  const request = [{ role: 'user', content: 'Synthetic request' }];
+  let release, start;
+  const started = new Promise(resolve => { start = resolve; });
+  f.runtime.complete = async (_id, _messages, _signal, report) => {
+    await new Promise(resolve => { release = resolve; start(); });
+    report({ inputTokens: 21, outputTokens: 5 });
+    return 'paid result';
+  };
+  const pending = f.api.infer(id, request);
+  await started;
+  if (change === 'revoked') {
+    const second = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+    second.revoke(id);
+    assert.throws(() => second.status(id), /撤销/);
+  }
+  const read = fs.readFileSync, committed = read(file, 'utf8');
+  const blocker = change === 'unreadable' ? t.mock.method(fs, 'readFileSync', (target, ...args) => {
+    if (target === file) throw Object.assign(Error('Statistics cannot read the ledger'), { code: 'EIO' });
+    return read(target, ...args);
+  }) : undefined;
+  release();
+  assert.equal(await pending, 'paid result');
+  blocker?.mock.restore();
+  assert.equal(read(file, 'utf8'), committed);
+  assert(!fs.readdirSync(f.dir).some(name => name.endsWith('.tmp')));
+
+  const restarted = new PluginBackground(file, f.runtime, f.shutdown.signal);
+  const api = restarted.bind('plugin', f.session.signal);
+  let checkedId = id;
+  if (change === 'revoked') {
+    assert.throws(() => api.read(id, 'a'), /撤销/);
+    checkedId = restarted.approve('plugin', restarted.prepare('plugin', {
+      modelSessionId: 'a', dailyCalls: 2, includeHistory: true, excludedIds: ['b'],
+    }));
+  }
+  assert.equal(api.status(checkedId).calls, 1);
+  assert.equal(api.status(checkedId).tokenUsage, undefined);
+});
+
+test('a foreground model change cannot restore authorization revoked by another host', t => {
+  const f = fixture(t);
+  const id = f.approve({ includedIds: ['a'], excludedIds: [], followModel: true });
+  const file = path.join(f.dir, 'grants.json');
+  const other = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  other.revoke(id);
+  const revoked = fs.readFileSync(file, 'utf8');
+
+  f.targets[0].model = 'switched';
+  assert.throws(() => f.host.noteForegroundModelChange('a', f.dir, 'mock', 'switched'), /ledger no longer matches/);
+  assert.throws(() => f.api.read(id, 'a'), /ledger no longer matches/);
+  assert.equal(fs.readFileSync(file, 'utf8'), revoked);
+  const restarted = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  assert.throws(() => restarted.status(id), /撤销/);
+});
+
+test('another host cannot commit between checking and replacing the ledger', t => {
+  const f = fixture(t);
+  const id = f.approve({ includedIds: ['a'], excludedIds: [], followModel: true });
+  const file = path.join(f.dir, 'grants.json');
+  const other = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  const rename = fs.renameSync;
+  let interleaved = false;
+  const mock = t.mock.method(fs, 'renameSync', (source, destination) => {
+    if (destination === file && !interleaved) {
+      interleaved = true;
+      assert.throws(() => other.revoke(id), { code: 'ELOCKED' });
+    }
+    return rename(source, destination);
+  });
+
+  f.targets[0].model = 'switched';
+  f.host.noteForegroundModelChange('a', f.dir, 'mock', 'switched');
+  assert(interleaved);
+  mock.mock.restore();
+  const current = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  current.revoke(id);
+  const restarted = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  assert.throws(() => restarted.status(id), /撤销/);
+  assert(!fs.existsSync(file + '.writer-lock'));
+});
+
+test('a busy ledger preserves existing access and allows the same instance to retry', async t => {
+  const f = fixture(t);
+  const id = f.approve();
+  const file = path.join(f.dir, 'grants.json');
+  const request = [{ role: 'user', content: 'Local fixture' }];
+  const release = acquireLedgerLock(file);
+  try {
+    const earlier = new Date(Date.now() - 60_000);
+    fs.utimesSync(file + '.writer-lock', earlier, earlier);
+    await assert.rejects(() => f.api.infer(id, request), { code: 'ELOCKED' });
+    assert.throws(() => f.api.revoke(id), { code: 'ELOCKED' });
+    assert.equal(f.api.status(id).calls, 0);
+    assert.equal(f.calls(), 0);
+  } finally {
+    release();
+  }
+  await f.api.infer(id, request);
+  assert.equal(f.api.status(id).calls, 1);
+  f.api.revoke(id);
+  assert.throws(() => f.api.status(id), /撤销/);
+});
+
+test('the next writer can recover the lock of an exited process', async t => {
+  const f = fixture(t);
+  const id = f.approve();
+  const file = path.join(f.dir, 'grants.json');
+  const lockModule = new URL('../dist/extensions/ledger-lock.js', import.meta.url).href;
+  execFileSync(process.execPath, ['--input-type=module', '-e',
+    `import { acquireLedgerLock } from ${JSON.stringify(lockModule)}; acquireLedgerLock(process.argv[1]);`, file]);
+  assert(fs.existsSync(file + '.writer-lock'));
+  await f.api.infer(id, [{ role: 'user', content: 'Local fixture' }]);
+  assert.equal(f.api.status(id).calls, 1);
+  assert(!fs.existsSync(file + '.writer-lock'));
+});
+
+test('model observations during a busy save invalidate earlier confirmations and persist on the next observation', async t => {
+  const f = fixture(t);
+  const id = f.approve({ includedIds: ['a'], excludedIds: [], followModel: true });
+  const file = path.join(f.dir, 'grants.json');
+  const prepared = await f.host.prepareModelChange('plugin', { grantId: id, model: null });
+  const release = acquireLedgerLock(file);
+  try {
+    f.targets[0].model = 'other';
+    f.host.noteForegroundModelChange('a', f.dir, 'mock', 'other');
+    f.targets[0].model = 'tiny';
+    f.host.noteForegroundModelChange('a', f.dir, 'mock', 'tiny');
+    assert.equal(f.api.status(id).modelRevision, 2);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).grants[0].modelRevision, undefined);
+  } finally {
+    release();
+  }
+  await assert.rejects(() => f.host.approveModelChange('plugin', prepared), /已变化/);
+  f.host.noteForegroundModelChange('a', f.dir, 'mock', 'tiny');
+  const restarted = new PluginBackground(file, f.runtime, f.shutdown.signal).bind('plugin', f.session.signal);
+  assert.equal(restarted.status(id).modelRevision, 2);
 });
 
 test('3C persists real foreground changes across A–B–A only for grants that use the foreground', async t => {

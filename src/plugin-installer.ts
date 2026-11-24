@@ -366,7 +366,7 @@ export class PluginInstaller {
   restore(id: string): void {
     this.controller.signal.throwIfAborted();
     if (this.active) throw Error('A plugin installation is in progress');
-    if (!restorableApps(this.settingsFile).some(app => app.id === id)) throw Error('This included extension is not available to reinstall');
+    if (!restorableApps(this.settingsFile, undefined, this.platform).some(app => app.id === id)) throw Error('This included extension is not available to reinstall');
     const pluginId = bundledPluginId(id);
     updateSettingsFile(this.settingsFile, settings => {
       settings[BUNDLED_REMOVED] = settings[BUNDLED_REMOVED].filter((name: string) => name !== id);

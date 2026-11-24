@@ -35,6 +35,43 @@ function kernel(t){
   const core=createCore({}),ctx=core.extensionContext({quit(){}});preparePluginRegistrations(ctx);activateAgent(ctx);preparePluginRegistrations(ctx);t.after(()=>core.kill());return ctx;
 }
 
+test('included scheduled tasks and voice input start on demand from app resources', async t => {
+  const profile = fs.mkdtempSync(path.join(home, 'included-'));
+  const file = path.join(profile, 'settings.json');
+  fs.writeFileSync(file, '{}');
+  const registrations = new Map();
+  const register = (id, definition) => {
+    assert(!registrations.has(id));
+    registrations.set(id, definition);
+    return () => registrations.delete(id);
+  };
+  const services = {
+    host: { snapshot: () => ({ sessions: [] }) },
+    messages: {},
+    interactions: { register },
+    composerInputs: { supportsPcmWav: true, register },
+    secrets: { read: () => undefined },
+  };
+  const registry = new ApplicationExtensionRegistry({
+    settingsFile: file,
+    definitions: [],
+    discover: () => installedApplicationDefinitions(file, { services }),
+  });
+  t.after(() => registry.close());
+  await registry.start();
+  const entries = pluginCatalog(file);
+  const packages = ['ashub-scheduled-tasks', 'ashub-voice-input'].map(id => entries.find(entry => entry.packageName === id));
+  assert.equal(registrations.size, 0);
+  for (const entry of packages) {
+    assert(entry?.bundled && !entry.enabled);
+    const snapshot = await registry.setPluginEnabled(entry.id, true);
+    assert.equal(snapshot.features.find(feature => feature.pluginId === entry.id)?.state, 'active');
+  }
+  assert.deepEqual([...registrations.keys()].sort(), ['dictation', 'settings', 'tasks']);
+  assert.equal(registrations.get('dictation').audioFormat, 'pcm-wav');
+  assert(!fs.existsSync(path.join(profile, 'extensions')));
+});
+
 test('real ZIP application entry activates once per Hub, session entry once per kernel, shared install disable applies to both',async t=>{
   const f=await installed(t,{schemaVersion:2,id:'dual-example',entries:{session:'session.mjs',application:'application.mjs'},configNamespaces:['example'],defaults:{example:{greeting:'hello'}},requires:{hostApi:'^1',capabilities:['application-lifecycle','session-extensions']}},{
     'application.mjs':`export default ctx=>{ctx.services.record('application:'+ctx.getExtensionSettings('example',{}).greeting);ctx.onDispose(()=>ctx.services.record('cleanup'));return {stop(){ctx.services.record('stop')}}}`,

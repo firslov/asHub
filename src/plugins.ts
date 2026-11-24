@@ -11,7 +11,13 @@ export const PLUGIN_DISABLED = 'ashub.plugins.disabled';
 export const BUNDLED_ENABLED = 'ashub.plugins.bundledEnabled';
 export const BUNDLED_REMOVED = 'ashub.plugins.bundledRemoved';
 const bundledRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../examples/extensions');
-const bundledApps = new Map(['kimi-coding-plan', 'project-management', 'browser-automation', 'image-display', 'multi-machine'].map(name => ['ashub-' + name, name]));
+const bundledApps = new Map([
+  'kimi-coding-plan', 'project-management', 'browser-automation', 'image-display', 'multi-machine',
+  'scheduled-tasks', 'voice-input', 'desktop-control',
+].map(name => ['ashub-' + name, name]));
+function supportsBundledPlatform(manifest: NormalizedPluginManifest, platform: string, packageOs: unknown): boolean {
+  return (!manifest.platforms || manifest.platforms.includes(platform)) && packageMetadataCompatibility({ platform, packageOs }).compatible;
+}
 export function includedPackageIds(entry: PluginEntry): string[] {
   return [...new Set([entry.manifest?.id, entry.packageName, entry.specifier, entry.damagedAppId]
     .filter((id): id is string => !!id && bundledApps.has(id)))];
@@ -90,6 +96,7 @@ function pluginPackageRoot(resolved: string, extensionsRoot: string): string | u
 }
 export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): PluginEntry[] {
   const settings = readPluginSettings(file), root = path.join(path.dirname(file), 'extensions');
+  const platform = host.platform ?? process.platform;
   const entries = new Map<string, PluginEntry>();
   const explicitIds = new Map<string, string[]>();
   const add = (spec: string, directoryName?: string, bundledId?: string) => {
@@ -111,6 +118,7 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
           if (typeof pkg.description === 'string') metadata.description = pkg.description.trim().slice(0, 300);
           metadata.nodeRange = pkg.engines?.node; metadata.packageOs = pkg.os; metadata.packageCpu = pkg.cpu;
           manifest = readPluginManifest(packageRoot, pkg.name);
+          if (bundledId && manifest && !supportsBundledPlatform(manifest, platform, metadata.packageOs)) return;
           if (manifest?.schemaVersion === 1 && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
             // Legacy explicit files retain their original identity and entry,
             // including when a directory also has a higher-priority index.
@@ -220,15 +228,18 @@ export function pluginCatalog(file: string, host: PluginHostEnvironment = {}): P
 }
 // Only an explicit reinstall clears an uninstall marker. The application
 // resources remain read-only, and a manual installation always takes priority.
-export function restorableApps(file: string, catalog = pluginCatalog(file)): { id: string; name: string }[] {
+export function restorableApps(file: string, catalog?: PluginEntry[], platform: string = process.platform): { id: string; name: string }[] {
   const removed: string[] = readPluginSettings(file)[BUNDLED_REMOVED] ?? [];
-  const present = new Set(catalog.flatMap(includedPackageIds));
+  const present = new Set((catalog ?? pluginCatalog(file, { platform })).flatMap(includedPackageIds));
   return removed.flatMap(id => {
     const folder = bundledApps.get(id);
     if (!folder || present.has(id)) return [];
     try {
-      const manifest = readPluginManifest(path.join(bundledRoot, folder), id);
-      return manifest ? [{ id, name: manifest.name ?? id }] : [];
+      const root = path.join(bundledRoot, folder);
+      const manifest = readPluginManifest(root, id);
+      if (!manifest) return [];
+      const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+      return supportsBundledPlatform(manifest, platform, pkg.os) ? [{ id, name: manifest.name ?? id }] : [];
     } catch { return []; }
   });
 }

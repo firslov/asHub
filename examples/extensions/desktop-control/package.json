@@ -1,0 +1,36 @@
+{
+  "name": "ashub-desktop-control",
+  "version": "0.3.5",
+  "private": true,
+  "description": "Optional macOS desktop control extension for asHub and agent-sh",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "files": [
+    "index.js",
+    "dist",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "docs",
+    "native",
+    "ashub-plugin.json",
+    "scripts/ashub-setup.mjs"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test tests/*.mjs",
+    "pack:plugin": "npm run build && npm run build:capture && npm pack --ignore-scripts",
+    "install:local": "node scripts/install.mjs",
+    "uninstall:local": "node scripts/uninstall.mjs",
+    "build:capture": "node scripts/build-capture.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "@types/node": "^22.20.5",
+    "agent-sh": "0.16.0"
+  }
+}

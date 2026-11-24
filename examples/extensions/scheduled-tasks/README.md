@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-需要 **asHub 0.21.1 或更新版本**，宿主须提供 `plugin-resources` 与 `authorized-messages` 能力。从「插件」菜单导入 `ashub-scheduled-tasks-0.1.1.zip`。0.21.0 及更早版本缺少所需接口，会拒绝安装，不会降级绕过授权。
+定时任务随新版 asHub 安装，默认关闭。在「插件 → 本地扩展」启用即可。若使用尚未随附此插件的版本，可在 **asHub 0.21.1 或更新版本**中导入 `ashub-scheduled-tasks-0.1.1.zip`，宿主须提供 `plugin-resources` 与 `authorized-messages` 能力。已有的手动安装及设置会继续使用。
 
 启用后，右侧出现时钟按钮：
 

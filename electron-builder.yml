@@ -10,6 +10,8 @@ files:
   - examples/extensions/browser-automation/{*.mjs,ashub-plugin.json,package.json}
   - examples/extensions/image-display/{*.mjs,ashub-plugin.json,package.json}
   - examples/extensions/multi-machine/{*.mjs,ashub-plugin.json,package.json}
+  - examples/extensions/scheduled-tasks/{*.mjs,ashub-plugin.json,package.json,README.md}
+  - examples/extensions/voice-input/{*.mjs,ashub-plugin.json,package.json,README.md}
   - node_modules/**/*
   - package.json
 
@@ -27,6 +29,12 @@ extraResources:
       - "**/*"
 
 mac:
+  files:
+    - examples/extensions/desktop-control/{index.js,ashub-plugin.json,package.json,README.md,LICENSE}
+    - examples/extensions/desktop-control/dist/**/*.js
+    - examples/extensions/desktop-control/docs/arc-cua-license.txt
+    - examples/extensions/desktop-control/scripts/ashub-setup.mjs
+    - examples/extensions/desktop-control/native/capture
   artifactName: asHub-${version}-${arch}.${ext}
   target:
     - target: dmg

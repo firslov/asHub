@@ -1,6 +1,6 @@
 {
   "name": "ashub",
-  "version": "0.21.7",
+  "version": "0.21.8",
   "description": "asHub: spawn and supervise headless agent-sh ACP sessions, expose them through a web UI on a single port.",
   "type": "module",
   "main": "electron/main.cjs",
@@ -14,8 +14,8 @@
   "scripts": {
     "start": "tsx src/cli.ts",
     "prebuild": "node scripts/check-deps.cjs && node scripts/patch-agent-sh.cjs",
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc && tsc -p examples/extensions/desktop-control",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p examples/extensions/desktop-control",
     "typecheck:web": "tsc --noEmit -p web/jsconfig.json",
     "electron:dev": "npm run build && electron .",
     "electron:pack": "npm run build && electron-builder --dir",
@@ -51,7 +51,7 @@
     "test:compaction": "npm run build && node --test tests/compaction.mjs tests/compaction-kernel.mjs",
     "test:scheduled-tasks": "npm run build && node --test tests/extension-messages.cjs tests/plugin-interactions.cjs examples/extensions/scheduled-tasks/tests/*.mjs tests/http-plugin-resources.cjs",
     "test:scheduled-tasks:ui": "electron tests/electron-scheduled-tasks.cjs",
-    "check:core": "npm run build && npm run typecheck:web && npm test && npm run test:http && npm run test:scheduled-tasks && npm run test:project-continuation && npm run test:network && node --test tests/release-workflows.cjs tests/replay-writer.cjs tests/replay-recovery.cjs tests/replay-frame.cjs tests/sse-writer.cjs tests/http-replay-flow.cjs && node --test examples/extensions/personal-assistant/tests/*.mjs tests/personal-assistant.mjs tests/assistant-dedicated.mjs tests/plugin-background.mjs tests/background-model-routing.mjs tests/batch-source-validation.mjs tests/http-background.cjs tests/theme-overview.mjs && npm run test:multi-machine",
+    "check:core": "npm run build && npm run typecheck:web && npm test && npm run test:http && npm run test:scheduled-tasks && npm run test:project-continuation && npm run test:network && node --test tests/release-workflows.cjs tests/replay-writer.cjs tests/replay-recovery.cjs tests/replay-frame.cjs tests/sse-writer.cjs tests/http-replay-flow.cjs && node --test examples/extensions/personal-assistant/tests/*.mjs tests/personal-assistant.mjs tests/assistant-dedicated.mjs tests/plugin-background.mjs tests/background-model-routing.mjs tests/batch-source-validation.mjs tests/http-background.cjs tests/theme-overview.mjs && npm run test:multi-machine && npm run test:desktop-control",
     "check:remote-release": "npm run build && node scripts/check-remote-release.cjs",
     "test:personal-assistant": "npm run build && node --test examples/extensions/personal-assistant/tests/*.mjs tests/personal-assistant.mjs tests/assistant-dedicated.mjs tests/plugin-background.mjs tests/background-model-routing.mjs tests/batch-source-validation.mjs tests/http-background.cjs tests/theme-overview.mjs",
     "test:personal-assistant:ui": "electron tests/electron-personal-assistant.cjs && electron tests/electron-assistant-model.cjs",
@@ -62,6 +62,7 @@
     "test:browser:editors": "electron tests/electron-browser-editors.cjs",
     "test:multi-machine": "npm run build && node --test tests/shared-conversations.mjs tests/device-migration-fallback.cjs tests/backend-connections.mjs tests/http-backends.mjs tests/installed-multi-machine.mjs examples/extensions/multi-machine/tests/*.mjs",
     "test:multi-machine:ui": "electron tests/electron-backends.cjs && electron tests/electron-backend-isolation.cjs && electron tests/electron-device-interconnect.cjs && electron tests/electron-backend-sync.cjs",
+    "test:desktop-control": "node --test examples/extensions/desktop-control/tests/bridge.mjs examples/extensions/desktop-control/tests/desktop-control.mjs examples/extensions/desktop-control/tests/runtime-health.mjs",
     "test:voice-input": "npm run build && node --test tests/composer-pcm.cjs tests/composer-inputs.mjs tests/media-permissions.cjs examples/extensions/voice-input/tests/*.mjs",
     "test:voice-input:ui": "electron tests/electron-voice-input.cjs",
     "test:voice-input:browser": "node tests/voice-input-browser.cjs && node tests/voice-pcm-browser.cjs"

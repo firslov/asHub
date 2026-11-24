@@ -43,8 +43,10 @@ function prepare(root, run = execFileSync) {
       const npm = process.env.npm_execpath;
       const output = npm ? run(process.execPath, [npm, ...args], { cwd: temp, encoding: 'utf8' })
         : run('npm', args, { cwd: temp, encoding: 'utf8' });
-      const archive = JSON.parse(output)[0]?.filename;
-      if (!archive || archive !== path.basename(archive)) throw Error('Invalid npm archive name');
+      // npm versions emit either an array or a map keyed by package name.
+      const packed = JSON.parse(output);
+      const archive = (Array.isArray(packed) ? packed[0] : packed?.[name])?.filename;
+      if (typeof archive !== 'string' || !archive || archive !== path.basename(archive)) throw Error('Invalid npm archive name');
       const file = path.join(temp, archive);
       const integrity = 'sha512-' + crypto.createHash('sha512').update(fs.readFileSync(file)).digest('base64');
       if (integrity !== entry.integrity) throw Error(`Integrity mismatch for ${name}`);

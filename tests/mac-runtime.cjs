@@ -30,6 +30,15 @@ async function main() {
     assert(rg.rgPath.startsWith(root + path.sep));
     assert.match(execFileSync(rg.rgPath, ['--version'], { encoding: 'utf8', timeout: 10000 }), /^ripgrep /);
     for (const name of ['hub.js', 'bridges/ash.js', 'bridges/terminal.js']) await import(pathToFileURL(path.join(root, 'dist', name)).href);
+    const extensions = path.join(root, 'examples/extensions');
+    for (const entry of ['scheduled-tasks/app.mjs', 'voice-input/app.mjs', 'desktop-control/index.js']) {
+      const plugin = await import(pathToFileURL(path.join(extensions, entry)).href);
+      assert.equal(typeof plugin.default, 'function', `Bundled plugin must be importable: ${entry}`);
+    }
+    const capture = path.join(extensions, 'desktop-control/native/capture');
+    fs.accessSync(capture, fs.constants.X_OK);
+    const architectures = execFileSync('/usr/bin/lipo', ['-archs', capture], { encoding: 'utf8', timeout: 10000 });
+    assert.deepEqual(architectures.trim().split(/\s+/).sort(), ['arm64', 'x86_64']);
     const pty = req('node-pty');
     await new Promise((resolve, reject) => {
       const term = pty.spawn('/bin/sh', ['-c', 'printf ASHUB_PTY_OK'], { cwd: home, env: process.env });

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const { getFileMatchers } = require('app-builder-lib/out/fileMatcher.js');
 const { prepare, verify, checkPackage, beforePack, afterPack } = require('../scripts/mac-ripgrep.cjs');
 const macTest = process.platform === 'win32' ? test.skip : test;
 const arches = { x64: 0x01000007, arm64: 0x0100000c };
@@ -37,12 +38,14 @@ macTest('package check catches a wrong CPU binary and missing execute bits',t=>{
   assert.throws(()=>verify(f.root,'x64'),/architecture/);f.install('x64');fs.chmodSync(binary,0o644);
   assert.throws(()=>verify(f.root,'x64'),/executable/);assert.throws(()=>verify(f.root,'universal'),/Unsupported/);
 });
-macTest('preparation restores the non-host package, verifies integrity, and is repeatable offline',t=>{
+for (const format of ['array', 'package map']) macTest(`preparation restores the non-host package from npm's ${format} JSON`,t=>{
   const f=fixture(t);f.install('arm64');let packs=0,extracts=0;
   prepare(f.root,(command,args,options)=>{
     if(command==='tar'){extracts++;f.install('x64',path.join(options.cwd || args.at(-1),'package'));return '';}
     packs++;assert(args.includes('@vscode/ripgrep-darwin-x64@1.18.0'));assert(args.includes('--ignore-scripts'));
-    fs.writeFileSync(path.join(options.cwd,'fixture.tgz'),f.bytes);return JSON.stringify([{filename:'fixture.tgz'}]);
+    fs.writeFileSync(path.join(options.cwd,'fixture.tgz'),f.bytes);
+    const result = { filename: 'fixture.tgz' };
+    return JSON.stringify(format === 'array' ? [result] : { '@vscode/ripgrep-darwin-x64': result });
   });
   assert.equal(packs,1);assert.equal(extracts,1);verify(f.root,'x64');
   prepare(f.root,()=>{throw Error('must not download verified packages');});
@@ -67,4 +70,52 @@ test('every builder entry uses the hooks; declared platform versions match the l
   assert.match(yaml,/^beforePack: scripts\/before-pack.cjs$/m);assert.match(yaml,/^afterPack: scripts\/after-pack.cjs$/m);
   const pkg=require('../package.json'),lock=require('../package-lock.json');
   for(const arch of Object.keys(arches)){const name=`@vscode/ripgrep-darwin-${arch}`;assert.equal(pkg.optionalDependencies[name],lock.packages[''].optionalDependencies[name]);assert.equal(pkg.optionalDependencies[name],lock.packages['node_modules/'+name].version);}
+});
+test('bundled plugin files are selected only on their supported platforms', () => {
+  const root = path.join(__dirname, '..');
+  const config = require('js-yaml').load(fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8'));
+  const pluginPath = path.join(root, 'examples/extensions');
+  const fileStat = fs.statSync(__filename);
+  const common = [
+    'scheduled-tasks/app.mjs', 'scheduled-tasks/schedule.mjs', 'scheduled-tasks/ashub-plugin.json', 'scheduled-tasks/package.json',
+    'voice-input/app.mjs', 'voice-input/ashub-plugin.json', 'voice-input/package.json',
+  ];
+  const macOnly = [
+    'desktop-control/index.js', 'desktop-control/ashub-plugin.json', 'desktop-control/package.json',
+    'desktop-control/dist/index.js', 'desktop-control/native/capture', 'desktop-control/scripts/ashub-setup.mjs',
+    'desktop-control/LICENSE', 'desktop-control/docs/arc-cua-license.txt',
+  ];
+  for (const platform of ['mac', 'win', 'linux']) {
+    const matchers = ['files', 'extraResources', 'extraFiles'].flatMap(name => getFileMatchers(config, name, path.join(root, 'release'), {
+      defaultSrc: root, globalOutDir: path.join(root, 'release'), customBuildOptions: config[platform], macroExpander: value => value,
+    }) || []);
+    const included = file => matchers.some(matcher => {
+      const absolute = path.join(pluginPath, file);
+      const relative = path.relative(matcher.from, absolute);
+      return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)
+        && matcher.createFilter()(absolute, fileStat);
+    });
+    for (const file of common) assert(included(file), `${platform} must bundle ${file}`);
+    for (const file of macOnly) assert.equal(included(file), platform === 'mac', `${platform}: ${file}`);
+  }
+});
+
+macTest('the builder compiles the desktop capture helper once for both macOS architectures', async t => {
+  const f = fixture(t);
+  f.install('arm64');
+  f.install('x64');
+  for (const spec of require('../scripts/patches/codex-windows-login.json').files) {
+    const file = path.join(f.root, 'node_modules/agent-sh', spec.path);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, spec.after);
+  }
+  const plugin = path.join(f.root, 'examples/extensions/desktop-control');
+  fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(plugin, 'scripts/build-capture.mjs'), "import { appendFileSync } from 'node:fs'; appendFileSync('builds', 'x');");
+  const build = require('../scripts/before-pack.cjs');
+  const packager = { projectDir: f.root, info: { appDir: f.root } };
+  for (const electronPlatformName of ['win32', 'linux']) await build({ electronPlatformName, packager });
+  assert(!fs.existsSync(path.join(plugin, 'builds')));
+  await Promise.all([1, 3].map(arch => build({ electronPlatformName: 'darwin', arch, packager })));
+  assert.equal(fs.readFileSync(path.join(plugin, 'builds'), 'utf8'), 'x');
 });

@@ -7,8 +7,8 @@ const root = path.resolve(__dirname, '../../../..');
 (async () => {
   const { AssistantPanel } = await import(pathToFileURL(path.join(__dirname, '../app.mjs')));
   let enabled = true, health = {};
-  const learning = { access: () => enabled, health: () => health };
-  const panel = new AssistantPanel({ conversationId: () => 'assistant', store: { profile: () => ({ enabled: true }) }, learning });
+  const learning = { access: () => enabled, health: () => health, config: () => ({ enabled: false }) };
+  const panel = new AssistantPanel({ conversationId: () => 'assistant', store: { profile: () => ({ enabled: true }) }, services: {}, learning });
   const views = [panel.overview()];
   health = { backlog: true }; views.push(panel.overview());
   learning.inferenceSignal = new AbortController().signal; views.push(panel.overview());

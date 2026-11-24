@@ -342,6 +342,96 @@ for (const id of ['ashub-project-management','ashub-image-display']) test(`repla
     assert.throws(()=>f.installer.restore(id),/not available/);
   } finally {await f.installer.close();}
 });
+test('new bundled extensions are disabled by default and restore only on supported platforms', async () => {
+  const f = fixture();
+  const portable = ['ashub-scheduled-tasks', 'ashub-voice-input'];
+  const desktop = 'ashub-desktop-control';
+  const newIds = [...portable, desktop];
+  const { PluginInstaller } = f.e.load('src/plugin-installer.ts');
+  const newEntries = platform => f.catalog.pluginCatalog(f.file, { platform })
+    .filter(entry => newIds.includes(entry.manifest?.id));
+  try {
+    for (const platform of ['darwin', 'win32', 'linux']) {
+      const expected = platform === 'darwin' ? newIds : portable;
+      fs.writeFileSync(f.file, '{}');
+      const entries = newEntries(platform);
+      assert.deepEqual(Array.from(entries, entry => entry.manifest.id), expected);
+      assert(entries.every(entry => entry.bundled && !entry.enabled));
+      fs.writeFileSync(f.file, JSON.stringify({ [f.catalog.BUNDLED_REMOVED]: newIds }));
+      assert.equal(newEntries(platform).length, 0);
+      const restorable = f.catalog.restorableApps(f.file, undefined, platform);
+      assert.deepEqual(Array.from(restorable, entry => entry.id), expected);
+
+      const installer = new PluginInstaller(f.file, async () => {}, platform);
+      try {
+        if (platform === 'darwin') {
+          installer.restore(desktop);
+          assert.deepEqual(Array.from(newEntries(platform), entry => entry.manifest.id), [desktop]);
+          assert.equal(newEntries(platform)[0].enabled, false);
+        } else {
+          assert.throws(() => installer.restore(desktop), /not available/);
+          assert.equal(newEntries(platform).length, 0);
+        }
+      } finally { await installer.close(); }
+    }
+  } finally { await f.installer.close(); }
+});
+test('existing local copies of newly bundled plugins retain their identity and preferences', async () => {
+  const f = fixture();
+  const localManifests = [
+    { schemaVersion: 1, id: 'ashub-scheduled-tasks' },
+    { schemaVersion: 1, id: 'ashub-voice-input' },
+    { schemaVersion: 1, id: 'ashub-desktop-control', platforms: ['darwin'] },
+  ];
+  const localRoots = localManifests.map(m => installed(f, `local-${m.id}`, m, '1.2.3'));
+  try {
+    const initial = f.catalog.pluginCatalog(f.file, { platform: 'darwin' });
+    const originals = localRoots.map(root => initial.find(entry => entry.packageRoot === root));
+    const settings = JSON.stringify({
+      [f.catalog.PLUGIN_DISABLED]: [originals[1].id],
+      'ashub.plugins.autoApprove': [originals[0].id, originals[2].id],
+      'desktop-control': { enabled: true, allowedApps: ['com.apple.TextEdit'] },
+    });
+    fs.writeFileSync(f.file, settings);
+    const catalog = f.catalog.pluginCatalog(f.file, { platform: 'darwin' });
+    for (const [index, m] of localManifests.entries()) {
+      const copies = catalog.filter(entry => entry.manifest?.id === m.id);
+      assert.equal(copies.length, 1);
+      const [entry] = copies;
+      assert.equal(entry.id, originals[index].id);
+      assert.equal(entry.packageRoot, localRoots[index]);
+      assert.equal(entry.version, '1.2.3');
+      assert.equal(entry.enabled, index !== 1);
+      assert(entry.includedApp && !entry.bundled);
+    }
+    assert.equal(fs.readFileSync(f.file, 'utf8'), settings);
+  } finally { await f.installer.close(); }
+});
+test('desktop control ZIP cannot be installed on Windows or Linux', async () => {
+  const f = fixture();
+  const desktop = JSON.parse(fs.readFileSync(new URL('../examples/extensions/desktop-control/ashub-plugin.json', import.meta.url)));
+  const bytes = archive(desktop, {
+    'release/index.js': 'export default () => {}',
+    [`release/${desktop.setup.script}`]: '// no setup on an unsupported platform',
+  });
+  const { PluginInstaller } = f.e.load('src/plugin-installer.ts');
+  let setupRuns = 0;
+  try {
+    for (const platform of ['win32', 'linux']) {
+      const installer = new PluginInstaller(f.file, async () => { setupRuns++; }, platform, undefined, undefined, undefined, {
+        probePython: async () => ({ ok: true, detail: 'Python 3.12.0', version: '3.12.0', path: '/test/python3' }),
+      });
+      try {
+        const preview = await installer.preview(bytes);
+        assert.equal(preview.canInstall, false);
+        assert(preview.checks.some(check => check.label === 'platform' && !check.ok));
+        assert.throws(() => installer.confirm(preview.token), /prerequisites/);
+        assert(!fs.existsSync(preview.target));
+      } finally { await installer.close(); }
+    }
+    assert.equal(setupRuns, 0);
+  } finally { await f.installer.close(); }
+});
 test('offline reinstall clears stale activation and grant without overwriting other profile preferences',async()=>{
   const f=fixture(), name='ashub-project-management';
   const original=f.catalog.pluginCatalog(f.file).find(p=>p.manifest?.id===name);

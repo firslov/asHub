@@ -1,6 +1,5 @@
 const {app,BrowserWindow}=require('electron');
 const assert=require('node:assert/strict'),{once}=require('node:events'),{pathToFileURL}=require('node:url');
-const {zip}=require('./plugin-zip-fixture.cjs');
 const {env,Bridge,fs,path,root}=require('./harness.cjs');
 const modules={},e=env({modules,globals:{setTimeout,clearTimeout,setInterval,clearInterval,Date}});
 process.env.AGENT_SH_HOME=e.dir;app.setPath('userData',path.join(e.dir,'browser'));app.on('window-all-closed',()=>{});
@@ -13,11 +12,10 @@ app.whenReady().then(async()=>{
   modules['./extensions/installed.js']=await import(pathToFileURL(path.join(root,'dist/extensions/installed.js')).href);
   hub=e.hub().startHub({host:'127.0.0.1',port:0,webRoot:path.join(root,'web'),pluginSecretStore:{read:k=>vault.get(k)||null,write:(k,v)=>v===null?vault.delete(k):vault.set(k,v)},makeBridge:opts=>{const bridge=new Bridge(opts);bridge.submit=async()=>{submits++;return{stopReason:'done'};};setTimeout(()=>bridge.emit('event',{name:'agent:info',payload:{model:'tiny',provider:'mock',modalities:['image']}}),0);return bridge;}});
   await once(hub.server,'listening');const base='http://127.0.0.1:'+hub.server.address().port;
-  const call=async(route,body,headers)=>{const r=await originalFetch(base+route,{method:body?'POST':'GET',headers:headers||{'Content-Type':'application/json'},body:body?headers?body:JSON.stringify(body):undefined});const raw=await r.text();assert.equal(r.status,200,raw);return JSON.parse(raw);};
-  const pkgRoot=path.join(root,'examples/extensions/voice-input'),pkg=JSON.parse(fs.readFileSync(path.join(pkgRoot,'package.json'))),files=Object.fromEntries(['package.json',...pkg.files].map(n=>[n,fs.readFileSync(path.join(pkgRoot,n),'utf8')]));
-  const preview=await call('/api/plugins/install?action=preview',zip(files),{'Content-Type':'application/zip'});assert(preview.canInstall,JSON.stringify(preview));
-  const job=await call('/api/plugins/install?action=confirm',{token:preview.token});let result;
-  for(let i=0;i<150;i++){result=await call('/api/plugins/install?id='+job.id);if(result.state!=='running')break;await new Promise(r=>setTimeout(r,20));}assert.equal(result.state,'succeeded',JSON.stringify(result));
+  const call=async(route,body,method=body?'POST':'GET')=>{const r=await originalFetch(base+route,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const raw=await r.text();assert.equal(r.status,200,raw);return JSON.parse(raw);};
+  const voice=(await call('/api/plugins')).plugins.find(plugin=>plugin.manifest?.id==='ashub-voice-input');
+  assert(voice?.bundled && !voice.enabled);
+  await call('/api/plugins',{id:voice.id,enabled:true},'PUT');
   let feature;for(let i=0;i<100;i++){feature=(await call('/api/extensions')).features.find(f=>f.name==='语音输入');if(feature?.state==='active')break;await new Promise(r=>setTimeout(r,20));}assert.equal(feature?.state,'active',JSON.stringify(feature));
   const resource='/api/plugin-resources/'+feature.pluginId+'/settings';
   const prepared=await call(resource,{action:'save',values:{endpoint:'https://fixture.test/audio/transcriptions',model:'fixture',apiKey:'fixture-key'}});assert(prepared.confirmation);assert(!JSON.stringify(prepared).includes('fixture-key'));await call(resource,{confirm:prepared.confirmation.id});assert.equal(vault.size,1);
@@ -60,7 +58,7 @@ app.whenReady().then(async()=>{
   await call('/api/extensions/'+feature.id+'/enabled',{enabled:false});await js("(async()=>{await (await import('/js/extensions/feature-state.js')).refreshFeatures()})()");
   await wait("document.querySelector('.composer-media').hidden");assert.equal(await js('query.value'),'已有草稿：这是测试转写');
   await call('/api/extensions/'+feature.id+'/enabled',{enabled:true});await js("(async()=>{await (await import('/js/extensions/feature-state.js')).refreshFeatures()})()");await wait("!document.querySelector('.composer-media').hidden");
-  // Isolated capture exercises real renderer events and the actual installed transcription adapter.
+  // Isolated capture exercises real renderer events and the bundled transcription adapter.
   const messages={
     en:{mic:'Voice input',stop:'Stop recording and transcribe',elapsed:'Recording',interrupted:'Recording was interrupted',empty:'No recording data was captured',denied:'Microphone access was denied',cancel:'Cancel',cancelled:'Cancelled. Your draft is unchanged.',auth:'Transcription authentication failed'},
     zh:{mic:'语音输入',stop:'结束录音并转写',elapsed:'录音 ',interrupted:'录音中断',empty:'未取得录音数据',denied:'麦克风未获授权',cancel:'取消',cancelled:'已取消 · 草稿保留',auth:'转写服务认证失败'},
@@ -94,7 +92,7 @@ app.whenReady().then(async()=>{
     assert(await js('mediaFixture.tracks.every(t=>t.stopped)'));
     asrStatus=200;
   }
-  // Real installed declarative panel, single page, no key echoed.
+  // Render the plugin's declarative panel on one page without displaying the key.
   await locale('zh');
   await wait(`!!document.querySelector('.extension-menu[aria-label="语音输入"]')`);
   await js("Array.from(document.querySelectorAll('.extension-menu')).find(b=>b.title.includes('语音输入')).click()");
@@ -326,7 +324,7 @@ app.whenReady().then(async()=>{
   assert.equal(await js("document.querySelector('#image-previews img')"),null,'the image belongs to the session that opened the picker');
   assert.equal(submits,0);
   assert(!errors.some(e=>/ReferenceError|TypeError/.test(e)),JSON.stringify(errors));
-  console.log('PASS installed voice plugin: mode-specific settings at 320/390/1200px in each language and theme, localized errors, retained form edits and focus, stale locale rejection, ZIP/capability gate, encrypted configuration, explicit confirmation, desktop draft-only conversion, image picker session ownership, enable/disable restore, forbidden remote config and cross-origin');
+  console.log('PASS bundled voice plugin: mode-specific settings at 320/390/1200px in each language and theme, localized errors, retained form edits and focus, stale locale rejection, bundled opt-in, encrypted configuration, explicit confirmation, desktop draft-only conversion, image picker session ownership, enable/disable restore, forbidden remote config and cross-origin');
   win.destroy();await hub.shutdown();clearTimeout(deadline);app.exit(0);
  }catch(error){console.error(error);win?.destroy();try{await hub?.shutdown();}catch{}clearTimeout(deadline);app.exit(1);}finally{globalThis.fetch=originalFetch;}
 });

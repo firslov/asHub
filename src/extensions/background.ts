@@ -5,6 +5,7 @@ import type { MessageEntry, SessionStore } from '../history/session-store.js';
 import type { SummaryUsage } from '../history/summary-client.js';
 import { extractText, stripContextWrappers, isSystemNoteMessage } from '../history/summarize.js';
 import { unicodeSlice } from '../unicode.js';
+import { acquireLedgerLock } from './ledger-lock.js';
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
@@ -16,6 +17,9 @@ interface Target { id: string; cwd: string; title: string; model?: string; provi
 interface Grant extends BackgroundGrantInput { id: string; pluginId: string; since: number; modelBinding: string; day: string; calls: number; backgroundModel?: BackgroundModel | null; modelRevision?: number; backgroundEndpoint?: BackgroundEndpoint; observedForeground?: string }
 interface TokenUsage extends SummaryUsage { reportedCalls: number }
 interface Usage { pluginId: string; day: string; calls: number; tokenUsage?: TokenUsage }
+interface CommittedLedger { stamp?: string; digest: string; legacySymlink?: boolean }
+const ledgerStamp = (stat: fs.BigIntStats) => `${stat.dev}:${stat.ino}:${stat.birthtimeNs}:${stat.mtimeNs}:${stat.size}`;
+const ledgerDigest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 interface HistoryView {
   store: SessionStore;
   revision: number;
@@ -78,10 +82,14 @@ export class PluginBackground {
   private usage = new Map<string, Usage>();
   private running = new Map<string, AbortController>();
   private fault: unknown;
+  private committed?: CommittedLedger;
+  private foregroundDirty = false;
   private historyCache = new Map<string, HistoryView>();
   constructor(private file: string, private runtime: BackgroundRuntime, private signal: AbortSignal) {
     let state;
-    try { state = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { version: 2, grants: [], usage: [] };
+    try {
+    const ledger = fs.existsSync(file) ? this.readLedger(file, true) : undefined;
+    state = ledger ? JSON.parse(ledger.data.toString('utf8')) : { version: 2, grants: [], usage: [] };
     if (![1,2].includes(state.version) || !Array.isArray(state.grants) || state.grants.length > 100) throw Error('Invalid background grants');
     if (state.grants.some((g: Grant) => !g || typeof g.id !== 'string' || typeof g.pluginId !== 'string' || typeof g.modelBinding !== 'string' || (g.followModel !== undefined && typeof g.followModel !== 'boolean') || (g.modelRevision !== undefined && (!Number.isSafeInteger(g.modelRevision) || g.modelRevision < 0)) || (g.backgroundModel !== undefined && g.backgroundModel !== null && !modelDescriptor(g.backgroundModel)) || !Number.isSafeInteger(g.since) || !Number.isSafeInteger(g.calls) || g.calls < 0 || (g.day !== '' && !validDay(g.day)) || (g.calls > 0 && !validDay(g.day)) || !Number.isInteger(g.dailyCalls) || g.dailyCalls < 1 || g.dailyCalls > 24 || !Array.isArray(g.excludedIds) || (g.includedIds !== undefined && (!Array.isArray(g.includedIds) || !g.includedIds.length || g.includedIds.some(id=>typeof id!=='string'||!/^[-a-zA-Z0-9]+$/.test(id)))))) throw Error('Invalid background grant');
     if (state.grants.some((g: Grant) => g.backgroundModel !== undefined && ((g.backgroundModel === null ? g.followModel !== true || g.backgroundEndpoint !== undefined : g.followModel !== false || !endpointDescriptor(g.backgroundEndpoint)) || g.includedIds?.length !== 1 || g.includedIds[0] !== g.modelSessionId || g.excludedIds.length !== 0 || !Number.isSafeInteger(g.modelRevision) || g.modelRevision! < 1))) throw Error('Invalid persisted model policy');
@@ -108,21 +116,95 @@ export class PluginBackground {
       if (state.version === 1) this.usage.set(g.pluginId, { pluginId:g.pluginId, day:g.day, calls:g.calls });
     }
     this.grants = state.grants;
+    this.committed = ledger?.snapshot;
     } catch (error) { this.fault = error; this.grants = []; this.usage.clear(); }
     signal.addEventListener('abort', () => { for (const c of this.running.values()) c.abort(); }, { once: true });
   }
-  private save(required = true) {
+  private readLedger(file: string, allowSymlink = false) {
+    const stat = fs.lstatSync(file, { bigint: true });
+    if (!stat.isFile() && !(allowSymlink && stat.isSymbolicLink())) throw Error('Invalid background ledger file');
+    const stamp = ledgerStamp(stat), data = fs.readFileSync(file);
+    const after = fs.lstatSync(file, { bigint: true });
+    if (ledgerStamp(after) !== stamp || after.ctimeNs !== stat.ctimeNs) throw Error('Background ledger changed while reading');
+    return { data, snapshot: { stamp, digest: ledgerDigest(data), legacySymlink: stat.isSymbolicLink() } };
+  }
+  private unchangedLedger(file: string, expected?: CommittedLedger) {
+    if (!expected?.stamp) return false;
+    try {
+      const { snapshot } = this.readLedger(file);
+      return snapshot.stamp === expected.stamp && snapshot.digest === expected.digest;
+    } catch { return false; }
+  }
+  private sampleLedgerFile(file: string) {
+    try {
+      const stat = fs.lstatSync(file, { bigint: true });
+      if (stat.isFile()) return stat;
+    } catch { /* An optional sample must not invalidate a successful commit. */ }
+    return undefined;
+  }
+  private save(update?: () => void, required = true, rollbackReservation?: () => void) {
     if (this.fault) throw this.fault;
     const tmp = this.file + '.' + randomUUID() + '.tmp';
-    try { fs.mkdirSync(path.dirname(this.file), { recursive: true }); fs.writeFileSync(tmp, JSON.stringify({ version: 2, grants: this.grants, usage: [...this.usage.values()] }), { mode: 0o600, flush: true }); fs.renameSync(tmp, this.file); }
+    let phase: 'preparing' | 'writing' | 'renaming' = 'preparing';
+    let staged: CommittedLedger | undefined;
+    let release: (() => void) | undefined;
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      release = acquireLedgerLock(this.file);
+      update?.();
+      const data = JSON.stringify({ version: 2, grants: this.grants, usage: [...this.usage.values()] });
+      const digest = ledgerDigest(data);
+      phase = 'writing';
+      fs.writeFileSync(tmp, data, { mode: 0o600, flush: true });
+      phase = 'preparing';
+      const stagedFile = this.sampleLedgerFile(tmp);
+      if (stagedFile) staged = { stamp: ledgerStamp(stagedFile), digest };
+      const committed = this.committed;
+      if (!required) {
+        // Token statistics are optional. Preserve any newer durable grant state.
+        if (!this.unchangedLedger(this.file, committed)) return;
+      } else if (committed) {
+        // Equal timestamps and size do not prove that the authorization bytes
+        // are unchanged. Verify them before replacing the ledger.
+        const { snapshot } = this.readLedger(this.file, committed.legacySymlink);
+        if (snapshot.digest !== committed.digest || (committed.stamp && snapshot.stamp !== committed.stamp)) {
+          throw Error('Background ledger no longer matches the committed authorization');
+        }
+      } else if (fs.lstatSync(this.file, { throwIfNoEntry: false })) {
+        throw Error('Background ledger no longer matches the committed authorization');
+      }
+      phase = 'renaming';
+      fs.renameSync(tmp, this.file);
+      const installed = this.sampleLedgerFile(this.file);
+      const stamp = installed && stagedFile && installed.dev === stagedFile.dev && installed.ino === stagedFile.ino
+        ? ledgerStamp(installed)
+        : undefined;
+      this.committed = { stamp, digest };
+      this.foregroundDirty = false;
+    }
     catch (e) {
+      if (!release && (e as NodeJS.ErrnoException)?.code === 'ELOCKED') {
+        if (required) throw e;
+        return;
+      }
+      // A rename error can report an already committed operation. Only retry
+      // if the original ledger and the complete staged replacement both remain.
+      if (rollbackReservation && (e as NodeJS.ErrnoException)?.code === 'EIO'
+        && (phase === 'writing' || (phase === 'renaming' && this.unchangedLedger(tmp, staged)))
+        && this.unchangedLedger(this.file, this.committed)) {
+        rollbackReservation();
+        throw e;
+      }
       if (required) {
         this.fault = e;
         for (const c of this.running.values()) c.abort();
         throw e;
       }
     }
-    finally { try { fs.unlinkSync(tmp); } catch {} }
+    finally {
+      try { fs.unlinkSync(tmp); } catch {}
+      try { release?.(); } catch { /* The committed state is already authoritative. */ }
+    }
   }
   private currentUsage(pluginId: string): Usage {
     const day = utcDay(), prior = this.usage.get(pluginId);
@@ -138,15 +220,13 @@ export class PluginBackground {
       reportedCalls: (previous?.reportedCalls ?? 0) + 1,
     };
     if (!validTokens(tokenUsage) || tokenUsage.reportedCalls > usage.calls) return;
-    this.usage.set(pluginId, { ...usage, tokenUsage });
     // The quota was already persisted before dispatch. A statistics write
     // must never invalidate a paid reply or disable existing authorizations.
-    this.save(false);
+    this.save(() => { this.usage.set(pluginId, { ...usage, tokenUsage }); }, false);
   }
   private binding(t: Target) { return JSON.stringify([t.id, t.cwd, t.provider, t.model]); }
   noteForegroundModelChange(id: string, cwd: string, provider: string | undefined, model: string | undefined) {
     if (this.fault || this.signal.aborted || !provider || !model) return;
-    let changed = false;
     let current: string | undefined;
     for (const g of this.grants) {
       if (g.modelSessionId !== id || g.backgroundModel) continue;
@@ -156,12 +236,17 @@ export class PluginBackground {
       const previous = g.observedForeground ?? foregroundIdentity(originalProvider,originalModel);
       if (current === previous) continue;
       if ((g.modelRevision ?? 0) >= Number.MAX_SAFE_INTEGER) throw Error('后台模型版本已达上限');
+      // This event reflects a model change that has already happened. Keep
+      // pending confirmations current even if another host is saving.
       g.observedForeground = current;
       g.modelRevision = (g.modelRevision ?? 0) + 1;
+      this.foregroundDirty = true;
       this.running.get(g.pluginId)?.abort();
-      changed = true;
     }
-    if (changed) this.save();
+    if (this.foregroundDirty) {
+      try { this.save(); }
+      catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ELOCKED') throw error; }
+    }
   }
   private async modelOptions(g: Grant): Promise<BackgroundModel[]> {
     if (!this.runtime.models || !this.runtime.completeSpecified || !this.runtime.describeSpecified) return [];
@@ -208,10 +293,12 @@ export class PluginBackground {
     if(this.get(pluginId,g.id,this.signal)!==g || (g.modelRevision??0)!==plan.revision || this.binding(this.runtime.targets().find(t=>t.id===g.modelSessionId)??{} as Target)!==plan.binding)throw Error('后台授权已变化，请重新确认');
     validate();
     if((g.modelRevision??0)>=Number.MAX_SAFE_INTEGER)throw Error('后台模型版本已达上限');
-    this.running.get(pluginId)?.abort();
-    g.backgroundModel=plan.model ? copy(plan.model) : null;if(plan.endpoint)g.backgroundEndpoint=copy(plan.endpoint);else delete g.backgroundEndpoint;g.followModel=plan.model===null;g.modelBinding=plan.model ? JSON.stringify([target.id,target.cwd]) : this.binding(target);g.modelRevision=(g.modelRevision??0)+1;
-    delete g.observedForeground;
-    this.save();return g.id;
+    this.save(() => {
+      this.running.get(pluginId)?.abort();
+      g.backgroundModel=plan.model ? copy(plan.model) : null;if(plan.endpoint)g.backgroundEndpoint=copy(plan.endpoint);else delete g.backgroundEndpoint;g.followModel=plan.model===null;g.modelBinding=plan.model ? JSON.stringify([target.id,target.cwd]) : this.binding(target);g.modelRevision=(g.modelRevision??0)+1;
+      delete g.observedForeground;
+    });
+    return g.id;
   }
   prepare(pluginId: string, input: BackgroundGrantInput) {
     this.signal.throwIfAborted(); if (this.fault) throw this.fault;
@@ -250,9 +337,12 @@ export class PluginBackground {
     // An approval changes the day's total limit, never grants an extra quota.
     // Read usage at approval time because an old grant can run after preview.
     if (!this.usage.has(pluginId) && this.usage.size >= 10000) throw Error('Too many background usage records');
-    this.running.get(pluginId)?.abort();
-    this.usage.set(pluginId, usage);
-    this.grants = [...this.grants.filter(g => g.pluginId !== pluginId), { ...copy(plan.grant), day:usage.day, calls:usage.calls }]; this.save(); return plan.grant.id;
+    this.save(() => {
+      this.running.get(pluginId)?.abort();
+      this.usage.set(pluginId, usage);
+      this.grants = [...this.grants.filter(g => g.pluginId !== pluginId), { ...copy(plan.grant), day:usage.day, calls:usage.calls }];
+    });
+    return plan.grant.id;
   }
   private get(pluginId: string, id: string, signal: AbortSignal) {
     this.signal.throwIfAborted(); signal.throwIfAborted(); if (this.fault) throw this.fault;
@@ -290,7 +380,13 @@ export class PluginBackground {
       status: (id: string) => { const g = get(id), t=this.runtime.targets().find(t=>t.id===g.modelSessionId); const chosen=g.backgroundModel??t; return { ...copy(g), ...this.currentUsage(pluginId), modelBinding: undefined, backgroundEndpoint: undefined, observedForeground: undefined, modelRevision:g.modelRevision??0, backgroundModel:g.backgroundModel??null, modelTarget:t && chosen?.provider && chosen.model ? {conversationId:t.id,cwd:t.cwd,provider:chosen.provider,model:chosen.model} : null }; },
       models: async (id: string) => { const g=get(id), revision=g.modelRevision??0; if(g.includedIds?.length!==1 || g.includedIds[0]!==g.modelSessionId || g.excludedIds.length)throw Error('模型设置仅适用于专属对话授权'); const target=this.runtime.targets().find(t=>t.id===g.modelSessionId); if(!target || JSON.stringify([target.id,target.cwd])!==JSON.stringify(JSON.parse(g.modelBinding).slice(0,2)))throw Error('后台授权的对话已变化'); const binding=this.binding(target), result=await this.modelOptions(g); if(get(id)!==g || (g.modelRevision??0)!==revision || this.binding(this.runtime.targets().find(t=>t.id===g.modelSessionId)??{} as Target)!==binding)throw Error('后台授权已变化'); return result; },
       targets: (id: string) => { const g = get(id); return this.runtime.targets().filter(t => !g.excludedIds.includes(t.id) && (!g.includedIds || g.includedIds.includes(t.id))).map(t => ({ ...t })); },
-      revoke: (id: string) => { get(id); this.running.get(pluginId)?.abort(); this.grants = this.grants.filter(g => g.id !== id); this.save(); },
+      revoke: (id: string) => {
+        get(id);
+        this.save(() => {
+          this.running.get(pluginId)?.abort();
+          this.grants = this.grants.filter(g => g.id !== id);
+        });
+      },
       valid: (id: string, conversationId: string, sourceIds: string[]) => {
         const g = get(id); if (!Array.isArray(sourceIds) || sourceIds.length > 200) throw Error('Invalid source IDs');
         const { entries, positions } = historyView(g, conversationId);
@@ -365,7 +461,17 @@ export class PluginBackground {
           if (validTokens(value)) observed = { inputTokens:value.inputTokens, outputTokens:value.outputTokens };
         };
         try {
-          usage.calls++; this.usage.set(pluginId, usage); g.day = usage.day; g.calls = usage.calls; this.save();
+          const previousUsage = this.usage.get(pluginId), previousDay = g.day, previousCalls = g.calls;
+          this.save(() => {
+            usage.calls++;
+            this.usage.set(pluginId, usage);
+            g.day = usage.day;
+            g.calls = usage.calls;
+          }, true, () => {
+            if (previousUsage) this.usage.set(pluginId, previousUsage);
+            else this.usage.delete(pluginId);
+            g.day = previousDay; g.calls = previousCalls;
+          });
           const result = selection
             ? await this.runtime.completeSpecified!(model.id, messages, combined, selection, g.backgroundEndpoint!.identity, onUsage)
             : await this.runtime.complete(model.id, messages, combined, onUsage);

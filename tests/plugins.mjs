@@ -55,7 +55,7 @@ test('included apps are opt-in, retain settings, and give precedence to a manual
   const f=fixture();
   const catalog=()=>pluginCatalog(f.file);
   const bundled=catalog().filter(p=>p.bundled);
-  assert.equal(bundled.length,5);
+  assert.equal(bundled.length, process.platform === 'darwin' ? 8 : 7);
   for(const plugin of bundled) {
     assert(!plugin.enabled && plugin.includedApp);
     assert(fs.existsSync(plugin.sessionSpecifier || plugin.applicationSpecifier));

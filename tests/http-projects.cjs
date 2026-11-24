@@ -3,6 +3,10 @@ const assert=require('node:assert/strict');
 const {once}=require('node:events');
 (async()=>{
  const e=env(); e.context.process.env.ASHUB_TOKEN='project-test';
+ // The isolated Hub must discover the same Git used to create the fixture.
+ for (const [key, value] of Object.entries(process.env)) {
+   if (/^(path|programfiles|programw6432|localappdata)$/i.test(key)) e.context.process.env[key]=value;
+ }
  const bridges=[];
  const opts={host:'127.0.0.1',port:0,webRoot:path.join(root,'web'),makeBridge:o=>{const b=new Bridge(o);bridges.push(b);return b;}};
  let hub=e.hub().startHub(opts); await once(hub.server,'listening');

@@ -6,16 +6,16 @@ The public site at https://ashub.aihao.world uses the same visual identity as th
 
 - `index.html`: static preview, with working GitHub Releases download fallbacks
 - `download.html`: the same page, used by the production mirror renderer
-- `assets/site-20261102-plugins.css` / `assets/site-20261008.js`: layout and progressive enhancements
+- `assets/site-20261108-0214.css` / `assets/site-20261008.js`: layout and progressive enhancements
 - `assets/showcase-workspace-0211-{en,zh}.jpg`: v0.21.1 main UI in English and Chinese
 - `assets/showcase-{dark,files}-0211.jpg`: current detail captures with isolated demo data
 - `assets/brand-20261102.svg`: the application icon from `web/assets/brand/icon.svg`
 
 Keep `index.html` and `download.html` identical. Use a new asset filename when replacing a cached production resource.
 
-The v0.21.1 overview covers optional scheduled tasks, task supplements, reliable history and the refreshed workspace. Download versions come from the live release payload, independently of the overview.
+The v0.21.9 overview covers subagent recovery, Personal Assistant memory, and device interconnect. Screenshots retain their original version labels. Download versions come from the live release payload, independently of the overview.
 
-Basic mobile access requires v0.20.5 or later. Project collaboration and thinking controls require v0.20.6 with the updated gateway. The phone graphic is a labeled HTML/CSS usage illustration, not a screenshot or a claim about real task results.
+Current mobile instructions use the Device Interconnect extension and a compatible gateway. The phone graphic is a labeled HTML/CSS usage illustration, not a screenshot or a claim about real task results.
 
 ## Preview
 
@@ -61,4 +61,4 @@ Back up the template and affected assets first. Upload new, versioned assets bef
 
 After deployment, verify the live page, all four platform links, loaded images and fonts, keyboard tabs, clipboard success/failure, and mobile overflow. Rollback consists of atomically restoring the backed-up template; old assets should remain available for cached pages.
 
-The dedicated `#plugins` section introduces optional project management, scheduled tasks and macOS desktop control, with ZIP installation steps and links to the host API. Examples are descriptions, not claims of preinstalled plugins or unattended tool permissions.
+The `#plugins` section distinguishes bundled local extensions from separately installed Personal Assistant and WeChat Bot. Desktop Control is bundled only on macOS.

@@ -13,11 +13,15 @@ Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The 
 
 ![asHub workspace with session tabs, project analysis and a formatted table](website/assets/showcase-workspace-0211-en.jpg)
 
-*Current interface with isolated demo data. English main screenshot; no personal conversations or credentials.*
+*English workspace screenshot from v0.21.1, using isolated demo data.*
 
 ## Highlights
 
-**New in v0.21.5:** a dedicated personal assistant conversation with scoped long-term memory, opt-in project continuation, browser file and code-editor workflows, and refreshed Codex models after switching accounts.
+**[v0.21.9](https://github.com/firslov/asHub/releases/tag/v0.21.9)** updates the agent-sh kernel to 0.17.0 and improves long-running tasks, Personal Assistant memory, and device interconnect.
+
+- **Subagents:** cancelled, partial, and completed runs are distinct in live views and history. Transient stream failures retry the current model request and keep completed tool results. Continuing a subagent in the same conversation reuses its original task and results within its original permissions.
+- **Personal Assistant:** search authorized conversation excerpts alongside saved memories, choose a separate model for background organization, and optionally build project decision overviews that point back to their evidence. The plugin is installed separately.
+- **Device interconnect:** see which computer is running the task, return to the device list, and resync a slow conversation without losing the draft or automatically resending a message.
 
 | Capability | Experience |
 | --- | --- |
@@ -33,7 +37,7 @@ Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The 
 | Proxy controls | Choose a global proxy default and override it per conversation |
 | Persistent work | Saved conversations, branches, rewind, Markdown export and downloadable workspace results |
 | A consistent interface | Warm light and graphite dark themes; English and Chinese; display scaling and a collapsible status bar |
-| Mobile access · preview | Continue authorized desktop conversations from a phone; shared history, streaming replies and one-time approvals |
+| Device interconnect · preview | Continue authorized conversations on another computer or in the mobile web app |
 
 <details>
 <summary>Dark workspace</summary>
@@ -89,37 +93,34 @@ chmod +x ./asHub-*.AppImage
 ./asHub-*.AppImage
 ```
 
-## Mobile access · preview
+## Device interconnect & mobile access · preview
 
-Continue desktop conversations at [asHub Mobile](https://ashub.aihao.world/mobile/). **Requires asHub v0.20.5 or later.**
+[asHub Mobile](https://ashub.aihao.world/mobile/) is a mobile web app. The desktop app's [Device Interconnect](examples/extensions/multi-machine) extension also lets one computer open the workspace of another.
 
-1. In the updated desktop, enable **Device interconnect (设备互联)** under **Plugins → Local extensions**, open its toolbar entry, and choose **Allow access to this computer**. Sign in or register and confirm shared directories. Earlier versions use **Mobile Access**; upgrading preserves existing device identity and authorization.
-2. Save the recovery code, then select **I have saved it (我已保存)**. Unconfirmed codes survive menu switches, but must be saved before quitting or refreshing the app
-3. Sign in with the same account on your phone, select your computer, and continue a conversation or start a new one
+1. On the computer that will run tasks, enable **Device interconnect** in **Plugins → Local extensions**. Open its toolbar entry, choose **Allow access to this computer**, sign in or register, and confirm the directories you want to share. Upgrading from the old Mobile Access feature preserves the existing device identity and authorization.
+2. On first setup, save the recovery code and confirm that you've saved it.
+3. Sign in with the same account on your phone, or choose **Connect to another computer** in the desktop extension. Select the target computer. Signing in to view another device does not share this computer.
 
-Keep the computer online, awake and asHub running. In v0.20.8, enable **Settings → Background activity → Keep running when the window closes** to keep remote access available after closing the window. Background mode is off by default; quitting the app stops it. Optional sleep prevention allows the display to turn off, but does not guarantee access during lid-close or manual sleep.
+The target computer must be online, awake, and running asHub. To keep access after closing the window, turn on **Settings → Background activity → Keep running when the window closes**. Quitting asHub or putting the computer to sleep can still interrupt access.
 
-Only conversations in authorized, existing directories are shared; restore archived conversations on the desktop first. Mobile supports streamed replies, images, model switching and one-time approvals. The relay forwards content without persisting conversation bodies; it is not end-to-end encrypted.
-
-Project views, task receipts, result downloads and thinking controls require desktop v0.20.6 or later and an updated mobile gateway.
+Only conversations in authorized, existing directories are shared. Restore archived conversations on the desktop first. On mobile you can follow streamed replies, view authorized image attachments, change models, and approve individual operations. When sync takes too long, choose **Resync this conversation** to keep your draft and check pending sends without sending them again. Mobile access and voice input require a compatible gateway. The relay forwards content without persisting conversation bodies; it is not end-to-end encrypted.
 
 ## Plugins
 
-Open **Plugins** in the right toolbar to import a trusted plugin ZIP, review its setup and manage configuration. Optional features use the same menus and design as the app. Some kernel extensions take effect when a conversation next starts.
+In **Plugins → Local extensions**, enable the extensions that ship with asHub. They start disabled on a fresh install. Existing manual installations take precedence and keep their settings. If you uninstall an included extension, it stays removed across upgrades until you choose to reinstall it. Other plugins can be installed from a trusted ZIP; see the [installation guide](docs/plugin-installation.md).
 
-In **v0.21.3+**, open **Plugins → Local extensions** to enable **Kimi Coding Plan**, **Project management** or the **Conversation browser**. Uninstalling an included extension keeps it removed across updates; use its reinstall button to bring it back disabled without a ZIP. These extensions ship with asHub and start disabled. Existing manual installations keep their settings and take precedence. Start a new conversation to load enabled tools. Use `/kimi-login` for Kimi web sign-in.
+| Availability | Plugins |
+| --- | --- |
+| Included on macOS, Windows, and Linux | [Kimi Coding Plan](examples/extensions/kimi-coding-plan), [Project Management](examples/extensions/project-management), [Conversation Browser](examples/extensions/browser-automation), [Image Display](examples/extensions/image-display), [Device Interconnect](examples/extensions/multi-machine), [Scheduled Tasks](examples/extensions/scheduled-tasks), [Voice Input](examples/extensions/voice-input) |
+| Included on macOS only | [Desktop Control](examples/extensions/desktop-control) |
+| Install separately | [Personal Assistant](examples/extensions/personal-assistant), [WeChat Bot](examples/extensions/wechat-bot) |
 
-In **v0.21.4+**, **Image Display** is also included as an optional local extension. Enable it to show workspace charts and screenshots inline, with click-to-enlarge previews. Images remain scoped to their conversation and are available through authorized mobile access. Project Management also gains task-bound blocker notifications with deduplication and delivery receipts; routine updates remain in the normal task flow.
-
-[Scheduled Tasks](examples/extensions/scheduled-tasks) and [Voice Input](examples/extensions/voice-input) ship with the updated asHub desktop app. [Desktop Control](examples/extensions/desktop-control) ships with the macOS app only. These extensions start disabled and can be enabled in **Plugins → Local extensions**. Existing manual installations and their settings take precedence. On macOS 14 or newer, use `/desktop install` in a new conversation to prepare the driver with a local Python 3.12+ installation, then grant the system permissions you need.
-
-The Conversation Browser opens a page beside the conversation, with isolated per-conversation site logins and manual takeover. In v0.21.5, it supports long text and supported code editors, workspace file uploads and reviewed downloads. Operations require approval by default; automatic approval is a per-plugin option. Download file confirmation and persistent browser grants remain desktop-only. Browser automation requires Electron.
-
-The separately installed [Personal Assistant](examples/extensions/personal-assistant) plugin requires v0.21.5. Its permanent sidebar entry opens one dedicated conversation. After explicit approval, it learns only from that conversation and recalls relevant memories; other chats are not monitored. Mobile uses the same assistant after its workspace directory is shared. Initial setup and memory authorization stay on the desktop.
-
-[Project Management](examples/extensions/project-management) can now resume an explicitly authorized project workflow when member tasks finish. It tracks delivery receipts and recovery state; user stops and approvals remain in effect.
-
-The [scheduled-tasks plugin](examples/extensions/scheduled-tasks) requires **v0.21.1+**. After explicit approval, it delivers a message to an existing conversation once or on a recurring schedule. Keep asHub running and the computer awake; tool permissions still apply.
+- **Personal Assistant:** the sidebar opens one dedicated conversation. Memory learns only from this conversation after you authorize it, and you can correct, forget, or pause memories. First setup and memory authorization happen on the desktop. To use the same assistant from your phone, share its workspace directory.
+- **Project Management:** assign and supplement tasks, track delivery and blockers, and continue an authorized workflow as members finish. User stops and tool approvals still apply.
+- **Conversation Browser and Image Display:** open websites beside your conversation in the Electron app, isolate logins per conversation and site, and review uploads and downloads. Image Display adds inline previews for authorized workspace images. Download confirmation and persistent browser grants stay on the desktop.
+- **Scheduled Tasks and Voice Input:** schedule messages to existing conversations once or on a recurring basis while asHub is running and the computer is awake. Voice transcription writes an editable draft for you to send. Use asHub's free shared quota or configure your own service.
+- **Desktop Control:** requires macOS 14+ and Python 3.12+. Enable it, run `/desktop install` in a new conversation, and grant the system permissions you need.
+- **Kimi Coding Plan:** use `/kimi-login` for Kimi web sign-in.
 
 ## Run from source
 

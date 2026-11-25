@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import {MemoryStore} from '../store.mjs';
 function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-theme-store-'));let store=new MemoryStore(dir);t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true})});return {dir,get store(){return store},reopen(){store.close();store=new MemoryStore(dir);return store}}}
 const authorize=store=>store.setState('learning',{enabled:true,grantId:'grant',dailyCalls:4});
@@ -12,6 +13,17 @@ function memory(store,name,sourceId='source-'+name,conversationId='conversation'
 }
 const ref=(row,role='support')=>({memoryId:row.id,revision:row.revision,conversationId:row.source.refs[0].conversationId,sourceId:row.source.refs[0].id,start:0,end:3,role});
 const request=(store,key,rows,generation=store.themeOverviewGeneration())=>({themeKey:key,kind:'preference',title:'协作偏好',basisKey:'basis-1',generation,statements:rows.map((row,i)=>({text:'陈述 '+key+' '+i,evidence:[ref(row)]}))});
+function reviewedProject(store, row, context=[]) {
+  const support={...ref(row),end:row.content.length};
+  return {
+    themeKey:'project:alpha',kind:'project',projectId:'alpha',title:'决策',basisKey:'review-1',
+    generation:store.themeOverviewGeneration(),reviewed:true,
+    statements:[{text:row.content,validFrom:100,
+      decisionReview:{version:1,context:context.map(({sourceId,text})=>({sourceId,digest:createHash('sha256').update(text).digest('hex')}))},
+      evidence:[support,...context.map(({sourceId,text})=>({...support,sourceId,end:text.length,role:'context'}))],
+    }],
+  };
+}
 test('opt in requires memory grant; enable generation and close erase bodies and dependencies',t=>{
  const f=fixture(t),s=f.store;assert.equal(s.themeOverviewEnabled(),false);assert.equal(s.themeOverviewGeneration(),0);assert.throws(()=>s.setThemeOverviewEnabled(true),/长期记忆/);
  authorize(s);s.setThemeOverviewEnabled(true);const row=memory(s,'公开事实');const gen=s.themeOverviewGeneration();
@@ -50,6 +62,132 @@ test('old schema is additive and project evidence plus exception roles round tri
  const q={themeKey:'project:alpha',kind:'project',projectId:'alpha',title:'决策',basisKey:'k',generation:s.themeOverviewGeneration(),statements:[{text:'先完成设计',validFrom:100,validTo:200,evidence:[ref(a),ref(b,'exception'),ref(b,'counterexample')]}]};
  s.saveThemeStatements(q);const [row]=s.listThemeStatements();assert.equal(row.projectId,'alpha');assert.equal(row.validFrom,100);assert.deepEqual(row.evidence.map(e=>e.role),['support','exception','counterexample']);
 });
+test('reviewed projects persist structured dependencies without raw context and revise them atomically',t=>{
+ const f=fixture(t);let s=f.store;authorize(s);s.setThemeOverviewEnabled(true);
+ const primary=memory(s,'决策'),context={sourceId:'context-only',text:'已有会议纪要明确此前建议已确认'};
+ const q=reviewedProject(s,primary,[context]);
+ const [first]=s.saveThemeStatements(q);
+ assert.deepEqual(s.saveThemeStatements(q),[first]);
+ const [before]=s.listThemeStatements();
+ assert.deepEqual(before.decisionReview,q.statements[0].decisionReview);
+ assert.deepEqual(before.evidence,q.statements[0].evidence);
+ assert(!s.db.prepare('SELECT body FROM theme_statements').get().body.includes(context.text));
+ s=f.reopen();assert.deepEqual(s.listThemeStatements(),[before]);
+ const updated=reviewedProject(s,primary,[{sourceId:'new-context',text:'批准记录'}]);
+ updated.basisKey='review-2';
+ assert.deepEqual(s.saveThemeStatements(updated),[{id:first.id,revision:2}]);
+ assert.equal(s.state('theme-overview:review:'+q.themeKey),updated.basisKey);
+ assert.deepEqual(s.listThemeStatements()[0].evidence,updated.statements[0].evidence);
+ for(const change of [
+  statement=>statement.decisionReview.context[0].digest='invalid',
+  statement=>statement.decisionReview.context[0].text=context.text,
+  statement=>statement.decisionReview.context[0].sourceId=statement.evidence[0].sourceId,
+  statement=>statement.evidence[0].end++,
+  statement=>statement.evidence[1].start++,
+  statement=>statement.evidence[1].revision++,
+  statement=>statement.evidence[1].conversationId='unrelated',
+  statement=>statement.evidence[1].memoryId='unrelated',
+  statement=>statement.evidence[1].role='support',
+  statement=>delete statement.decisionReview,
+ ]) {
+  const malformed=structuredClone(updated);malformed.basisKey='uncommitted';change(malformed.statements[0]);
+  assert.throws(()=>s.saveThemeStatements(malformed));
+  assert.equal(s.state('theme-overview:review:'+q.themeKey),updated.basisKey);
+  assert.equal(s.listThemeStatements()[0].revision,2);
+ }
+});
+test('version two project proofs persist exact UTF-16 ranges and reject invalid or split spans',t=>{
+ const f=fixture(t);
+ let s=f.store;
+ authorize(s);s.setThemeOverviewEnabled(true);
+ const row=memory(s,'扩展🧪通过');
+ const result=reviewedProject(s,row);
+ const start=row.content.indexOf('🧪'), end=row.content.length;
+ const review=result.statements[0].decisionReview={version:2,context:[],commitment:{start,end}};
+ const [saved]=s.saveThemeStatements(result);
+ s=f.reopen();
+ assert.deepEqual(s.listThemeStatements()[0].decisionReview,review);
+ const whitespace=row.content.indexOf(' ');
+ for(const commitment of [
+  {start:-1,end},{start,end:end+1},{start,end:start},{start:start+0.5,end},
+  {start:start+1,end},{start,end:start+1},{start:whitespace,end:whitespace+1},
+  {start,end,quote:row.content.slice(start,end)},
+ ]) {
+  const invalid=structuredClone(result);
+  invalid.statements[0].decisionReview.commitment=commitment;
+  assert.throws(()=>s.saveThemeStatements(invalid),/审查记录|证据已变化/);
+  assert.equal(s.listThemeStatements()[0].revision,saved.revision);
+ }
+ // A storage writer predating the safeguard could leave a malformed range.
+ const body=JSON.parse(s.db.prepare('SELECT body FROM theme_statements WHERE id=?').get(saved.id).body);
+ body.decisionReview.commitment.start=start+1;
+ s.db.prepare('UPDATE theme_statements SET body=? WHERE id=?').run(JSON.stringify(body),saved.id);
+ s=f.reopen();
+ assert.deepEqual(s.listThemeStatements(),[]);
+ assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM theme_evidence').get().n,0);
+ assert.equal(s.get(row.id).state,'active');
+});
+test('forgetting context removes reviewed statements by conversation and prevents late publication',t=>{
+ const s=fixture(t).store;authorize(s);s.setThemeOverviewEnabled(true);
+ const primary=memory(s,'决策','decision','project-chat');
+ const neighboring=memory(s,'上文','adjacent','project-chat');
+ const otherChat=memory(s,'不同对话','adjacent','other-chat');
+ const independent=memory(s,'其他决策','independent','project-chat');
+ const pending=reviewedProject(s,primary,[{sourceId:'adjacent',text:neighboring.content}]);
+ pending.statements.push(...reviewedProject(s,independent).statements);s.saveThemeStatements(pending);
+ s.forget(otherChat.id,otherChat.revision);assert.equal(s.listThemeStatements().length,2);
+ s.forget(neighboring.id,neighboring.revision);
+ assert.equal(s.db.prepare('SELECT COUNT(*) n FROM theme_statements').get().n,1);
+ assert.deepEqual(s.listThemeStatements().map(statement=>statement.evidence[0].memoryId),[independent.id]);
+ assert.equal(s.get(primary.id).state,'active');
+ assert.throws(()=>s.saveThemeStatements(pending),/证据已变化/);
+});
+test('reopening prunes context ignored by a rollback version and empty reviews survive only within their grant',t=>{
+ const f=fixture(t);let s=f.store;authorize(s);s.setThemeOverviewEnabled(true);
+ const q=reviewedProject(s,memory(s,'决策'),[{sourceId:'context-only',text:'确认记录'}]);
+ s.saveThemeStatements(q);
+ s.setState('ignored:conversation',['context-only']);
+ s=f.reopen();assert.deepEqual(s.listThemeStatements(),[]);
+ assert.equal(s.db.prepare('SELECT COUNT(*) n FROM theme_evidence').get().n,0);
+ const empty={...q,basisKey:'no-settled-decisions',statements:[]};
+ assert.deepEqual(s.saveThemeStatements(empty),[]);
+ assert.equal(s.state('theme-overview:review:'+q.themeKey),empty.basisKey);
+ s.setState('learning',{enabled:true,grantId:'new-grant'});
+ assert.equal(s.themeOverviewEnabled(),false);
+ assert.equal(s.state('theme-overview:review:'+q.themeKey),undefined);
+ s.setThemeOverviewEnabled(true);
+ assert.throws(()=>s.saveThemeStatements(empty),/授权已变化/);
+});
+test('bounded per-source review progress is persisted atomically with the project overview',t=>{
+ const f=fixture(t);let s=f.store;authorize(s);s.setThemeOverviewEnabled(true);
+ const primary=memory(s,'决策','decision');
+ const q=reviewedProject(s,primary);
+ const progress={reviewed:[{sourceId:'decision',basisKey:'a'.repeat(64)}],complete:'b'.repeat(64)};
+ q.reviewProgress=progress;
+ s.saveThemeStatements(q);
+ const before=s.listThemeStatements();
+ s=f.reopen();
+ const stateKey='theme-overview:review:'+q.themeKey;
+ assert.deepEqual(s.state(stateKey),progress);
+ for(const change of [
+  input=>delete input.reviewed,
+  input=>input.reviewProgress.complete='garbage',
+  input=>input.reviewProgress.reviewed[0].basisKey='garbage',
+  input=>input.reviewProgress.reviewed[0].sourceId='x'.repeat(201),
+  input=>input.reviewProgress.reviewed.push(input.reviewProgress.reviewed[0]),
+  input=>input.reviewProgress.reviewed=Array(1001).fill(input.reviewProgress.reviewed[0]),
+  input=>input.reviewProgress.reviewed[0].text='原文不应存入游标',
+  input=>input.statements[0].evidence[0].revision++,
+ ]) {
+  const invalid=structuredClone(q);change(invalid);
+  assert.throws(()=>s.saveThemeStatements(invalid));
+  assert.deepEqual(s.state(stateKey),progress);
+  assert.deepEqual(s.listThemeStatements(),before);
+ }
+ s.saveThemeStatements({...q,reviewProgress:{reviewed:progress.reviewed},statements:[]});
+ assert.deepEqual(s.state(stateKey),{reviewed:progress.reviewed});
+ assert.deepEqual(s.listThemeStatements(),[]);
+});
 test('pausing learning or replacing grant atomically disables and clears the pilot and invalidates pending writes',t=>{
  const f=fixture(t),s=f.store;authorize(s);s.setThemeOverviewEnabled(true);const a=memory(s,'甲'),old=request(s,'theme',[a]);s.saveThemeStatements(old);
  s.setState('learning',{enabled:false,grantId:null});assert.equal(s.themeOverviewEnabled(),false);assert.equal(s.db.prepare('SELECT COUNT(*) n FROM theme_statements').get().n,0);
@@ -87,16 +225,27 @@ test('real storage and host revalidate source then save and remove a derived pro
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'theme-real-host-'));const controller=new AbortController();
  const target={id:'a',instanceId:'a',kind:'agent',cwd:dir,title:'A',model:'m',provider:'p',busy:false,projectId:'b'};
  const history=new SessionStore(path.join(dir,'a.jsonl'),{create:{sessionId:'a',cwd:dir}});
- const original='项目乙决定采用方案甲';const [id]=await history.appendMessages([{role:'user',content:original}]);let calls=0;
- const host=new PluginBackground(path.join(dir,'grant.json'),{targets:()=>[target],store:()=>history,complete:async()=>{calls++;return '{"indices":[0]}'}},controller.signal);
+ const context='评审已经通过，团队确认可以继续';const commitment='决定采用方案甲';const original='项目乙'+commitment;
+ const [precedingId,id]=await history.appendMessages([{role:'user',content:context},{role:'user',content:original}]);let calls=0;
+ const host=new PluginBackground(path.join(dir,'grant.json'),{targets:()=>[target],store:()=>history,complete:async(_id,messages)=>{
+  calls++;
+  assert.deepEqual(JSON.parse(messages[1].content).excerpts[0].context,[{position:'before',text:context}]);
+  return JSON.stringify({decisions:[{index:0,status:'settled',quote:commitment}],indices:[0]});
+ }},controller.signal);
  const api=host.bind('plugin',controller.signal);const grant=host.approve('plugin',host.prepare('plugin',{modelSessionId:'a',includedIds:['a'],dailyCalls:4,includeHistory:true,excludedIds:[],followModel:true}));
- const assistant=new Assistant({dataDirectory:dir,background:api,conversations:{get:()=>target.id},host:{snapshot:()=>({sessions:[target],projects:[{id:'b',name:'乙'}]}),projectNames:(entry,conversation,grantId)=>{assert.equal(entry,'assistant');assert.equal(conversation,target.id);assert.equal(grantId,grant);const authorization=api.status(grantId);assert.equal(authorization.followModel,true);assert.deepEqual(authorization.includedIds,[conversation]);return [{id:'b',name:'乙',nameSince:0,nameObserved:'乙'}];}}});
+ const assistant=new Assistant({dataDirectory:dir,background:api,conversations:{get:()=>target.id},host:{snapshot:()=>({sessions:[target],projects:[{id:'b',name:'乙'}]}),projectNameHistory:(entry,conversation,grantId)=>{assert.equal(entry,'assistant');assert.equal(conversation,target.id);assert.equal(grantId,grant);const authorization=api.status(grantId);assert.equal(authorization.followModel,true);assert.deepEqual(authorization.includedIds,[conversation]);return {projects:[{id:'b',name:'乙',nameSince:0}],gaps:[]};}}});
  t.after(()=>{assistant.stop();controller.abort();history.close?.();fs.rmSync(dir,{recursive:true,force:true})});
  const s=assistant.store,c={enabled:true,grantId:grant,modelSessionId:'a'};s.setState('learning',c);s.setThemeOverviewEnabled(true);
  const row=s.add({title:'项目决策',content:original,kind:'fact',scope:'project:b'}, {type:'learned',grantId:grant,context:{projectId:'b',subject:'project',conversationId:'a'},refs:[{conversationId:'a',id,quote:original,at:api.entry(grant,'a',id,0).at,start:0,end:original.length}]},'active');
  assert.equal(await maybeConsolidateOverview(assistant.learning,c,target,assistant.learning.controller.signal),true);assert.equal(calls,1);
  const [saved]=s.listThemeStatements();assert.equal(saved.text,original);assert.equal(saved.evidence[0].memoryId,row.id);assert(themeEvidenceValid(assistant,saved));
+ assert.deepEqual(saved.evidence.map(ref=>[ref.role,ref.sourceId]),[['support',id],['context',precedingId]]);
+ assert.equal(saved.decisionReview.context[0].sourceId,precedingId);
+ assert.equal(saved.decisionReview.version,2);
+ assert.deepEqual(saved.decisionReview.commitment,{start:original.indexOf(commitment),end:original.length});
+ assert(!s.db.prepare('SELECT body FROM theme_statements').get().body.includes(context));
  const overview=themeRecall(assistant,target,'项目乙决策演变脉络');assert(overview);assert.equal(overview.statements[0].text,original);
+ assert.deepEqual(overview.statements[0].evidence.map(ref=>ref.sourceId),[id]);
  api.revoke(grant);assert(!themeEvidenceValid(assistant,saved));s.forget(row.id,row.revision);assert.deepEqual(s.listThemeStatements(),[]);
 });
 test('legacy Node lacking isTransaction supports learning state inside store transaction',t=>{

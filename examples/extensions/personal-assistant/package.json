@@ -1,6 +1,6 @@
 {
   "name": "ashub-personal-assistant",
-  "version": "0.5.9",
+  "version": "0.5.11",
   "type": "module",
   "private": true,
   "description": "A persistent assistant conversation with automatic, source-backed long-term memory",
@@ -24,6 +24,7 @@
     "precision.mjs",
     "events.mjs",
     "theme-overviews.mjs",
+    "theme-decision-model.mjs",
     "project-mentions.mjs"
   ],
   "scripts": {

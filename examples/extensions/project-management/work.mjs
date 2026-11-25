@@ -36,11 +36,17 @@ function normalize(args, members) {
       new Set(deps).size !== deps.length
     )
       throw Error("依赖列表无效");
+    const criteria = Array.isArray(s.criteria)
+      ? s.criteria.map((value) => text(value, 240, "criterion"))
+      : text(s.criteria, 1200, "criteria");
+    if (Array.isArray(criteria) &&
+      (!criteria.length || criteria.length > 8 || criteria.join("\n").length > 1200 || new Set(criteria).size !== criteria.length))
+      throw Error("验收条件须为 1–8 项不同的条件，合计最多 1200 字符");
     return {
       id: key(s.id),
       member: s.member,
       output: text(s.output, 1200, "output"),
-      criteria: text(s.criteria, 1200, "criteria"),
+      criteria,
       dependsOn: deps.map(key).sort(),
     };
   });
@@ -86,6 +92,118 @@ function waiting(plan, step) {
     (id) => decision(plan.steps.find((s) => s.id === id)) !== "accepted",
   );
 }
+const dispatchLimit = 8000;
+const handoffSummaryReserve = 128;
+const artifactLine = ({ label, path }) => "产物引用（核对访问权限与当前版本）：" + JSON.stringify({ label, path });
+function handoffArtifacts(plan, step, requested) {
+  const available = new Map(step.dependsOn.map((dependency) => [
+    dependency, latest(plan.steps.find((item) => item.id === dependency)).review.artifacts ?? [],
+  ]));
+  const selected = new Map(available);
+  if (requested === undefined) return { available, selected };
+  if (!Array.isArray(requested) || requested.length > available.size) throw Error("无效字段：artifactSelection");
+  const sources = new Set();
+  for (const row of requested) {
+    const artifacts = available.get(row?.step);
+    const ids = row?.artifactIndexes;
+    if (!artifacts || sources.has(row.step) || !Array.isArray(ids) || new Set(ids).size !== ids.length ||
+      ids.some((id) => !artifacts.some((artifact) => artifact.index === id)))
+      throw Error("只能选择本步骤前置验收中已登记的产物编号");
+    sources.add(row.step);
+    selected.set(row.step, artifacts.filter((artifact) => ids.includes(artifact.index)));
+  }
+  return { available, selected };
+}
+function briefParts(work, plan, step, id, reworkReason, selected) {
+  const criteria = Array.isArray(step.criteria)
+    ? step.criteria.map((label, i) => (i + 1) + ". " + label).join("\n")
+    : step.criteria;
+  const lines = [
+    "[项目协作 " + work + "/" + step.id + " · " + id + "]",
+    "目标：" + plan.goal,
+    "交付：" + step.output,
+    "验收：" + criteria,
+    ...(reworkReason ? ["仅处理上一轮缺口：" + reworkReason] : []),
+  ];
+  const summaries = [];
+  let artifactChars = 0;
+  for (const dependency of step.dependsOn) {
+    const attempt = latest(plan.steps.find((item) => item.id === dependency));
+    const review = attempt?.review;
+    lines.push("已验收输入：" + dependency);
+    if (attempt.taskId) lines.push("来源任务：" + attempt.taskId +
+      (review.taskRevision === undefined ? "" : " · 任务版本 " + review.taskRevision));
+    for (const artifact of selected.get(dependency)) {
+      const line = artifactLine(artifact);
+      lines.push(line);
+      artifactChars += line.length + 1;
+    }
+    const exceptions = (review.unresolved ?? []).filter((item) => item.disposition === "accepted_exception")
+      .map(({ issue, reason }) => JSON.stringify({ issue, reason }));
+    if (exceptions.length) lines.push("已接受的例外：" + exceptions.join("；"));
+    summaries.push({ dependency, reason: review.reason });
+  }
+  return { base: lines.join("\n"), summaries, artifactChars };
+}
+function formatBrief({ base, summaries }) {
+  if (!summaries.length) return base;
+  const conclusions = summaries.map(({ dependency, reason }) => ({
+    prefix: dependency + " 验收结论：",
+    reason,
+  }));
+  const remaining = dispatchLimit - base.length;
+  const full = conclusions.map(({ prefix, reason }) => "\n" + prefix + reason).join("");
+  if (full.length <= remaining) return base + full;
+  const space = Math.floor(remaining / conclusions.length);
+  return base + conclusions.map(({ prefix, reason }) => {
+    const available = space - prefix.length - 1;
+    if (available < 2) return "";
+    const excerpt = reason.length <= available ? reason : reason.slice(0, available - 1).toWellFormed() + "…";
+    return "\n" + prefix + excerpt;
+  }).join("");
+}
+function indexed(items, size, indexOf, label) {
+  if (items === undefined) return [];
+  if (!Array.isArray(items) || items.length > size) throw Error("无效字段：" + label);
+  const indexes = new Set();
+  for (const item of items) {
+    const index = indexOf(item);
+    if (!Number.isInteger(index) || index < 1 || index > size || indexes.has(index))
+      throw Error("无效或重复的编号：" + label);
+    indexes.add(index);
+  }
+  return [...items].sort((a, b) => indexOf(a) - indexOf(b));
+}
+function reviewEvidence(step, args, host) {
+  const accepted = args.decision === "accepted";
+  const delivery = host.result?.delivery;
+  if (host.status.deliverySubmitted && !delivery) throw Error("交付详情暂不可用，请重新核对任务");
+  const criteria = Array.isArray(step.criteria) ? step.criteria : [step.criteria];
+  const issues = delivery?.unresolved ?? [];
+  const artifacts = delivery?.artifacts ?? [];
+  const checks = indexed(args.checks, criteria.length, (item) => item?.criterion, "checks").map((item) => {
+    if (!["met", "unmet", "unverified"].includes(item.outcome)) throw Error("无效的条件核对结果");
+    return { criterion: item.criterion, outcome: item.outcome, evidence: text(item.evidence, 420, "evidence") };
+  });
+  if (accepted && (Array.isArray(step.criteria) || checks.length) &&
+    (checks.length !== criteria.length || checks.some((item) => item.outcome !== "met")))
+    throw Error("通过前必须逐项满足验收条件并记录证据");
+  const unresolved = indexed(args.unresolved, issues.length, (item) => item?.item, "unresolved").map((item) => {
+    if (!["resolved", "accepted_exception", "blocking"].includes(item.disposition)) throw Error("无效的未决事项处理决定");
+    return { item: item.item, issue: issues[item.item - 1], disposition: item.disposition, reason: text(item.reason, 420, "reason") };
+  });
+  if (accepted && (unresolved.length !== issues.length || unresolved.some((item) => item.disposition === "blocking")))
+    throw Error("通过前必须逐项处理未决事项；仍阻塞的事项不能通过");
+  const selected = indexed(args.artifactIndexes, artifacts.length, (index) => index, "artifactIndexes")
+    .map((index) => ({ index, label: artifacts[index - 1].label, path: artifacts[index - 1].path }));
+  if (selected.length && !accepted) throw Error("只有通过的交付可以向下游传递产物");
+  return {
+    ...(Number.isSafeInteger(host.status.revision) ? { taskRevision: host.status.revision } : {}),
+    ...(checks.length ? { checks } : {}),
+    ...(unresolved.length ? { unresolved } : {}),
+    ...(selected.length ? { artifacts: selected } : {}),
+  };
+}
 function snapshot(plan) {
   return {
     goal: plan.goal,
@@ -112,7 +230,7 @@ function snapshot(plan) {
           ? {
               attempt: attempt.id,
               taskId: attempt.taskId,
-              review: attempt.review,
+              review: attempt.review && { decision: attempt.review.decision, reason: attempt.review.reason },
             }
           : {}),
       };
@@ -120,6 +238,7 @@ function snapshot(plan) {
   };
 }
 export function workflow(ctx) {
+  const canVerifyDispatch = (ctx.list?.() ?? []).includes("ashub:collaboration:dispatch-receipt");
   let db,
     closed = false;
   function storage() {
@@ -205,7 +324,8 @@ export function workflow(ctx) {
     if (event.name !== "conversation_send" || !event.toolCallId) return;
     const a = event.rawInput,
       issued = briefs.get(a?.message);
-    if (issued && a.id === issued.member) calls.set(event.toolCallId, issued);
+    if (issued && a.id === issued.member && a.requestKey === issued.requestKey)
+      calls.set(event.toolCallId, issued);
   });
   ctx.bus.on("agent:tool-completed", (event) => {
     const issued = calls.get(event.toolCallId);
@@ -318,6 +438,7 @@ export function workflow(ctx) {
             member: step.member,
             id: pending.id,
             message: pending.message,
+            requestKey: pending.requestKey,
           });
         const detail = {
           step: view.steps.find((s) => s.id === args.step),
@@ -387,21 +508,33 @@ export function workflow(ctx) {
         }
         if (!last && args.previousTaskId) throw Error("没有可返工的上一轮任务");
         const id = randomUUID();
-        const upstream = s.dependsOn.map((d) => {
-          const prev = latest(getStep(p, d));
-          return d + "：" + prev.review.reason;
-        });
-        const message = [
-          "[项目协作 " + scope[2] + "/" + s.id + " · " + id + "]",
-          "目标：" + p.goal,
-          "交付：" + s.output,
-          "验收：" + s.criteria,
-          ...upstream.map((v) => "已验收输入：" + v),
-          ...(last ? ["仅处理上一轮缺口：" + last.review.reason] : []),
-        ].join("\n");
-        if (message.length > 8000)
-          throw Error("派发说明超过宿主 8000 字符限制，请使用简短的输入引用");
-        s.attempts.push({ id, message });
+        const { available, selected } = handoffArtifacts(p, s, args.artifactSelection);
+        const parts = briefParts(scope[2], p, s, id, last?.review.reason, selected);
+        const requiredCharacters = parts.base.length - parts.artifactChars;
+        const remaining = dispatchLimit - requiredCharacters;
+        if (remaining < 0) return {
+          state: "handoff_capacity_exceeded",
+          note: "步骤说明和完整验收例外已超出单条派发容量。请按原验收记录拆分后续工作，分批交接所需例外。",
+          characterLimit: dispatchLimit,
+          requiredCharacters,
+        };
+        const artifactBudget = Math.max(0, remaining - parts.summaries.length * handoffSummaryReserve);
+        if (parts.artifactChars > artifactBudget) return {
+          state: "handoff_selection_required",
+          note: "所选产物超出交接可用容量。请在 artifactSelection 中减少或更换产物。",
+          artifactBudget,
+          selectedCharacters: parts.artifactChars,
+          inputs: [...available].map(([step, artifacts]) => ({
+            step,
+            artifacts: artifacts.map((a) => ({ index: a.index, label: a.label, characters: artifactLine(a).length + 1,
+              selected: selected.get(step).includes(a) })),
+          })),
+        };
+        const message = formatBrief(parts);
+        const requestKey = canVerifyDispatch ? id : undefined;
+        const artifactSelection = args.artifactSelection === undefined ? undefined
+          : [...selected].map(([step, artifacts]) => ({ step, artifactIndexes: artifacts.map((artifact) => artifact.index) }));
+        s.attempts.push({ id, message, ...(requestKey ? { requestKey } : {}), ...(artifactSelection ? { artifactSelection } : {}) });
         save(conn, scope, p);
         briefs.set(message, {
           scope,
@@ -409,13 +542,38 @@ export function workflow(ctx) {
           member: s.member,
           id,
           message,
+          requestKey,
         });
-        return { attempt: id, send: { id: s.member, message } };
+        return { attempt: id, send: { id: s.member, message, ...(requestKey ? { requestKey } : {}) } };
       });
-    const taskId = text(args.taskId, 160, "taskId"),
-      attempt = latest(step);
+    const attempt = latest(step);
     if (!attempt || attempt.id !== args.attempt)
       throw Error("派发尝试已变化，请查看当前记录");
+    if (action === "link") {
+      const taskId = args.taskId === undefined ? undefined : text(args.taskId, 160, "taskId");
+      if (attempt.taskId) {
+        if (taskId && attempt.taskId !== taskId) throw Error("派发尝试已绑定其他回执");
+        return { taskId: attempt.taskId };
+      }
+      if (!canVerifyDispatch) throw Error("宿主暂不支持验证派发回执，请升级后补登记");
+      if (!taskId && !attempt.requestKey) throw Error("旧派发需要提供原始 taskId");
+      const receipt = await ctx.call("ashub:collaboration:dispatch-receipt", {
+        ...(taskId ? { taskId } : { requestKey: attempt.requestKey }), signal,
+      });
+      signal?.throwIfAborted();
+      const current = await context(signal);
+      if (current.owner !== c.owner || current.project !== c.project || !current.members.has(step.member))
+        throw Error("项目归属已变化");
+      if (!receipt) return { state: "receipt_pending", note: "未查到已受理回执，请核对原始发送；未自动重发。" };
+      if (!attempt.message || receipt.recipientId !== step.member ||
+        (taskId && receipt.taskId !== taskId) || receipt.requestKey !== attempt.requestKey ||
+        receipt.messageDigest !== createHash("sha256").update(attempt.message).digest("hex"))
+        throw Error("回执与本次派发不匹配");
+      const result = attach(scope, step.id, attempt.id, text(receipt.taskId, 160, "taskId"));
+      briefs.delete(attempt.message);
+      return result;
+    }
+    const taskId = text(args.taskId, 160, "taskId");
     if (action === "review" && attempt.taskId !== taskId)
       throw Error("仅能验收本步骤已登记的回执");
     const host = await hostTask(taskId, step.member, c, signal);
@@ -426,11 +584,6 @@ export function workflow(ctx) {
       !current.members.has(step.member)
     )
       throw Error("项目归属已变化");
-    if (action === "link") {
-      const result = attach(scope, step.id, attempt.id, taskId);
-      if (attempt.message) briefs.delete(attempt.message);
-      return result;
-    }
     if (
       !["accepted", "revise", "blocked"].includes(args.decision) ||
       !host.status.terminal
@@ -438,7 +591,7 @@ export function workflow(ctx) {
       throw Error("须在任务结束后选择有效的验收决定");
     if (args.decision === "accepted" && host.status.state !== "completed")
       throw Error("失败、中断或取消的任务不能验收通过");
-    const review = {
+    const coreReview = {
       decision: args.decision,
       reason: text(args.reason, 420, "reason"),
     };
@@ -447,8 +600,15 @@ export function workflow(ctx) {
         a = latest(getStep(p, step.id));
       if (a.id !== args.attempt || a.taskId !== taskId)
         throw Error("任务已变化，请重新核对");
-      if (a.review && JSON.stringify(a.review) !== JSON.stringify(review))
+      // Historical reviews remain immutable even if their evidence predates this format.
+      if (a.review && JSON.stringify(a.review) === JSON.stringify(coreReview) &&
+        args.checks === undefined && args.unresolved === undefined && args.artifactIndexes === undefined)
+        return snapshot(p);
+      const review = { ...coreReview, ...reviewEvidence(step, args, host) };
+      if (a.review) {
+        if (JSON.stringify(a.review) === JSON.stringify(review)) return snapshot(p);
         throw Error("本轮验收已登记，请勿覆盖");
+      }
       a.review = review;
       save(conn, scope, p);
       return snapshot(p);

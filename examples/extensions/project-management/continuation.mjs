@@ -47,6 +47,34 @@ export class Continuation {
     this.revoke(r);
     r.enabled=false;r.state=state;r.reason=reason;r.epoch=randomUUID();this.save(r);
   }
+  submit(r) {
+    // A crash after crossing into the host must not look like an unstarted intent.
+    r.pending.submitting=true;this.save(r);
+    let receipt;
+    try {
+      receipt=this.s.messages.submit(r.pending.request);
+    } catch (error) {
+      if(error?.code!=='EXTENSION_MESSAGE_REJECTED')throw error;
+      this.pause(r,'error','本工作流的接续通知未受理，请核对后恢复');
+      return null;
+    }
+    delete r.pending.submitting;this.save(r);
+    return receipt;
+  }
+  suspendAll(error) {
+    this.fault=String(error);
+    try{this.s.messages.suspendAdmission?.();}catch{}
+    let active=[];
+    try {
+      active=this.records().filter(r=>r.enabled);
+      this.db.exec('BEGIN IMMEDIATE');
+      try {
+        for(const r of active)this.save({...r,enabled:false,state:'error',reason:'接续服务异常，请核对后手动恢复',epoch:randomUUID()});
+        this.db.exec('COMMIT');
+      } catch (e) {this.db.exec('ROLLBACK');throw e;}
+    } catch { /* When this store is unavailable, still try to revoke host admission. */ }
+    for(const r of active)try{this.revoke(r);}catch{}
+  }
   tick() {
     if(this.stopped||this.fault)return;
     try {
@@ -59,6 +87,9 @@ export class Continuation {
         if(!grant||grant.revoked) {this.pause(r,'paused','授权已撤销，或用户已停止协调对话');continue;}
         const current=this.inspect(w);
         if(r.pending) {
+          if(r.pending.submitting) {
+            this.pause(r,'error','接续提交未确认，请核对协调对话后手动恢复');continue;
+          }
           let receipt=this.s.messages.lookup(r.pending.key);
           // The exact submission is persisted before calling the host. Recovery may
           // retry only this same key and payload; a running/uncertain turn is never replayed.
@@ -67,7 +98,8 @@ export class Continuation {
               this.pause(r,'paused','待发送通知或接续授权已到期，请核查后恢复');continue;
             }
             if(current.fingerprint!==r.pending.fingerprint) {r.pending=null;this.save(r);continue;}
-            receipt=this.s.messages.submit(r.pending.request);
+            receipt=this.submit(r);
+            if(!receipt)continue;
           }
           if(receipt.state==='queued'&&!r.pending.superseded&&(current.fingerprint!==r.pending.fingerprint||current.blocked||current.finished)) {
             // Record our cancellation intent before cancelling in the host store.
@@ -98,12 +130,10 @@ export class Continuation {
         const changes=`${current.review.length} 项待验收（${[...new Set(current.review.map(s=>s.taskState))].join(',')||'无'}），${current.ready.length} 项 ready；详细任务与回执请查询工作流`;
         const request={grantId:r.grantId,key,values:{changes},expiresAt:this.now()+86400000};
         r.pending={key,request,fingerprint:current.fingerprint};r.lastAt=this.now();r.state='queued';this.save(r);
-        this.s.messages.submit(request);
+        this.submit(r);
       }
       this.publish();
-    } catch(e) {this.fault=String(e); // Fail closed; cancel only messages which have not started.
-      try { for(const r of this.records())if(r.enabled){try{this.s.messages.revoke(r.grantId);}catch{}} } catch {}
-    }
+    } catch(e) {this.suspendAll(e);}
   }
   publish() {
     const works=new Map(this.works().map(w=>[w.id,w]));

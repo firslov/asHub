@@ -10,6 +10,14 @@ const importFrom=(base,p)=>import(pathToFileURL(path.join(base,p)).href);
 const [{PluginBackground},{SessionStore},{Assistant},{withMemory}]=await Promise.all([
   importFrom(hostRoot,'dist/extensions/background.js'),importFrom(hostRoot,'dist/history/session-store.js'),
   importFrom(root,'examples/extensions/personal-assistant/shared.mjs'),importFrom(root,'examples/extensions/personal-assistant/context.mjs')]);
+function projectHost(host,signal,target,projects) {
+ const projectNames=(entry,sid,grantId)=>{
+  const g=host.bind('assistant',signal).status(grantId);
+  if(entry!=='assistant'||sid!==target.id||g.modelSessionId!==sid||g.includedIds?.length!==1||g.includedIds[0]!==sid||g.excludedIds.includes(sid))throw Error('project authorization');
+  return projects;
+ };
+ return {snapshot:()=>({sessions:[target],projects}),projectNames,projectNameHistory:(...args)=>({projects:projectNames(...args),gaps:[]})};
+}
 const count=Number(option('trajectories','40'));
 if(!Number.isSafeInteger(count)||count<1||count>100)throw Error('trajectories must be 1–100');
 const tally={project:{expected:0,covered:0},preference:{expected:0,covered:0},exact:{expected:0,covered:0},unrelated:{expected:0,leaked:0},foreign:{expected:0,leaked:0},duplicate:{expected:0,leaked:0}};
@@ -22,7 +30,7 @@ for(let i=0;i<count;i++){
  const projects=[{id:'p1',name,nameObserved:name,nameSince:Date.now()-10000},{id:'p2',name:'南河',nameObserved:'南河',nameSince:Date.now()-10000}];
  const history=new SessionStore(path.join(dir,'history.jsonl'),{create:{sessionId:id,cwd:dir}});
  const host=new PluginBackground(path.join(dir,'grants.json'),{targets:()=>[target],store:()=>history,complete:async()=>{throw Error('model forbidden');}},life.signal);
- const a=new Assistant({dataDirectory:dir,host:{snapshot:()=>({sessions:[target],projects}),projectNames:(entry,sid,grantId)=>{const g=host.bind('assistant',life.signal).status(grantId);if(entry!=='assistant'||sid!==id||g.modelSessionId!==id||g.includedIds?.length!==1||g.includedIds[0]!==id||g.excludedIds.includes(id))throw Error('project authorization');return projects;}},conversations:{get:()=>id},background:host.bind('assistant',life.signal)});
+ const a=new Assistant({dataDirectory:dir,host:projectHost(host,life.signal,target,projects),conversations:{get:()=>id},background:host.bind('assistant',life.signal)});
  try{
   const grant=host.approve('assistant',host.prepare('assistant',{modelSessionId:id,includedIds:[id],excludedIds:[],includeHistory:true,dailyCalls:4}));
   a.learning.configure(grant,{modelSessionId:id,includeHistory:true,includedIds:[id]});
@@ -71,18 +79,21 @@ async function longTrajectories() {
       calls++;const data=JSON.parse(messages[1].content);seen=data.excerpts ?? [];
       const first=seen.find(x=>x.text.includes('初始原则')),last=seen.find(x=>x.text.includes('最新转折'));
       const indices=[first?.index,last?.index].filter(x=>Number.isInteger(x));
-      return JSON.stringify({indices:indices.length?indices:[0]});
+      return JSON.stringify({
+        indices:indices.length?indices:[0],
+        decisions:seen.map(({index,text})=>({index,status:'settled',quote:text})),
+      });
     }},life.signal);
     const projects=[{id:'p1',name,nameObserved:name,nameSince:Date.now()-40*86400000}];
-    const a=new Assistant({dataDirectory:dir,host:{snapshot:()=>({sessions:[target],projects}),projectNames:(entry,sid,grantId)=>{const g=host.bind('assistant',life.signal).status(grantId);if(entry!=='assistant'||sid!==id||g.modelSessionId!==id||g.includedIds?.length!==1||g.includedIds[0]!==id||g.excludedIds.includes(id))throw Error('project authorization');return projects;}},conversations:{get:()=>id},background:host.bind('assistant',life.signal)});
+    const a=new Assistant({dataDirectory:dir,host:projectHost(host,life.signal,target,projects),conversations:{get:()=>id},background:host.bind('assistant',life.signal)});
     try{
       const grant=host.approve('assistant',host.prepare('assistant',{modelSessionId:id,includedIds:[id],excludedIds:[],includeHistory:true,dailyCalls:4}));
       a.learning.configure(grant,{modelSessionId:id,includeHistory:true,includedIds:[id]});
       const available=!!maybeConsolidateOverview && typeof a.store.setThemeOverviewEnabled==='function';
       if(available)a.store.setThemeOverviewEnabled(true);
-      const texts=[`项目${name}决定初始原则：数据离线处理并优先保密。`,
-        ...Array.from({length:20},(_,i)=>`项目${name}决定常规方案：检查批次${i}并按既定流程复核。`),
-        `项目${name}决定最新转折：改用本地缓存并记录审批，编号 ZX-${900+k}。`];
+      const texts=[`项目${name}：决定采用初始原则：数据离线处理并优先保密。`,
+        ...Array.from({length:20},(_,i)=>`项目${name}：决定采用常规方案：检查批次${i}并按既定流程复核。`),
+        `项目${name}：决定采用最新转折方案：改用本地缓存并记录审批，编号 ZX-${900+k}。`];
       const ids=[];const clock=Date.now,base=clock()-texts.length*86400000;
       try{for(let i=0;i<texts.length;i++){Date.now=()=>base+i*86400000;ids.push(...await history.appendMessages([{role:'user',content:texts[i]}]));}}finally{Date.now=clock;}
       for(let i=0;i<texts.length;i++){

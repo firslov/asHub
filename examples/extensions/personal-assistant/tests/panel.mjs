@@ -27,11 +27,11 @@ test('first setup reports unavailable models without exposing unrelated settings
 });
 
 // Status is observational: it must never grant access or add management UI.
-test('inline entry shows one quiet status without changing authorization or actions', t=>{
+test('settings show the consolidation status once and leave the sidebar entry compact', t=>{
  const {a,p}=setup(t);a.services.conversations={get:()=> 'a'};a.learning.access=()=>true;
  let health={failures:0,errorClass:null};a.learning.health=()=>health;
  const profile=a.store.profile(),config=a.learning.config();
- const check=expected=>{const view=p.overview();assert.equal(view.toggle.status,expected);assert.equal(view.toggle.checked,true);assert.deepEqual(view.actions.map(x=>x.id),['pause']);assert.deepEqual(view.rows,[]);assert.equal(view.form,undefined);assert(!view.note.includes(expected),'only one place describes the status');};
+ const check=expected=>{const view=p.overview();assert.equal(view.toggle,undefined);assert.equal(view.manage,undefined);assert.equal(view.note,expected);assert.deepEqual(view.actions.map(x=>x.id),['pause']);assert.deepEqual(view.rows,[]);assert.equal(view.form,undefined);};
  check('等待首次整理');
  health={backlog:true};check('待整理 · 空闲后继续');
  // Scanning or a busy conversation is not model inference.
@@ -43,8 +43,8 @@ test('inline entry shows one quiet status without changing authorization or acti
  health={failures:1,errorClass:'capacity'};check('记忆空间已满');
  health={};check('等待首次整理');
  assert.deepEqual(a.store.profile(),profile);assert.deepEqual(a.learning.config(),config);
- a.learning.access=()=>false;assert.equal(p.overview().toggle.status,undefined);assert.equal(p.overview().toggle.checked,false);assert.deepEqual(p.overview().actions.map(x=>x.id),['authorize']);
- a.learning.access=()=>true;a.store.configure({name:profile.name,enabled:false},profile.revision);assert.equal(p.overview().toggle.status,undefined,'profile pause hides even stale health');
+ a.learning.access=()=>false;assert.equal(p.overview().note,'长期记忆已关闭');assert.deepEqual(p.overview().actions.map(x=>x.id),['authorize']);
+ a.learning.access=()=>true;a.store.configure({name:profile.name,enabled:false},profile.revision);assert.equal(p.overview().note,'长期记忆已关闭','profile pause hides even stale health');
 });
 
 test('quota and retry status show the actual local eligibility time', t=>{
@@ -100,10 +100,10 @@ test('theme pilot requires current assistant authorization and closes independen
  assert.equal(writes,2);
  assert.equal(cancellations,1);
  assert.equal(ordinary.signal.aborted,false);
- assert.equal(p.overview().toggle.checked,true);
+ assert(p.overview().actions.some(a=>a.id==='pause'));
  assert.throws(()=>p.prepare('disable-theme-overviews',staleControl),/已变化/);
  authorized=false;
- assert.equal(p.overview().manage,undefined);
+ assert.deepEqual(p.overview().actions.map(a=>a.id),['authorize']);
 });
 
 test('desktop model controls preserve a legacy grant and require a current confirmation',async t=>{
@@ -112,15 +112,15 @@ test('desktop model controls preserve a legacy grant and require a current confi
  a.learning.config=()=>({enabled:true,grantId:'g1'});a.learning.modelPolicyChanged=id=>{assert.equal(id,'g1');changed++};
  a.services.background.status=id=>{assert.equal(id,'g1');return {modelRevision:revision,backgroundModel:policy,followModel:follow}};
  a.services.background.models=id=>{assert.equal(id,'g1');return [{provider:'p1',model:'same'},{provider:'p2',model:'same'},{provider:'p1',model:'same'}]};
- const view=p.overview(),button=view.actions.find(x=>x.id==='model-settings');assert(button);assert.match(view.note,/原授权固定模型/);
+ const view=p.overview(),button=view.actions.find(x=>x.id==='model-settings');assert.equal(button.label,'整理模型');
  const opened=await p.prepare(button.id,button.values),form=opened.execute().form,select=form.fields[0];
- assert.equal(select.value,'legacy');assert.equal(select.options.length,4);assert.match(opened.execute().note,/每天最多 4 次/);
+ assert.equal(select.value,'legacy');assert.equal(select.options.length,4);assert.match(form.guidance[0].detail,/每天最多整理 4 次/);
  const value=select.options.find(o=>o.label==='same · p2').value;
  const plan=await p.prepare('model-change',{...form.values,modelPolicy:value});
  assert.deepEqual(plan.backgroundModelChange,{grantId:'g1',model:{provider:'p2',model:'same'}});assert.equal(changed,0);
  plan.validate();revision++;policy={provider:'p2',model:'same'};plan.execute('g1');assert.equal(changed,1);
- assert.match(p.overview().note,/same · p2/);
  const reopen=await p.prepare('model-settings',p.overview().actions.find(x=>x.id==='model-settings').values);
+ const current=reopen.execute().form.fields[0];assert.equal(current.options.find(o=>o.value===current.value).label,'same · p2');
  const followPlan=await p.prepare('model-change',{...reopen.execute().form.values,modelPolicy:'follow'});
  assert.deepEqual(followPlan.backgroundModelChange,{grantId:'g1',model:null});
  sid='b';assert.throws(()=>followPlan.validate(),/变化/);assert.equal(changed,1);

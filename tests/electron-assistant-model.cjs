@@ -37,24 +37,29 @@ app.whenReady().then(async()=>{
   const js=code=>win.webContents.executeJavaScript(code),wait=async expression=>{for(let i=0;i<180;i++){if(await js(expression))return;await new Promise(r=>setTimeout(r,20));}throw Error('Timed out: '+expression+'; '+await js('document.body.innerText'))};
   await js(`(async()=>{const {mountResource}=await import('/js/extensions/resource-view.js');window.disposeFixture=mountResource(document.querySelector('#root'),{pluginId:'fixture'},'assistant',{request:async(body)=>{const r=await fetch('/resource',body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});const v=await r.json();if(!r.ok)throw Error(v.error);return v}})})()`);
   const click=async text=>js(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent===${JSON.stringify(text)});if(!b)throw Error('missing button');b.click()})()`);
-  await wait("document.body.textContent.includes('原授权固定模型')");assert(!await js("document.body.textContent.includes('整理模型设置')"));
+  await wait("document.body.textContent.includes('等待首次整理')");assert(!await js("document.body.textContent.includes('整理模型')"));
   await js("fetch('/fixture-enable')");await js("disposeFixture();document.querySelector('#root').replaceChildren()");
   await js(`(async()=>{const {mountResource}=await import('/js/extensions/resource-view.js');window.disposeFixture=mountResource(document.querySelector('#root'),{pluginId:'fixture'},'assistant',{request:async(body)=>{const r=await fetch('/resource',body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});const v=await r.json();if(!r.ok)throw Error(v.error);return v}})})()`);
-  await wait("document.body.textContent.includes('整理模型设置')");assert.match(await js('document.body.textContent'),/原授权固定模型/);
-  await click('整理模型设置');await wait("!!document.querySelector('select')");
+  await wait("document.body.textContent.includes('整理模型')");
+  await click('整理模型');await wait("!!document.querySelector('select')");
+  assert.equal(await js("document.querySelector('select').selectedOptions[0].textContent"),'原授权固定模型（保留）');
+  assert.equal(await js("document.querySelector('.extension-resource-guidance').open"),false);
   const options=await js("[...document.querySelector('select').options].map(o=>o.textContent)");assert(options.includes('shared · one'));assert(options.includes('shared · two'));assert(options.includes('跟随对话模型'));assert.equal(new Set(options).size,options.length);assert(options.every(s=>s.length<=200));assert(await js("[...document.querySelector('select').options].every(o=>o.value.length<=200)"));
   await js("(()=>{const e=document.querySelector('select');e.value=[...e.options].find(o=>o.textContent==='shared · two').value})()");await click('继续');
   await wait("!!document.querySelector('.extension-resource-confirm')");assert.match(await js('document.body.textContent'),/授权.*原文/);assert.equal(changes,0);
   await js("document.querySelector('.extension-resource-confirm button').click()");assert.equal(changes,0);assert.equal(revision,0);
   await click('继续');await wait("!!document.querySelector('.extension-resource-confirm')");
   await js("document.querySelector('.extension-resource-confirm button:last-child').click()");
-  await wait("document.body.textContent.includes('shared · two') && !document.querySelector('.extension-resource-confirm')");
+  await wait("document.body.textContent.includes('整理模型') && !document.querySelector('.extension-resource-confirm')");
   assert.deepEqual(model,{provider:'two',model:'shared'});assert.equal(changes,1);
-  await js("fetch('/fixture-disable')");await click('整理模型设置');await wait("!!document.querySelector('select')");
+  await click('整理模型');await wait("!!document.querySelector('select')");
+  assert.equal(await js("document.querySelector('select').selectedOptions[0].textContent"),'shared · two');
+  await click('返回');await wait("!document.querySelector('select')");
+  await js("fetch('/fixture-disable')");await click('整理模型');await wait("!!document.querySelector('select')");
   assert.match(await js('document.body.textContent'),/当前不支持指定模型/);
   await js("(()=>{const e=document.querySelector('select');e.value='follow'})()");await click('继续');await wait("!!document.querySelector('.extension-resource-confirm')");
   await js("document.querySelector('.extension-resource-confirm button:last-child').click()");
-  await wait("document.body.textContent.includes('跟随对话模型') && !document.querySelector('.extension-resource-confirm')");
+  await wait("document.body.textContent.includes('等待首次整理') && !document.querySelector('.extension-resource-confirm')");
   assert.equal(model,null);assert.equal(changes,2);console.log('PASS Electron: unsupported entry hidden, existing policy recovery, exact model choice, disclosure, cancel and confirmation');
  }catch(error){console.error(error);process.exitCode=1;}
  finally{clearTimeout(timer);if(win&&!win.isDestroyed())win.destroy();if(server){server.closeAllConnections();await new Promise(r=>server.close(r));}fs.rmSync(dir,{recursive:true,force:true});app.exit(process.exitCode||0);}

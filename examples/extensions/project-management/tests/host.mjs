@@ -84,6 +84,9 @@ test(
       core.handlers.define("ashub:collaboration:wait", (p) =>
         access.waitTasks(p.targets, p.waitMs, p.signal),
       );
+      core.handlers.define("ashub:collaboration:dispatch-receipt", (p) =>
+        access.dispatchReceipt(p, p.signal),
+      );
       core.handlers.define("ashub:collaboration:deliver", () => {});
       for (const tool of conversationTools(access))
         ctx.agent.registerTool(tool);
@@ -137,6 +140,7 @@ test(
         ],
       });
       const b = await run("project_work_brief", base);
+      assert.equal(b.send.requestKey, b.attempt);
       const { taskId } = await run("conversation_send", b.send);
       assert.equal(
         (await run("project_work_status", base)).step.taskId,
@@ -168,6 +172,17 @@ test(
         "accepted",
       );
       assert.equal(sent, 1);
+      await fresh("project_work_plan", {
+        work: "recover", goal: "recover missed event",
+        steps: [{ id: "a", member: "member", output: "output.md", criteria: ["verified"] }],
+      });
+      const pending = await fresh("project_work_brief", { ...base, work: "recover" });
+      // Send through the host without a kernel event to emulate a response lost during restart.
+      const recovered = await access.send(pending.send.id, pending.send.message, undefined, pending.send.requestKey);
+      assert.equal((await fresh("project_work_status", { ...base, work: "recover" })).step.state, "receipt_pending");
+      assert.deepEqual(await fresh("project_work_link", { ...base, work: "recover", attempt: pending.attempt }), { taskId: recovered.taskId });
+      assert.equal((await fresh("conversation_send", pending.send)).taskId, recovered.taskId);
+      assert.equal(sent, 2);
     } finally {
       for (const stop of runtimes) stop();
       fs.rmSync(dir, { recursive: true, force: true });

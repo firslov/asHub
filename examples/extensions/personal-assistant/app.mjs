@@ -73,17 +73,15 @@ export class AssistantPanel {
   overview() {
     const id=this.a.conversationId(),profile=this.store.profile(),running=!!id&&this.a.learning.access(id)&&profile.enabled;
     if(!id)return {actions:[action('setup','开启个人助手')],note:'一个专属对话，慢慢了解你',rows:[{title:'从这里开始',detail:'只从你与个人助手的交流中整理记忆，其他对话不受影响',actions:[]}]};
-    const notice=running ? this.memoryStatus() : '';
     const theme=running && this.themeScope();
     const pilot=theme ? this.store.themeOverviewEnabled() : false;
     const binding={conversationId:id,profileRevision:profile.revision};
     const model=running && this.modelScope();
     const canChangeModel=this.modelCanManage(model);
-    const modelDescription=model?.grant?.backgroundModel ? `指定 ${model.grant.backgroundModel.model} · ${model.grant.backgroundModel.provider}` : model?.grant?.followModel ? '跟随对话模型' : '原授权固定模型';
-    const actions=[...(canChangeModel?[action('model-settings','整理模型设置',{...binding,grantId:model.grantId,modelRevision:model.modelRevision})]:[]),...(theme?[action(pilot?themeDisable:themeEnable,pilot?'关闭主题概览试点':'开启主题概览试点',{...binding,generation:theme.generation})]:[]),
-      action(running?'pause':'authorize',running?'关闭长期记忆':'开启长期记忆',binding)];
-    return {toggle:{label:'长期记忆',checked:running,action:running?'pause':'authorize',...(notice?{status:notice}:{})},
-      ...((theme||canChangeModel)?{manage:true}:{}),actions,note:(running?'长期记忆已开启':'长期记忆已关闭')+' · 只用于这段助手对话'+(model?' · 整理模型：'+modelDescription:''),rows:[]};
+    const actions=[...(canChangeModel?[action('model-settings','整理模型',{...binding,grantId:model.grantId,modelRevision:model.modelRevision})]:[]),
+      ...(theme?[action(pilot?themeDisable:themeEnable,pilot?'关闭概览':'开启概览',{...binding,generation:theme.generation})]:[]),
+      action(running?'pause':'authorize',running?'关闭记忆':'开启记忆',binding)];
+    return {actions,note:running?this.memoryStatus():'长期记忆已关闭',rows:[]};
   }
 
   memoryStatus(now=Date.now()) {
@@ -148,8 +146,11 @@ export class AssistantPanel {
           const options=[{value:'follow',label:'跟随对话模型'},...modelOptions(unique)];
           if(currentValue==='legacy')options.unshift({value:'legacy',label:'原授权固定模型（保留）'});
           else if(current && !options.some(option=>option.value===currentValue))options.unshift({value:currentValue,label:modelLabel(current).slice(0,60).toWellFormed()+' ['+currentValue.slice(6)+']（当前不可用）'});
-          return simple({actions:back(),rows:[],note:'整理时会将本助手对话中的授权原文发送给所选模型提供商；沿用每天最多 4 次的共享额度（UTC），不调用工具。模型不可用时保留已有记忆。'+(!supported?' 当前不支持指定模型，可切换为跟随对话模型。':''),
-            form:{action:'model-change',submit:'继续',values:{conversationId:scope.sid,profileRevision:scope.profileRevision,grantId:scope.grantId,modelRevision:scope.modelRevision},fields:[field('modelPolicy','整理模型','select',currentValue,{options})]}});
+          return simple({actions:back(),rows:[],...(!supported?{note:'当前不支持指定模型，可改为跟随对话。'}:{}),
+            form:{action:'model-change',submit:'继续',compact:true,
+              guidance:[{summary:'整理范围与额度',detail:'所选模型提供商会收到本助手对话的授权原文。每天最多整理 4 次（UTC），不调用工具。模型不可用时保留已有记忆。'}],
+              values:{conversationId:scope.sid,profileRevision:scope.profileRevision,grantId:scope.grantId,modelRevision:scope.modelRevision},
+              fields:[field('modelPolicy','整理模型','select',currentValue,{options})]}});
         }
         if(typeof values.modelPolicy!=='string')throw Error('请选择整理模型');
         if((values.modelPolicy==='legacy' && currentValue==='legacy') || (values.modelPolicy==='follow' && currentValue==='follow'))return simple(this.overview());

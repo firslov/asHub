@@ -4,6 +4,7 @@ const { once } = require('node:events');
 const { env, Bridge, path, fs } = require('./harness.cjs');
 const { zip } = require('./plugin-zip-fixture.cjs');
 const http = require('node:http');
+const net = require('node:net');
 
 async function fixture(extra = {}) {
   const e = env(extra);
@@ -89,6 +90,59 @@ test('slow optional extension startup does not block real core HTTP queries', as
     assert.equal((await f.api('/api/balance?provider=fixture')).status, 409);
     assert.equal((await f.api('/api/host/snapshot')).value.extensions.features[0].state, 'starting');
   } finally { await f.app.shutdown(); }
+});
+
+test('HTTP shutdown drains a response that becomes idle after server.close', async () => {
+  const { shutdownHub } = env({ globals: { setTimeout, clearTimeout, setInterval, clearInterval } }).hub();
+  let activeResponse;
+  const server = http.createServer((_req, res) => {
+    activeResponse = res;
+    res.writeHead(200);
+    res.write('first ');
+  });
+  // The normal keep-alive timer must not be what makes shutdown succeed.
+  server.keepAliveTimeout = 30_000;
+  const agent = new http.Agent({ keepAlive: true });
+  server.listen(0, '127.0.0.1');
+  try {
+    await once(server, 'listening');
+    const request = http.get({ host: '127.0.0.1', port: server.address().port, agent });
+    const [response] = await once(request, 'response');
+    assert.equal(response.headers.connection, 'keep-alive');
+    const body = (async () => {
+      let text = '';
+      for await (const chunk of response) text += chunk;
+      return text;
+    })();
+    const shutdown = shutdownHub(server);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(server.listening, false);
+    activeResponse.end('last');
+    assert.equal(await body, 'first last', 'shutdown must preserve the full in-flight response');
+    const failures = await shutdown;
+    assert.equal(failures.length, 0, 'shutdown failed: ' + failures.map(String).join('; '));
+  } finally {
+    agent.destroy();
+    server.closeAllConnections();
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('host shutdown closes a speculative TCP connection that never sent a request', async () => {
+  const f = await fixture({ globals: { setTimeout, clearTimeout, setInterval, clearInterval } });
+  const accepted = once(f.app.server, 'connection');
+  const client = net.connect(f.app.server.address().port, '127.0.0.1');
+  const disconnected = once(client, 'close');
+  try {
+    const [socket] = await accepted;
+    assert.equal(socket.bytesRead, 0);
+    await f.app.shutdown();
+    await disconnected;
+    assert.equal(f.app.server.listening, false);
+  } finally {
+    client.destroy();
+    if (f.app.server.listening) await f.app.shutdown();
+  }
 });
 
 test('failed optional cleanup still closes HTTP and flushes durable core session metadata', async () => {

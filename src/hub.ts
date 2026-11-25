@@ -65,7 +65,7 @@ import * as os from "node:os";
 import { randomBytes, createHash, createHmac, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { execFile } from "node:child_process";
-import { isIP } from "node:net";
+import { isIP, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import type { BackgroundModelSelection, Bridge, BridgeFactory, BusEvent, ContextSnapshot, SessionKind, PermissionOutcome } from "./bridges/types.js";
 import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
@@ -409,6 +409,7 @@ function persistReplayFrame(sessionId: string, frame: string): void {
 }
 
 const _initializing = new WeakMap<Map<string, Session>, Set<{ cancel(): void; done: Promise<void> }>>();
+const _hubHttpSockets = new WeakMap<http.Server, Set<Socket>>();
 
 export async function shutdownHub(server?: http.Server, sessions?: Map<string, Session>, drainHistory?: () => Promise<void>): Promise<unknown[]> {
   const failures: unknown[] = [];
@@ -445,13 +446,24 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
       let settled = false;
       const finish = (error?: NodeJS.ErrnoException) => {
         if (settled) return;
-        settled = true; clearTimeout(timer);
+        settled = true;
+        clearTimeout(timer);
+        clearInterval(reapIdle);
         if (error && error.code !== "ERR_SERVER_NOT_RUNNING") recordFailure(error);
         resolve();
       };
       const timer = setTimeout(() => finish(Error("HTTP server shutdown timed out")), 3000);
-      try { server.close(finish); }
-      catch (error) { recordFailure(error); finish(); }
+      // close() only reaps sockets that are already idle. Reap later ones as
+      // requests finish so their keep-alive timers can't outlast shutdown.
+      const reapIdle = setInterval(() => server.closeIdleConnections(), 50);
+      try {
+        server.close(finish);
+        // Node's idle HTTP scan can miss browser preconnects that have never
+        // sent any bytes. At this point no new requests should be started.
+        for (const socket of _hubHttpSockets.get(server) ?? []) {
+          if (socket.bytesRead === 0) socket.destroy();
+        }
+      } catch (error) { recordFailure(error); finish(); }
     });
   }
 
@@ -1506,6 +1518,12 @@ export function startHub(opts: HubOpts): {
       res.writeHead(err instanceof TypeError || err instanceof URIError || err instanceof SyntaxError ? 400 : 500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "request failed" }));
     });
+  });
+  const httpSockets = new Set<Socket>();
+  _hubHttpSockets.set(server, httpSockets);
+  server.on("connection", socket => {
+    httpSockets.add(socket);
+    socket.once("close", () => httpSockets.delete(socket));
   });
 
   // Restore persisted sessions before starting the HTTP server so that

@@ -215,14 +215,20 @@ class Body:
 
 class CosS3Client:
     def __init__(self, config): pass
-    def object(self, bucket, key, is_head):
+    def object(self, bucket, key, is_head, byte_range=None):
         assert bucket == 'ashub-release-1258678103'
         if key == os.environ.get('FAIL_LOOKUP'):
             raise CosServiceError(403, 'AccessDenied')
         file = Path(os.environ['COS_BUCKET_FIXTURE']) / key
-        if not file.is_file(): raise CosServiceError(404, None if is_head else 'NoSuchKey')
+        if is_head and (not file.is_file() or key == os.environ.get('AMBIGUOUS_HEAD')):
+            raise CosServiceError(404, 'NoSuchResource')
+        if not is_head and key == os.environ.get('AMBIGUOUS_HEAD'):
+            assert byte_range == 'bytes=0-0'
+            if os.environ.get('GET_ERROR'):
+                raise CosServiceError(404, os.environ['GET_ERROR'])
+        if not file.is_file(): raise CosServiceError(404, 'NoSuchKey')
         return {} if is_head else {'Body': Body(file)}
-    def get_object(self, Bucket, Key): return self.object(Bucket, Key, False)
+    def get_object(self, Bucket, Key, Range=None): return self.object(Bucket, Key, False, Range)
     def head_object(self, Bucket, Key): return self.object(Bucket, Key, True)
 `);
   const gh = path.join(dir, 'gh.cjs');
@@ -334,6 +340,8 @@ test('publication refuses orphaned payloads, unknown metadata and unsuccessful l
     [/latest-mac.yml already advertises v1\.2\.10/, { 'latest-mac.yml': 'version: 1.2.10\n' }],
     [/Cannot determine .* latest.yml/, { 'latest.yml': 'invalid manifest' }],
     [/HTTP 403/, {}, { FAIL_LOOKUP: mirrorPayloads.at(-1) }],
+    [/HTTP 404/, {}, { AMBIGUOUS_HEAD: mirrorPayloads.at(-1), GET_ERROR: 'NoSuchBucket' }],
+    [/payload .* already exists/, { [mirrorPayloads.at(-1)]: 'existing' }, { AMBIGUOUS_HEAD: mirrorPayloads.at(-1) }],
   ]) {
     await t.test(message.source, sub => {
       const result = mirrorFixture(sub, { remote }).publish(env);

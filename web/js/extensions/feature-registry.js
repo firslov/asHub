@@ -14,9 +14,27 @@ export class FeatureRegistry {
     this.modules = new Map();
   }
   enabled(id) { return this.features.get(id)?.enabled === true; }
-  snapshot() { return { version: 1, supported: this.supported, busy: this.busy, error: this.error, features: [...this.features.values()].map(feature => ({ ...feature, ...(feature.ui ? { ui: JSON.parse(JSON.stringify(feature.ui)) } : {}) })) }; }
+  snapshot() {
+    return { version: 1, supported: this.supported, busy: this.busy, error: this.error,
+      features: [...this.features.values()].map(feature => ({ ...feature,
+        ...(feature.capabilities ? { capabilities: [...feature.capabilities] } : {}),
+        ...(feature.ui ? { ui: JSON.parse(JSON.stringify(feature.ui)) } : {}),
+      })),
+    };
+  }
   subscribe(listener) { this.listeners.add(listener); listener(this.snapshot()); return () => this.listeners.delete(listener); }
   emit() { for (const listener of this.listeners) { try { listener(this.snapshot()); } catch {} } }
+  waitForWrite() {
+    if (!this.busy) return Promise.resolve();
+    return new Promise(resolve => {
+      const listener = ({ busy }) => {
+        if (busy) return;
+        this.listeners.delete(listener);
+        resolve();
+      };
+      this.listeners.add(listener);
+    });
+  }
   apply(snapshot) {
     if (snapshot?.version !== 1 || !Array.isArray(snapshot.features) || snapshot.features.length > 256) throw Error('Invalid extension catalog');
     const next = new Map();
@@ -26,6 +44,8 @@ export class FeatureRegistry {
         || !['application', 'frontend'].includes(feature.scope) || typeof feature.state !== 'string') throw Error('Invalid extension metadata');
       // Copy the supported fields. Ignore executable paths, markup and unknown fields.
       const entry = { id: feature.id, name: feature.name.slice(0, 200), scope: feature.scope, enabled: feature.enabled, state: feature.state.slice(0, 80) };
+      if (typeof feature.description === 'string') entry.description = feature.description.slice(0, 1000);
+      if (Array.isArray(feature.capabilities) && feature.capabilities.length <= 64 && feature.capabilities.every(value => typeof value === 'string' && /^[a-z][a-z0-9.-]{0,79}$/.test(value))) entry.capabilities = [...feature.capabilities];
       if (typeof feature.pluginId === 'string' && feature.pluginId && feature.pluginId.length <= 200) entry.pluginId = feature.pluginId;
       if (entry.pluginId && entry.state === 'error' && typeof feature.error === 'string') entry.error = feature.error.trim().slice(0, 1000);
       if (feature.ui?.panels !== undefined) {

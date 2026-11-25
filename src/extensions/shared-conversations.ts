@@ -5,6 +5,9 @@ import { openArtifact } from '../artifacts.js';
 
 export interface SharingInput { roots: string[] }
 type Grant = { pluginId: string; roots: string[] };
+type SharingStatus = { available: boolean; enabled: boolean; status: string };
+type SharingResource = { plugin: string; resource?: string };
+const statusPriority = (status: SharingStatus) => !status.enabled ? 0 : status.status === 'online' ? 3 : status.status === 'connecting' ? 2 : 1;
 const fail = (message: string, status = 403) => Object.assign(new Error(message), { status });
 const sid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{4,32}$/.test(value);
 /** Host-owned directory grants and a bounded conversation API. No accounts,
@@ -13,7 +16,7 @@ export class SharedConversations {
     private grants: Record<string, Grant> = {};
     private fault: unknown;
     private base = '';
-    private statuses = new Map<string, { signal: AbortSignal; read: () => any }>();
+    private statuses = new Map<string, { signal: AbortSignal; read: () => SharingStatus; resource?: string }>();
     private channels = new Map<string, Set<AbortController>>();
     constructor(private file: string, private token: string | undefined) {
         try {
@@ -57,16 +60,34 @@ export class SharedConversations {
         try { this.save(); } catch (e) { this.grants[id] = previous; throw e; }
         for (const c of this.channels.get(id) || []) c.abort();
     }
-    status() {
-        for (const source of this.statuses.values()) if (!source.signal.aborted) { try { return source.read(); } catch { } }
-        return { available: false, enabled: false, status: 'disabled' };
+    private selectStatus(preferred?: SharingStatus) {
+        let best = preferred;
+        let target: SharingResource | undefined;
+        for (const [plugin, source] of this.statuses) {
+            if (source.signal.aborted) continue;
+            try {
+                const status = source.read();
+                if (status && (!best || statusPriority(status) > statusPriority(best))) {
+                    best = status;
+                    target = { plugin, resource: source.resource };
+                }
+            } catch { /* An unavailable publisher does not hide the other connections. */ }
+        }
+        return { status: best ?? { available: false, enabled: false, status: 'disabled' }, target };
+    }
+    status() { return this.selectStatus().status; }
+    desktopStatus(preferred?: SharingStatus) {
+        const { status, target } = this.selectStatus(preferred);
+        return { ...status, target };
     }
     bind(pluginId: string, signal: AbortSignal) {
         return Object.freeze({
             scope: (id: string) => { signal.throwIfAborted(); const g = this.grants[id]; return g?.pluginId === pluginId ? [...g.roots] : null; },
             revoke: (id: string) => { signal.throwIfAborted(); this.revoke(pluginId, id); },
-            registerStatus: (read: () => any) => {
-                signal.throwIfAborted(); const item = { signal, read }; this.statuses.set(pluginId, item);
+            registerStatus: (read: () => SharingStatus, resource?: string) => {
+                signal.throwIfAborted();
+                if (resource !== undefined && (typeof resource !== 'string' || !/^[a-z][a-z0-9-]{0,79}$/.test(resource))) throw Error('Invalid sharing resource');
+                const item = { signal, read, resource }; this.statuses.set(pluginId, item);
                 signal.addEventListener('abort', () => { if (this.statuses.get(pluginId) === item) this.statuses.delete(pluginId); }, { once: true });
             },
             open: (id: string) => this.open(pluginId, id, signal),

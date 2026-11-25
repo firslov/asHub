@@ -1,4 +1,4 @@
-import { registerNetworkEndpoint } from "../network-policy.js";
+import { registerNetworkEndpoint, withNetworkSession } from "../network-policy.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { createHash } from "node:crypto";
@@ -126,8 +126,9 @@ export class CodexProviderHost {
     this.dispose = dispose;
     const agent = this.ctx.agent;
     if (!agent) return;
-    const sessionId = this.ctx.call("session:current-id");
-    if (typeof sessionId === "string" && sessionId) {
+    const id = this.ctx.call("session:current-id");
+    const sessionId = typeof id === "string" && id ? id : undefined;
+    if (sessionId) {
       const config = this.ctx.getExtensionSettings("codex-provider", {
         upstreamURL: "https://chatgpt.com/backend-api/codex/responses",
       });
@@ -190,13 +191,15 @@ export class CodexProviderHost {
         if (this.ctx.list().includes(`command:${key}`)) return;
         this.ctx.registerCommand(name, description, async (args: string) => {
           await this.sync();
-          if (!this.closed) await this.commands.get(key)?.(args);
+          if (!this.closed) await withNetworkSession(sessionId, () => this.commands.get(key)?.(args));
           await this.sync();
         });
       },
     } as Context;
     try {
-      await activate(context);
+      // The loopback server inherits this scope for OAuth refreshes, which have
+      // no session header. A shared catalog timer is not the server's owner.
+      await withNetworkSession(sessionId, () => activate(context));
       if (this.closed) dispose();
       else {
         this.signature = signature;

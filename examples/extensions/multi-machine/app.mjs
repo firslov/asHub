@@ -140,9 +140,10 @@ export function connectionResource(account, sharing) {
 
 export default async function activate(ctx) {
     const account = new RemoteAccount({ backends: ctx.services.backends, signal: ctx.signal });
+    const resource = 'connections';
     let sharing;
-    try { sharing = new DeviceSharing(ctx); } catch (e) { account.close(); throw e; }
-    ctx.services.interactions.register('connections', connectionResource(account, sharing));
+    try { sharing = new DeviceSharing(ctx, resource); } catch (e) { account.close(); throw e; }
+    ctx.services.interactions.register(resource, connectionResource(account, sharing));
     void account.refresh().catch(() => {});
     return { stop: async () => { account.close(); await sharing.close(); }, canStop: () => !account.loggingIn && !sharing.busy() };
 }

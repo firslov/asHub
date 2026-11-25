@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// agent-sh 0.16.1 still needs the Windows login and steering compatibility fixes.
+// Apply the compatibility deltas still needed with the pinned kernel release.
 const fs = require('node:fs');
 const path = require('node:path');
 const patch = require('./patches/codex-windows-login.json');
@@ -23,10 +23,11 @@ function apply(root = path.resolve(__dirname, '../node_modules/agent-sh'), spec 
 module.exports = { apply };
 if (require.main === module) {
   const count = apply();
-  apply(undefined, require('./patches/provider-startup.json'), 'provider startup');
-  const hunks = require('./patch-steering.cjs');
-  hunks.apply();
+  const hunks = require('./patch-kernel-hunks.cjs');
   hunks.apply(undefined, require('./patches/provider-refresh.json'), 'provider refresh');
+  hunks.apply(undefined, require('./patches/provider-request-body.json'), 'provider request body refresh');
+  hunks.apply(undefined, require('./patches/openrouter-catalog-lifecycle.json'), 'OpenRouter catalog lifecycle');
   hunks.apply(undefined, require('./patches/codex-summary-boundaries.json'), 'Codex summary boundaries');
+  hunks.apply(undefined, require('./patches/subagent-request-retry.json'), 'subagent request retry');
   console.log(`Codex Windows login patch: ${count ? 'applied' : 'verified'}`);
 }

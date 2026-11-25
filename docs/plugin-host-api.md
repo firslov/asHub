@@ -68,7 +68,7 @@ SSE data contains `{version:1, epoch, revision, kind?, id?}`. Kinds are `session
 
 The session shape in the snapshot matches legacy `GET /sessions`; projects match `/api/projects`. Snapshots reflect current in-process state, not a cross-process transaction with arbitrary external file edits. Legacy HTTP routes and the v1 plugin handler names remain supported. Only explicit 404/405/501 indicates an older host; authentication or server failures must not be treated as capability absence.
 
-The installed personal assistant can verify project names through `host.projectNames(entryKey, conversationId, grantId)`. The host checks that the plugin owns the live entry and holds the current background grant for that conversation alone. The call returns the current observation time and up to 16 previous name intervals per project. Times are UTC milliseconds. A legacy project gains an observation time when the host first sees its name. Public HTTP and ordinary plugin snapshots expose current names only.
+Applications declaring `project-name-history` and `scoped-history` can read factual name intervals through `host.projectNameHistory(entryKey, conversationId, grantId)`. The entry must be declared in the package's conversation scope, owned by that plugin, live, and covered by the plugin's current single-conversation background grant. The result is `{projects, gaps}`. Projects include only the ID, current name and observation time, and up to 16 previous name intervals. Closed gaps identify time ranges with incomplete coverage and contain no names or project IDs. All times are UTC milliseconds. Deleted project names are removed, and public HTTP and ordinary plugin snapshots expose current names only. Interpreting a name mention or deciding whether a gap makes the evidence ambiguous is plugin policy.
 
 Application extension states are `inactive`, `starting`, `active`, `stopping` and `error`. An enabled extension can still be unavailable during startup or after failure. A failed optional extension does not block core session routes. Feature disable preserves stored data. The remote gateway intentionally does not forward these unrestricted local host/plugin-management routes; it retains its permission-filtered remote protocol.
 
@@ -140,7 +140,7 @@ The grant covers current and future active agent conversations except exclusions
 
 - `background.status(grantId)` returns the current grant and quota, without the internal model binding. Usage is persisted per plugin and UTC day independently of grant replacement/revocation. A newly approved `dailyCalls` is the total daily limit, not an additional allowance. Failed or cancelled requests that have started still count; quota is persisted before calling the provider. Existing grant counters migrate to the version 2 usage ledger; revoked counters already discarded by older hosts cannot be reconstructed. Older hosts fail closed on this ledger rather than resetting it.
 - `background.targets(grantId)` returns authorized target metadata, including busy state.
-- `background.read(grantId, conversationId, cursor?)` returns `{target, entries, cursor, reset, more}`. Pages scan at most 40 persisted active-branch entries, with stable IDs, timestamps, roles and text capped at 3000 UTF-16 units on a safe Unicode boundary. System notes are omitted; recognized generated task envelopes use the `generated` role. This is not complete provenance classification. The cursor tracks scanned entries, even if filtered. A missing cursor restarts the active branch with `reset:true`; consumers must deduplicate by source ID.
+- `background.read(grantId, conversationId, cursor?, limit?)` returns `{target, entries, cursor, reset, more}`. Pages scan up to 40 persisted active-branch entries, or the requested limit from 1 to 40, with stable IDs, timestamps, roles and text capped at 3000 UTF-16 units on a safe Unicode boundary. System notes are omitted; recognized generated task envelopes use the `generated` role. This is not complete provenance classification. The cursor tracks scanned entries, even if filtered. A missing cursor restarts the active branch with `reset:true`; consumers must deduplicate by source ID.
 - `background.valid(grantId, conversationId, sourceIds)` checks whether up to 200 IDs still belong to the authorized active branch. It does not attest to semantic correctness or user intent.
 - `background.infer(grantId, messages, signal?)` makes a separate, tool-free request through the approved model. It accepts 1–8 system/user messages and at most 16000 serialized characters; output budget is 4096 tokens with a 60-second deadline. Busy model sources and concurrent requests for the same plugin are rejected for later retry. It does not append history or acquire permission to call tools.
 - `background.revoke(grantId)` cancels the package's running background request and removes the grant.
@@ -217,7 +217,7 @@ Session handlers may expose `ashub:collaboration:signal({id, requestKey, message
 
 Application plugins requiring `task-events` receive `services.collaboration.snapshot(ownerId)` and `subscribe(listener)`. Snapshots contain task metadata only (IDs, state, revision, terminal and delivery flags), scoped to a current project owner and its current members. Subscriptions are invalidation signals; read a fresh snapshot and reconcile persistent plugin state. They are removed on deactivation. No model is invoked by observation.
 
-With `message-lifecycle`, an explicitly confirmed message grant may opt into `projectId`, `pauseOnStop` and `recoverQueued`. Project scope is checked at confirmation and again at delivery admission. User Stop revokes grants that opt into pauseOnStop, including pending deliveries, and invalidates older confirmation previews even before a grant exists. Fresh confirmation can authorize work again; unrelated scheduled grants and previews are unchanged. Only queued recoverQueued deliveries survive graceful shutdown or process restart; running/uncertain work remains interrupted and is never automatically replayed. Disabling a plugin cancels its waiting deliveries. The bound message service also exposes `authorization(id)` (revoked, used, maxRuns, expiresAt) and `cancel(key)` (queued only). Grant ownership and existing idempotency checks remain enforced.
+With `message-lifecycle`, an explicitly confirmed message grant may opt into `projectId`, `pauseOnStop` and `recoverQueued`. Project scope is checked at confirmation and at delivery admission. User Stop revokes grants that opt into `pauseOnStop`, including pending deliveries, and invalidates earlier confirmation previews. Fresh confirmation can authorize work again. Queued recoverable deliveries resume after a recorded graceful shutdown. An unclean shutdown or a legacy store without a shutdown record revokes recoverable grants. Running deliveries remain interrupted. The host waits for application activation before admitting messages; disabling a plugin cancels its waiting deliveries. The bound message service exposes `authorization(id)`, `cancel(key)` for queued messages, and `suspendAdmission()` to block new admissions for that activation and revoke that plugin’s recoverable grants durably. Other plugins and ordinary scheduled grants retain their authorization. Grant ownership and idempotency checks apply throughout.
 
 With `activity-hints`, `services.activities.replace(records)` publishes up to 100 text-only `{id,projectId,sessionId,label,state}` hints per plugin. Labels are limited to 200 characters and other fields to 100. Hints are validated against current membership, cleared on deactivation, and emitted through the project invalidation channel. Remote catalogs include only hints whose owner conversation is shared. These are presentation metadata, not executable actions or additional authority.
 
@@ -239,6 +239,7 @@ A setup resource may return `openConversation: id` in its completed view. Only a
 - `search(grant, conversationId, query)`: at most 12 matching snippets of 800 characters, with original message ID, role and timestamp.
 - `entry(grant, conversationId, sourceId, offset?)`: at most 3000 characters with `nextOffset` and `more`; rejects invalid UTF-16 boundaries. `previousId` identifies the directly preceding message in the current authorized history, or is `null` at its beginning or authorization boundary; invisible system notes remain omitted, while tool/generated messages are not skipped.
 - `latestUser(grant, conversationId)`: the latest authorized user entry ID, allowing plugins to validate fresh user intent.
+- `lookupEvidence(grant, conversationId, anchorId, {exact, terms, excludeWithin?})` finds authorized user messages after the anchor. It returns `{hits, more}` with up to 24 matches in newest-first branch order. Each hit has an `id`, an `exact` flag for a complete identifier match, and a `shared` count. Non-exact hits share at least two distinct terms. Optional `{entries, elapsedMs}` bounds omit matches within both limits measured from the anchor. Use `entry` to check provenance and read text. A result with `more: true` omits matches and cannot establish that no contrary evidence exists.
 
 These methods obey the grant start date, current history branch and plugin lifecycle. Generated cross-conversation messages are marked `generated` in search results, not asserted as human statements.
 
@@ -376,16 +377,24 @@ settings, unrestricted filesystem access, shell shortcuts and persistent approva
 are excluded; network policy changes are conversation-scoped. Streams exclude
 terminal data and stop when directory authorization changes.
 
-`registerStatus(read)` supplies a lifecycle-bound, non-secret status snapshot for
-native desktop affordances. Only return public connectivity metadata. The host has
-no account, gateway, device discovery or reconnection policy.
+`registerStatus(read, resourceId?)` supplies a lifecycle-bound, non-secret status
+snapshot for native desktop affordances. Only return public connectivity metadata.
+The desktop prefers an online publisher, then a connecting or enabled publisher.
+It opens the selected publisher's declared resource panel. Older publishers can
+omit the resource ID when they declare a single resource. A reveal runs the
+resource's `onReveal` callback before opening its panel. The host has no
+account, gateway, device discovery or reconnection policy.
 
 The optional device interconnect application combines the former mobile publisher
 and multi-machine controller. A one-time compatibility migration copies existing
 identity/scope/receipt state into plugin storage. The old local `/api/mobile` GET
 remains a status shim; mutation routes return 410 after migration. A legacy adapter
 runs only if migration fails, preserving an existing paired phone until upgrade
-can finish; it is not used for fresh installations or successful migrations.
+can finish. During fallback, a migration target that might publish the legacy
+identity is suppressed. Independently paired publishers keep their credentials,
+grants and receipts and stay available. When the tray shows the compatibility
+connection's status, its settings action opens the corresponding feature control
+with migration instructions and a switch to turn off the old connection.
 
 ### Grouped resources and directory fields
 

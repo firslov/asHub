@@ -7,22 +7,25 @@ export const withSilentCodexRetries = <T>(run: () => T): T => silentRetries.run(
 
 export const CODEX_HEADERS_TIMEOUT_MS = 15 * 60_000;
 type Options = { signal?: AbortSignal; [key: string]: unknown };
+type ClientConfiguration = { baseURL?: string; apiKey?: string; model?: string };
 type ProxyError = Error & { type: string; error: { status: number; retryable: boolean; partial?: boolean; retry_after?: string } };
 const guarded = new WeakSet<object>();
-const endpoints = new Map<string, number>();
+const endpoints = new Map<string, { registrations: number }>();
+const configChanged = (current: ClientConfiguration | undefined, original: ClientConfiguration): boolean =>
+  (["baseURL", "apiKey", "model"] as const).some(key => current?.[key] !== original[key]);
 
 /** Identify managed Codex transports even if a broken loopback connection
  * prevents the proxy's structured error from reaching the SDK. */
 export function registerCodexEndpoint(baseURL: string | undefined): () => void {
   if (!baseURL) return () => {};
-  endpoints.set(baseURL, (endpoints.get(baseURL) ?? 0) + 1);
+  const endpoint = endpoints.get(baseURL) ?? { registrations: 0 };
+  endpoint.registrations++;
+  endpoints.set(baseURL, endpoint);
   let active = true;
   return () => {
     if (!active) return;
     active = false;
-    const remaining = (endpoints.get(baseURL) ?? 1) - 1;
-    if (remaining) endpoints.set(baseURL, remaining);
-    else endpoints.delete(baseURL);
+    if (--endpoint.registrations === 0) endpoints.delete(baseURL);
   };
 }
 
@@ -36,12 +39,13 @@ function policy() {
 function proxyError(error: unknown): error is ProxyError {
   const e = error as ProxyError | undefined;
   return !!e && e.type === "codex_proxy_error" && Number.isInteger(e.error?.status)
+    && e.error.status >= 400 && e.error.status <= 599
     && typeof e.error?.retryable === "boolean";
 }
 
 function exhausted(error: ProxyError): Error {
-  // The kernel and subagent each have an outer retry loop. This layer owns the
-  // Codex budget; never multiply it by replaying an exhausted request/run.
+  // This layer owns the Codex budget in both engine loops. A terminal
+  // disposition keeps the engine from retrying an exhausted request again.
   return Object.assign(new Error(error.message, { cause: error }), error, {
     error: { ...error.error, retryable: false },
   });
@@ -71,26 +75,40 @@ function delayFor(error: ProxyError, attempt: number, deadline: boolean): number
 /** Retry only a single model request, before any chunks have escaped. Tool
  * execution is outside this boundary, so completed tools are never replayed.
  * Other providers retain the kernel's existing retry behavior. */
-export function guardCodexRetries(value: unknown, notify: (message: string) => void): void {
+export function guardCodexRetries(value: unknown, notify: (message: string) => void, {
+  scopedEndpoint = false, sourceClient,
+}: { scopedEndpoint?: boolean; sourceClient?: unknown } = {}): void {
   if (!value || typeof value !== "object" || guarded.has(value)) return;
   const client = value as {
-    config?: { baseURL?: string; apiKey?: string; model?: string };
+    config?: ClientConfiguration;
     stream: (options: Options) => Promise<AsyncIterable<unknown>>;
   };
   if (typeof client.stream !== "function") return;
+  const initialBaseURL = client.config?.baseURL ?? "";
+  // A child client snapshots credentials at launch. Provider refresh may retire
+  // its proxy instead of reconfiguring the child as it does the shared client.
+  const initialEndpoint = scopedEndpoint ? endpoints.get(initialBaseURL) : undefined;
+  const source = initialEndpoint && sourceClient && typeof sourceClient === "object"
+    ? sourceClient as { config?: ClientConfiguration; model?: string } : undefined;
+  const sourceConfig = { ...source?.config }, sourceModel = source?.model;
   const original = client.stream;
   client.stream = async function (options) {
     const receiver = this, { maxRetries, headersTimeoutRetries } = policy();
     const requestConfig = { ...receiver.config };
-    let codexRequest = endpoints.has(receiver.config?.baseURL ?? "");
+    let codexRequest = !!initialEndpoint || endpoints.has(receiver.config?.baseURL ?? "");
     return (async function* () {
       let deadlineRetries = 0;
       for (let attempt = 0; ; attempt++) {
         options.signal?.throwIfAborted();
+        if (initialEndpoint && (receiver.config?.baseURL !== initialBaseURL || endpoints.get(initialBaseURL) !== initialEndpoint)) {
+          throw disconnected(new Error("Codex request endpoint was replaced. Send the message again."), false);
+        }
+        if (source && (configChanged(source.config, sourceConfig) || source.model !== sourceModel)) {
+          throw disconnected(new Error("Codex request settings changed. Send the message again."), false);
+        }
         // Model selection and provider refresh reconfigure the shared client
         // immediately. Never resend old model parameters to its new endpoint.
-        if (codexRequest && (["baseURL", "apiKey", "model"] as const)
-          .some(key => receiver.config?.[key] !== requestConfig[key])) {
+        if (codexRequest && configChanged(receiver.config, requestConfig)) {
           throw disconnected(new Error("Codex request settings changed while waiting to retry. Send the message again."), false);
         }
         let emitted = false;

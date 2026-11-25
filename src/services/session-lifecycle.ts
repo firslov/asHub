@@ -51,20 +51,22 @@ async function initializeSession(
   let store: HistoryStore | undefined;
   let initialMessages: unknown[] | undefined;
   const treePath = path.join(SESSIONS_DIR, `${id}.jsonl`);
+  const historyWriterLifecycle = opts.historyWriterLifecycle?.(id);
+  const historyOptions = { metaPath: sessionMetaPath(id), ...historyWriterLifecycle };
 
   if (isAgent && !needsLazyRestore) {
     try {
       if (existing && fs.existsSync(treePath)) {
-        store = new SessionStore(treePath, { metaPath: sessionMetaPath(id) });
+        store = new SessionStore(treePath, historyOptions);
       } else if (!existing) {
         store = new SessionStore(treePath, {
           create: { cwd, sessionId: id },
-          metaPath: sessionMetaPath(id),
+          ...historyOptions,
         });
       } else {
         store = new SessionStore(treePath, {
           create: { cwd, sessionId: id },
-          metaPath: sessionMetaPath(id),
+          ...historyOptions,
         });
       }
     } catch (err) {
@@ -132,6 +134,7 @@ async function initializeSession(
     contextLock: Promise.resolve(),
     lastFrameSeq: existing?.lastFrameSeq ?? 0,
     _needsRestore: needsLazyRestore || undefined,
+    _historyWriterLifecycle: historyWriterLifecycle,
   };
 
   let cancelled = false;
@@ -175,7 +178,11 @@ async function initializeSession(
         try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
       });
       if (store) {
-        session.capture = createCapture(bridge, () => session.store ?? null, { onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`) });
+        session.capture = createCapture(bridge, () => session.store ?? null, {
+          onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`),
+          onFlushResult: session._historyWriterLifecycle?.onCaptureResult,
+          shutdownSignal: session._historyWriterLifecycle?.shutdownSignal,
+        });
       }
     }
     // Terminal sessions also need event routing — PTY output flows through

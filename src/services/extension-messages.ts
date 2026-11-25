@@ -39,6 +39,7 @@ interface Grant extends MessageGrant {
     lastAt?: number;
 }
 export interface DeliveryPort {
+    activePlugin?(id: string): boolean;
     target(id: string): {
         title: string;
         binding: string;
@@ -50,14 +51,20 @@ export interface DeliveryPort {
 const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const text = (v: unknown, max: number) => typeof v === 'string' && v.trim().length > 0 && v.length <= max && !v.includes('\0');
+/** The specific submission was rejected before changing the queue or grant. */
+function rejectSubmission(message: string): never {
+    throw Object.assign(Error(message), { code: 'EXTENSION_MESSAGE_REJECTED' });
+}
 /** Durable, authorized message admission. No calendar, recurrence, or plugin business rules. */
 export class ExtensionMessages {
     private state: {
         version: 1;
+        cleanShutdown?: boolean;
         grants: Record<string, Grant>;
         deliveries: Record<string, Delivery>;
     };
     private active = new Map<string, AbortSignal>();
+    private suspended = new Set<AbortSignal>();
     private timer?: ReturnType<typeof setInterval>;
     private inFlight = new Set<string>();
     // Confirmation tokens are process-local; stops also invalidate previews
@@ -68,19 +75,33 @@ export class ExtensionMessages {
     prepareShutdown() { this.shuttingDown = true; }
     private fault: unknown;
     constructor(private file: string, private port: DeliveryPort, private now = Date.now) {
-        this.state = { version: 1, grants: {}, deliveries: {} };
+        this.state = { version: 1, cleanShutdown: false, grants: {}, deliveries: {} };
         try {
             if (fs.existsSync(file)) {
                 const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-                if (data.version !== 1 || !data.grants || !data.deliveries)
+                if (data.version !== 1 || !data.grants || !data.deliveries ||
+                    (data.cleanShutdown !== undefined && typeof data.cleanShutdown !== 'boolean'))
                     throw Error('Invalid extension message store');
                 this.state = data;
-                for (const d of Object.values(this.state.deliveries))
-                    if (['queued', 'running'].includes(d.state) && !(d.state === 'queued' && this.state.grants[d.grantId]?.recoverQueued)) {
+                // Persist a dirty marker before this host can admit work. If
+                // both ledgers later fail, recovery can still detect the gap.
+                const recover = this.state.cleanShutdown === true;
+                if (!recover) for (const grant of Object.values(this.state.grants))
+                    if (grant.recoverQueued) grant.revoked = true;
+                for (const d of Object.values(this.state.deliveries)) {
+                    const grant = this.state.grants[d.grantId];
+                    if (d.state === 'queued' && grant?.recoverQueued) {
+                        if (!grant.revoked) continue;
+                        d.state = 'cancelled';
+                        d.error = 'Recovery authorization unavailable after restart';
+                        d.finishedAt = this.now();
+                    } else if (['queued', 'running'].includes(d.state)) {
                         d.state = 'interrupted';
                         d.error = 'Host restarted; automatic replay is disabled';
                         d.finishedAt = this.now();
                     }
+                }
+                this.state.cleanShutdown = false;
                 this.save();
             }
         }
@@ -119,9 +140,11 @@ export class ExtensionMessages {
             throw Error('Plugin already has an active message service');
         this.active.set(pluginId, signal);
         signal.addEventListener('abort', () => {
+            this.suspended.delete(signal);
             if (this.active.get(pluginId) !== signal)
                 return;
             this.active.delete(pluginId);
+            if (this.closed) return;
             for (const d of Object.values(this.state.deliveries))
                 if (d.pluginId === pluginId && d.state === 'queued' && !(this.shuttingDown && this.state.grants[d.grantId]?.recoverQueued)) {
                     d.state = 'cancelled';
@@ -135,12 +158,26 @@ export class ExtensionMessages {
         }, { once: true });
         const guard = () => { signal.throwIfAborted(); this.guard(pluginId); };
         return Object.freeze({
+            // The plugin can shut admission even if its own ledger cannot be read.
+            // Revoke recoverable grants in the host store so it cannot revive them on restart.
+            suspendAdmission: () => {
+                signal.throwIfAborted();
+                this.suspended.add(signal);
+                if (this.closed || this.fault || this.active.get(pluginId) !== signal)
+                    throw Error('Plugin message service unavailable');
+                const recoverable = Object.values(this.state.grants).filter(g => g.pluginId === pluginId && g.recoverQueued && !g.revoked);
+                if (recoverable.length) this.revokeGrants(recoverable);
+            },
             submit: (input: {
                 grantId: string;
                 key: string;
                 values?: Record<string, string>;
                 expiresAt: number;
-            }) => { guard(); return this.submit(pluginId, input); },
+            }) => {
+                guard();
+                if (this.suspended.has(signal)) throw Error('Plugin message admission suspended');
+                return this.submit(pluginId, input);
+            },
             lookup: (key: string) => { guard(); const d = this.state.deliveries[hash([pluginId, key])]; return d ? copy(d) : undefined; },
             status: (id: string) => { guard(); const d = this.state.deliveries[id]; if (!d || d.pluginId !== pluginId)
                 throw Error('Delivery unavailable'); return copy(d); },
@@ -173,7 +210,7 @@ export class ExtensionMessages {
                 { label: '任务内容', value: spec.template },
                 { label: '权限范围', value: '仅提交此消息；工具操作仍遵守原有授权' },
                 ...(spec.pauseOnStop ? [{ label: '停止行为', value: '点击停止将撤销此自动接续授权，需手动恢复' }] : []),
-                ...(spec.recoverQueued ? [{ label: '重启行为', value: '仅恢复尚未开始的消息；已开始但结果未知时不重发' }] : []),
+                ...(spec.recoverQueued ? [{ label: '重启行为', value: '正常退出后仅恢复尚未开始的消息；异常退出后需重新确认' }] : []),
                 { label: '最短提交间隔', value: `${spec.minIntervalMs / 1000}s` },
                 { label: '最多提交', value: String(spec.maxRuns ?? '持续有效，直到撤销') },
                 ...(spec.expiresAt ? [{ label: '授权截止', value: new Date(spec.expiresAt).toISOString() }] : []),
@@ -222,33 +259,33 @@ export class ExtensionMessages {
         expiresAt: number;
     }) {
         if (!text(input.key, 180) || !Number.isSafeInteger(input.expiresAt))
-            throw Error('Invalid delivery request');
+            rejectSubmission('Invalid delivery request');
         const fingerprint = hash(input), id = hash([pluginId, input.key]);
         const existing = this.state.deliveries[id];
         if (existing) {
             if (existing.fingerprint !== fingerprint)
-                throw Error('Delivery key already bound to different parameters');
+                rejectSubmission('Delivery key already bound to different parameters');
             return copy(existing);
         }
         const g = this.state.grants[input.grantId];
         if (!g || g.pluginId !== pluginId || g.revoked)
-            throw Error('Message authorization revoked or unavailable');
+            rejectSubmission('Message authorization revoked or unavailable');
         if (g.expiresAt !== undefined && g.expiresAt <= this.now())
-            throw Error('Message authorization expired');
+            rejectSubmission('Message authorization expired');
         if (g.maxRuns !== undefined && g.used >= g.maxRuns)
-            throw Error('Message authorization exhausted');
+            rejectSubmission('Message authorization exhausted');
         if (g.lastAt !== undefined && this.now() - g.lastAt < g.minIntervalMs)
-            throw Error('Message authorization rate limit');
+            rejectSubmission('Message authorization rate limit');
         const target = this.port.target(g.targetId);
         if (!target || target.binding !== g.binding)
-            throw Error('Target conversation unavailable or changed');
+            rejectSubmission('Target conversation unavailable or changed');
         const values = input.values ?? {};
         if (!values || Array.isArray(values) || Object.entries(values).some(([k, v]) => !g.variables?.includes(k) || typeof v !== 'string' || v.length > 160 || /[\r\n\0]/.test(v)))
-            throw Error('Invalid message variables');
+            rejectSubmission('Invalid message variables');
         const message = g.template.replace(/\{\{(\w+)\}\}/g, (token, k) => { if (!Object.hasOwn(values, k))
-            throw Error(`Missing variable ${k}`); return values[k]; });
+            rejectSubmission(`Missing variable ${k}`); return values[k]; });
         if (message.length > 10000)
-            throw Error('Message too long');
+            rejectSubmission('Message too long');
         if (Object.keys(this.state.deliveries).length >= 20000)
             throw Error('Delivery receipt capacity reached; automatic pruning is disabled');
         const d: Delivery = { id, pluginId, grantId: g.id, key: input.key, fingerprint, targetId: g.targetId, message, label: g.label, createdAt: this.now(), expiresAt: Math.min(input.expiresAt, g.expiresAt ?? Infinity), state: input.expiresAt <= this.now() ? 'expired' : 'queued' };
@@ -279,7 +316,9 @@ export class ExtensionMessages {
                 this.save();
                 continue;
             }
-            if (this.inFlight.has(d.id) || this.active.get(d.pluginId)?.aborted !== false || this.port.busy(d.targetId))
+            const activation = this.active.get(d.pluginId);
+            if (this.inFlight.has(d.id) || !activation || activation.aborted || this.suspended.has(activation) ||
+                this.port.activePlugin?.(d.pluginId) === false || this.port.busy(d.targetId))
                 continue;
             this.inFlight.add(d.id);
             pending.push((async () => {
@@ -287,7 +326,9 @@ export class ExtensionMessages {
                 try {
                     await this.port.dispatch(copy(d), () => {
                         this.guard(d.pluginId);
-                        if (d.state !== 'queued' || g.revoked || d.expiresAt <= this.now() || this.port.target(d.targetId)?.binding !== g.binding || (g.projectId !== undefined && this.port.target(d.targetId)?.projectId !== g.projectId) || this.port.busy(d.targetId))
+                        if (this.active.get(d.pluginId) !== activation || this.suspended.has(activation) ||
+                            d.state !== 'queued' || g.revoked || d.expiresAt <= this.now() || this.port.target(d.targetId)?.binding !== g.binding || (g.projectId !== undefined && this.port.target(d.targetId)?.projectId !== g.projectId) ||
+                            this.port.activePlugin?.(d.pluginId) === false || this.port.busy(d.targetId))
                             throw Object.assign(Error('Delivery admission changed'), { code: 'ADMISSION_CHANGED' });
                         d.state = 'running';
                         d.startedAt = this.now();
@@ -323,9 +364,19 @@ export class ExtensionMessages {
         }
         await Promise.allSettled(pending);
     }
-    close() { this.closed = true; clearInterval(this.timer); for (const d of Object.values(this.state.deliveries))
+    close() {
+        if (this.closed) return;
+        this.closed = true; clearInterval(this.timer);
+        for (const d of Object.values(this.state.deliveries))
         if (['queued', 'running'].includes(d.state) && !(d.state === 'queued' && this.state.grants[d.grantId]?.recoverQueued)) {
             d.state = 'interrupted';
             d.finishedAt = this.now();
-        } this.save(); }
+        }
+        this.save();
+    }
+    finishShutdown() {
+        if (!this.shuttingDown || !this.closed) throw Error('Message service has not finished closing');
+        this.state.cleanShutdown = true;
+        this.save();
+    }
 }

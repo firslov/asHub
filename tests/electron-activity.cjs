@@ -16,9 +16,9 @@ import * as activity from '/js/stream/activity.js';
 import * as thinking from '/js/stream/thinking.js';
 import * as groups from '/js/stream/tool-group.js';
 import * as replyApi from '/js/stream/reply.js';
-import {buildToolRow} from '/js/stream/renderers.js';
+import {buildToolRow,renderSubagentCancellation} from '/js/stream/renderers.js';
 import {lang} from '/js/i18n.js';
-window.fixture={activity,thinking,groups,replyApi,buildToolRow,lang};
+window.fixture={activity,thinking,groups,replyApi,buildToolRow,renderSubagentCancellation,lang};
 </script>`;
 app.whenReady().then(async()=>{
  server=http.createServer((req,res)=>{
@@ -148,6 +148,24 @@ app.whenReady().then(async()=>{
   })()`);
   assert.deepEqual(timestamp,{iso:'2026-10-30T08:12:34.000Z',visible:true,inside:true,overflow:false});
   await fs.promises.writeFile(`/tmp/ashub-activity-time-${theme}-${width}.png`,(await win.webContents.capturePage()).toPNG());
+  const cancellation=await run(`(()=>{
+   const {renderSubagentCancellation,lang}=fixture;
+   const stream=document.querySelector('.session-stream');stream.replaceChildren();
+   const translations=[];
+   for(const language of ['zh','en']){
+    lang.value=language;
+    const block=document.createElement('div');block.className='subagent-block subagent-failed';
+    block.innerHTML='<div class="subagent-head subagent-done"><span class="subagent-type-badge">review</span><span class="subagent-icon">✗</span><span class="subagent-label">Review the background task</span></div>';
+    stream.appendChild(block);
+    const head=block.firstElementChild;
+    renderSubagentCancellation(block,head);
+    const badge=head.querySelector('.subagent-cancelled-badge'),rect=badge.getBoundingClientRect();
+    translations.push({text:badge.textContent,fits:rect.width>0&&rect.left>=0&&rect.right<=innerWidth,
+     failure:block.classList.contains('subagent-failed'),icon:head.querySelector('.subagent-icon').textContent});
+   }
+   return translations;
+  })()`);
+  assert.deepEqual(cancellation,[{text:'已取消',fits:true,failure:false,icon:'■'},{text:'Cancelled',fits:true,failure:false,icon:'■'}]);
   console.log('PASS activity detail layout',theme,width,result);
  }
 }).then(()=>finish(0),e=>{console.error(e);finish(1)});

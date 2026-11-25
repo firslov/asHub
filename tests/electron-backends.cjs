@@ -15,6 +15,28 @@ app.whenReady().then(async()=>{
   const {BackendConnections}=await import('../dist/extensions/backends.js');const registry=new BackendConnections({signal:controller.signal,open:id=>opened.push(id)});
   const frame=(name,payload={})=>({meta:{name},payload});
   const history=[frame('agent:info',{model:'deepseek-v4',provider:'deepseek'}),frame('agent:query',{query:'请查看结果'}),frame('agent:processing-start'),frame('agent:thinking',{text:'**分析结果**'}),frame('agent:tool-started',{toolCallId:'old',name:'read_file',input:{path:'report.md'}}),frame('agent:tool-completed',{toolCallId:'old',text:'done'}),frame('agent:response-chunk',{blocks:[{type:'text',text:'结果已就绪。公式：$x^2$'}]}),frame('agent:response-chunk',{blocks:[{type:'text',text:'\n\n![图片](chart.png)\n\n[报告](report.md)\n\n<img src="https://tracking.invalid/pixel" srcset="https://tracking.invalid/pixel2 2x">'}]}),frame('agent:response-segment',{text:'结果已就绪。公式：$x^2$\n\n![图片](chart.png)\n\n[报告](report.md)\n\n<img src="https://tracking.invalid/pixel" srcset="https://tracking.invalid/pixel2 2x">'}),frame('agent:processing-done'),frame('hub:replay-done')];
+  const childHistory=mode=>[
+   frame('agent:tool-started',{toolCallId:mode+'-call',title:mode+'-launch'}),
+   frame('subagent:started',{subagentId:mode+'-cancel',toolCallId:mode+'-call',title:mode+'-cancel'}),
+   frame('subagent:done',{subagentId:mode+'-cancel',toolCallId:mode+'-call',cancelled:true}),
+   frame('agent:tool-completed',{toolCallId:mode+'-call',exitCode:1,text:'Interrupted'}),
+   frame('subagent:started',{subagentId:mode+'-partial',title:mode+'-partial'}),
+   frame('subagent:done',{subagentId:mode+'-partial',degraded:'budget'}),
+   frame('subagent:started',{subagentId:mode+'-success',title:mode+'-success'}),
+   frame('subagent:done',{subagentId:mode+'-success'}),
+   frame('agent:tool-started',{toolCallId:mode+'-queued',title:mode+'-queued'}),
+   frame('agent:tool-completed',{toolCallId:mode+'-queued',exitCode:1,text:'Interrupted'}),
+   frame('subagent:done',{toolCallId:mode+'-queued',cancelled:true,degraded:null,tokensUsed:0}),
+   frame('agent:tool-started',{toolCallId:mode+'-reused',title:mode+'-older-launch'}),
+   frame('subagent:started',{toolCallId:mode+'-reused',subagentId:mode+'-older-child',title:mode+'-older-child'}),
+   frame('agent:tool-completed',{toolCallId:mode+'-reused',exitCode:0}),
+   frame('agent:tool-started',{toolCallId:mode+'-reused',title:mode+'-newer-launch'}),
+   frame('subagent:started',{toolCallId:mode+'-reused',subagentId:mode+'-newer-child',title:mode+'-newer-child'}),
+   frame('subagent:done',{toolCallId:mode+'-reused',subagentId:mode+'-older-child',cancelled:true}),
+   frame('agent:tool-completed',{toolCallId:mode+'-reused',exitCode:0}),
+   frame('subagent:done',{toolCallId:mode+'-reused',subagentId:mode+'-newer-child'}),
+  ];
+  history.splice(history.findIndex(event=>event.meta.name==='agent:response-chunk'),0,...childHistory('replay'));
   const bind=key=>registry.bind('plugin',controller.signal).register(key,{label:key==='one'?'办公室 Mac':'工作站',online:()=>online,request:async(op,args)=>{
    requests.push({key,op,args});if(op==='sessions'){
     if(sessionDelay){const held=sessionDelay;sessionDelay=null;return held;}
@@ -122,6 +144,14 @@ app.whenReady().then(async()=>{
   emit(frame('agent:processing-start'));emit(frame('agent:tool-started',{toolCallId:'shared-label',name:'read_file'}));
   emit({...frame('agent:error',{message:'fixture error'}),meta:{name:'agent:error',ts:Date.now()}});emit(frame('agent:processing-done'));
   await wait("!!document.querySelector('.bw-phase-time')");assert((await js("document.querySelectorAll('.bw-phase')[2].textContent")).includes('处理异常'));assert((await js("document.querySelectorAll('.bw-phase')[2].textContent")).includes('读取文件'));
+  emit(frame('agent:processing-start'));childHistory('live').forEach(emit);emit(frame('agent:processing-done'));
+  for(const mode of ['replay','live']){
+   const want=[mode+'-launch · 已取消',mode+'-cancel · 已取消',mode+'-partial · 部分完成',mode+'-success · 完成',mode+'-queued · 已取消',
+    mode+'-older-launch · 已取消',mode+'-older-child · 已取消',mode+'-newer-launch · 完成',mode+'-newer-child · 完成'];
+   const rows=`[...document.querySelectorAll('.bw-phase details summary')].map(n=>n.textContent).filter(s=>s.startsWith('${mode}-'))`;
+   await wait(`${rows}.length===${want.length}`);
+   assert.deepEqual(await js(rows),want);
+  }
   await wait("document.querySelector('#queue').textContent.includes('排队消息')");await click('编辑');await js("document.querySelector('#dialog textarea').value='修改后的排队消息'");await click('保存');await wait("document.querySelector('#queue').textContent.includes('修改后的排队消息')");await click('插队');await wait("document.querySelector('#queue').textContent.includes('等待接入')");let releaseQueue;queueDelay=new Promise(r=>releaseQueue=r);const beforeQueue=requests.filter(r=>r.op==='queue').length;streams.get('one:abcd')(frame('agent:queue-updated'));await wait('true');for(let n=0;n<100&&requests.filter(r=>r.op==='queue').length===beforeQueue;n++)await new Promise(r=>setTimeout(r,20));await click('撤回');await wait("!document.querySelector('#queue').textContent");releaseQueue([{id:'queue-message-000001',query:'stale queue',revision:1}]);await new Promise(r=>setTimeout(r,80));assert.equal(await js("document.querySelector('#queue').textContent"),'');assert(requests.some(r=>r.op==='queue-withdraw'));
   await js("document.querySelector('#query').value='电脑一草稿';document.querySelector('#query').dispatchEvent(new Event('input'))");
   const second=await make(b.id),js2=code=>second.webContents.executeJavaScript(code);await wait("document.querySelectorAll('#sessions button').length===3",js2);

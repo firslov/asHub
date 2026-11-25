@@ -1,5 +1,4 @@
 import { lang, t } from './i18n.js';
-import { featuresReady } from './extensions/feature-state.js';
 
 const api = window.electronAPI;
 const section = document.getElementById('desktop-background-settings');
@@ -39,13 +38,6 @@ if (api?.getBackgroundSettings && section) {
   const syncLanguage = () => { render(); api.setBackgroundSettings({ language: lang.value }).catch(() => {}); };
   document.addEventListener('langchange', syncLanguage);
   document.getElementById('config-toggle')?.addEventListener('click', () => { if (failed) load(); });
-  api.onOpenMobileAccess(async () => {
-    await featuresReady();
-    const trigger = document.querySelector('[data-host-capabilities~="shared-conversations"]');
-    if (trigger && !trigger.classList.contains('active')) trigger.click();
-    else if (!trigger) document.getElementById('plugins-toggle')?.click();
-  });
   load();
   syncLanguage();
-  api.notifyDesktopReady();
 }

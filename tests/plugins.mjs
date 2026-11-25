@@ -162,12 +162,14 @@ test('uninstall removes named handlers and command handlers, retaining the origi
   const off = ctx.advise('shared', next => '[' + next() + ']');
   await runtime.load(ctx);
   assert.equal(ctx.call('plugin:probe'), 'plugin only');
+  assert.equal(core.handlers.hasBase('plugin:probe'), true);
   assert.equal(core.handlers.call('command:/plugin-probe'), 'plugin command');
   assert.equal(ctx.call('shared'), '[plugin override]');
   ctx.define('later', () => 'new host base');
   const releaseNewer = defineOwned('shared', () => 'newer plugin');
   runtime.uninstall(pluginCatalog(f.file)[0].id);
   assert.equal(ctx.call('plugin:probe'), undefined);
+  assert.equal(core.handlers.hasBase('plugin:probe'), false);
   assert(!ctx.list().includes('plugin:probe'));
   assert.equal(core.handlers.call('command:/plugin-probe'), undefined);
   assert.equal(ctx.call('shared'), '[newer plugin]');

@@ -39,6 +39,57 @@ test('history cursor, generated provenance, exclusions and branch rewinds use du
  f.store.setActiveLeaf(ids[0]); assert.deepEqual(f.api.valid(id,'a',[ids[1]]),[]); assert.equal(f.api.read(id,'a',page.cursor).reset,true);
  const fresh=f.approve({includeHistory:false}); assert.equal(f.api.read(fresh,'a').entries.length,0);
 });
+test('evidence lookup uses whole identifiers and distinct terms in authorized branch order',async t=>{
+ const f=fixture(t);
+ const [anchor,exact,prefix,lexical,technical]=await f.store.appendMessages([
+  {role:'user',content:'确认 HX-12 合同续签'},
+  {role:'user',content:'ＨＸ－１２'},
+  {role:'user',content:'HX-120 合同'},
+  {role:'user',content:'续签合同前核对条款'},
+  {role:'user',content:'repo/path blue-green'},
+  {role:'assistant',content:'HX-12 合同续签'},
+  {role:'user',content:'[插件任务] HX-12 合同续签'},
+ ]);
+ const id=f.approve(), query={exact:['HX-12'],terms:['合同','续签','续签']};
+ const lookup=()=>f.api.lookupEvidence(id,'a',anchor,query);
+ assert.deepEqual(lookup(),{hits:[{id:lexical,exact:false,shared:2},{id:exact,exact:true,shared:0}],more:false});
+ const windowed=f.api.lookupEvidence(id,'a',anchor,{...query,excludeWithin:{entries:2,elapsedMs:60000}});
+ assert.deepEqual(windowed,{hits:[{id:lexical,exact:false,shared:2}],more:false});
+ assert.deepEqual(f.api.read(id,'a',anchor,1).entries.map(row=>row.id),[exact]);
+ assert.deepEqual(f.api.lookupEvidence(id,'a',anchor,{exact:[],terms:['合同','合同']}),{hits:[],more:false});
+ assert.deepEqual(f.api.lookupEvidence(id,'a',anchor,{exact:[],terms:['repo/path','blue-green']}),{hits:[{id:technical,exact:false,shared:2}],more:false});
+ assert.throws(()=>f.api.lookupEvidence(id,'b',anchor,query),/outside/);
+ assert.throws(()=>f.api.lookupEvidence(id,'a',anchor,{exact:['HX 12'],terms:[]}),/Invalid evidence/);
+ assert.throws(()=>f.api.lookupEvidence(id,'a',anchor,{exact:new Array(2),terms:[]}),/Invalid evidence/);
+ const [latest]=await f.store.appendMessages([{role:'user',content:'撤回 HX-12 合同续签'}]);
+ assert.deepEqual(lookup().hits.map(hit=>hit.id),[latest,lexical,exact]);
+ f.store.setActiveLeaf(prefix);
+ const [alternate]=await f.store.appendMessages([{role:'user',content:'与 HX-12 无关'}]);
+ assert.deepEqual(lookup().hits.map(hit=>hit.id),[alternate,exact]);
+ assert.throws(()=>f.api.lookupEvidence(id,'a',lexical,query),/unavailable/);
+ f.api.revoke(id);
+ assert.throws(lookup,/撤销/);
+ const restricted=f.approve({includeHistory:false});
+ const session=f.host.bind('other',f.session.signal);
+ assert.throws(()=>session.lookupEvidence(restricted,'a',anchor,query),/撤销/);
+});
+test('evidence lookup reports overflow only for eligible matches and returns the newest matches',async t=>{
+ t.mock.timers.enable({apis:['Date'],now:new Date('2030-03-04T12:00:00Z')});
+ const f=fixture(t);
+ const [older]=await f.store.appendMessages([{role:'user',content:'HX-12 old'}]);
+ const prior=f.approve();
+ assert.doesNotThrow(()=>f.api.lookupEvidence(prior,'a',older,{exact:['HX-12'],terms:[]}));
+ t.mock.timers.tick(1000);
+ const restricted=f.approve({includeHistory:false});
+ const [anchor]=await f.store.appendMessages([{role:'user',content:'HX-12 renew'}]);
+ assert.throws(()=>f.api.lookupEvidence(restricted,'a',older,{exact:['HX-12'],terms:[]}),/unavailable/);
+ const exact=()=>f.api.lookupEvidence(restricted,'a',anchor,{exact:['HX-12'],terms:[]});
+ const ids=await f.store.appendMessages(Array.from({length:24},()=>({role:'user',content:'HX-12 later'})));
+ await f.store.appendMessages([{role:'assistant',content:'HX-12'},{role:'user',content:'HX-120'},{role:'user',content:'[插件任务] HX-12'}]);
+ assert.deepEqual(exact(),{hits:[...ids].reverse().map(id=>({id,exact:true,shared:0})),more:false});
+ const [latest]=await f.store.appendMessages([{role:'user',content:'HX-12 follows up'}]);
+ assert.deepEqual(exact(),{hits:[latest,...ids.slice(1).reverse()].map(id=>({id,exact:true,shared:0})),more:true});
+});
 test('revocation and disposal abort running inference; cancelled calls count and oversized data never reaches provider',async t=>{
  const f=fixture(t), id=f.approve();
  await assert.rejects(()=>f.api.infer(id,[{role:'user',content:'x'.repeat(16001)}]),/limits/); assert.equal(f.calls(),0);

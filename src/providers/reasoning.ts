@@ -1,10 +1,16 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getSettings, resolveProvider } from "agent-sh/settings";
+import { getSettings, REASONING_LEVELS, resolveProvider } from "agent-sh/settings";
 
-export interface ReasoningModel { id: string; provider: string; reasoning?: boolean; supportsReasoningEffort?: boolean }
-export interface ReasoningProfile { levels: string[]; format: "effort" | "thinking" | "router"; defaultLevel?: string }
+export interface ReasoningModel {
+  id: string;
+  provider: string;
+  reasoning?: boolean;
+  supportsReasoningEffort?: boolean;
+  reasoningLevels?: readonly string[];
+}
+export interface ReasoningProfile { levels: string[]; format: "effort" | "thinking" | "router" | "compatible"; defaultLevel?: string }
 export interface ThinkingState { model: string; provider: string; level: string; levels: string[]; supported: boolean; defaultLevel?: string }
 const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -33,7 +39,8 @@ export function reasoningProfile(model: ReasoningModel): ReasoningProfile | null
   const settings = getSettings() as unknown as Record<string, unknown>;
   const codex = settings["codex-provider"] as { providerId?: string } | undefined;
   const isCodex = model.provider === (codex?.providerId || "codex");
-  const shape = isCodex ? "codex" : resolveProvider(model.provider)?.reasoningShape || model.provider;
+  const provider = isCodex ? undefined : resolveProvider(model.provider);
+  const shape = isCodex ? "codex" : provider?.reasoningShape || model.provider;
   const id = model.id.toLowerCase().replace(/-\d{4}-\d{2}-\d{2}$/, "");
   const make = (levels: string[], format: ReasoningProfile["format"] = "effort", defaultLevel?: string) => ({ levels, format, defaultLevel });
   if (shape === "codex") {
@@ -67,6 +74,17 @@ export function reasoningProfile(model: ReasoningModel): ReasoningProfile | null
     if (/^gpt-5\.(?:2|4)(?:-mini|-nano)?$/.test(target)) return make(["none", "low", "medium", "high", "xhigh"], format, "none");
     if (/^(?:o1|o3|o3-mini|o4-mini)$/.test(target)) return make(["low", "medium", "high"], format, "medium");
   }
+  if (shape === "openai-compatible") {
+    // The bridge has kernel capabilities; the pre-session catalog and lazy
+    // restore only have the provider/model identity and use resolved settings.
+    const capabilities = provider?.modelCapabilities?.get(model.id);
+    if (capabilities?.reasoning === false || provider?.supportsReasoningEffort === false) return null;
+    const declared = model.reasoningLevels ?? capabilities?.reasoningLevels ?? provider?.reasoningLevels;
+    if (Array.isArray(declared)) {
+      const levels = REASONING_LEVELS.filter(level => declared.includes(level));
+      if (levels.length) return make(levels, "compatible");
+    }
+  }
   return null;
 }
 
@@ -76,6 +94,11 @@ export function nativeReasoningParams(profile: ReasoningProfile, level: string):
   if (profile.format === "thinking") return level === "off" ? { thinking: { type: "disabled" } }
     : { thinking: { type: "enabled" }, ...(level === "on" ? {} : { reasoning_effort: level }) };
   if (profile.format === "router") return { reasoning: { effort: level } };
+  if (profile.format === "compatible" && level === "off") {
+    // The kernel only registers the openai-compatible hook with OPENAI_BASE_URL.
+    // Its declared-level fallback otherwise omits effort for "off" (provider default).
+    return process.env.OPENAI_BASE_URL ? { reasoning_effort: "none" } : {};
+  }
   return { reasoning_effort: level };
 }
 

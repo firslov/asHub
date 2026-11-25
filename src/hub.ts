@@ -2,7 +2,7 @@ import { ComposerInputs } from './extensions/composer-inputs.js';
 import { BackendConnections, type PluginSecretStore } from './extensions/backends.js';
 import { ConversationEntries } from './extensions/conversation-entries.js';
 import { PluginBackground } from './extensions/background.js';
-import { replayEventName } from './history/replay-frame.js';
+import { replayEventName, subagentReplayState } from './history/replay-frame.js';
 import { ReplayWriter } from './history/replay-writer.js';
 import { getSseWriter } from './transport/sse-writer.js';
 import { PluginActivities } from './services/plugin-activities.js';
@@ -14,7 +14,7 @@ import { readBodyWithSignal } from "./transport/body-reader.js";
 import { createProviderBalanceService } from "./services/provider-balance.js";
 import { createSkillsMarketplaceService } from "./services/skills-marketplace.js";
 import { handleFeatureRequest, type FeatureServices } from "./transport/feature-http.js";
-import { ApplicationExtensionRegistry } from "./extensions/application.js";
+import { ApplicationExtensionRegistry, type ApplicationExtensionContext } from "./extensions/application.js";
 import { installedApplicationDefinitions } from "./extensions/installed.js";
 import { HOST_PLUGIN_CAPABILITIES } from "./extensions/manifest.js";
 import { handleProjectRequest } from "./transport/project-http.js";
@@ -48,9 +48,9 @@ import { ImageResources } from "./image-resources.js";
 import { ProjectStore } from "./projects.js";
 import type { ConversationAccess } from "./bridges/types.js";
 import { SharedConversations } from './extensions/shared-conversations.js';
-import { migrateDeviceInterconnect } from './remote/migration.js';
-import { MobileAccessExtension } from "./remote/extension.js";
-import { RemoteConnector, type RemoteSecretStore } from "./remote/connector.js";
+import { DeviceMigrationConflict, legacyMobileFeature, loadLegacyMobile, migrateDeviceInterconnect } from './remote/migration.js';
+import type { MobileAccessExtension } from "./remote/extension.js";
+import type { RemoteSecretStore } from "./remote/connector.js";
 import { DEEPSEEK_MODELS } from "./providers/deepseek.js";
 import { codexCatalogVersion, codexStatus } from "./providers/codex.js";
 import * as http from "node:http";
@@ -70,7 +70,7 @@ import { fileURLToPath } from "node:url";
 import type { BackgroundModelSelection, Bridge, BridgeFactory, BusEvent, ContextSnapshot, SessionKind, PermissionOutcome } from "./bridges/types.js";
 import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
 import { listAllProviders, resolveApiKey, anyProviderConfigured, reloadKeysFile, KEYS_PATH } from "agent-sh/auth";
-import { SessionStore, type AgentMessage } from "./history/session-store.js";
+import { SessionStore, type AgentMessage, type HistoryWriterLifecycle } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
 import { extractText, extractImages, snippet, stripContextWrappers, summarizeMessage, isSystemNoteMessage } from "./history/summarize.js";
 import { createCompactionStrategy } from "./history/compaction-strategy.js";
@@ -94,6 +94,7 @@ export interface HubOpts {
   makeBridge: BridgeFactory;
   /** Internal lifecycle signal: prevents late creation after shutdown. */
   signal?: AbortSignal;
+  historyWriterLifecycle?: (id: string) => HistoryWriterLifecycle;
 }
 
 
@@ -211,7 +212,7 @@ const FRAME_SEQ_FILE = path.join(SESSIONS_DIR, ".frame-seq");
 let _frameSeqDirty = false;
 let _frameSeqChain: Promise<void> = Promise.resolve();
 
-function flushFrameSeq(force = false): void {
+function flushFrameSeq(force = false, onFailure?: (error: unknown) => void): void {
   if (!force && !_frameSeqDirty) return;
   _frameSeqDirty = false;
   const seq = frameSeq;
@@ -222,7 +223,7 @@ function flushFrameSeq(force = false): void {
         _mkdirDone.add(SESSIONS_DIR);
       }
       await fs.promises.writeFile(FRAME_SEQ_FILE, String(seq));
-    } catch {}
+    } catch (error) { onFailure?.(error); }
   });
 }
 
@@ -370,6 +371,7 @@ const _replayWriters = new Map<string, ReplayWriter>();
  *  their finally, so no self-reference is needed. */
 const _pendingDeletes = new Map<string, Promise<void>>();
 const BATCH_FLUSH_MS = 2000;
+const DETACHED_HISTORY_SHUTDOWN_TIMEOUT_MS = 3000;
 
 function _flushBuf(sessionId: string): void {
   // Piggyback the global frameSeq write on the 2s batch cycle: one write per
@@ -408,7 +410,13 @@ function persistReplayFrame(sessionId: string, frame: string): void {
 
 const _initializing = new WeakMap<Map<string, Session>, Set<{ cancel(): void; done: Promise<void> }>>();
 
-export async function shutdownHub(server?: http.Server, sessions?: Map<string, Session>): Promise<void> {
+export async function shutdownHub(server?: http.Server, sessions?: Map<string, Session>, drainHistory?: () => Promise<void>): Promise<unknown[]> {
+  const failures: unknown[] = [];
+  const recordFailure = (error: unknown) => { failures.push(error); };
+  const collectFailures = async (pending: Iterable<Promise<unknown>>) => {
+    for (const result of await Promise.allSettled(pending))
+      if (result.status === "rejected") recordFailure(result.reason);
+  };
   const initializing = sessions ? [...(_initializing.get(sessions) ?? [])] : [];
   for (const pending of initializing) pending.cancel();
   await Promise.allSettled(initializing.map(pending => pending.done));
@@ -419,10 +427,10 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
 
   // 1. Close all SSE long-lived connections so server.close() doesn't hang.
   for (const s of allSessions) {
-    s.collaboration?.stopSession(s.id);
+    try { s.collaboration?.stopSession(s.id); } catch (error) { recordFailure(error); }
     s._closing = true;
-    s.bridge?.settlePermissions?.();
-    s._cancelRestore?.();
+    try { s.bridge?.settlePermissions?.(); } catch (error) { recordFailure(error); }
+    try { s._cancelRestore?.(); } catch (error) { recordFailure(error); }
     for (const res of s.sseClients) {
       try { res.end(); } catch {}
     }
@@ -433,31 +441,47 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
 
   // 2. Stop accepting new connections with a hard timeout.
   if (server) {
-    await Promise.race([
-      new Promise<void>((resolve) => server.close((err) => {
-        if (err) console.error("[hub] server close error:", err);
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = (error?: NodeJS.ErrnoException) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        if (error && error.code !== "ERR_SERVER_NOT_RUNNING") recordFailure(error);
         resolve();
-      })),
-      new Promise<void>((resolve) => setTimeout(resolve, 3000)),
-    ]);
+      };
+      const timer = setTimeout(() => finish(Error("HTTP server shutdown timed out")), 3000);
+      try { server.close(finish); }
+      catch (error) { recordFailure(error); finish(); }
+    });
   }
 
   // 3. Gracefully close all bridges.
   if (sessions) {
-    await Promise.allSettled(
+    await collectFailures(
       Array.from(sessions.values()).map(async (s) => {
         try { s.bridge?.cancel?.(); } catch {}
-        s.bridge?.settlePermissions?.();
-        try { await withContextLock(s, async () => { await s.capture?.flush(); }); } catch (err) { console.error("[hub] shutdown capture failed:", err); }
-        flushSegment(s);
-        await s.store?.seal();
-        // The child may request approval while the asynchronous history flush runs.
-        s.bridge?.settlePermissions?.();
-        s._closed = true;
-        try { await s.bridge?.close?.(); } catch {}
+        try {
+          s.bridge?.settlePermissions?.();
+          try { await withContextLock(s, async () => { await s.capture?.flush(); }); }
+          catch (error) { recordFailure(error); console.error("[hub] shutdown capture failed:", error); }
+          flushSegment(s);
+          await s.store?.seal();
+        } catch (error) { recordFailure(error); }
+        finally {
+          // A failed history seal must still release the bridge and its approvals.
+          if (s._contextBroken || s.store?.needsRecovery)
+            recordFailure(Error("Session history requires recovery: " + s.id));
+          try { s.bridge?.settlePermissions?.(); } catch (error) { recordFailure(error); }
+          s._closed = true;
+          await s.bridge?.close?.();
+        }
       })
     );
   }
+
+  // Detached bridges can still have captures queued or waiting for a snapshot.
+  // Let them finish before flushing replay, because a capture can update it.
+  try { await drainHistory?.(); } catch (error) { recordFailure(error); }
 
   // 4. Flush all pending writes.
   for (const id of Array.from(_writeBufs.keys())) {
@@ -466,7 +490,7 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
   // frameSeq backstop: the dirty flag is set at every counter increment, but
   // write unconditionally on exit so the persisted counter always covers
   // every frame id any client may have seen.
-  flushFrameSeq(true);
+  flushFrameSeq(true, recordFailure);
   // Persist per-session metas (carrying lastFrameSeq) — in-memory values are
   // updated on every pushFrame, but the meta file is otherwise only written
   // on spawn/title-change, so without this the fast restore path would keep
@@ -474,25 +498,30 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
   // allowClosed: step 3's bridge close marked these sessions _closed, but
   // their files were NOT deleted (no closeSession), so writing the meta
   // cannot resurrect anything.
-  await Promise.allSettled(allSessions.map(async (s) => {
+  await collectFailures(allSessions.map(async (s) => {
     const t = _metaTimers.get(s.id);
     if (t) { clearTimeout(t); _metaTimers.delete(s.id); }
-    try { await saveSessionMeta(s, { allowClosed: true }); } catch {}
+    await saveSessionMeta(s, { allowClosed: true });
   }));
   await Promise.allSettled(Array.from(_writeLocks.values()));
   for (const id of _writeBufs.keys()) _flushBuf(id);
   await Promise.allSettled(Array.from(_writeLocks.values()));
   for (const [id, buf] of _writeBufs) {
     if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
-    if (buf.frames.length) console.error(`[hub] UNSAVED replay remains for ${id}; storage did not recover`);
+    if (buf.frames.length) {
+      const error = Error(`UNSAVED replay remains for ${id}; storage did not recover`);
+      recordFailure(error);
+      console.error("[hub]", error.message);
+    }
   }
   await _frameSeqChain;
-  await Promise.allSettled(Array.from(_metaLocks.values()));
+  await collectFailures(_metaLocks.values());
 
   // 5. Await in-flight session-file deletions (closeSession).  Without
   // this, a close-then-quit can leave the session's files on disk and
   // the session reappears on the next launch.
-  await Promise.allSettled(Array.from(_pendingDeletes.values()));
+  await collectFailures(_pendingDeletes.values());
+  return failures;
 }
 
 function persistReplayFile(sessionId: string, frames: string[]): Promise<void> {
@@ -840,9 +869,35 @@ function unmaskApiKeys(parsed: Record<string, unknown>, old: Record<string, unkn
   }
 }
 
-export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => Promise<void>; resolveArtifact: (id: string, requested: string) => Promise<string>; remoteStatus: () => ReturnType<SharedConversations["status"]> } {
+export function startHub(opts: HubOpts): {
+  server: http.Server;
+  shutdown: () => Promise<void>;
+  resolveArtifact: (id: string, requested: string) => Promise<string>;
+  remoteStatus: () => ReturnType<SharedConversations['status']>;
+  remoteSettingsTarget: () => { feature: string } | { plugin: string; resource: string } | undefined;
+} {
   const lifecycle = new AbortController();
-  opts = { ...opts, signal: lifecycle.signal };
+  const historyShutdown = new AbortController();
+  // History capture and writes can outlive a detached bridge.
+  const historiesRequiringRecovery = new Set<string>();
+  const incompleteHistoryCaptures = new Map<string, unknown>();
+  const pendingHistoryOperations = new Set<Promise<unknown>>();
+  const pendingHistoryWrites = new Set<Promise<unknown>>();
+  const trackHistory = (pending: Set<Promise<unknown>>, operation: Promise<unknown>) => {
+    pending.add(operation);
+    const settled = () => { pending.delete(operation); };
+    void operation.then(settled, settled);
+  };
+  opts = { ...opts, signal: lifecycle.signal, historyWriterLifecycle: id => ({
+    shutdownSignal: historyShutdown.signal,
+    onRecoveryRequired: () => { historiesRequiringRecovery.add(id); },
+    onCaptureResult: failure => {
+      if (failure) incompleteHistoryCaptures.set(id, failure.error);
+      else incompleteHistoryCaptures.delete(id);
+    },
+    onOperationPending: operation => trackHistory(pendingHistoryOperations, operation),
+    onWritePending: write => trackHistory(pendingHistoryWrites, write),
+  }) };
   const hostEvents = new HostEvents();
   const sessionService = new SessionService({ events: hostEvents, busy: sessionBusy, thinking: sessionThinkingLevel });
   const sessions = sessionService.sessions;
@@ -851,7 +906,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     sessions, events: hostEvents, deleteSession: id => deleteSession(sessions, id), expandHome,
   });
   // Establish a durable lower bound before future conversation messages arrive.
-  try { projects.listWithNameHistory(); }
+  try { projects.observeNameHistory(); }
   catch { console.warn('[hub] Could not initialize project name history.'); }
   const featureServices = createFeatureServices(hostEvents, lifecycle.signal);
   featureServicesBySessions.set(sessions, featureServices);
@@ -883,12 +938,24 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   const access = createAccessGuard(opts.host);
   const sharing = new SharedConversations(path.join(SESSIONS_DIR, 'sharing-grants.json'), access.token);
   let legacyMobile: MobileAccessExtension | undefined;
+  let pendingLegacyMobile: Promise<MobileAccessExtension | undefined> | undefined;
+  let suppressedMigrationPluginId: string | undefined;
   try { migrateDeviceInterconnect({settingsFile:settingsPath(), sessionsDir:SESSIONS_DIR, legacy:opts.remoteSecretStore, secrets:opts.pluginSecretStore, sharing}); }
-  catch {
-    // Upgrade fallback only: a failed migration must not break an already paired
-    // phone or prevent local startup. Fresh installs never use this adapter.
-    legacyMobile = new MobileAccessExtension(new RemoteConnector({store:opts.remoteSecretStore,dataDir:path.join(SESSIONS_DIR,'remote'),localToken:access.token}));
-    console.error('[hub] Device migration deferred; existing mobile connection retained. Update the device interconnect plugin and check secure storage.');
+  catch (error) {
+    const conflict = error instanceof DeviceMigrationConflict ? error : undefined;
+    if (conflict) suppressedMigrationPluginId = conflict.pluginId;
+    if (conflict?.allowLegacy === false) {
+      console.error('[hub] Device migration paused: identity or request receipts could not be safely handed off. Existing device settings were retained.');
+    } else {
+      // Upgrade fallback only: fresh installs never use this adapter.
+      pendingLegacyMobile = loadLegacyMobile({store:conflict?.fallbackStore ?? opts.remoteSecretStore,dataDir:path.join(SESSIONS_DIR,'remote'),localToken:access.token}).then(adapter => {
+        console.error('[hub] Device migration deferred; existing mobile connection retained. Update the device interconnect plugin and check secure storage.');
+        return adapter;
+      }, () => {
+        console.error('[hub] Could not load the legacy mobile adapter. Existing device settings were retained for migration.');
+        return undefined;
+      });
+    }
   }
   let knownExtensions = '';
   const extensionSnapshot = (pluginCatalogChanged = false) => {
@@ -906,6 +973,11 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   };
   const pluginActivities = new PluginActivities((project, id) => !!sessions.get(id) && projects.list().some(p => p.id === project && p.sessionIds.includes(id)), () => hostEvents.publish('projects'));
   const extensionMessages = new ExtensionMessages(path.join(SESSIONS_DIR, 'extension-messages.json'), {
+    activePlugin: id => {
+      // A restored message must wait for the plugin to reconcile its durable state.
+      try { extensions.requireActive('plugin-' + id); return true; }
+      catch { return false; }
+    },
     target: id => {
       const session = sessions.get(id);
       return session && session.kind === 'agent' && !session._closed && !session._closing
@@ -946,7 +1018,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     store: id => {
       const s = sessions.get(id); if (!s) return undefined;
       const file = path.join(SESSIONS_DIR, `${id}.jsonl`);
-      if (!s.store && fs.existsSync(file)) s.store = new SessionStore(file, { metaPath: sessionMetaPath(id) });
+      if (!s.store && fs.existsSync(file)) s.store = new SessionStore(file, { metaPath: sessionMetaPath(id), ...s._historyWriterLifecycle });
       return s.store;
     },
     complete: async (id, messages, signal, onUsage) => {
@@ -1014,37 +1086,47 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
     subscribe: (listener: Parameters<HostEvents['subscribe']>[0]) => hostEvents.subscribe(listener),
   };
   extensions = new ApplicationExtensionRegistry({ settingsFile: settingsPath(), capabilities: HOST_PLUGIN_CAPABILITIES,
-    discover: () => installedApplicationDefinitions(settingsPath(), { enableBrowserPages: opts.enableBrowserPages, bindServices: (id, context) => ({
-      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('shared-conversations') ? {sharedConversations:sharing.bind(id,context.signal)} : {}),
-      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('backend-connections') ? {backends:backends.bind(id,context.signal)} : {}),
-      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('composer-inputs') ? {composerInputs:composerInputs.bind(id,context.signal)} : {}),
-      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.requires.capabilities.includes('plugin-secrets') ? {secrets:backends.bind(id,context.signal).secrets} : {}),
-      ...(pluginCatalog(settingsPath()).find(p=>p.id===id)?.manifest?.id === 'ashub-personal-assistant' ? {host: Object.freeze({ ...hostService, projectNames: (entryKey: string, conversationId: string, grantId: string) => {
-        const grant = background.bind(id, context.signal).status(grantId);
-        if (grant.modelSessionId !== conversationId || grant.includedIds?.length !== 1 ||
-            grant.includedIds[0] !== conversationId || grant.excludedIds.includes(conversationId) ||
-            conversationEntries.bind(id, context.signal).get(entryKey) !== conversationId) {
-          throw Error('Project name history requires an authorized dedicated conversation');
-        }
-        return projects.listWithNameHistory();
-      } })} : {}),
-      activities: pluginActivities.bind(id, context.signal),
-      collaboration: Object.freeze({
-        snapshot: (owner: string) => {
-          context.signal.throwIfAborted();
-          const project = projects.list().find(p => p.sessionIds.includes(owner));
-          if (!project || !sessions.has(owner)) return [];
-          return opts.collaboration!.snapshot(owner).filter(t => project.sessionIds.includes(t.recipientId) && sessions.has(t.recipientId));
-        },
-        subscribe: (listener: () => void) => {
-          context.signal.throwIfAborted(); const dispose = opts.collaboration!.subscribe(listener);
-          context.onDispose(dispose); return dispose;
-        },
-      }),
-      conversations: conversationEntries.bind(id, context.signal),
-      background: background.bind(id, context.signal), messages: extensionMessages.bind(id, context.signal), interactions: interactions.bind(id, context.signal),
-    }), services: {host: Object.freeze(hostService)} }).filter(definition => !legacyMobile || !definition.capabilities?.includes('shared-conversations')), definitions: [
-    ...(legacyMobile ? [legacyMobile.definition] : []),
+    discover: () => {
+      return installedApplicationDefinitions(settingsPath(), { enableBrowserPages: opts.enableBrowserPages, bindServices: (id, context, manifest) => {
+        const capabilities = manifest.requires.capabilities;
+        const history = background.bind(id, context.signal);
+        const entries = conversationEntries.bind(id, context.signal);
+        const entryKeys = manifest.sessionScope?.conversationEntries;
+        return {
+          ...(capabilities.includes('shared-conversations') ? {sharedConversations:sharing.bind(id,context.signal)} : {}),
+          ...(capabilities.includes('backend-connections') ? {backends:backends.bind(id,context.signal)} : {}),
+          ...(capabilities.includes('composer-inputs') ? {composerInputs:composerInputs.bind(id,context.signal)} : {}),
+          ...(capabilities.includes('plugin-secrets') ? {secrets:backends.bind(id,context.signal).secrets} : {}),
+          ...(entryKeys && capabilities.includes('scoped-history') && capabilities.includes('project-name-history') ? {host: Object.freeze({ ...hostService, projectNameHistory: (entryKey: string, conversationId: string, grantId: string) => {
+            const grant = history.status(grantId);
+            if (!entryKeys.includes(entryKey) || grant.modelSessionId !== conversationId || grant.includedIds?.length !== 1 ||
+                grant.includedIds[0] !== conversationId || grant.excludedIds.includes(conversationId) || entries.get(entryKey) !== conversationId) {
+              throw Error('Project name history requires an authorized dedicated conversation');
+            }
+            return projects.nameHistory();
+          } })} : {}),
+          activities: pluginActivities.bind(id, context.signal),
+          collaboration: Object.freeze({
+            snapshot: (owner: string) => {
+              context.signal.throwIfAborted();
+              const project = projects.list().find(p => p.sessionIds.includes(owner));
+              if (!project || !sessions.has(owner)) return [];
+              return opts.collaboration!.snapshot(owner).filter(t => project.sessionIds.includes(t.recipientId) && sessions.has(t.recipientId));
+            },
+            subscribe: (listener: () => void) => {
+              context.signal.throwIfAborted(); const dispose = opts.collaboration!.subscribe(listener);
+              context.onDispose(dispose); return dispose;
+            },
+          }),
+          conversations: entries,
+          background: history, messages: extensionMessages.bind(id, context.signal), interactions: interactions.bind(id, context.signal),
+        };
+      }, services: {host: Object.freeze(hostService)} }).filter(definition => definition.pluginId !== suppressedMigrationPluginId);
+    }, definitions: [
+    ...(pendingLegacyMobile ? [{ ...legacyMobileFeature, create: async (context: ApplicationExtensionContext) => {
+      if (!legacyMobile) throw Error('Legacy mobile adapter unavailable');
+      return legacyMobile.definition.create?.(context);
+    } }] : []),
     { id: 'quick-prompts', name: '快捷提示词', scope: 'frontend', ui: { panel: 'prompt-manager' } },
     { id: 'skills-marketplace', name: '技能市场', capabilities: ['skills.search', 'skills.install'], ui: { panel: 'skills-panel' },
       create: () => ({ canStop: () => featureServices.skills.pendingCount === 0 }) },
@@ -1278,7 +1360,7 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       }
       if (req.method === "GET" && (rest === "/tree" || rest === "/branch")) {
         const file = path.join(SESSIONS_DIR, `${id}.jsonl`);
-        if (!session.store && fs.existsSync(file)) session.store = new SessionStore(file, { metaPath: sessionMetaPath(id) });
+        if (!session.store && fs.existsSync(file)) session.store = new SessionStore(file, { metaPath: sessionMetaPath(id), ...session._historyWriterLifecycle });
         return rest === "/tree" ? treeEndpoint(res, session) : branchEndpoint(res, session);
       }
       // Lazy-init bridge for restored sessions that haven't been activated yet.
@@ -1432,7 +1514,8 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
   let shutdownTask: Promise<void> | undefined;
   const restoring = restoreSessions(sessions, opts).catch((err) => {
     console.error("[hub] session restore error:", err);
-  }).then(() => {
+  }).then(async () => {
+    if (pendingLegacyMobile) legacyMobile = await pendingLegacyMobile;
     if (stopping) return;
     server.listen(opts.port, opts.host, () => {
       const address = server.address();
@@ -1447,7 +1530,24 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
 
   return {
     server,
-    remoteStatus: () => legacyMobile?.status() ?? sharing.status(),
+    remoteStatus: () => sharing.desktopStatus(legacyMobile?.status()),
+    remoteSettingsTarget: () => {
+      const { target } = sharing.desktopStatus(legacyMobile?.status());
+      if (!target) return pendingLegacyMobile ? { feature: legacyMobileFeature.id } : undefined;
+      const { plugin } = target;
+      let { resource } = target;
+      try {
+        if (!resource) {
+          const ui = pluginCatalog(settingsPath()).find(entry => entry.id === plugin)?.manifest?.ui;
+          const declared = ui?.panels.flatMap(panel => panel.components.flatMap(item => item.type === 'resource' ? [item.id] : [])) ?? [];
+          if (declared.length === 1) resource = declared[0];
+        }
+        if (resource && interactions.reveal(plugin, resource)) return { plugin, resource };
+      } catch {
+        console.warn('[hub] Could not reveal the remote settings resource.');
+      }
+      return { feature: 'plugin-' + plugin };
+    },
     // Native desktop API only: never expose host paths through HTTP or RPC.
     resolveArtifact: async (id, requested) => {
       const session = sessions.get(id);
@@ -1466,10 +1566,39 @@ export function startHub(opts: HubOpts): { server: http.Server; shutdown: () => 
       return shutdownTask ??= Promise.allSettled([Promise.resolve().then(() => extensionMessages.close()), restoring, extensions.close(), pluginInstaller.close(), featureServices.skills.close(), featureServices.balance.close()])
         .then(async results => {
           // A broken optional extension must never skip durable core shutdown.
-          await shutdownHub(server, sessions);
+          const sessionFailures = await shutdownHub(server, sessions, async () => {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              if (!pendingHistoryOperations.size) return;
+              const timeout = new Promise<never>((_, reject) => {
+                timer = setTimeout(() => {
+                  const error = Error("Timed out waiting for detached session history");
+                  historyShutdown.abort(error);
+                  reject(error);
+                }, DETACHED_HISTORY_SHUTDOWN_TIMEOUT_MS);
+              });
+              while (pendingHistoryOperations.size) await Promise.race([Promise.allSettled(pendingHistoryOperations), timeout]);
+            } finally {
+              clearTimeout(timer);
+              // A journal append and its rollback are already using the file.
+              // Finish them before shutdown can hand the directory to another host.
+              while (pendingHistoryWrites.size) await Promise.allSettled(pendingHistoryWrites);
+            }
+          });
+          for (const id of historiesRequiringRecovery) {
+            if (_deletedIds.has(id)) continue;
+            const message = "Session history requires recovery: " + id;
+            if (!sessionFailures.some(error => error instanceof Error && error.message === message))
+              sessionFailures.push(Error(message));
+          }
+          for (const [id, cause] of incompleteHistoryCaptures) {
+            if (!_deletedIds.has(id)) sessionFailures.push(Error("Session history capture did not finish: " + id, { cause }));
+          }
           const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-          if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Application extension cleanup failed');
-        }).finally(() => { hostEvents.close(); featureServicesBySessions.delete(sessions); });
+          if (failures.length) throw new AggregateError([...failures.map(result => result.reason), ...sessionFailures], 'Application extension cleanup failed');
+          if (sessionFailures.length) throw new AggregateError(sessionFailures, 'Core session cleanup failed');
+        }).finally(() => { hostEvents.close(); featureServicesBySessions.delete(sessions); })
+        .then(() => extensionMessages.finishShutdown());
     },
   };
 }
@@ -3733,7 +3862,14 @@ function withContextLock<T>(session: Session, fn: () => Promise<T>): Promise<T> 
   const prev = session.contextLock;
   let release!: () => void;
   session.contextLock = new Promise<void>((r) => { release = r; });
-  return prev.then(fn).finally(release);
+  const operation = prev.then(() => {
+    session._historyWriterLifecycle?.shutdownSignal?.throwIfAborted();
+    return fn();
+  }).finally(release);
+  // Register before waiting on the lock or on a bridge snapshot. Both can
+  // defer the first store write until after the bridge leaves the session map.
+  session._historyWriterLifecycle?.onOperationPending?.(operation);
+  return operation;
 }
 
 /**
@@ -3888,6 +4024,7 @@ async function tagLastQueryFrame(session: Session): Promise<void> {
     session._tagPending = pending.filter((p) => ++p.attempts < MAX_TAG_ATTEMPTS);
     return;
   }
+  if (session._closed || session._historyWriterLifecycle?.shutdownSignal?.aborted) return;
   const msgs = snap.messages as Array<{ role?: string; content?: unknown }>;
   const claimedIds = new Set<string>();
   for (const frame of session.replay) {
@@ -3975,6 +4112,7 @@ function synthesizeBranchFrames(
   session: Session,
   messages: unknown[],
   entryIds: (string | null)[] = [],
+  knownReplay: string[] = [],
 ): string[] {
   const frames: string[] = [];
   let seq = 0;
@@ -3996,6 +4134,8 @@ function synthesizeBranchFrames(
   };
   const msgs = messages as Msg[];
   let turnStarted = false;
+  let userEntryId: string | null = null;
+  const subagents = subagentReplayState(knownReplay);
   // A null entryId slot only marks a compaction summary when the tag system
   // is actually in use. Sessions without a tree store report all-null tags,
   // and their user messages are real messages, not summaries.
@@ -4017,6 +4157,7 @@ function synthesizeBranchFrames(
     if (isSystemNoteMessage(m)) continue;
     if (((hasEntryIdTags && entryIds[idx] === null) || isContextPlaceholder(m)) && m.role === "user" && typeof m.content === "string") {
       closeTurn();
+      userEntryId = null;
       const evictedCount = parseEvictedCount(m.content);
       const checkpoint = m.meta?.ashubCheckpoint ? session.store?.getEntry(m.meta.ashubCheckpoint) : undefined;
       const details = checkpoint?.type === "compaction" ? {
@@ -4029,6 +4170,7 @@ function synthesizeBranchFrames(
     }
     if (m.role === "user") {
       closeTurn();
+      userEntryId = entryIds[idx] ?? null;
       const images = extractImages(m.content);
       const payload: Record<string, unknown> = { query: extractText(m.content) };
       if (images.length > 0) payload.images = images;
@@ -4063,17 +4205,24 @@ function synthesizeBranchFrames(
             batchIndex: i,
             batchTotal: tcs.length,
           }));
+          const activeChild = userEntryId && tc.id && subagents.active(
+            userEntryId, tc.id, tc.function?.name, (rawInput as { task?: unknown } | undefined)?.task,
+          );
+          if (activeChild) frames.push(sseFrame(meta("subagent:started"), activeChild));
         }
       }
       continue;
     }
     if (m.role === "tool") {
       const content = typeof m.content === "string" ? m.content : extractText(m.content);
+      const outcome = userEntryId && m.tool_call_id ? subagents.outcome(userEntryId, m.tool_call_id) : undefined;
+      const exitCode = outcome ? outcome.cancelled || outcome.error !== undefined ? 1 : 0 : inferToolExitCode(content);
       frames.push(sseFrame(meta("agent:tool-completed"), {
         toolCallId: m.tool_call_id,
-        exitCode: inferToolExitCode(content),
+        exitCode,
         rawOutput: content,
         kind: "execute",
+        ...outcome,
       }));
       continue;
     }
@@ -4110,7 +4259,7 @@ async function rebuildReplay(
   // No frame cap here either (see pushFrame): the rebuilt replay is the
   // complete current branch, and truncating it would re-introduce the
   // history loss this rebuild is meant to avoid.
-  const frames = synthesizeBranchFrames(session, messages, entryIds);
+  const frames = synthesizeBranchFrames(session, messages, entryIds, session.replay);
   session.replay = frames;
   session.segmentText = "";
   session.segmentStartedAt = undefined;
@@ -4149,6 +4298,7 @@ async function contextTransaction<T>(session: Session, operation: () => Promise<
       session.capture?.resetTo(ids);
     } catch (rollbackError) {
       session._contextBroken = true;
+      session._historyWriterLifecycle?.onRecoveryRequired?.();
       console.error("[hub] context rollback failed:", rollbackError);
     }
     throw err;

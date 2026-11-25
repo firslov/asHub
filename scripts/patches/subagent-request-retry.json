@@ -1,0 +1,147 @@
+{
+  "files": [
+    {
+      "path": "src/agent/agent-loop.ts",
+      "hunks": [
+        {
+          "before": "msg.includes(\"network\") || msg.includes(\"socket hang up\")",
+          "after": "msg.includes(\"network\") || msg.includes(\"socket hang up\") || msg.includes(\"connection error\")"
+        },
+        {
+          "before": "        if (signal.aborted) throw e;\n\n        // Context overflow — aggressively compact and retry",
+          "after": "        if (signal.aborted) throw e;\n\n        // The transport owns Codex retry policy, including partial responses.\n        // Check it before context-overflow heuristics inspect the error text.\n        const proxyError = e as { type?: string; error?: { retryable?: unknown; partial?: unknown } } | null;\n        if (proxyError?.type === \"codex_proxy_error\" && llmErrorStatus(e) !== undefined\n            && (proxyError.error?.retryable === false || proxyError.error?.partial === true)) throw e;\n\n        // Context overflow — aggressively compact and retry"
+        },
+        {
+          "before": "if (empty && empties < MAX_EMPTY_RETRIES)",
+          "after": "if (empty && this.runState?.options.retryEmptyReplies !== false && empties < MAX_EMPTY_RETRIES)"
+        },
+        {
+          "before": "    if (responseUsage && this.runState) {",
+          "after": "    // A proxy can end its own body cleanly after losing the upstream\n    // stream. Partial tool calls must never be committed at that EOF.\n    const requireCompleteToolCalls = this.runState?.options.requireCompleteToolCalls === true && !signal.aborted;\n    if (requireCompleteToolCalls && pendingToolCalls.length && !finishReason) {\n      throw new Error(\"Model connection closed before the tool-call response completed.\");\n    }\n\n    if (responseUsage && this.runState) {"
+        },
+        {
+          "before": "    // Normalize arguments JSON — some providers (Alibaba/qwen) strictly",
+          "after": "    if (requireCompleteToolCalls && pendingToolCalls.length && (finishReason === \"length\" || finishReason === \"content_filter\")) {\n      const run = this.runState;\n      const budget = run?.options.budgetTokens;\n      if (finishReason === \"length\" && run && budget !== undefined && run.result.usage.completion_tokens >= budget) {\n        // The run finished at its budget. Retain earlier receipts and text,\n        // while discarding the uncommitted tool call from this response.\n        run.result.stopReason = \"limited\";\n        run.result.limit = \"budget\";\n        pendingToolCalls.length = 0;\n      } else {\n        throw new Error(`Subagent tool-call response was incomplete (${finishReason}).`);\n      }\n    }\n\n    // Normalize arguments JSON — some providers (Alibaba/qwen) strictly"
+        },
+        {
+          "before": "      try { JSON.parse(s); } catch { tc.argumentsJson = \"{}\"; }",
+          "after": "      try {\n        const args = JSON.parse(s);\n        if (requireCompleteToolCalls && (!args || typeof args !== \"object\" || Array.isArray(args))) throw new TypeError();\n      } catch {\n        if (requireCompleteToolCalls) throw new Error(\"Subagent tool call contained invalid JSON arguments.\");\n        tc.argumentsJson = \"{}\";\n      }"
+        },
+        {
+          "before": "const empty = !signal.aborted && response?.text?.trim() === \"\" && response.toolCalls?.length === 0;",
+          "after": "const empty = !signal.aborted && this.runState?.result.stopReason !== \"limited\" && response?.text?.trim() === \"\" && response.toolCalls?.length === 0;"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/agent-loop.js",
+      "hunks": [
+        {
+          "before": "msg.includes(\"network\") || msg.includes(\"socket hang up\")",
+          "after": "msg.includes(\"network\") || msg.includes(\"socket hang up\") || msg.includes(\"connection error\")"
+        },
+        {
+          "before": "                if (signal.aborted)\n                    throw e;\n                // Context overflow — aggressively compact and retry",
+          "after": "                if (signal.aborted)\n                    throw e;\n\n                // The transport owns Codex retry policy, including partial responses.\n                // Check it before context-overflow heuristics inspect the error text.\n                const proxyError = e;\n                if (proxyError?.type === \"codex_proxy_error\" && llmErrorStatus(e) !== undefined\n                    && (proxyError.error?.retryable === false || proxyError.error?.partial === true)) throw e;\n\n                // Context overflow — aggressively compact and retry"
+        },
+        {
+          "before": "if (empty && empties < MAX_EMPTY_RETRIES)",
+          "after": "if (empty && this.runState?.options.retryEmptyReplies !== false && empties < MAX_EMPTY_RETRIES)"
+        },
+        {
+          "before": "        if (responseUsage && this.runState) {",
+          "after": "        // A proxy can end its own body cleanly after losing the upstream\n        // stream. Partial tool calls must never be committed at that EOF.\n        const requireCompleteToolCalls = this.runState?.options.requireCompleteToolCalls === true && !signal.aborted;\n        if (requireCompleteToolCalls && pendingToolCalls.length && !finishReason) {\n          throw new Error(\"Model connection closed before the tool-call response completed.\");\n        }\n\n        if (responseUsage && this.runState) {"
+        },
+        {
+          "before": "        // Normalize arguments JSON — some providers (Alibaba/qwen) strictly",
+          "after": "        if (requireCompleteToolCalls && pendingToolCalls.length && (finishReason === \"length\" || finishReason === \"content_filter\")) {\n          const run = this.runState;\n          const budget = run?.options.budgetTokens;\n          if (finishReason === \"length\" && run && budget !== undefined && run.result.usage.completion_tokens >= budget) {\n            // The run finished at its budget. Retain earlier receipts and text,\n            // while discarding the uncommitted tool call from this response.\n            run.result.stopReason = \"limited\";\n            run.result.limit = \"budget\";\n            pendingToolCalls.length = 0;\n          } else {\n            throw new Error(`Subagent tool-call response was incomplete (${finishReason}).`);\n          }\n        }\n\n        // Normalize arguments JSON — some providers (Alibaba/qwen) strictly"
+        },
+        {
+          "before": "            try {\n                JSON.parse(s);\n            }\n            catch {\n                tc.argumentsJson = \"{}\";\n            }",
+          "after": "            try {\n                const args = JSON.parse(s);\n                if (requireCompleteToolCalls && (!args || typeof args !== \"object\" || Array.isArray(args))) throw new TypeError();\n            }\n            catch {\n                if (requireCompleteToolCalls) throw new Error(\"Subagent tool call contained invalid JSON arguments.\");\n                tc.argumentsJson = \"{}\";\n            }"
+        },
+        {
+          "before": "const empty = !signal.aborted && response?.text?.trim() === \"\" && response.toolCalls?.length === 0;",
+          "after": "const empty = !signal.aborted && this.runState?.result.stopReason !== \"limited\" && response?.text?.trim() === \"\" && response.toolCalls?.length === 0;"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/subagent.ts",
+      "hunks": [
+        {
+          "before": "\"agent:tool-output-chunk\" | \"agent:tool-completed\">(name: K)",
+          "after": "\"agent:tool-output-chunk\" | \"agent:tool-completed\" | \"ui:info\">(name: K)"
+        },
+        {
+          "before": "      forward(\"agent:tool-completed\");",
+          "after": "      forward(\"agent:tool-completed\");\n      forward(\"ui:info\");"
+        },
+        {
+          "before": "retryWindowMs: opts.retryWindowMs,",
+          "after": "retryWindowMs: opts.retryWindowMs,\n      retryEmptyReplies: opts.retryEmptyReplies,"
+        },
+        {
+          "before": "  retryWindowMs?: number;\n}",
+          "after": "  retryWindowMs?: number;\n  /** Set false to accept a completed empty reply without resending the request. */\n  retryEmptyReplies?: boolean;\n}"
+        },
+        {
+          "before": "      rawErrors: true,",
+          "after": "      rawErrors: true,\n      requireCompleteToolCalls: true,"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/subagent.js",
+      "hunks": [
+        {
+          "before": "            forward(\"agent:tool-completed\");",
+          "after": "            forward(\"agent:tool-completed\");\n            forward(\"ui:info\");"
+        },
+        {
+          "before": "retryWindowMs: opts.retryWindowMs,",
+          "after": "retryWindowMs: opts.retryWindowMs,\n            retryEmptyReplies: opts.retryEmptyReplies,"
+        },
+        {
+          "before": "            rawErrors: true,",
+          "after": "            rawErrors: true,\n            requireCompleteToolCalls: true,"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/run-contract.ts",
+      "hunks": [
+        {
+          "before": "  retryWindowMs?: number;\n}",
+          "after": "  retryWindowMs?: number;\n  /** Set false to accept a completed empty reply without resending the request. */\n  retryEmptyReplies?: boolean;\n}"
+        },
+        {
+          "before": "  rawErrors?: boolean;",
+          "after": "  rawErrors?: boolean;\n  /** Require a finished, well-formed response before dispatching streamed tool calls. */\n  requireCompleteToolCalls?: boolean;"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/run-contract.d.ts",
+      "hunks": [
+        {
+          "before": "    retryWindowMs?: number;\n}",
+          "after": "    retryWindowMs?: number;\n    /** Set false to accept a completed empty reply without resending the request. */\n    retryEmptyReplies?: boolean;\n}"
+        },
+        {
+          "before": "    rawErrors?: boolean;",
+          "after": "    rawErrors?: boolean;\n    /** Require a finished, well-formed response before dispatching streamed tool calls. */\n    requireCompleteToolCalls?: boolean;"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/subagent.d.ts",
+      "hunks": [
+        {
+          "before": "    retryWindowMs?: number;\n}",
+          "after": "    retryWindowMs?: number;\n    /** Set false to accept a completed empty reply without resending the request. */\n    retryEmptyReplies?: boolean;\n}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 import type { Bridge, BridgeFactory, BusEvent, ConversationAccess, SessionKind } from "../bridges/types.js";
 import type { HostAccess } from "../host-operations.js";
 import type { CollaborationTasks } from "../collaboration.js";
-import type { SessionStore } from "../history/session-store.js";
+import type { HistoryWriterLifecycle, SessionStore } from "../history/session-store.js";
 import type { createCapture } from "../history/capture.js";
 import type { createCompactionStrategy } from "../history/compaction-strategy.js";
 import type { Session } from "./session-types.js";
@@ -14,6 +14,7 @@ export interface SessionLifecycleOptions {
   imageResources?: (id: string) => import("../image-resources.js").ImageResourceAccess;
   hostAccess?: (id: string) => HostAccess;
   collaboration?: CollaborationTasks;
+  historyWriterLifecycle?: (id: string) => HistoryWriterLifecycle;
 }
 export interface RestoredSession {
   id: string; title?: string; kind?: SessionKind; replay: string[]; startedAt: number;

@@ -216,6 +216,10 @@ function close() {
   ++generation; panel.hidden = true; document.getElementById('plugins-toggle')?.classList.remove('active');
   if (hadFocus) document.getElementById('plugins-toggle')?.focus();
 }
+export function focusFeatureControl(id) {
+  const item = [...panel.querySelectorAll('[data-feature-id]')].find(row => row.dataset.featureId === id);
+  item?.querySelector('.feature-toggle')?.focus();
+}
 registerPanel('plugins', { toggleBtnId: 'plugins-toggle', panelId: 'plugins-overlay', open: () => { panel.hidden = false; document.getElementById('plugins-close').focus(); return load(); }, close });
 document.getElementById('plugins-close').addEventListener('click', close);
 refresh.addEventListener('click', () => { if (!saving) void load(); });

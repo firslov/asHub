@@ -6,19 +6,22 @@ export function conversationTools(access: ConversationAccess): ToolDefinition[] 
     name: `conversation_${action}`,
     description: action === "list" ? "List available conversations in this conversation's project. Contexts remain independent."
       : action === "read" ? "Read recent user/assistant text from another conversation in the same project. Tool logs and attachments are omitted; long messages are truncated."
-      : "Send a message to another conversation in the same project within the user's authorized task. Starts or queues a turn; returns acceptance, not the result. Never automatically reply to received messages.",
+      : "Send a message to another conversation in the same project within the user's authorized task. Starts or queues a turn. If a requestKey was supplied, reuse the exact key, recipient and message on retry. A receipt is not the result. Never automatically reply to received messages.",
     readOnly: action !== "send",
     input_schema: {
       type: "object", properties: action === "list" ? {} : {
         id: { type: "string", description: "Exact conversation ID from conversation_list" },
-        ...(action === "read" ? { limit: { type: "integer", minimum: 1, maximum: 40, description: "Recent messages; default 10" } } : { message: { type: "string", maxLength: 8000 } }),
+        ...(action === "read" ? { limit: { type: "integer", minimum: 1, maximum: 40, description: "Recent messages; default 10" } } : {
+          message: { type: "string", maxLength: 8000 },
+          requestKey: { type: "string", pattern: "^[A-Za-z0-9_-]{8,100}$", description: "Optional stable identifier for one dispatch. Reuse only for the same attempt." },
+        }),
       }, required: action === "list" ? [] : action === "read" ? ["id"] : ["id", "message"],
     },
     async execute(args, _onChunk, ctx) {
       try {
         if (ctx?.signal?.aborted) throw new Error("Cancelled");
-        const a = args as { id: string; limit?: number; message: string };
-        const result = action === "list" ? access.list() : action === "read" ? await access.read(a.id, a.limit ?? 10, ctx?.signal) : await access.send(a.id, a.message, ctx?.signal);
+        const a = args as { id: string; limit?: number; message: string; requestKey?: string };
+        const result = action === "list" ? access.list() : action === "read" ? await access.read(a.id, a.limit ?? 10, ctx?.signal) : await access.send(a.id, a.message, ctx?.signal, a.requestKey);
         return { content: JSON.stringify(result), exitCode: 0, isError: false };
       } catch (e) { return { content: String(e), exitCode: 1, isError: true }; }
     },

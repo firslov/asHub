@@ -53,7 +53,7 @@ await check('R07 replay and live Markdown share one reply',async()=>{
 });
 await check('R08 cancelled approval cannot mutate a file',async()=>{
  const e=env(),{AshBridge}=e.load('src/bridges/ash.ts'),b=Object.create(AshBridge.prototype);EventEmitter.call(b);const controller=new AbortController();let approve;
- const core={bus:{emit:()=>controller.abort(),emitPipeAsync:()=>new Promise(r=>approve=r)}};Object.assign(b,{core,autoApprove:false,backendRegistered:true,pendingPermissions:new Map()});Object.assign(e.context,{core});
+ const core={bus:{emit:()=>controller.abort(),emitPipeAsync:()=>new Promise(r=>approve=r)}};Object.assign(b,{core,autoApprove:false,backendRegistered:true,pendingPermissions:new Map(),subagentControllers:new Set()});Object.assign(e.context,{core});
  const sf=ast('src/bridges/ash.ts'),node=find(sf,n=>ts.isCallExpression(n)&&n.expression.getText(sf)==='core.handlers.advise'&&n.arguments[0]?.text==='tool:execute');const gate=vm.runInContext(ts.transpileModule('('+node.arguments[1].getText(sf)+')',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,e.context).bind(b);
  const {createWriteFileTool}=await import(root+'/node_modules/agent-sh/dist/agent/tools/write-file.js');const tool=createWriteFileTool(()=>e.dir),file='cancelled-write.txt';const ctx={name:'write_file',args:{path:file,content:'WROTE AFTER CANCEL'},tool,signal:controller.signal};const pending=gate(c=>tool.execute(c.args),ctx);b.cancel();assert(controller.signal.aborted,'cancel not invoked');approve({decision:{outcome:'approved'}});await pending;assert(!fs.existsSync(path.join(e.dir,file)),'cancelled tool still wrote file');return {aborted:true,fileWritten:false};
 });
@@ -97,7 +97,7 @@ await check('R19 model IDs are literal option values',async()=>{
 });
 
 await check('R08 cancellation settles pending permissions and removes their timer',async()=>{
- const e=env(),{AshBridge}=e.load('src/bridges/ash.ts'),b=Object.create(AshBridge.prototype);EventEmitter.call(b);Object.assign(b,{pendingPermissions:new Map(),permissionSessionApproved:new Set(),core:{bus:{emit(){}}},backendRegistered:true});
+ const e=env(),{AshBridge}=e.load('src/bridges/ash.ts'),b=Object.create(AshBridge.prototype);EventEmitter.call(b);Object.assign(b,{pendingPermissions:new Map(),permissionSessionApproved:new Set(),subagentControllers:new Set(),core:{bus:{emit(){}}},backendRegistered:true});
  const sf=ast('src/bridges/ash.ts'),node=find(sf,n=>ts.isCallExpression(n)&&n.expression.getText(sf)==='onPipe'&&n.arguments[0]?.text==='permission:request');
  e.context.testBridge=b;const permission=vm.runInContext(ts.transpileModule('(function(){ return ('+node.arguments[1].getText(sf)+'); }).call(testBridge)',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,e.context);
  const waiting=permission({kind:'file-write'});assert(b.pendingPermissions.size===1,'permission not registered');b.cancel();const result=await waiting;assert(result.decision.outcome==='denied'&&result.decision.reason==='cancelled'&&b.pendingPermissions.size===0&&e.timers.size===0,'cancel left permission pending');

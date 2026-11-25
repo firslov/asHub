@@ -7,6 +7,7 @@ import { ensureTsSupport } from 'agent-sh/extension-loader';
 import { pluginCatalog, readPluginSettings } from '../plugins.js';
 import type { ApplicationExtensionContext, ApplicationExtensionDefinition, ApplicationExtensionInstance } from './application.js';
 import { adaptInstalledApplicationUI } from './installed-compatibility.js';
+import type { NormalizedPluginManifest } from './manifest.js';
 import type { ApplicationExtensionServices } from './services.js';
 
 export interface InstalledApplicationContext extends ApplicationExtensionContext {
@@ -20,7 +21,7 @@ export interface InstalledApplicationContext extends ApplicationExtensionContext
 export function installedApplicationDefinitions(settingsFile: string, options: {
   enableBrowserPages?(id: string, signal: AbortSignal): void;
   services?: Partial<ApplicationExtensionServices>;
-  bindServices?(pluginId: string, context: ApplicationExtensionContext): Partial<ApplicationExtensionServices>;
+  bindServices?(pluginId: string, context: ApplicationExtensionContext, manifest: NormalizedPluginManifest): Partial<ApplicationExtensionServices>;
 } = {}): ApplicationExtensionDefinition[] {
   const entries = pluginCatalog(settingsFile);
   const selected = entries.filter(entry => entry.applicationSpecifier || entry.manifest?.ui || entry.manifest?.requires.capabilities.includes('browser-pages'));
@@ -51,7 +52,7 @@ export function installedApplicationDefinitions(settingsFile: string, options: {
         if (typeof activate !== 'function') throw new Error('Missing application activate(ctx) export');
         const settings = readPluginSettings(settingsFile);
         const pluginContext: InstalledApplicationContext = Object.freeze({
-          ...context, pluginId: entry.id, services: Object.freeze({ dataDirectory: pluginDataDirectory(settingsFile, entry.id), ...options.services, ...options.bindServices?.(entry.id, context) }),
+          ...context, pluginId: entry.id, services: Object.freeze({ dataDirectory: pluginDataDirectory(settingsFile, entry.id), ...options.services, ...options.bindServices?.(entry.id, context, manifest) }),
           getExtensionSettings<T extends Record<string, unknown>>(namespace: string, defaults: T): T {
             if (context.signal.aborted) throw new Error('Extension activation has ended');
             if (!manifest.configNamespaces.includes(namespace)) throw new Error('Plugin settings namespace was not declared');

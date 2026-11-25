@@ -29,7 +29,8 @@ export interface ConversationAccess {
   task(id: string, offset?: number, waitMs?: number, signal?: AbortSignal): Promise<unknown>;
   list(): unknown;
   read(id: string, limit: number, signal?: AbortSignal): Promise<unknown>;
-  send(id: string, message: string, signal?: AbortSignal): Promise<unknown>;
+  send(id: string, message: string, signal?: AbortSignal, requestKey?: string): Promise<unknown>;
+  dispatchReceipt?(input: { taskId?: string; requestKey?: string }, signal?: AbortSignal): unknown;
 }
 
 export interface BridgeOpts {

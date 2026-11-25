@@ -20,12 +20,65 @@ interface Usage { pluginId: string; day: string; calls: number; tokenUsage?: Tok
 interface CommittedLedger { stamp?: string; digest: string; legacySymlink?: boolean }
 const ledgerStamp = (stat: fs.BigIntStats) => `${stat.dev}:${stat.ino}:${stat.birthtimeNs}:${stat.mtimeNs}:${stat.size}`;
 const ledgerDigest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
+interface HistoryPostings {
+  exact: Map<string, number[]>;
+  terms: Map<string, number[]>;
+}
 interface HistoryView {
   store: SessionStore;
   revision: number;
   leaf: string;
   entries: MessageEntry[];
   positions: Map<string, number>;
+  postings?: HistoryPostings;
+}
+const evidenceExactPattern = /[a-z0-9]+(?:[-_.:/][a-z0-9]+)*/g;
+const evidenceWordSegmenter = new Intl.Segmenter('zh', { granularity: 'word' });
+const generatedHistorySource = /^\[(?:Cross-conversation message|插件任务|Compacted conversation|Context checkpoint)/u;
+const normalizeEvidenceText = (value: string) => value.normalize('NFKC').toLowerCase();
+const evidenceHitLimit = 24;
+
+function addEvidencePostings(postings: Map<string, number[]>, tokens: Set<string>, position: number) {
+  for (const token of tokens) {
+    const found = postings.get(token);
+    if (found) found.push(position);
+    else postings.set(token, [position]);
+  }
+}
+
+function indexHistoryPostings(entries: MessageEntry[], start = 0,
+  postings: HistoryPostings = { exact: new Map(), terms: new Map() }): HistoryPostings {
+  for (let position = start; position < entries.length; position++) {
+    const entry = entries[position]!;
+    if (entry.message.role !== 'user' || isSystemNoteMessage(entry.message)) continue;
+    const text = stripContextWrappers(extractText(entry.message.content));
+    if (generatedHistorySource.test(text.trimStart())) continue;
+    const normalized = normalizeEvidenceText(text);
+    const exact = new Set(normalized.match(evidenceExactPattern));
+    const words = new Set([...exact].filter(token => token.length >= 2));
+    let previousHan = '';
+    for (const { segment, isWordLike } of evidenceWordSegmenter.segment(normalized)) {
+      if (isWordLike && segment.length >= 2) words.add(segment);
+      const singleHan = /^\p{Script=Han}$/u.test(segment);
+      if (singleHan && previousHan) words.add(previousHan + segment);
+      previousHan = singleHan ? segment : '';
+    }
+    addEvidencePostings(postings.exact, exact, position);
+    addEvidencePostings(postings.terms, words, position);
+  }
+  return postings;
+}
+
+function evidenceQueryTokens(values: unknown, pattern: RegExp): string[] {
+  if (!Array.isArray(values) || values.length > 24) throw Error('Invalid evidence lookup');
+  const tokens = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== 'string' || value.length > 100) throw Error('Invalid evidence token');
+    const normalized = normalizeEvidenceText(value);
+    if (normalized.length > 100 || !pattern.test(normalized)) throw Error('Invalid evidence token');
+    tokens.add(normalized);
+  }
+  return [...tokens];
 }
 interface BackgroundPreview { fields: Array<{label: string; value: string}>; details?: Array<{label: string; value: string}> }
 const utcDay = () => new Date().toISOString().slice(0, 10);
@@ -360,7 +413,13 @@ export class PluginBackground {
       if (prior?.store === store && prior.revision === revision && prior.leaf === leaf) return prior;
       const entries = store.getHistoryEntries(), positions = new Map<string, number>();
       entries.forEach((entry, index) => positions.set(entry.id, index));
-      const view = { store, revision, leaf, entries, positions };
+      const view: HistoryView = { store, revision, leaf, entries, positions };
+      // Existing message objects form an unchanged prefix on a plain append.
+      // Rewind and compaction rebuild postings for the new active history.
+      if (prior?.store === store && prior.postings && prior.entries.length <= entries.length &&
+          prior.entries.every((entry, index) => entry === entries[index])) {
+        view.postings = indexHistoryPostings(entries, prior.entries.length, prior.postings);
+      }
       this.historyCache.set(id, view);
       if (this.historyCache.size > 64) this.historyCache.delete(this.historyCache.keys().next().value!);
       return view;
@@ -418,6 +477,46 @@ export class PluginBackground {
         }
         return null;
       },
+      lookupEvidence: (id: string, conversationId: string, anchorId: string, query: {
+        exact: string[]; terms: string[]; excludeWithin?: { entries: number; elapsedMs: number };
+      }) => {
+        const g = get(id), view = historyView(g, conversationId);
+        const anchor = view.positions.get(anchorId);
+        if (anchor === undefined || !readable(g, view.entries[anchor])) throw Error('History source unavailable');
+        const exact = evidenceQueryTokens(query?.exact, /^[a-z0-9]+(?:[-_.:/][a-z0-9]+)*$/);
+        const terms = evidenceQueryTokens(query?.terms, /^[^\s\p{C}]+$/u);
+        const nearby = query.excludeWithin;
+        if (nearby !== undefined && (!nearby || !Number.isSafeInteger(nearby.entries) || nearby.entries < 0 ||
+            !Number.isSafeInteger(nearby.elapsedMs) || nearby.elapsedMs < 0)) throw Error('Invalid evidence window');
+        const anchorTime = view.entries[anchor]!.timestamp;
+        const hits: Array<{ id: string; exact: boolean; shared: number }> = [];
+        if (!exact.length && terms.length < 2) return { hits, more: false };
+        const postings = view.postings ??= indexHistoryPostings(view.entries);
+        const lanes = [
+          ...exact.map(token => ({ positions: postings.exact.get(token) ?? [], exact: true })),
+          ...terms.map(token => ({ positions: postings.terms.get(token) ?? [], exact: false })),
+        ].map(lane => ({ ...lane, offset: lane.positions.length - 1 }));
+        // Merge the newest postings first and stop once authorized results
+        // cannot fit. A truncated set must not look like complete evidence.
+        while (true) {
+          let position = -1;
+          for (const lane of lanes) position = Math.max(position, lane.positions[lane.offset] ?? -1);
+          if (position <= anchor) return { hits, more: false };
+          let matchedExact = false, shared = 0;
+          for (const lane of lanes) {
+            if (lane.positions[lane.offset] !== position) continue;
+            lane.offset--;
+            if (lane.exact) matchedExact = true;
+            else shared++;
+          }
+          const entry = view.entries[position]!;
+          if ((!matchedExact && shared < 2) || !readable(g, entry)) continue;
+          const elapsed = entry.timestamp - anchorTime;
+          if (nearby && position - anchor <= nearby.entries && elapsed >= 0 && elapsed <= nearby.elapsedMs) continue;
+          if (hits.length === evidenceHitLimit) return { hits, more: true };
+          hits.push({ id: entry.id, exact: matchedExact, shared });
+        }
+      },
       search: (id: string, conversationId: string, query: string) => {
         const g = get(id); if (typeof query !== 'string' || !query.trim() || query.length > 300) throw Error('Invalid history query');
         const words = query.toLocaleLowerCase().split(/\s+/).slice(0,8);
@@ -425,16 +524,17 @@ export class PluginBackground {
           const text = stripContextWrappers(extractText(e.message.content)), lower = text.toLocaleLowerCase();
           const exact=lower.indexOf(query.trim().toLocaleLowerCase());
           const at = exact>=0 ? exact : Math.max(0, ...words.map(w => lower.indexOf(w)));
-          return words.some(w => lower.includes(w)) ? [{id:e.id,at:e.timestamp,role:/^\[(?:Cross-conversation message|插件任务|Compacted conversation|Context checkpoint)/.test(text)?'generated':e.message.role,text:unicodeSlice(text,Math.max(0,at-100),Math.max(0,at-100)+800)}] : [];
+          return words.some(w => lower.includes(w)) ? [{id:e.id,at:e.timestamp,role:generatedHistorySource.test(text)?'generated':e.message.role,text:unicodeSlice(text,Math.max(0,at-100),Math.max(0,at-100)+800)}] : [];
         }).slice(-12);
       },
-      read: (id: string, conversationId: string, cursor?: string) => {
+      read: (id: string, conversationId: string, cursor?: string, limit = 40) => {
         const g = get(id), t = target(g, conversationId), { entries: all, positions } = historyView(g, conversationId);
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 40) throw Error('Invalid history page size');
         const index = cursor ? (positions.get(cursor) ?? -1) : -1;
-        const page = all.slice(index + 1, index + 41);
+        const page = all.slice(index + 1, index + 1 + limit);
         const rows = page.filter(e => readable(g, e)).map((e: MessageEntry) => {
           const text = stripContextWrappers(extractText(e.message.content));
-          const generated = /^\[(?:Cross-conversation message|插件任务|Compacted conversation|Context checkpoint)/.test(text);
+          const generated = generatedHistorySource.test(text);
           return { id: e.id, at: e.timestamp, role: generated ? 'generated' : e.message.role,
             text: unicodeSlice(text, 0, 3000), truncated: text.length > 3000 };
         });

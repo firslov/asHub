@@ -10,6 +10,23 @@ import {migrateDeviceInterconnect} from '../dist/remote/migration.js';
 import {pluginCatalog} from '../dist/plugins.js';
 import {createHash} from 'node:crypto';
 function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'device-sharing-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
+test('native connectivity reports the selected publisher and its resource, with lifecycle cleanup', t => {
+ const sharing = new SharedConversations(path.join(fixture(t), 'grants.json'));
+ const first = new AbortController(), second = new AbortController();
+ const connecting = { available: true, enabled: true, status: 'connecting' };
+ const online = { available: true, enabled: true, status: 'online' };
+ sharing.bind('first', first.signal).registerStatus(() => connecting);
+ const newer = sharing.bind('second', second.signal);
+ assert.throws(() => newer.registerStatus(() => online, '../settings'), /Invalid sharing resource/);
+ newer.registerStatus(() => online, 'connection-settings');
+ assert.deepEqual(sharing.desktopStatus(), { ...online, target: { plugin: 'second', resource: 'connection-settings' } });
+ assert.deepEqual(sharing.status(), online);
+ second.abort();
+ assert.deepEqual(sharing.desktopStatus(), { ...connecting, target: { plugin: 'first', resource: undefined } });
+ assert.deepEqual(sharing.desktopStatus(online), { ...online, target: undefined });
+ first.abort();
+ assert.deepEqual(sharing.desktopStatus(), { available: false, enabled: false, status: 'disabled', target: undefined });
+});
 test('legacy identity, exact grant and receipts migrate once, disabled state survives, no account credential is invented',t=>{
  for(const enabled of [true,false]){
   const dir=fixture(t),settingsFile=path.join(dir,'settings.json'),sessionsDir=path.join(dir,'hub-sessions');fs.writeFileSync(settingsFile,JSON.stringify({'ashub.features.disabled':enabled?[]:['mobile-access']}));
@@ -101,10 +118,20 @@ test('migration retry follows disable, scope reduction and account rebind made t
  }
 });
 
-test('legacy migration does not re-enable an independently configured disabled interconnect plugin',t=>{
+test('legacy migration keeps an independent plugin disabled and leaves both receipt journals alone',t=>{
  const dir=fixture(t),settingsFile=path.join(dir,'settings.json'),sessionsDir=path.join(dir,'hub-sessions');fs.writeFileSync(settingsFile,'{}');
  const entry=pluginCatalog(settingsFile).find(p=>p.manifest?.id==='ashub-multi-machine'),key=createHash('sha256').update(entry.id+'\0device').digest('hex');
  const existing=JSON.stringify({deviceId:'independent',deviceToken:'independent-token',username:'bob',roots:[dir],enabled:true,grantId:'independent-grant'}),vault=new Map([[key,existing]]);
+ const legacyJournal=path.join(sessionsDir,'remote','remote-requests.json');
+ const separateJournal=path.join(sessionsDir,'plugin-data',entry.id,'remote-requests.json');
+ const legacyReceipts=JSON.stringify({'legacy:id':{digest:'legacy',state:'done'}});
+ const separateReceipts=JSON.stringify({'independent:id':{digest:'independent',state:'done'}});
+ for(const [file,contents] of [[legacyJournal,legacyReceipts],[separateJournal,separateReceipts]]){
+  fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,contents);
+ }
  migrateDeviceInterconnect({settingsFile,sessionsDir,sharing:new SharedConversations(path.join(dir,'grants.json')),legacy:{read:()=>JSON.stringify({deviceId:'legacy',deviceToken:'legacy-token',username:'alice',roots:[dir],enabled:true})},secrets:{read:k=>vault.get(k)||null,write:(k,v)=>vault.set(k,v)}});
  assert.equal(vault.get(key),existing);assert.equal(pluginCatalog(settingsFile).find(p=>p.id===entry.id).enabled,false);
+ assert.equal(fs.readFileSync(separateJournal,'utf8'),separateReceipts);
+ assert.equal(fs.readFileSync(legacyJournal,'utf8'),legacyReceipts);
+ assert(fs.existsSync(path.join(sessionsDir,'device-interconnect-migrated.json')));
 });

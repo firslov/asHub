@@ -50,11 +50,27 @@ globalThis.fetch = async (input, init) => {
 const upstream = http.createServer(async (req, res) => {
   for await (const _ of req) { /* consume */ }
   requests++;
-  if (['four-failures', 'exhaust-retries', 'exhaust-deadlines', 'switch-backoff'].includes(mode)) {
+  if (mode === 'child-forbidden-retry') {
+    res.writeHead(400, {'content-type': 'application/json'});
+    res.end(JSON.stringify({error: {message: 'Context window error with a terminal Codex verdict'}}));
+    return;
+  }
+  if (mode === 'child-empty-after-retry') {
+    if (++policyRequests === 1) {
+      res.writeHead(503, {'content-type': 'application/json', 'retry-after': '0'});
+      res.end(JSON.stringify({error: {message: 'Temporary failure before an empty completed response'}}));
+    } else {
+      res.writeHead(200, {'content-type': 'text/event-stream'});
+      res.end(`data: ${JSON.stringify({type: 'response.completed', response: {status: 'completed', usage: {input_tokens: 4, output_tokens: 0}}})}\n\n`);
+    }
+    return;
+  }
+  if (['four-failures', 'exhaust-retries', 'exhaust-deadlines', 'switch-backoff', 'child-switch-backoff'].includes(mode)) {
     policyRequests++;
     if (mode === 'exhaust-deadlines') return;
     if (mode === 'exhaust-retries' || policyRequests <= 4) {
-      res.writeHead(503, {'content-type': 'application/json', 'retry-after': mode === 'switch-backoff' ? '0.05' : '0'});
+      const retryAfter = mode === 'child-switch-backoff' ? '0.2' : mode === 'switch-backoff' ? '0.05' : '0';
+      res.writeHead(503, {'content-type': 'application/json', 'retry-after': retryAfter});
       res.end(JSON.stringify({error:{message:'temporary policy fixture failure'}}));
       return;
     }
@@ -200,6 +216,28 @@ try {
   }
   console.log('PASS transient retries and local header deadlines have independent bounded budgets');
 
+  mode = 'child-forbidden-retry';
+  const beforeForbiddenRetry = requests, forbiddenRetryNotes = [];
+  const offForbiddenRetry = bridge.onEvent(event => {
+    if (event.name === 'ui:info' && /retry|compact/i.test(event.payload?.message ?? '')) forbiddenRetryNotes.push(event.payload.message);
+  });
+  try {
+    await assert.rejects(bridge.core.handlers.call('subagent:run', {
+      task: 'Honor the terminal Codex response', tools: [], maxIterations: 2,
+    }), /context window error/i);
+    assert.equal(requests - beforeForbiddenRetry, 1);
+    assert.deepEqual(forbiddenRetryNotes, [], 'context-overflow wording cannot trigger a retry or compaction on a terminal response');
+  } finally { offForbiddenRetry(); }
+  console.log('PASS subagent honors a terminal Codex verdict before context-overflow handling');
+
+  mode = 'child-empty-after-retry'; policyRequests = 0;
+  const emptyChild = await bridge.core.handlers.call('subagent:run', {
+    task: 'Complete without visible output', tools: [], maxIterations: 2,
+  });
+  assert.equal(emptyChild.split('\n\nSubagent id:')[0], '');
+  assert.equal(policyRequests, 2, 'an empty but completed provider reply must not start another retry budget');
+  console.log('PASS empty completed subagent response does not allocate another Codex retry budget');
+
   mode = 'switch-backoff'; policyRequests = 0;
   let switched;
   const switchDuringRetry = event => {
@@ -219,6 +257,27 @@ try {
   mode = 'delayed';
   await bridge.submit('Continue on the newly selected model');
   console.log('PASS changing models during retry stops the old request and the next turn still works');
+
+  mode = 'child-switch-backoff'; policyRequests = 0;
+  const endpoint = id => bridge.core.handlers.call('agent:resolve-endpoint', { provider: 'codex', id }).baseURL;
+  const childProxy = endpoint('alternate-audit-model');
+  let switchedDuringChild;
+  const offChildSwitch = bridge.onEvent(event => {
+    if (!switchedDuringChild && event.name === 'ui:info' && /retrying/.test(event.payload?.message ?? '')) {
+      switchedDuringChild = Promise.resolve(bridge.execCommand('/model', 'audit-model@codex'));
+      switchedDuringChild.catch(() => {});
+    }
+  });
+  try {
+    await assert.rejects(bridge.core.handlers.call('subagent:run', {
+      task: 'Do not resend a child request after the parent changes models', tools: [], maxIterations: 2,
+    }), /settings changed|endpoint was replaced/);
+    assert(switchedDuringChild);
+    await switchedDuringChild;
+    assert.equal(endpoint('audit-model'), childProxy, 'switching models within Codex still uses the same proxy');
+    assert.equal(policyRequests, 1);
+  } finally { offChildSwitch(); }
+  console.log('PASS changing the parent Codex model stops a stale child retry on the same proxy');
 
   mode = 'cancel';
   const closed = new Promise(resolve => { upstreamClosed = resolve; });

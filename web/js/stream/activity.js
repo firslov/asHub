@@ -35,7 +35,8 @@ function refresh(record) {
   const rows = Array.from(body.querySelectorAll(".tool-row"));
   count.hidden = rows.length === 0;
   setText(count, rows.length ? t("activity.steps", { n: rows.length }) : "");
-  const pending = rows.filter((row) => !row.classList.contains("ok") && !row.classList.contains("err"));
+  const pending = rows.filter((row) => !row.classList.contains("ok") && !row.classList.contains("err")
+    && !row.classList.contains("cancelled") && !row.classList.contains("partial"));
   const delegated = body.querySelector(".subagent-spinner");
   const thinking = Array.from(body.querySelectorAll(".thinking-block"))
     .some((block) => block.dataset.activityDone !== "1");

@@ -203,7 +203,7 @@ dialog.artifact-preview { font-family: var(--font-sans); box-shadow: var(--shado
 .live-input:focus-within { box-shadow: 0 0 0 2px var(--accent-glow); }
 .toolbar > :is(#files-toggle,#ctx-toggle,#tree-toggle,#sa-toggle) { order: 1; }
 .toolbar > :is(#prompt-toggle,#skills-toggle,.extension-menu,.rail-more) { order: 2; }
-.toolbar > :is(#plugins-toggle,#mobile-access-toggle,#config-toggle) { order: 3; }
+.toolbar > :is(#plugins-toggle,#config-toggle) { order: 3; }
 .toolbar > #plugins-toggle, .toolbar > #prompt-toggle { margin-top: 6px; }
 .toolbar > :is(.toolbar-sep,#export-btn,#lang-toggle,#theme-toggle) { order: 4; }
 .toolbar > .rail-labels-toggle { display: none; }

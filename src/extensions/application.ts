@@ -16,6 +16,7 @@ export interface ApplicationExtensionInstance {
 export interface ApplicationExtensionDefinition {
   id: string;
   name: string;
+  description?: string;
   scope?: 'application' | 'frontend';
   capabilities?: string[];
   dependencies?: string[];
@@ -100,6 +101,7 @@ export class ApplicationExtensionRegistry {
   snapshot() {
     return { version: 1 as const, features: [...this.entries.values()].map(({ definition: d, enabled, state, error }) => ({
       id: d.id, name: d.name, enabled, state, scope: d.scope ?? 'application',
+      ...(d.description ? { description: d.description } : {}),
       ...(d.capabilities ? { capabilities: [...d.capabilities] } : {}), ...(d.ui ? { ui: d.ui } : {}),
       ...(d.pluginId ? { pluginId: d.pluginId, configNamespaces: [...(d.configNamespaces ?? [])] } : {}),
       ...(error ? { error } : {}),

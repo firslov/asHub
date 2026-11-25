@@ -32,6 +32,19 @@ test('host catalog is authoritative; missing features disabled and metadata cann
   await registry.refresh(); assert.equal(registry.enabled('skills-marketplace'), false); assert.equal(imports, 0);
   assert.equal(registry.snapshot().features[0].module, undefined); await registry.load('quick-prompts'); assert.equal(imports, 1);
 });
+test('declared capabilities survive catalog validation without sharing mutable arrays', async () => {
+  const { FeatureRegistry } = await moduleAt('feature-registry.js');
+  const registry = new FeatureRegistry(definitions);
+  const capabilities = ['shared-conversations', 'provider.balance'];
+  registry.apply(snapshot([{ ...feature(), capabilities }]));
+  capabilities.push('late-update');
+  const first = registry.snapshot();
+  assert.deepEqual(first.features[0].capabilities, ['shared-conversations', 'provider.balance']);
+  first.features[0].capabilities.pop();
+  assert.equal(registry.snapshot().features[0].capabilities.length, 2);
+  registry.apply(snapshot([{ ...feature(), capabilities: ['shared-conversations other'] }]));
+  assert.equal(registry.snapshot().features[0].capabilities, undefined);
+});
 test('network failure or disappearing endpoint never re-enables a disabled feature', async () => {
   const { FeatureRegistry } = await moduleAt('feature-registry.js');
   let status = 200;

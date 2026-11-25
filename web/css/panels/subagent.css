@@ -117,7 +117,8 @@
    state — warning treatment, distinct from success ✓ and failure ✗.
    Block layout itself stays in live.css; these rules only add the
    warning visuals alongside the other subagent-specific styles here. */
-.subagent-degraded {
+.subagent-degraded,
+.subagent-cancelled-badge {
   display: inline-flex;
   align-items: center;
   height: 18px;
@@ -125,12 +126,23 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   line-height: 1;
-  color: var(--warning);
-  background: var(--warning-bg);
-  border: 1px solid var(--warning-border);
+  border: 1px solid;
   border-radius: var(--radius-pill);
   flex-shrink: 0;
 }
+
+.subagent-degraded {
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+}
+
+.subagent-cancelled-badge {
+  color: var(--text-dim);
+  border-color: var(--border);
+}
+
+.subagent-cancelled > .subagent-head .subagent-icon { color: var(--text-dim); }
 
 .subagent-tokens-used {
   font-family: var(--font-mono);

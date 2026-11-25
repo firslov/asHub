@@ -9,6 +9,22 @@ import "../conversation-presentation.js";
 const { usageMetrics } = globalThis.AsHubConversationPresentation;
 const { toolDisplayName } = globalThis.AsHubConversationPresentation;
 
+export function renderSubagentCancellation(block, head) {
+  block.classList.remove("subagent-failed");
+  block.classList.add("subagent-cancelled");
+  if (!head) return;
+  const icon = head.querySelector(".subagent-icon");
+  if (icon) { icon.textContent = "■"; icon.style.color = ""; }
+  head.querySelector(".subagent-degraded")?.remove();
+  head.querySelector(".subagent-tokens-used")?.remove();
+  head.querySelector(".subagent-id")?.remove();
+  if (head.querySelector(".subagent-cancelled-badge")) return;
+  const badge = document.createElement("span");
+  badge.className = "subagent-cancelled-badge";
+  badge.textContent = t("subagent.cancelled");
+  head.appendChild(badge);
+}
+
 export const hideUsage = (session) => {
   const strip = session?.usageStripEl;
   if (!strip) return;

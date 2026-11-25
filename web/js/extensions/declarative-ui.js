@@ -125,7 +125,6 @@ export function mountDeclarativeUI(feature, { menuHost, panelHost, input = docum
     }
     // Keep installed panels with the other tools, above settings and utilities.
     const anchor = menuHost.querySelector(':scope > .rail-more, :scope > #config-toggle, :scope > .toolbar-sep');
-    trigger.dataset.hostCapabilities = (feature.capabilities || []).join(' ');
     menuHost.insertBefore(trigger, anchor); panelHost.append(panel);
     const hide = () => { panel.hidden = true; trigger.classList.remove('active'); };
     close.addEventListener('click', () => { hide(); trigger.focus(); });

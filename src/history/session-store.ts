@@ -111,7 +111,15 @@ function renderEvictedSummary(branch: SessionEntry[], firstKeptIdx: number): str
   return `${header}\n${kept.join("\n")}`;
 }
 
-export interface SessionStoreOpts {
+export interface HistoryWriterLifecycle {
+  onRecoveryRequired?: () => void;
+  onOperationPending?: (operation: Promise<unknown>) => void;
+  onWritePending?: (write: Promise<unknown>) => void;
+  onCaptureResult?: (failure?: { error: unknown }) => void;
+  shutdownSignal?: AbortSignal;
+}
+
+export interface SessionStoreOpts extends HistoryWriterLifecycle {
   create?: { cwd: string; sessionId: string };
   metaPath?: string;
 }
@@ -130,6 +138,9 @@ export class SessionStore {
   private writes = new Set<Promise<unknown>>();
   private appendQueue: Promise<unknown> = Promise.resolve();
   private writeFailed = false;
+  private readonly onRecoveryRequired?: () => void;
+  private readonly onWritePending?: (write: Promise<unknown>) => void;
+  private readonly shutdownSignal?: AbortSignal;
   private revision = 0;
 
   /** Refuse new writes immediately, then drain already-started appends. */
@@ -139,10 +150,18 @@ export class SessionStore {
   }
   private track<T>(write: Promise<T>): Promise<T> {
     this.writes.add(write);
+    this.onWritePending?.(write);
     void write.finally(() => this.writes.delete(write)).catch(() => {});
     return write;
   }
-  private assertWritable(): void { if (this.sealed || this.writeFailed) throw new Error("session store closed or requires recovery"); }
+  private assertWritable(): void {
+    this.shutdownSignal?.throwIfAborted();
+    if (this.sealed || this.writeFailed) throw new Error("session store closed or requires recovery");
+  }
+  private requireRecovery(): void {
+    this.writeFailed = true;
+    this.onRecoveryRequired?.();
+  }
   readonly id: string;
 
   constructor(filePath: string, opts?: SessionStoreOpts) {
@@ -150,6 +169,9 @@ export class SessionStore {
     this.leafPath = filePath + ".leaf";
     this.metaPath = opts?.metaPath ?? filePath + ".meta";
     this.externalMeta = !!opts?.metaPath;
+    this.onRecoveryRequired = opts?.onRecoveryRequired;
+    this.onWritePending = opts?.onWritePending;
+    this.shutdownSignal = opts?.shutdownSignal;
     this.meta = { createdAt: 0 };
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
@@ -186,6 +208,7 @@ export class SessionStore {
   }
 
   getRevision(): number { return this.revision; }
+  get needsRecovery(): boolean { return this.writeFailed; }
   getActiveLeaf(): string { return this.activeLeaf; }
   setActiveLeaf(id: string): void {
     this.assertWritable();
@@ -196,7 +219,7 @@ export class SessionStore {
     try { fs.appendFileSync(this.entriesPath, JSON.stringify({ type: "leaf", leafId: id }) + "\n"); }
     catch (err) {
       try { fs.truncateSync(this.entriesPath, size); }
-      catch { this.writeFailed = true; }
+      catch { this.requireRecovery(); }
       throw err;
     }
     this.activeLeaf = id;
@@ -223,6 +246,7 @@ export class SessionStore {
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
     this.assertWritable();
     const write = this.appendQueue.catch(() => {}).then(() => {
+      this.shutdownSignal?.throwIfAborted();
       if (this.writeFailed) throw new Error("session store requires recovery");
       return operation();
     });
@@ -234,7 +258,7 @@ export class SessionStore {
     try { await fsp.appendFile(this.entriesPath, data); }
     catch (err) {
       try { await fsp.truncate(this.entriesPath, size); }
-      catch { this.writeFailed = true; }
+      catch { this.requireRecovery(); }
       throw err;
     }
   }

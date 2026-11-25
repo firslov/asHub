@@ -30,6 +30,7 @@ export interface TaskSupplement {
   mode: "queue" | "steer"; state: SupplementState;
 }
 const supplementStates = ["pending", "consumed", "modified", "dropped", "rejected", "interrupted", "uncertain"];
+const awaitingReceipt = (state: SupplementState) => state === "pending" || state === "uncertain";
 export interface TaskSignal {
   requestKey: string; message: string; text: string; queueId: string;
   mode: "steer" | "turn" | "queue"; state: SupplementState; createdAt: number;
@@ -38,16 +39,22 @@ export interface CollaborationTask {
   id: string; sourceId: string; recipientId: string; message: string; query: string;
   revision?: number; signals?: TaskSignal[]; delivery?: TaskDelivery; supplements?: TaskSupplement[]; queueId?: string;
   state: TaskState; createdAt: number; updatedAt: number; text: string; error?: string;
+  dispatch?: { requestKey: string; projectId: string };
 }
+export const validDispatchKey = (value: unknown): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9_-]{8,100}$/.test(value);
 const taskStates: TaskState[] = ["queued", "running", "completed", "failed", "cancelled", "interrupted"];
 function validReceipt(task: unknown): task is CollaborationTask {
   if (!task || typeof task !== "object") return false;
   const value = task as Record<string, unknown>;
+  const dispatch = value.dispatch as CollaborationTask["dispatch"];
   return ["id", "sourceId", "recipientId", "message", "query", "text"].every(k => typeof value[k] === "string")
     && taskStates.includes(value.state as TaskState)
     && [value.createdAt, value.updatedAt].every(n => typeof n === "number" && Number.isFinite(n) && n >= 0)
     && (value.revision === undefined || (Number.isSafeInteger(value.revision) && (value.revision as number) >= 0))
     && (value.queueId === undefined || typeof value.queueId === "string")
+    && (dispatch === undefined || (!!dispatch && validDispatchKey(dispatch.requestKey) &&
+      typeof dispatch.projectId === "string" && !!dispatch.projectId))
     && (value.supplements === undefined || (Array.isArray(value.supplements) && value.supplements.length <= 32 &&
       value.supplements.every(u => u && ["requestKey", "message", "text", "queueId"].every(k => typeof u[k] === "string") &&
         ["queue", "steer"].includes(u.mode) && supplementStates.includes(u.state)) &&
@@ -83,26 +90,42 @@ export class CollaborationTasks {
         const task: unknown = JSON.parse(fs.readFileSync(path.join(directory, name), "utf8"));
         if (!validReceipt(task) || task.id + ".json" !== name) throw new Error("Invalid collaboration receipt");
         this.tasks.set(task.id, task);
+        // The send was recorded before injection. A pending/uncertain receipt
+        // (or one interrupted by an older host) cannot prove that the supplement
+        // did not reach the model before the consumption save failed.
+        const staleDelivery = !!task.delivery && (task.supplements ?? []).some(u => awaitingReceipt(u.state) || u.state === "interrupted");
+        if (staleDelivery) delete task.delivery;
         let pending = false;
-        for (const update of [...(task.supplements ?? []), ...(task.signals ?? [])]) if (update.state === "pending" || update.state === "uncertain") {
+        for (const update of [...(task.supplements ?? []), ...(task.signals ?? [])]) if (awaitingReceipt(update.state)) {
           update.state = "interrupted"; pending = true;
         }
-        if (!taskTerminal(task.state)) {
+        const interrupted = !taskTerminal(task.state);
+        if (interrupted) {
           task.state = "interrupted"; task.error = "Application restarted before completion";
-          task.updatedAt = Date.now(); task.revision = (task.revision ?? 0) + 1; this.save(task);
-        } else if (pending) this.save(task);
+        }
+        if (interrupted || staleDelivery) {
+          task.updatedAt = Date.now(); task.revision = (task.revision ?? 0) + 1;
+        }
+        if (interrupted || staleDelivery || pending) this.save(task);
       } catch (e) { console.error("[collaboration] unreadable receipt retained:", name, e); }
     }
   }
-  private save(task: CollaborationTask) {
+  private save(task: CollaborationTask, flush = false) {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     const file = path.join(this.directory, task.id + ".json"), tmp = file + ".tmp";
-    try { fs.writeFileSync(tmp, JSON.stringify(task), { mode: 0o600 }); fs.renameSync(tmp, file); }
+    try { fs.writeFileSync(tmp, JSON.stringify(task), { mode: 0o600, flush }); fs.renameSync(tmp, file); }
     finally { try { fs.unlinkSync(tmp); } catch {} }
   }
-  create(sourceId: string, recipientId: string, message: string, query: string, id = randomUUID()) {
-    const task: CollaborationTask = { id, sourceId, recipientId, message, query, state: "queued", revision: 0, createdAt: Date.now(), updatedAt: Date.now(), text: "" };
-    this.save(task); this.tasks.set(id, task); return task;
+  create(sourceId: string, recipientId: string, message: string, query: string, id: string = randomUUID(), dispatch?: CollaborationTask["dispatch"]) {
+    if (dispatch && this.findDispatch(id)) throw new Error("Dispatch already exists");
+    const task: CollaborationTask = { id, sourceId, recipientId, message, query, state: "queued", revision: 0, createdAt: Date.now(), updatedAt: Date.now(), text: "", ...(dispatch ? { dispatch } : {}) };
+    this.save(task, !!dispatch); this.tasks.set(id, task); return task;
+  }
+  findDispatch(id: string) {
+    const task = this.tasks.get(id);
+    if (!task && fs.existsSync(path.join(this.directory, id + ".json")))
+      throw new Error("Dispatch receipt unavailable; inspect the original task before retrying");
+    return task;
   }
   get(id: string) { const task = this.tasks.get(id); if (!task) throw new Error("Task not found"); return task; }
   list() { return [...this.tasks.values()].sort((a, b) => b.createdAt - a.createdAt); }
@@ -125,8 +148,8 @@ export class CollaborationTasks {
     if (task.supplements?.some(u => u.requestKey === update.requestKey)) throw new Error("Duplicate supplement key");
     const next = { ...task, ...(query === undefined ? {} : {query}), supplements: [...(task.supplements ?? []), update],
       revision: (task.revision ?? 0) + 1, updatedAt: Date.now() };
-    // Persist before any delivery. Uncertain attempts must never be replayed.
-    this.save(next); Object.assign(task, next);
+    // Persist before injection so recovery can detect a missing consumption receipt.
+    this.save(next, true); Object.assign(task, next);
   }
   uncertainSupplement(id: string, requestKey: string) {
     const task = this.get(id), update = task.supplements?.find(u => u.requestKey === requestKey);

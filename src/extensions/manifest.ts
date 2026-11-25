@@ -4,7 +4,7 @@ import os from 'node:os';
 import { satisfies, valid, validRange } from 'semver';
 
 export const HOST_PLUGIN_API_VERSION = '1.0.0';
-export const HOST_PLUGIN_CAPABILITIES = ['composer-inputs', 'plugin-secrets', 'resource-directory-fields', 'shared-conversations', 'backend-connections', 'session-extensions', 'application-lifecycle', 'plugin-resources', 'authorized-messages', 'task-events', 'message-lifecycle', 'activity-hints', 'plugin-data', 'background-services', 'scoped-history', 'conversation-entries', 'conversation-resource-popovers', 'conversation-scoped-sessions', 'remote-resources', 'image-resources', ...(process.versions.electron ? ['browser-pages', 'browser-files'] : [])] as const;
+export const HOST_PLUGIN_CAPABILITIES = ['composer-inputs', 'plugin-secrets', 'resource-directory-fields', 'shared-conversations', 'backend-connections', 'session-extensions', 'application-lifecycle', 'plugin-resources', 'authorized-messages', 'task-events', 'message-lifecycle', 'activity-hints', 'plugin-data', 'background-services', 'scoped-history', 'project-name-history', 'conversation-entries', 'conversation-resource-popovers', 'conversation-scoped-sessions', 'remote-resources', 'image-resources', ...(process.versions.electron ? ['browser-pages', 'browser-files'] : [])] as const;
 /** Match the client's JSON.stringify(ui).length limit (UTF-16 code units, not bytes). */
 export const MAX_PLUGIN_UI_JSON_CHARS = 262144;
 export const PLUGIN_ENTRY_FILES = ['index.js', 'index.mjs', 'index.ts', 'index.tsx', 'index.mts'];

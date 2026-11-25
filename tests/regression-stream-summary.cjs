@@ -81,6 +81,7 @@ function handler(ctx,name){
    saMaps:v=>{v._saBlocksByCallId??=new Map();v._saBlocksBySaId??=new Map();},
    createSubagentBlock:()=>{const b=node('subagent-block'),head=node('subagent-head');head.append(node('subagent-icon'),node('subagent-spinner'));b.append(head,node('subagent-result'));return b;},
    insertStreamNode:x.groups.insertStreamNode,refreshActivity:activity.refreshActivity,t:k=>k,
+   renderSubagentCancellation:x.e.load('web/js/stream/renderers.js').renderSubagentCancellation,
   });
   const started=handler(x.e.context,'subagent:started'),done=handler(x.e.context,'subagent:done');
   started.call(s,{subagentId:'async',type:'explore',task:'Inspect files'});
@@ -95,9 +96,20 @@ function handler(ctx,name){
   assert(current!==old&&s.streamEl.contains(current)&&body.contains(child),'replayed children missing or routed to old DOM');
   started.call(s,{subagentId:'async',type:'explore'});
   assert(s.streamEl.querySelectorAll('.subagent-block').length===3,'duplicate start created an extra child');
-  done.call(s,{subagentId:'async'});done.call(s,{subagentId:'child',error:'New failure'});
+  started.call(s,{subagentId:'stopped',type:'review'});const stopped=s._saBlocksBySaId.get('stopped');
+  const pending=node('subagent-block');s._saBlocksByCallId.set('pending',pending);
+  started.call(s,{subagentId:'stopped',type:'review'});
+  started.call(s,{subagentId:'child-2',swarmId:'swarm'});const child2=s._saBlocksBySaId.get('child-2');
+  assert(!pending._saId&&body.contains(child2),'duplicate or swarm start stole a pending launch');
+  const other=node('subagent-block');s._saBlocksByCallId.set('other',other);
+  started.call(s,{subagentId:'bound',toolCallId:'other'});
+  assert(s._saBlocksBySaId.get('bound')===other&&!pending._saId,'explicit launch ID did not identify the correct block');
+  done.call(s,{subagentId:'bound',toolCallId:'other'});
+  done.call(s,{subagentId:'child-2'});
+  done.call(s,{subagentId:'async'});done.call(s,{subagentId:'child',error:'New failure'});done.call(s,{subagentId:'stopped',cancelled:true});
   assert(current.querySelector('.subagent-icon').textContent==='✓'&&!current.querySelector('.subagent-spinner'),'completion missed replayed child');
   assert(child.querySelector('.subagent-result').textContent.includes('New failure')&&child.classList.contains('subagent-failed'),'failure routed to detached child');
+  assert(stopped.querySelector('.subagent-icon').textContent==='■'&&stopped.querySelector('.subagent-cancelled-badge')&&!stopped.querySelector('.subagent-spinner'),'replay displayed cancellation as another state');
   assert(old.querySelector('.subagent-spinner')&&s._saBlocksBySaId.size===0,'completion changed old DOM or retained terminal links');
  });
  await check('Stream closing a view cancels its pending thinking render',()=>{

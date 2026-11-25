@@ -70,6 +70,7 @@ export interface Session {
    *  after itself. */
   _deletingFiles?: boolean;
   _contextBroken?: boolean;
+  _historyWriterLifecycle?: import("../history/session-store.js").HistoryWriterLifecycle;
   /** Exclusive, explicitly approved host operation in progress. */
   _hostOperation?: boolean;
   /** HTTP commands may await provider setup without starting an agent turn. */

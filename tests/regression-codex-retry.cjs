@@ -14,7 +14,7 @@ function setup(stream, config={}, wait) {
   const {guardCodexRetries,registerCodexEndpoint}=e.load('src/providers/codex-retry.ts');
   const client={stream}; guardCodexRetries(client, message=>notices.push(message));
   guardCodexRetries(client, ()=>assert.fail('double wrapping'));
-  return {client, waits, notices, registerCodexEndpoint};
+  return {client, waits, notices, registerCodexEndpoint, guardCodexRetries};
 }
 test('Codex retries four times, then succeeds without duplicate chunks', async()=>{
   let calls=0;
@@ -23,7 +23,7 @@ test('Codex retries four times, then succeeds without duplicate chunks', async()
   assert.equal(calls,5);assert.deepEqual(x.waits,[2000,4000,8000,16000]);
   assert.match(x.notices.at(-1),/attempt 5\/5/);
 });
-test('exhaustion suppresses outer kernel and subagent retries',async()=>{
+test('exhaustion gives the engine a terminal Codex disposition',async()=>{
   let calls=0;
   const x=setup(async()=>{calls++;throw failure();});
   await assert.rejects(collect(x.client.stream({})),e=>e.error.retryable===false&&e.error.status===502);
@@ -143,6 +143,100 @@ test('refreshing an equivalent configuration does not interrupt retries',async()
   const release=x.registerCodexEndpoint(x.client.config.baseURL);
   try {assert.deepEqual(await collect(x.client.stream({model:'original'})),['ok']);assert.equal(calls,2);}
   finally {release();}
+});
+
+test('a child keeps its independent retry budget for each model request',async()=>{
+  const attempts=new Map();
+  const x=setup(async()=>assert.fail('request unexpectedly used the parent client'),{maxRetries:1});
+  const baseURL='http://127.0.0.1:12345/v1';
+  const release=x.registerCodexEndpoint(baseURL);
+  const child={config:{baseURL},async *stream({request}){
+    const attempt=(attempts.get(request)??0)+1;
+    attempts.set(request,attempt);
+    if(attempt===1)throw failure();
+    yield request;
+  }};
+  x.guardCodexRetries(child,()=>{},{scopedEndpoint:true});
+  try {
+    for(const request of ['before tool','after tool'])assert.deepEqual(await collect(child.stream({request})),[request]);
+    assert.deepEqual([...attempts.values()],[2,2]);
+    assert.deepEqual(x.waits,[2000,2000]);
+  } finally {release();}
+});
+
+test('concurrent Codex requests keep independent header budgets when only one is cancelled', async () => {
+  const controller = new AbortController();
+  const attempts = new Map();
+  let reachedBackoff;
+  const waiting = new Promise(resolve => { reachedBackoff = resolve; });
+  const x = setup(async function* ({ request }) {
+    const attempt = (attempts.get(request) ?? 0) + 1;
+    attempts.set(request, attempt);
+    if (attempt === 1) throw deadline();
+    yield request;
+  }, { maxRetries: 1 }, async ({ signal }) => {
+    if (signal !== controller.signal) return;
+    reachedBackoff();
+    await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  });
+  const cancelled = assert.rejects(collect(x.client.stream({ request: 'stopped', signal: controller.signal })), /abort/i);
+  await waiting;
+  const sibling = collect(x.client.stream({ request: 'sibling' }));
+  controller.abort();
+  await cancelled;
+  assert.deepEqual(await sibling, ['sibling']);
+  assert.deepEqual(Object.fromEntries(attempts), { stopped: 1, sibling: 2 });
+  assert.deepEqual(x.waits, [5000, 5000]);
+});
+
+test('a fork cannot retry or use a replacement Codex proxy at the same address',async()=>{
+  let calls=0,releaseReplacement=()=>{};
+  const baseURL='http://127.0.0.1:12345/v1';
+  let release;
+  const x=setup(async()=>assert.fail('request unexpectedly used the parent client'),{},()=>{
+    release();
+    releaseReplacement=x.registerCodexEndpoint(baseURL);
+  });
+  release=x.registerCodexEndpoint(baseURL);
+  const child={config:{baseURL},stream:async()=>{calls++;throw failure();}};
+  x.guardCodexRetries(child,()=>{},{scopedEndpoint:true});
+  try {
+    const terminal=e=>e.type==='codex_proxy_error'&&e.error.retryable===false&&e.message.includes('endpoint was replaced');
+    await assert.rejects(collect(child.stream({})),terminal);
+    await assert.rejects(collect(child.stream({})),terminal);
+    assert.equal(calls,1);
+  } finally {release();releaseReplacement();}
+});
+
+for (const change of ['configuration model','effective model']) test(`a child cannot retry after its Codex parent changes ${change} on the same proxy`,async()=>{
+  let calls=0;
+  const baseURL='http://127.0.0.1:12345/v1';
+  const x=setup(async()=>assert.fail('request unexpectedly used the parent client'),{},()=>{
+    if(change==='configuration model')x.client.config={...x.client.config,model:'new model'};
+    else x.client.model='new model';
+  });
+  x.client.config={baseURL,apiKey:'fixture',model:'old model'};
+  x.client.model='old model';
+  const release=x.registerCodexEndpoint(baseURL);
+  const child={config:{...x.client.config,model:'child override'},stream:async()=>{calls++;throw failure();}};
+  x.guardCodexRetries(child,()=>{},{scopedEndpoint:true,sourceClient:x.client});
+  try {
+    const terminal=e=>e.type==='codex_proxy_error'&&e.error.retryable===false&&e.message.includes('request settings changed');
+    await assert.rejects(collect(child.stream({})),terminal);
+    await assert.rejects(collect(child.stream({})),terminal);
+    assert.equal(calls,1);
+  } finally {release();}
+});
+
+test('malformed proxy status fails closed on a managed Codex endpoint',async()=>{
+  let calls=0;
+  const x=setup(async()=>{calls++;throw failure(999,true,{},'network failure');});
+  x.client.config={baseURL:'http://127.0.0.1:12345/v1'};
+  const release=x.registerCodexEndpoint(x.client.config.baseURL);
+  try {
+    await assert.rejects(collect(x.client.stream({})),e=>e.type==='codex_proxy_error'&&e.error.retryable===false&&e.error.status===502);
+    assert.equal(calls,1);
+  } finally {release();}
 });
 
 test('background retry notices stay silent while concurrent foreground retries remain visible',async()=>{

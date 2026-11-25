@@ -64,6 +64,7 @@ const HUB_PORT = 7878;
 const { createBackgroundController, isTrustedDesktopEvent } = require('./background.cjs');
 let background = null;
 let remoteStatusRef = () => ({});
+let remoteSettingsTargetRef = () => undefined;
 let resolveArtifactRef = async () => { throw Error('Application is not ready'); };
 const browserPages = require('./browser-pages.cjs').createBrowserPages({
   electron: require('electron'),
@@ -76,7 +77,6 @@ const browserPages = require('./browser-pages.cjs').createBrowserPages({
 
 const { performFileAction } = require('./files.cjs');
 const desktopReady = new WeakSet();
-const pendingMobile = new WeakSet();
 const pendingPlugin = new WeakMap();
 function showMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();
@@ -87,15 +87,16 @@ function showMainWindow() {
   }
 }
 function openMobileAccess() {
-  showMainWindow();
-  const contents = mainWindow.webContents;
-  if (desktopReady.has(contents)) contents.send('desktop:open-mobile');
-  else pendingMobile.add(contents);
+  sendExtensionTarget(remoteSettingsTargetRef() ?? {});
 }
 
 function revealPluginResource(plugin, resource) {
+  sendExtensionTarget({ plugin, resource });
+}
+
+function sendExtensionTarget(target) {
   showMainWindow();
-  const contents = mainWindow.webContents, target = { plugin, resource };
+  const contents = mainWindow.webContents;
   if (desktopReady.has(contents)) contents.send('desktop:reveal-plugin-resource', target);
   else pendingPlugin.set(contents, target);
 }
@@ -444,7 +445,6 @@ function setupIPC() {
   ipcMain.on('desktop:ready', event => {
     if (!trustedDesktop(event)) return;
     desktopReady.add(event.sender);
-    if (pendingMobile.delete(event.sender)) event.sender.send('desktop:open-mobile');
     const target = pendingPlugin.get(event.sender);
     if (target) { pendingPlugin.delete(event.sender); event.sender.send('desktop:reveal-plugin-resource', target); }
   });
@@ -800,6 +800,7 @@ async function startServer() {
       server = recovered.server;
       shutdownHubRef = recovered.shutdown;
       remoteStatusRef = recovered.remoteStatus;
+      remoteSettingsTargetRef = recovered.remoteSettingsTarget;
       resolveArtifactRef = recovered.resolveArtifact;
       shutdownPromise = null;
       _shuttingDown = false;
@@ -811,6 +812,7 @@ async function startServer() {
     server = hub.server;
     shutdownHubRef = hub.shutdown;
     remoteStatusRef = hub.remoteStatus;
+    remoteSettingsTargetRef = hub.remoteSettingsTarget;
     resolveArtifactRef = hub.resolveArtifact;
   } catch (err) {
     console.error("[electron] failed to start hub:", err);

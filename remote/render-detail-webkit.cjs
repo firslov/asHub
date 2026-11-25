@@ -167,5 +167,35 @@ const path=require('node:path'),assert=require('node:assert/strict');
    assert.match(preview.input,/原始参数/);assert.match(preview.result,/结果证据/);assert.match(preview.label,/精简预览/);
    console.log(`PASS WebKit ${theme}: touch disclosure, live coalescing, inert payload, compact preview visibility, layout`);
   }
+  const childResults=[
+   {subagentId:'cancelled',cancelled:true,result:'未完成的工作 '.repeat(300)},
+   {subagentId:'partial',degraded:'iterations',result:'阶段发现'},
+   {subagentId:'completed',result:'审查结论'},
+   {toolCallId:'queued',cancelled:true,task:'等待中的审查 '.repeat(300)},
+  ];
+  for(const replay of [false,true]){
+   const frames=childResults.map(payload=>{
+    const event={meta:{name:'subagent:done'},payload};
+    return replay?JSON.parse(mobileReplayFrame('data: '+JSON.stringify(event)+'\n\n').slice(6)):event;
+   });
+   await page.evaluate(frames=>{
+    resetMessages();const emit=(name,payload={})=>frame({meta:{name},payload});
+    emit('agent:processing-start');
+    for(const {payload} of frames){
+     if(payload.subagentId)emit('subagent:started',{subagentId:payload.subagentId,task:payload.subagentId});
+     else emit('agent:tool-started',{toolCallId:payload.toolCallId,name:'review'});
+    }
+    for(const result of frames)frame(result);
+    emit('agent:tool-completed',{toolCallId:'queued',exitCode:1});
+    emit('agent:processing-done');
+   },frames);
+   await page.locator('.detail > summary').tap();
+   const labels=page.locator('.tool-step .step-status');
+   await labels.last().waitFor();
+   assert.deepEqual(await labels.allTextContents(),['已取消','部分完成','已结束','已取消']);
+   assert.equal(await page.locator('.tool-step').first().getAttribute('data-state'),'cancelled');
+   assert.equal(await page.locator('.tool-step').last().getAttribute('data-state'),'cancelled');
+  }
+  console.log('PASS WebKit subagent outcomes retain separate cancellation, partial and completion labels in live and compact replay');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

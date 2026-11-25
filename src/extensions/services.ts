@@ -9,12 +9,12 @@ import type { PluginActivities } from '../services/plugin-activities.js';
 import type { PluginBackground } from './background.js';
 import type { ConversationEntries } from './conversation-entries.js';
 import type { PluginInteractions } from './interactions.js';
-import type { Project } from '../projects.js';
+import type { ProjectNameHistory } from '../projects.js';
 
 export interface ApplicationHostService {
   capabilities(): HostCapabilities;
   snapshot(): HostSnapshot;
-  projectNames?(entryKey: string, conversationId: string, grantId: string): Project[];
+  projectNameHistory?(entryKey: string, conversationId: string, grantId: string): ProjectNameHistory;
   subscribe(listener: (event: HostInvalidation) => void): () => void;
 }
 

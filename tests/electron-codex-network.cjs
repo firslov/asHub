@@ -27,7 +27,8 @@ const connections = new Set();
 const sockets = new Set();
 let bridge, upstream, isolated, requests = 0, mode = '', modeAttempts = 0;
 let closeSignal, retrySignal, capturedNetworkError, subagentCancel;
-const watchdog = setTimeout(() => { console.error('Codex HTTP/2 test timed out'); app.exit(1); }, 45000);
+const childInputs = [];
+const watchdog = setTimeout(() => { console.error('Codex HTTP/2 test timed out'); app.exit(1); }, 60000);
 const sse = value => `data: ${JSON.stringify(value)}\n\n`;
 const reset = stream => stream.close(http2.constants.NGHTTP2_PROTOCOL_ERROR);
 const complete = stream => stream.end(sse({ type: 'response.output_text.delta', delta: 'HTTP2_OK' })
@@ -40,19 +41,38 @@ app.whenReady().then(async () => {
   upstream.on('session', connection => { connections.add(connection); connection.on('close', () => connections.delete(connection)); });
   upstream.on('stream', (stream, headers) => {
     stream.on('error', () => {}); // The deliberately reset stream emits ERR_HTTP2_STREAM_ERROR.
+    const thisMode = mode;
+    const chunks = [];
+    if (thisMode === 'child-after-tool' || thisMode === 'child-resume-tool') stream.on('data', chunk => chunks.push(chunk));
     stream.resume();
     stream.on('end', () => {
       requests++; modeAttempts++;
       assert.equal(headers.cookie, undefined);
       assert.equal(headers.authorization, 'Bearer fake-access');
       assert.equal(stream.session.alpnProtocol, 'h2');
-      const thisMode = mode;
       stream.once('close', () => closeSignal?.());
+      if (thisMode === 'child-budget') {
+        stream.respond({ ':status': 503, 'content-type': 'application/json', 'retry-after': '0' });
+        stream.end(JSON.stringify({ error: { message: 'Retry budget fixture' } }));
+        return;
+      }
       if (thisMode === 'persistent' || thisMode === 'cancel-retry' || thisMode === 'cancel-subagent' || (thisMode === 'headers-once' && modeAttempts === 1)) {
         reset(stream); return;
       }
       stream.respond({ ':status': 200, 'content-type': 'text/event-stream' });
       stream.write(sse({ type: 'response.created', response: { id: 'fixture' } }));
+      if (thisMode === 'child-after-tool' || thisMode === 'child-resume-tool') {
+        childInputs.push(JSON.parse(Buffer.concat(chunks).toString('utf8')).input);
+      }
+      if (thisMode === 'child-after-tool') {
+        if (modeAttempts === 1) {
+          const tool = { type: 'function_call', id: 'child-item', call_id: 'child-call', name: 'fixture_write_receipt', arguments: '{}' };
+          stream.write(sse({ type: 'response.output_item.added', output_index: 0, item: tool }));
+          stream.end(sse({ type: 'response.completed', response: { status: 'completed', output: [tool] } }));
+          return;
+        }
+        if (modeAttempts === 2) { setTimeout(() => reset(stream), 30); return; }
+      }
       if (thisMode === 'body-once' && modeAttempts === 1) {
         setTimeout(() => reset(stream), 30); return;
       }
@@ -160,17 +180,84 @@ app.whenReady().then(async () => {
   assert.equal(tools, 0);
   console.log('PASS subagent recovers a real Chromium HTTP/2 failure');
 
-  begin('partial-text');
-  await assert.rejects(bridge.core.handlers.call('subagent:run', { task: 'Reply briefly', tools: [], maxIterations: 1 }),
-    /ERR_HTTP2_PROTOCOL_ERROR|ended before completion/);
-  assert.equal(modeAttempts, 1, 'the subagent wrapper must honor the no-retry marker');
-  console.log('PASS subagent preserves the partial-output no-retry boundary');
+  begin('child-after-tool');
+  const receipt = path.join(dir, 'subagent-write.txt');
+  const writeReceipt = {
+    name: 'fixture_write_receipt', description: 'Record a local test receipt', modifiesFiles: true,
+    input_schema: { type: 'object', properties: {} },
+    async execute() {
+      fs.appendFileSync(receipt, 'recorded\n');
+      return { content: 'SUBAGENT_WRITE_RECEIPT', exitCode: 0, isError: false };
+    },
+  };
+  bridge.extCtx.agent.registerTool(writeReceipt);
+  const offApproval = bridge.onEvent(event => {
+    if (event.name === 'permission:request') queueMicrotask(() => bridge.decidePermission(event.payload.requestId, 'approved'));
+  });
+  let resumableId;
+  try {
+    const afterTool = await bridge.core.handlers.call('subagent:run', { task: 'Record one local receipt', tools: [writeReceipt], maxIterations: 3 });
+    assert.match(afterTool, /HTTP2_OK/);
+    resumableId = /\n\nSubagent id: (\S+) /.exec(afterTool)?.[1];
+    assert(resumableId);
+    const hasReceipt = input => input.some(item => item.type === 'function_call_output' && item.output === 'SUBAGENT_WRITE_RECEIPT');
+    assert.deepEqual(childInputs.map(hasReceipt), [false, true, true]);
+    assert.deepEqual(childInputs[1], childInputs[2]);
+    assert.equal(modeAttempts, 3);
+    assert.equal(retryAnnouncements, 1);
+    assert.equal(tools, 1);
+    assert.equal(fs.readFileSync(receipt, 'utf8'), 'recorded\n');
+  } finally { offApproval(); }
+  console.log('PASS subagent retries only the cut HTTP/2 model request after a completed write');
+
+  begin('child-resume-tool');
+  const resumed = await bridge.core.handlers.call('subagent:resume', { id: resumableId, task: 'Check the completed receipt' });
+  assert.match(resumed, /HTTP2_OK/);
+  const resumedInput = childInputs.at(-1);
+  assert(resumedInput.some(item => item.type === 'function_call' && item.call_id === 'child-call' && item.name === writeReceipt.name));
+  assert(resumedInput.some(item => item.type === 'function_call_output' && item.call_id === 'child-call' && item.output === 'SUBAGENT_WRITE_RECEIPT'));
+  const resumedText = JSON.stringify(resumedInput);
+  assert.match(resumedText, /Record one local receipt/);
+  assert.match(resumedText, /Check the completed receipt/);
+  assert.equal(modeAttempts, 1);
+  assert.equal(tools, 0);
+  assert.equal(fs.readFileSync(receipt, 'utf8'), 'recorded\n');
+  console.log('PASS resumed Codex child keeps the original call and output without invoking the tool again');
+
+  begin('child-budget');
+  await assert.rejects(bridge.core.handlers.call('subagent:run', { task: 'Reply briefly', tools: [], maxIterations: 2 }), /503|Retry budget fixture/);
+  assert.equal(modeAttempts, 5, 'the child must have the same four-retry budget as the main Codex request');
+  assert.equal(retryAnnouncements, 4);
+  assert.equal(tools, 0);
+  console.log('PASS subagent Codex exhaustion does not multiply the retry budget');
+
+  for (const value of ['partial-text', 'partial-tool']) {
+    begin(value);
+    await assert.rejects(bridge.core.handlers.call('subagent:run', { task: 'Reply briefly', tools: [], maxIterations: 2 }),
+      /ERR_HTTP2_PROTOCOL_ERROR|ended before completion/);
+    assert.equal(modeAttempts, 1, 'the subagent must honor the no-retry marker');
+    assert.equal(retryAnnouncements, 0);
+    assert.equal(tools, 0, 'the truncated model round must not execute a tool');
+    console.log(`PASS subagent ${value} preserves the no-retry boundary`);
+  }
 
   begin('cancel-subagent');
   subagentCancel = new AbortController();
-  await assert.rejects(bridge.core.handlers.call('subagent:run', {
-    task: 'Reply briefly', tools: [], maxIterations: 1, signal: subagentCancel.signal,
-  }), /abort/i);
+  const childCompletions = [];
+  const offChildCompletions = bridge.onEvent(event => {
+    if (event.name === 'subagent:done') childCompletions.push(event.payload);
+  });
+  try {
+    const cancelled = await bridge.core.handlers.call('subagent:run', {
+      task: 'Reply briefly', tools: [], maxIterations: 1, signal: subagentCancel.signal,
+    });
+    assert.deepEqual(cancelled, { subagentCancelled: true, message: 'Subagent cancelled.' });
+    assert.equal(childCompletions.length, 1);
+    assert.equal(childCompletions[0].cancelled, true);
+    assert.equal(childCompletions[0].error, undefined);
+  } finally {
+    offChildCompletions();
+  }
   assert.equal(modeAttempts, 1);
   assert.equal(retryAnnouncements, 1);
   console.log('PASS cancelling a subagent retry prevents another upload');

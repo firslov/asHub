@@ -417,29 +417,39 @@ test('non-object MCP output rejects the request instead of crashing the host',as
 });
 
 for (const mode of ['api', 'deferred']) test(`kernel ${mode} executes a desktop batch in order without caching observations`, async t => {
- const { AgentLoop } = await import('agent-sh/agent');
- const {service,calls}=fixture(t);const {tools}=pluginContext(service);
- const { createToolProtocol } = await import(new URL('tool-protocol.js', import.meta.resolve('agent-sh/agent')).href);
- const protocol=createToolProtocol(mode);protocol.getApiTools([...tools.values()]);
- const results=[];let round=0;
- const batch=[['desktop_start',{bundleId:'com.test.App',windowId:100,goal:'Inspect window'}],['desktop_observe',{}],['desktop_observe',{}],['desktop_finish',{}]]
-  .map(([name,args],i)=>mode==='deferred'?{id:String(i),name:'use_extension',argumentsJson:JSON.stringify({name,args})}:{id:String(i),name,argumentsJson:JSON.stringify(args)});
- const loop=Object.assign(Object.create(AgentLoop.prototype),{
-  handlers:{call(name,payload){
-   if(name==='tool-protocol:extract-calls')return payload.streamedCalls;
-   if(name==='tool:execute')return payload.tool.execute(payload.args,undefined,{signal:payload.signal});
-   return '';
+ const { ashEngine, createAgentHost } = await import('agent-sh/runtime');
+ const {service,calls,file}=fixture(t);const {tools}=pluginContext(service);
+ const batch=[['desktop_start',{bundleId:'com.test.App',windowId:100,goal:'Inspect window'}],['desktop_observe',{}],['desktop_observe',{}],['desktop_finish',{}]];
+ const modelCalls=batch.map(([name,args],index)=>({
+  index,id:`call_${index}`,type:'function',
+  function:{name:mode==='deferred'?'use_extension':name,arguments:JSON.stringify(mode==='deferred'?{name,args}:args)},
+ }));
+ let rounds=0;
+ // Use the public turn path and real tool protocol with an in-memory model
+ // stream and the desktop fixtures above. Leave scheduling at its default.
+ const host=await createAgentHost({cwd:path.dirname(file),settings:{toolMode:mode},extensions:[ashEngine({
+  tools:[...tools.values()],
+  client:{model:'desktop-fixture',async *stream({tools:offered}){
+   if(++rounds===1){
+    const names=offered.map(t=>t.function.name);
+    assert.deepEqual(names,mode==='deferred'?['use_extension']:[...tools.keys()]);
+    yield {choices:[{delta:{tool_calls:modelCalls},finish_reason:'tool_calls'}]};
+   }else{
+    yield {choices:[{delta:{content:'Done.'},finish_reason:'stop'}]};
+   }
   }},
-  bus:{emit(){}},activeModel:{contextWindow:100000},conversation:{estimatePromptTokens:()=>0},
-  drainSteerQueue(){},steerQueue:[],findTool:name=>tools.get(name),getTools:()=>[...tools.values()],
-  streamWithRetry:async()=>({text:'',toolCalls:round++===0?batch:[]}),
-  toolProtocol:{recordAssistant(){},rewriteToolCall:c=>protocol.rewriteToolCall(c),recordResults(_c,r){results.push(...r);}},
-  toolCallCounts:new Map(),lastErrorByTool:new Map(),lastErrorByFile:new Map(),
-  totalToolCalls:0,totalToolErrors:0,totalLoopIterations:0,totalResolutions:0,
- });
- await loop.executeLoop(new AbortController().signal);
- assert.equal(results.length,4);
+ })]});
+ t.after(()=>host.dispose());
+ const results=[];
+ const turn=await host.run('Inspect and release the fixture window.',{maxIterations:2,rawErrors:true,onMessage(message){
+  if(message.role==='tool')results.push(message);
+ }});
+ assert.equal(turn.status,'completed',turn.error);
+ assert.equal(turn.text,'Done.');
+ assert.equal(rounds,2);
+ assert.deepEqual(results.map(r=>r.toolName),batch.map(([name])=>name));
  assert(results.every(r=>!r.isError),JSON.stringify(results));
+ assert.deepEqual(results.slice(0,3).map(r=>JSON.parse(r.content).snapshot),['s1','s2','s3']);
  assert.deepEqual(calls.filter(c=>['observe','release'].includes(c.name)).map(c=>c.name),['observe','observe','observe','release']);
  assert.equal((await service.status()).busy,false);
 });

@@ -3,11 +3,22 @@ const {env,Bridge,fs,path,root}=require('./harness.cjs');
 for(const memory of [true,false])test(`real HTTP host creates one dedicated conversation, scopes history and isolates remote confirmations (memory=${memory})`,{timeout:15000},async t=>{
  const modules={},e=env({modules,globals:{setTimeout,clearTimeout,setInterval,clearInterval,Date}});process.env.AGENT_SH_HOME=e.dir;
  const installed=await import('../dist/extensions/installed.js');
- let boundServices,foreignServices;
- modules['./extensions/installed.js']={...installed,installedApplicationDefinitions:(file,options)=>installed.installedApplicationDefinitions(file,{...options,bindServices:(id,context)=>{
-  boundServices=options.bindServices(id,context);foreignServices=options.bindServices('unrelated-plugin',context);return boundServices;
+ const catalog=e.load('src/plugins.ts'),readCatalog=catalog.pluginCatalog;
+ let catalogReads=0,boundServices,foreignServices;
+ catalog.pluginCatalog=(...args)=>{catalogReads++;return readCatalog(...args);};
+ modules['./extensions/installed.js']={...installed,installedApplicationDefinitions:(file,options)=>installed.installedApplicationDefinitions(file,{...options,bindServices:(id,context,manifest)=>{
+  const readsBeforeBinding=catalogReads;
+  const services=options.bindServices(id,context,manifest);
+  assert.equal(catalogReads,readsBeforeBinding,'application service binding uses the discovered manifest');
+  if(manifest.id==='ashub-personal-assistant')boundServices=services;
+  if(manifest.id==='unrelated-plugin')foreignServices=services;
+  return services;
  }})};
  const target=path.join(e.dir,'extensions','personal-assistant');fs.mkdirSync(path.dirname(target),{recursive:true});fs.cpSync(path.join(root,'examples/extensions/personal-assistant'),target,{recursive:true});
+ const unrelated=path.join(e.dir,'extensions','unrelated-plugin');fs.mkdirSync(unrelated);
+ fs.writeFileSync(path.join(unrelated,'package.json'),JSON.stringify({name:'unrelated-plugin',version:'1.0.0',type:'module'}));
+ fs.writeFileSync(path.join(unrelated,'ashub-plugin.json'),JSON.stringify({schemaVersion:2,id:'unrelated-plugin',entries:{application:'app.mjs'}}));
+ fs.writeFileSync(path.join(unrelated,'app.mjs'),'export function activate() {}');
  const pluginId=e.load('src/plugins.ts').pluginCatalog(path.join(e.dir,'settings.json')).find(p=>p.manifest?.id==='ashub-personal-assistant').id;
  const loaded=[];let inference=0;
  const projectFile=path.join(e.dir,'hub-sessions','projects.json');
@@ -26,7 +37,7 @@ for(const memory of [true,false])test(`real HTTP host creates one dedicated conv
   assert.equal('nameHistory' in (await api('/api/host/snapshot')).body.projects[0],false);
   const ordinaryRoot=path.join(e.dir,'ordinary');fs.mkdirSync(ordinaryRoot);
   const ordinary=(await api('/sessions',{cwd:ordinaryRoot,kind:'agent',provider:'mock',model:'tiny'})).body.instanceId;
-  let feature;for(let i=0;i<150;i++){feature=(await api('/api/extensions')).body.features.find(f=>f.name==='个人助手');if(feature?.state==='active')break;await new Promise(r=>setTimeout(r,20));}assert.equal(feature?.state,'active',JSON.stringify(feature));
+  let feature;for(let i=0;i<150;i++){feature=(await api('/api/extensions')).body.features.find(f=>f.name==='个人助手');if(feature?.state==='active'&&foreignServices)break;await new Promise(r=>setTimeout(r,20));}assert.equal(feature?.state,'active',JSON.stringify(feature));assert(foreignServices,'the unrelated application plugin is active too');
   const resource='/api/plugin-resources/'+feature.pluginId+'/assistant';
   assert.equal((await api('/api/plugin-conversations')).body[0].sessionId,null);
   const draft=await api(resource,{action:'create-assistant',values:{model:JSON.stringify({provider:'mock',model:'tiny'}),memory}});assert.equal(draft.status,200,JSON.stringify(draft));assert(draft.body.confirmation);
@@ -69,9 +80,11 @@ for(const memory of [true,false])test(`real HTTP host creates one dedicated conv
   const grantFile=path.join(e.dir,'hub-sessions','background-grants.json');
   const grant=JSON.parse(fs.readFileSync(grantFile,'utf8')).grants[0].id;
   assert.equal('nameHistory' in boundServices.host.snapshot().projects[0],false);
-  assert.equal(boundServices.host.projectNames('assistant',sid,grant)[0].nameHistory[0].name,'原项目名');
-  assert.throws(()=>boundServices.host.projectNames('assistant',ordinary,grant));
-  assert.throws(()=>boundServices.host.projectNames('other',sid,grant));
+  const projectFacts=boundServices.host.projectNameHistory('assistant',sid,grant);
+  assert.equal(projectFacts.projects[0].nameHistory[0].name,'原项目名');
+  assert.deepEqual(Object.keys(projectFacts.projects[0]).sort(),['id','name','nameHistory','nameSince']);
+  assert.throws(()=>boundServices.host.projectNameHistory('assistant',ordinary,grant));
+  assert.throws(()=>boundServices.host.projectNameHistory('other',sid,grant));
   assert.equal(foreignServices.host,undefined,'unrelated installed extensions receive only the original public host service');
   const pilot=await api(resource,{action:'enable-theme-overviews',values:{}});
   assert.equal(pilot.status,200);assert(pilot.body.confirmation);
@@ -82,9 +95,9 @@ for(const memory of [true,false])test(`real HTTP host creates one dedicated conv
   assert.deepEqual(remote.body.view.actions.map(a=>a.id),['pause']);
   assert.equal((await api(resource+'?remoteSession='+ordinary)).status,409);
   const memories=await api(resource+'?remoteSession='+sid,{action:'memories',values:{}});assert.equal(memories.status,409);
-  const pause=await api(resource+'?remoteSession='+sid,{action:'pause',values:{}});assert.equal(pause.status,200);assert.equal(pause.body.confirmation,undefined);assert.equal(pause.body.view.toggle.checked,false);
-  assert.throws(()=>boundServices.host.projectNames('assistant',sid,grant));
-  const off=await api(resource+'?remoteSession='+sid);assert.equal(off.body.view.toggle.checked,false);assert.deepEqual(off.body.view.actions,[]);assert.equal((await api(resource+'?remoteSession='+sid,{action:'authorize',values:{}})).status,409);
+  const pause=await api(resource+'?remoteSession='+sid,{action:'pause',values:{}});assert.equal(pause.status,200);assert.equal(pause.body.confirmation,undefined);assert.match(pause.body.view.note,/长期记忆已关闭/);
+  assert.throws(()=>boundServices.host.projectNameHistory('assistant',sid,grant));
+  const off=await api(resource+'?remoteSession='+sid);assert.deepEqual(off.body.view.actions,[]);assert.equal((await api(resource+'?remoteSession='+sid,{action:'authorize',values:{}})).status,409);
   assert.match((await api(resource)).body.view.note,/关闭/);assert.equal(inference,0);
   const reauthorize=await api(resource,{action:'authorize',values:{}});
   assert.equal((await api(resource,{confirm:reauthorize.body.confirmation.id})).status,200);

@@ -170,6 +170,109 @@ test('model profiles expose native levels, forced thinking, and no invented ladd
   for (const m of [model('unknown'), model('gpt-5','private-provider'), {...model('gpt-5'),reasoning:false}]) assert.equal(p(m),null);
 });
 
+function declaredThinkingFixture(modules = {}) {
+  const e = env({ globals: { structuredClone }, modules });
+  const config = { providers: { fixture: {
+    apiKey: 'fixture-only', baseURL: 'https://provider.invalid/v1', reasoningShape: 'openai-compatible',
+    models: [{ id: 'vendor-reasoner', reasoning: true, reasoningLevels: ['off', 'low', 'max'] },
+      { id: 'undeclared-model', reasoning: true }],
+  } } };
+  assert.equal(e.load('src/config-validation.ts').settingsValidationError(config), null);
+  const kernel = e.load('node_modules/agent-sh/src/core/settings.ts');
+  const settings = kernel.createSettingsService(config);
+  e.settings.getSettings = () => settings.get();
+  e.settings.resolveProvider = id => settings.resolveProvider(id);
+  e.settings.REASONING_LEVELS = kernel.REASONING_LEVELS;
+  e.auth.listAllProviders = () => [{ id: 'fixture' }];
+  return { e, config, settings };
+}
+
+test('compatible declarations are visible in both the settings-only and active bridge model catalogs', async () => {
+  const { e } = declaredThinkingFixture();
+  const { AshBridge } = e.load('src/bridges/ash.ts');
+  const { getModels } = e.load('src/hub.ts', 'export { getModels };');
+  const resolved = e.settings.resolveProvider('fixture');
+  const modes = resolved.models.map(id => ({ id, provider: 'fixture', ...resolved.modelCapabilities.get(id) }));
+  assert.deepEqual(plain(modes[0].reasoningLevels), ['off', 'low', 'max']);
+  const bridge = Object.assign(Object.create(AshBridge.prototype), {
+    initPromise: Promise.resolve(), syncCodex: async () => {},
+    core: { handlers: { call(name) { assert.equal(name, 'agent:get-models'); return modes; } } },
+  });
+  for (const sessions of [new Map(), new Map([['s', { kind: 'agent', bridge }]])]) {
+    const res = new Res();
+    await getModels(req({}, '/api/models/fixture', 'GET'), res, sessions);
+    assert.equal(res.statusCode, 200, res.body);
+    assert.deepEqual(res.json().models, [
+      { id: 'vendor-reasoner', thinkingLevels: ['off', 'low', 'max'] },
+      { id: 'undeclared-model', thinkingLevels: [] },
+    ]);
+  }
+});
+
+test('a compatible model selection survives a JSON round trip and reaches the mock SDK with the native request shape', () => {
+  const bodies = [];
+  const { e } = declaredThinkingFixture({ openai: class {
+    chat = { completions: { create: body => bodies.push(plain(body)) } };
+  } });
+  const active = { id: 'vendor-reasoner', provider: 'fixture' };
+  const { EventEmitter } = require('node:events');
+  const { AshBridge } = e.load('src/bridges/ash.ts');
+  const { SessionThinking } = e.load('src/providers/reasoning.ts');
+  const { LlmClient } = e.load('node_modules/agent-sh/src/agent/llm-client.ts');
+  const { default: activateCompatible } = e.load('node_modules/agent-sh/src/agent/providers/openai-compatible.ts');
+  const resolved = e.settings.resolveProvider('fixture');
+  const client = new LlmClient({ apiKey: resolved.apiKey, baseURL: resolved.baseURL, model: active.id });
+  const bus = Object.assign(new EventEmitter(), { emitPipe: () => ({ level: 'high' }), onPipeAsync() {} });
+  const bridge = Object.assign(Object.create(AshBridge.prototype), { opts: {}, core: { bus, handlers: { call(name) {
+    if (name === 'agent:get-model') return { model: active.id, provider: active.provider };
+    if (name === 'agent:get-models') return [{ ...active, ...resolved.modelCapabilities.get(active.id) }];
+    throw new Error(`Unexpected handler: ${name}`);
+  } } } });
+  EventEmitter.call(bridge);
+  bridge.wire(bridge.core);
+  assert.throws(() => bridge.setThinking('high'), /Unsupported thinking level/);
+  const send = (level, effort) => {
+    bridge.setThinking(level);
+    const { thinkingSelections } = plain(bridge.getRestoreState());
+    bridge.thinking = new SessionThinking(thinkingSelections);
+    assert.equal(bridge.getThinking().level, level);
+    const request = { messages: [], reasoning_effort: 'high', reasoning: { effort: 'high' }, thinking: { type: 'enabled' } };
+    bus.emit('llm:request', request);
+    client.stream(request);
+    const body = bodies.at(-1);
+    assert.equal(body.model, active.id);
+    assert.equal(Object.hasOwn(body, 'reasoning_effort'), effort !== undefined);
+    assert.equal(body.reasoning_effort, effort);
+    assert.equal(Object.hasOwn(body, 'reasoning'), false);
+    assert.equal(Object.hasOwn(body, 'thinking'), false);
+  };
+  for (const [level, effort] of [['max', 'max'], ['low', 'low'], ['off', undefined], ['default', undefined]]) send(level, effort);
+  // Exercise the actual kernel hook as a control. The harness cannot fetch
+  // the model catalog; only registration and its request mapper are needed.
+  e.context.process.env.OPENAI_BASE_URL = resolved.baseURL;
+  let hook;
+  activateCompatible({ agent: { providers: { register() {}, configure(_id, value) { hook = value.reasoningParams; } } } });
+  assert.deepEqual(plain(hook('off')), { reasoning_effort: 'none' });
+  send('off', 'none');
+  send('default', undefined);
+});
+
+test('compatible profiles use validated declarations only, preferring model overrides over provider defaults', () => {
+  const { e, config, settings } = declaredThinkingFixture();
+  config.providers.fixture.reasoningLevels = ['high', 'minimal'];
+  config.providers.fixture.models.push({ id: 'disabled', reasoning: false, reasoningLevels: ['max'] });
+  settings.update(config);
+  const { reasoningProfile } = e.load('src/providers/reasoning.ts');
+  const fixture = id => model(id, 'fixture');
+  assert.deepEqual(plain(reasoningProfile(fixture('vendor-reasoner'))?.levels), ['off', 'low', 'max']);
+  assert.deepEqual(plain(reasoningProfile(fixture('undeclared-model'))?.levels), ['minimal', 'high']);
+  assert.equal(reasoningProfile(fixture('disabled')), null);
+  assert.equal(reasoningProfile({ ...fixture('undeclared-model'), supportsReasoningEffort: false }), null);
+  assert.equal(reasoningProfile({ ...fixture('undeclared-model'), reasoningLevels: ['on', 'none', 'ultra'] }), null);
+  assert.equal(reasoningProfile({ ...model('vendor-reasoner', 'unknown-shape'), reasoningLevels: ['max'] }), null);
+  assert.deepEqual(plain(reasoningProfile({ ...fixture('gpt-5.1'), reasoningLevels: ['max'] })?.levels), ['none', 'low', 'medium', 'high']);
+});
+
 test('Codex cache filters client-only ultra while preserving model-specific backend choices', () => {
   const e=env(); e.settings.getSettings=()=>({'codex-provider':{providerId:'subscription'}});
   const cache=path.join(e.os.homedir(),'.codex','models_cache.json'); fs.mkdirSync(path.dirname(cache),{recursive:true});

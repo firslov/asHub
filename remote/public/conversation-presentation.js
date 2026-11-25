@@ -6,6 +6,7 @@
   // these fields; lightweight replay must retain them.
   function diagnosticState(result) {
     if (!result || typeof result !== 'object') return 'pending';
+    if (result.cancelled === true) return 'cancelled';
     if (result.success === false || result.isError === true || result.error
       || (Number.isFinite(result.exitCode) && result.exitCode !== 0)) return 'failed';
     if (result.degraded === 'budget' || result.degraded === 'iterations') return 'partial';

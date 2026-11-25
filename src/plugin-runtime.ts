@@ -85,6 +85,16 @@ export function preparePluginRegistrations(ctx: Context): Map<string, Register> 
     const rawAdd = surface[add].bind(target), rawRemove = surface[remove].bind(target);
     type Entry = { args: any[]; previous?: Entry; released: boolean };
     const active = new Map<string, Entry>();
+    // The native instruction/skill register methods remove their previous
+    // contribution through the public method before replacing it.
+    const removesDuringRegister = add === 'registerInstruction' || add === 'registerSkill';
+    let replacing: string | undefined;
+    const replaceRaw = (key: string, args: any[]) => {
+      const outer = replacing;
+      if (removesDuringRegister) replacing = key;
+      try { rawAdd(...args); }
+      finally { replacing = outer; }
+    };
     // activateAgent registers native providers before this wrapper can attach.
     // Their pipe contributions are raw registrations (unlike advised tool,
     // instruction and skill views), so retain them as the initial baseline.
@@ -98,7 +108,7 @@ export function preparePluginRegistrations(ctx: Context): Map<string, Register> 
       const prior = active.get(key);
       const entry: Entry = { args, previous: owned ? prior : undefined, released: false };
       active.set(key, entry);
-      try { rawAdd(...args); }
+      try { replaceRaw(key, args); }
       catch (e) {
         if (active.get(key) === entry) {
           // Rejection is not a replacement, including for host registrations.
@@ -114,7 +124,7 @@ export function preparePluginRegistrations(ctx: Context): Map<string, Register> 
         while (previous?.released) previous = previous.previous;
         if (previous) {
           active.set(key, previous);
-          rawAdd(...previous.args);
+          replaceRaw(key, previous.args);
         } else {
           active.delete(key);
           rawRemove(key);
@@ -128,7 +138,10 @@ export function preparePluginRegistrations(ctx: Context): Map<string, Register> 
       // Only provider registration exposes a disposer in the kernel API.
       return add === 'register' ? release : undefined;
     };
-    surface[remove] = (key: string) => { active.delete(key); rawRemove(key); };
+    surface[remove] = (key: string) => {
+      if (key !== replacing) active.delete(key);
+      rawRemove(key);
+    };
   }
   return methods;
 }
@@ -156,15 +169,18 @@ export function prepareScopedHandlers(registry: AgentShellCore['handlers']): Sco
     if (!trackingBases) {
       const define = registry.define.bind(registry), call = registry.call.bind(registry);
       const list = registry.list.bind(registry), has = registry.has.bind(registry);
+      const hasBase = registry.hasBase.bind(registry);
       registry.define = (key, fn) => {
-        define(key, fn);
+        const release = define(key, fn);
         bases.delete(key); // A later host definition supersedes earlier owners.
+        return release;
       };
       registry.call = (key, ...args) => {
         const base = !advised.has(key) && bases.get(key)?.at(-1);
         return base ? base.handler(...args) : call(key, ...args);
       };
       registry.has = key => bases.has(key) || has(key);
+      registry.hasBase = key => bases.has(key) || hasBase(key);
       registry.list = () => [...new Set([...list(), ...bases.keys()])];
       trackingBases = true;
     }

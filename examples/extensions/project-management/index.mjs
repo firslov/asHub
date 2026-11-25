@@ -120,22 +120,33 @@ pending 只表示等待送入；consumed 只表示进入模型上下文，不证
       work, goal:{type:'string',description:'本次目标与共同约束'}, steps:{type:'array',minItems:1,maxItems:12,items:{
         type:'object',additionalProperties:false,required:['id','member','output','criteria'],properties:{
           id:step,member:{type:'string',description:'负责人对话 ID'},output:{type:'string',description:'具体交付物、材料引用及写入范围'},
-          criteria:{type:'string',description:'可核对的验收条件'},dependsOn:{type:'array',items:step}
+          criteria:{description:'优先列出 1–8 项可独立核对的验收条件。也接受旧的单段文字格式。',
+            anyOf:[{type:'array',minItems:1,maxItems:8,items:{type:'string',maxLength:240}},{type:'string',maxLength:1200}]},
+          dependsOn:{type:'array',items:step}
         }}}
     }, ['work','goal','steps']);
     workTool('status','查看协调对话的工作记录。省略 work 列出工作，指定 step 查看该步骤的历史、宿主交付与未决事项。',{
       work,step
     },[],true);
-    workTool('brief','为已就绪步骤生成一次派发说明，用返回的 send 参数原样调用 conversation_send。返工传上一轮 taskId。',{
-      work,step,previousTaskId:taskId
+    const numbered = {type:'integer',minimum:1,maximum:8};
+    workTool('brief','为已就绪步骤准备派发。收到 handoff_selection_required 时，在 artifactSelection 中重选前置产物。收到 handoff_capacity_exceeded 时，按原验收记录拆分后续工作。把最终 send 参数原样传给 conversation_send。返工传上一轮 taskId。',{
+      work,step,previousTaskId:taskId,
+      artifactSelection:{type:'array',maxItems:11,items:{type:'object',additionalProperties:false,required:['step','artifactIndexes'],
+        properties:{step,artifactIndexes:{type:'array',maxItems:8,uniqueItems:true,items:numbered}}}},
     },['work','step']);
-    workTool('link','仅当自动登记缺失，核对该 attempt 的原始发送记录后，补登记真实回执；不会发送消息。',{
+    workTool('link','查询并补登记本次派发的真实回执。新版派发按尝试编号查询，旧派发须提供原始 taskId。不会发送消息。',{
       work,step,attempt,taskId
-    },['work','step','attempt','taskId']);
-    workTool('review','检查宿主交付或原始结果后记录验收。accepted 理由写明可复用结论或产物路径，revise/blocked 写明缺口。',{
-      work,step,attempt,taskId,decision:{type:'string',enum:['accepted','revise','blocked']},reason:{type:'string',maxLength:420}
+    },['work','step','attempt']);
+    const reason = {type:'string',minLength:1,maxLength:420};
+    workTool('review','核对交付或原始结果。accepted 要求所有结构化条件通过且交付中无未处理阻塞。选中的产物引用随验收依据传给下游。',{
+      work,step,attempt,taskId,decision:{type:'string',enum:['accepted','revise','blocked']},reason,
+      checks:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,required:['criterion','outcome','evidence'],
+        properties:{criterion:numbered,outcome:{type:'string',enum:['met','unmet','unverified']},evidence:reason}}},
+      unresolved:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,required:['item','disposition','reason'],
+        properties:{item:numbered,disposition:{type:'string',enum:['resolved','accepted_exception','blocking']},reason}}},
+      artifactIndexes:{type:'array',maxItems:8,description:'从该次交付中选择要传给下游的产物，编号从 1 开始。',items:numbered},
     },['work','step','attempt','taskId','decision','reason']);
-    ctx.agent.registerInstruction('project-work', '多成员任务有并行或依赖关系时，用 project_work_plan 记录目标、负责人、产物和验收条件。独立短任务直接使用原工具。对 ready 步骤生成 brief，在已授权范围内原样用 conversation_send 发出；插件会匹配并记录回执。receipt_pending 时先核对原始调用，勿盲目重发。用原有 conversation_wait 批量等待，再根据交付和实际证据 review；completed 只代表成员结束回复。仅 accepted 放行后继；返工只处理缺口。恢复时先用 project_work_status 找回工作和回执。');
+    ctx.agent.registerInstruction('project-work', '多成员任务有并行或依赖关系时，用 project_work_plan 记录目标、负责人、产物和逐项验收条件。独立短任务直接使用原工具。对 ready 步骤生成 brief，在已授权范围内原样用 conversation_send 发出（包含返回的 requestKey）；插件会匹配并记录回执。receipt_pending 时先用 project_work_link 查询回执，勿换 key 或盲目重发。用 conversation_wait 批量等待，核对实际证据后逐项 review。条件、未决事项和产物的编号均从 1 开始。accepted 前说明每个未决事项的处理，选择下游所需的产物引用；材料仍需下游在已有权限内核对。completed 只代表成员结束回复。仅 accepted 放行后继；返工只处理缺口。');
     ctx.agent.registerInstruction('project-management-delivery', `项目协作交付约定：在用户授权范围内分派任务时，明确每位成员的职责、文件写入范围、验收方式和交付物，不复制整段会话历史。独立任务可以并行开展；同目录写入仍需分工。
 协调者用 conversation_wait 一次等待多个 taskId，收到一个结果即可安排有依赖的后续工作；完整使用返回的 cursors 继续等待，避免反复读取同一结果；hasMore 为真时用同一组 cursors 和 waitMs:0 继续读取其余交付。timeout 只表示本次等待结束，不需要向成员发催问消息。settled 表示所关注任务均已结束且结果已读取，停止等待。
 成员处理带 Task ID 的协作任务时，结束前用 conversation_deliver 提交简明结论（含实际验证结果）、产物引用及未解决问题；没有产物或未解决问题时传空数组。大报告保留在产物中，不把过程日志复制到 summary。提交结果不会另起模型轮次，不需再自动向协调者发消息。

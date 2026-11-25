@@ -5,15 +5,19 @@
  *   ashub --port 8080
  *   ashub --backend acp --cmd "claude-code-acp"
  */
-import "./windows-bootstrap.js";
-import "./network-bootstrap.js";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startHub, type HubOpts } from "./hub.js";
-import { AshBridge } from "./bridges/ash.js";
-import { AcpBridge } from "./bridges/acp.js";
-import { TerminalBridge } from "./bridges/terminal.js";
+import type { HubOpts } from "./hub.js";
 import type { BridgeFactory } from "./bridges/types.js";
+
+// Check before loading any runtime dependencies: on Node 26, the built-in
+// fetch does not use the proxy dispatcher configured by our installed Undici.
+const nodeVersion = process.versions.node;
+const [nodeMajor, nodeMinor] = nodeVersion.split(".").map(Number);
+if (!((nodeMajor === 22 && nodeMinor >= 12) || (nodeMajor > 22 && nodeMajor < 26))) {
+  console.error(`[ashub] Unsupported Node.js ${nodeVersion}. The asHub CLI requires Node.js >=22.12.0 <26. Use Node.js 22 or 24.`);
+  process.exit(1);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -126,6 +130,14 @@ function makeFactory(args: Args): BridgeFactory {
 }
 
 const args = parseArgs();
+
+// Keep the bootstraps ahead of the Hub and its providers on supported runtimes.
+await import("./windows-bootstrap.js");
+await import("./network-bootstrap.js");
+const { startHub } = await import("./hub.js");
+const { AshBridge } = await import("./bridges/ash.js");
+const { AcpBridge } = await import("./bridges/acp.js");
+const { TerminalBridge } = await import("./bridges/terminal.js");
 
 const opts: HubOpts = {
   port: args.port,

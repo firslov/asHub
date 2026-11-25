@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DevicePublisher } from './publisher.mjs';
 export class DeviceSharing {
-  constructor(ctx) {
+  constructor(ctx, resource) {
     this.service=ctx.services.sharedConversations;
     const secrets=ctx.services.backends.secrets;
     this.publisher=new DevicePublisher({dataDir:ctx.services.dataDirectory,
@@ -10,7 +10,7 @@ export class DeviceSharing {
       access:id=>this.service.open(id)});
     // Scoped host channel owns localhost addressing; plugins never receive its token.
     this.publisher.start();
-    this.service.registerStatus(()=>this.publisher.status());
+    this.service.registerStatus(()=>this.publisher.status(),resource);
     ctx.signal.addEventListener('abort',()=>this.publisher.close(),{once:true});
   }
   status(){return this.publisher.status();}

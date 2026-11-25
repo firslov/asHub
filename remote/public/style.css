@@ -108,8 +108,12 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0}
 .message p:last-child{margin:0}
 .message pre{background:var(--code);border:0;border-radius:5px;padding:16px;overflow:auto;font-size:12px;line-height:1.6}
 .message code{font-family:ui-monospace,SFMono-Regular,monospace;font-size:.9em}
-.message table{display:block;overflow-x:auto;border-collapse:collapse;font-size:13px}
+/* Keep words intact for column sizing; overflow stays inside the table, not the message. */
+.message table{display:block;overflow-x:auto;overflow-wrap:normal;border-collapse:collapse;font-size:13px}
 .message th,.message td{padding:7px 12px;border:1px solid var(--line)}
+.message table tr > :is(th,td):first-child:not(:only-child){min-width:6em}
+/* Wide text columns must not squeeze an inline preview down to its caption. */
+.message table .image-resource{min-width:min(120px,40vw)}
 .message blockquote{border-left:2px solid var(--accent);padding-left:16px;margin-left:0;color:var(--muted)}
 .message img{max-width:100%;max-height:360px;border-radius:12px}
 .detail{font-size:12px;color:var(--muted);margin-bottom:20px}

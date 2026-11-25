@@ -42,7 +42,7 @@ export function mountFeatureControls(container, ownerFor) {
       const parent = owner || list;
       if (row.item.parentElement !== parent) parent.append(row.item);
       row.name.textContent = owner ? t('plugins.featureService') : definition ? t(definition.title) : feature.name;
-      row.description.textContent = definition ? t(definition.description) : t('features.declarative');
+      row.description.textContent = definition ? t(definition.description) : feature.description || t('features.declarative');
       row.description.hidden = !!owner;
       if (owner && feature.ui?.panels) {
         row.entries ??= new Map();

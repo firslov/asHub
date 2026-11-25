@@ -114,7 +114,7 @@ test('Codex summary item boundaries separate headings without changing answer or
 test('Codex summary patch applies cleanly to both kernel sources and is idempotent',async t=>{
  const fs=await import('node:fs'),os=await import('node:os');
  const {createRequire}=await import('node:module'),require=createRequire(import.meta.url);
- const {apply}=require('../scripts/patch-steering.cjs'),spec=require('../scripts/patches/codex-summary-boundaries.json');
+ const {apply}=require('../scripts/patch-kernel-hunks.cjs'),spec=require('../scripts/patches/codex-summary-boundaries.json');
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ashub-codex-summary-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const expected=new Map();
  for(const entry of spec.files){

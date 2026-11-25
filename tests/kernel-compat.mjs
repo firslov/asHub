@@ -28,6 +28,7 @@ globalThis.fetch = (input, init) => {
 };
 const requests = [];
 let modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+let cutModelStream;
 const server = http.createServer(async (req, res) => {
   try {
     let raw = ''; for await (const chunk of req) raw += chunk;
@@ -52,6 +53,15 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] }) + '\n\n');
+    const interruption = cutModelStream?.(data);
+    if (interruption === 'eof') {
+      res.end();
+      return;
+    }
+    if (interruption) {
+      setTimeout(() => res.destroy(), 30);
+      return;
+    }
     res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } }) + '\n\n');
     res.end('data: [DONE]\n\n');
   } catch (err) { res.writeHead(500); res.end(String(err)); }
@@ -244,6 +254,522 @@ try {
     const result = await within(bridge.core.handlers.call('subagent:run', { task: 'compatibility child', systemPrompt: 'Reply briefly', tools: [], maxIterations: 2 }));
     assert.match(typeof result === 'string' ? result : JSON.stringify(result), /KERNEL_REPLY_OK/);
   });
+  const committedTool = {
+    name: 'fixture_append_once', description: 'Append a receipt in the test directory', modifiesFiles: true,
+    input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    execute: async ({ path: target }) => {
+      assert.equal(path.dirname(target), dir);
+      await fs.appendFile(target, 'one write\n');
+      return { content: 'COMMITTED_TOOL_RECEIPT', exitCode: 0, isError: false };
+    },
+  };
+  bridge.extCtx.agent.registerTool(committedTool);
+  for (const mode of ['synchronous', 'background']) await check('subagent retries the interrupted request without repeating a completed tool (' + mode + ')', async () => {
+    const task = 'Resume the ' + mode + ' fixture after a model stream interruption';
+    const target = path.join(dir, 'subagent-retry-' + mode + '.txt');
+    const hasReceipt = data => data.messages.some(message => message.role === 'tool' && message.content === 'COMMITTED_TOOL_RECEIPT');
+    let cut = false, approvals = 0, toolStarts = 0, settled;
+    const terminal = new Promise(resolve => { settled = resolve; });
+    const off = bridge.onEvent(event => {
+      if (event.name === 'permission:request') {
+        approvals++;
+        queueMicrotask(() => bridge.decidePermission(event.payload.requestId, 'approved'));
+      }
+      if (event.name === 'agent:tool-started' && event.payload.name === committedTool.name) toolStarts++;
+      if (event.name === 'subagent:done' && event.payload.task === task) settled(event.payload);
+    });
+    const before = requests.length;
+    modelReply = data => hasReceipt(data) ? { content: cut ? 'RECOVERED_CHILD' : 'ABANDONED_CHILD_FRAGMENT' }
+      : { tool_calls: [{ index: 0, id: 'fixture-tool', type: 'function', function: { name: committedTool.name, arguments: JSON.stringify({ path: target }) } }] };
+    cutModelStream = data => {
+      if (cut || !hasReceipt(data)) return false;
+      cut = true;
+      return true;
+    };
+    try {
+      const result = await within(bridge.core.handlers.call('subagent:run', { task, tools: [committedTool], maxIterations: 3, async: mode === 'background' }));
+      if (mode === 'background') assert.match(result, /^subagent:sa\d+$/);
+      else {
+        assert.match(result, /RECOVERED_CHILD/);
+        assert.doesNotMatch(result, /ABANDONED_CHILD_FRAGMENT/);
+      }
+      const done = await within(terminal);
+      assert.equal(done.error, undefined);
+      assert.equal(done.cancelled, undefined);
+      assert.equal(done.degraded, null);
+      assert.equal(done.tokensUsed, 6, 'charge the two successful model rounds once each');
+      const rounds = requests.slice(before);
+      assert.deepEqual(rounds.map(hasReceipt), [false, true, true]);
+      assert.deepEqual(rounds[1].messages, rounds[2].messages);
+      assert.equal(approvals, 1);
+      assert.equal(toolStarts, 1);
+      assert.equal(await fs.readFile(target, 'utf8'), 'one write\n');
+      if (mode === 'background') {
+        assert.equal(done.resumable, true);
+        cutModelStream = undefined;
+        modelReply = () => ({ content: 'BACKGROUND_CONTINUATION_OK' });
+        const continued = await within(bridge.core.handlers.call('subagent:resume', {
+          id: done.subagentId, task: 'Report the background receipt.'
+        }));
+        assert.match(continued, /BACKGROUND_CONTINUATION_OK/);
+        assert.equal(requests.length, before + 4);
+        assert(hasReceipt(requests.at(-1)));
+        assert.equal(toolStarts, 1);
+        assert.equal(await fs.readFile(target, 'utf8'), 'one write\n');
+      }
+    } finally {
+      off();
+      cutModelStream = undefined;
+      modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+    }
+  });
+  await check('subagent never dispatches a tool received before an unterminated clean SSE close', async () => {
+    const target = path.join(dir, 'subagent-clean-eof.txt');
+    const hasReceipt = data => data.messages.some(message => message.role === 'tool' && message.tool_call_id === 'committed-call');
+    const write = id => ({ tool_calls: [{ index: 0, id, type: 'function', function: {
+      name: committedTool.name, arguments: JSON.stringify({ path: target }),
+    } }] });
+    let cut = false, approvals = 0;
+    const off = bridge.onEvent(event => {
+      if (event.name !== 'permission:request') return;
+      approvals++;
+      queueMicrotask(() => bridge.decidePermission(event.payload.requestId, 'approved'));
+    });
+    const before = requests.length;
+    modelReply = data => !hasReceipt(data) ? write('committed-call') : !cut ? write('uncommitted-call') : { content: 'CLEAN_EOF_RECOVERED' };
+    cutModelStream = data => {
+      if (cut || !hasReceipt(data)) return false;
+      cut = true;
+      return 'eof';
+    };
+    try {
+      const result = await within(bridge.core.handlers.call('subagent:run', {
+        task: 'Recover a receipt after the partial tool stream closed', tools: [committedTool], maxIterations: 3,
+      }));
+      assert.match(result, /CLEAN_EOF_RECOVERED/);
+      const rounds = requests.slice(before);
+      assert.deepEqual(rounds.map(hasReceipt), [false, true, true]);
+      assert.deepEqual(rounds[1].messages, rounds[2].messages);
+      assert(!JSON.stringify(rounds[2].messages).includes('uncommitted-call'));
+      assert.equal(approvals, 1);
+      assert.equal(await fs.readFile(target, 'utf8'), 'one write\n');
+    } finally {
+      off();
+      cutModelStream = undefined;
+      modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+    }
+  });
+  const subagentProbeName = 'subagent_cancel_probe';
+  const subagentProbeDelta = () => ({
+    content: 'UNFINISHED_CHILD_TEXT',
+    tool_calls: [{ index: 0, id: 'cancel-probe', type: 'function', function: { name: subagentProbeName, arguments: '{}' } }],
+  });
+  let onSubagentProbe;
+  const subagentProbe = {
+    name: subagentProbeName, description: 'Local subagent lifecycle probe', input_schema: { type: 'object', properties: {} },
+    execute: async (_args, _onChunk, ctx) => {
+      await onSubagentProbe?.(ctx.signal);
+      return { content: 'PROBE_RESULT', exitCode: 0, isError: false };
+    },
+  };
+  bridge.extCtx.agent.registerTool(subagentProbe);
+  for (const mode of ['synchronous', 'background', 'timeout', 'swarm']) {
+    await check('bridge settles real subagent cancellation consistently (' + mode + ')', async () => {
+      const controller = new AbortController();
+      const started = [], done = [];
+      let settled;
+      const children = mode === 'swarm' ? 2 : 1;
+      const donePromise = new Promise(resolve => { settled = resolve; });
+      const off = bridge.onEvent(event => {
+        if (event.name === 'subagent:started') started.push(event.payload);
+        if (event.name === 'subagent:done') {
+          done.push(event.payload);
+          if (done.length === children) settled();
+        }
+      });
+      let probeCalls = 0;
+      const probeSignals = [];
+      onSubagentProbe = async signal => {
+        probeSignals.push(signal);
+        if (++probeCalls < children) {
+          if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+          return;
+        }
+        if (mode === 'background') bridge.cancel(); // No parent turn is active.
+        else if (mode === 'timeout') controller.abort(new DOMException('fixture deadline', 'TimeoutError'));
+        else controller.abort();
+      };
+      modelReply = subagentProbeDelta;
+      try {
+        const task = 'Cancellation fixture ' + mode;
+        const before = requests.length;
+        if (mode === 'swarm') {
+          const tool = bridge.extCtx.agent.getTools().find(tool => tool.name === 'agentswarm');
+          const aggregate = await within(tool.execute({ type: 'implement', prompt_template: task + ' {{item}}', items: ['first', 'second'] }, undefined, { signal: controller.signal }));
+          assert.match(aggregate.content, /0 succeeded, 2 failed, 0 partial, 2 total/);
+          assert.equal(aggregate.content.match(/Subagent cancelled\./g)?.length, 2);
+          assert(!aggregate.content.includes('UNFINISHED_CHILD_TEXT'));
+        } else {
+          const result = await within(bridge.core.handlers.call('subagent:run', {
+            task, tools: [subagentProbe], maxIterations: 2, signal: controller.signal, async: mode === 'background',
+          }));
+          if (mode === 'background') assert.match(result, /^subagent:sa\d+$/);
+          else if (mode === 'timeout') {
+            assert.equal(result.subagentTimedOut, true);
+            assert.match(result.message, /timeout after 20min/);
+          } else assert.deepEqual(result, { subagentCancelled: true, message: 'Subagent cancelled.' });
+        }
+        await within(donePromise);
+        assert.equal(requests.length - before, children, 'cancellation must not retry model requests');
+        assert.equal(probeCalls, children);
+        assert(probeSignals.every(signal => signal.aborted));
+        assert.equal(started.length, children);
+        assert.equal(done.length, children);
+        for (const event of done) {
+          assert(started.some(start => start.subagentId === event.subagentId));
+          assert.equal(event.degraded, null);
+          assert.equal(event.tokensUsed, 3);
+          if (mode === 'timeout') {
+            assert.equal(event.error, 'timeout after 20min');
+            assert.equal(event.cancelled, undefined);
+          } else {
+            assert.equal(event.cancelled, true);
+            assert.equal(event.error, undefined);
+            assert.equal(event.result, undefined);
+            const resumed = await within(bridge.core.handlers.call('subagent:resume', { id: event.subagentId, task: 'Forbidden resume fixture' }));
+            assert.match(resumed, /^Error: .*no (?:resumable result|completed subagent run)/);
+          }
+        }
+        if (mode === 'background') {
+          modelReply = () => ({ content: 'CANCELLATION_STATUS_READ' });
+          await within(bridge.submit('Read the background state'));
+          const context = JSON.stringify(requests.at(-1).messages);
+          assert(context.includes('Cancelled: \\"Cancellation fixture background\\"'));
+          assert(!context.includes('UNFINISHED_CHILD_TEXT'));
+        }
+      } finally {
+        modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+        onSubagentProbe = undefined;
+        off();
+      }
+    });
+  }
+  await check('bridge reports actual subagent completion and partial progress independently', async () => {
+    const done = [];
+    const off = bridge.onEvent(event => { if (event.name === 'subagent:done') done.push(event.payload); });
+    try {
+      modelReply = () => ({ content: 'Quoted warning: [Subagent terminated: max iterations] from an old report.' });
+      await within(bridge.core.handlers.call('subagent:run', { task: 'Complete fixture', tools: [], maxIterations: 1 }));
+      modelReply = subagentProbeDelta;
+      await within(bridge.core.handlers.call('subagent:run', { task: 'Partial fixture', tools: [subagentProbe], maxIterations: 1 }));
+      assert.deepEqual(done.map(({ cancelled, degraded, error }) => [cancelled, degraded, error]), [
+        [undefined, null, undefined], [undefined, 'iterations', undefined],
+      ]);
+      assert.equal(done[1].resumable, true);
+      const before = requests.length;
+      modelReply = () => ({ content: 'PARTIAL_CONTINUATION_OK' });
+      const resumed = await within(bridge.core.handlers.call('subagent:resume', {
+        id: done[1].subagentId, task: 'Continue from the available evidence',
+      }));
+      assert.match(resumed, /PARTIAL_CONTINUATION_OK/);
+      assert.equal(requests.length - before, 1);
+      assert(requests[before].messages.some(message => message.role === 'tool' && message.content === 'PROBE_RESULT'));
+    } finally {
+      off();
+      modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+    }
+  });
+  await check('child events carry the exact tool launch ID during a multi-tool turn', async () => {
+    const ids = new Map([['First launch fixture', 'launch-a'], ['Second launch fixture', 'launch-b']]);
+    const events = [];
+    const off = bridge.onEvent(event => {
+      if (event.name === 'subagent:started' || event.name === 'subagent:done') events.push(event);
+    });
+    let chooseTools = true;
+    modelReply = () => {
+      if (!chooseTools) return { content: 'LINKED_FIXTURE_RESULT' };
+      chooseTools = false;
+      return { tool_calls: Array.from(ids, ([task, id], index) => ({
+        index, id, type: 'function', function: { name: 'plan', arguments: JSON.stringify({ task }) },
+      })) };
+    };
+    try {
+      await within(bridge.submit('Launch two child tasks'));
+      assert.equal(events.length, 4);
+      for (const [task, id] of ids) {
+        const childEvents = events.filter(event => event.payload.task === task);
+        assert.deepEqual(childEvents.map(event => event.name), ['subagent:started', 'subagent:done']);
+        assert(childEvents.every(event => event.payload.toolCallId === id));
+        assert.equal(childEvents[0].payload.subagentId, childEvents[1].payload.subagentId);
+      }
+    } finally {
+      off();
+      modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+    }
+  });
+  await check('stopping a main turn also settles its linked synchronous child', async () => {
+    const task = 'Stop the linked test child';
+    const childEvents = [];
+    let finish;
+    const finished = new Promise(resolve => { finish = resolve; });
+    const off = bridge.onEvent(event => {
+      if (event.payload?.task !== task || !event.name.startsWith('subagent:')) return;
+      childEvents.push(event);
+      if (event.name === 'subagent:done') finish();
+    });
+    let chooseTool = true;
+    modelReply = () => {
+      if (!chooseTool) return subagentProbeDelta();
+      chooseTool = false;
+      return { tool_calls: [{ index: 0, id: 'stop-linked-child', type: 'function', function: {
+        name: 'implement', arguments: JSON.stringify({ task }),
+      } }] };
+    };
+    onSubagentProbe = () => bridge.cancel();
+    try {
+      assert.deepEqual(await within(bridge.submit('Launch a child and stop')), { stopReason: 'cancelled' });
+      await within(finished);
+      assert.deepEqual(childEvents.map(event => [event.name, event.payload.toolCallId]), [
+        ['subagent:started', 'stop-linked-child'], ['subagent:done', 'stop-linked-child'],
+      ]);
+      const { cancelled, error, degraded } = childEvents[1].payload;
+      assert.equal(cancelled, true);
+      assert.equal(error, undefined);
+      assert.equal(degraded, null);
+    } finally {
+      off();
+      onSubagentProbe = undefined;
+      modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+    }
+  });
+  await check('stopping a launch waiting for a slot settles its card before any child starts', async () => {
+    const task = 'Fixture waiting for a subagent slot';
+    const unlinkedTask = 'Fixture without a launch card';
+    const toolCallId = 'stop-waiting-child';
+    const slots = 10;
+    let started = 0, finished = 0, occupy, release, settle;
+    const occupied = new Promise(resolve => { occupy = resolve; });
+    const released = new Promise(resolve => { release = resolve; });
+    const settled = new Promise(resolve => { settle = resolve; });
+    const childEvents = [];
+    const off = bridge.onEvent(event => {
+      if (event.name === 'agent:tool-started' && event.payload.toolCallId === toolCallId) queueMicrotask(() => bridge.cancel());
+      if (event.name === 'subagent:done' && event.payload.task.startsWith('Occupied fixture slot ')) {
+        if (++finished === slots) release();
+      }
+      if ([task, unlinkedTask].includes(event.payload?.task) && event.name.startsWith('subagent:')) childEvents.push(event);
+      if (event.name === 'subagent:done' && event.payload.toolCallId === toolCallId) settle();
+    });
+    onSubagentProbe = async signal => {
+      if (++started === slots) occupy();
+      if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+    };
+    modelReply = subagentProbeDelta;
+    try {
+      await within(Promise.all(Array.from({ length: slots }, (_, index) => bridge.core.handlers.call('subagent:run', {
+        task: 'Occupied fixture slot ' + index, tools: [subagentProbe], async: true,
+      }))));
+      await within(occupied);
+      const direct = new AbortController();
+      const waiting = bridge.core.handlers.call('subagent:run', { task: unlinkedTask, signal: direct.signal });
+      direct.abort();
+      assert.deepEqual(await within(waiting), { subagentCancelled: true, message: 'Subagent cancelled.' });
+
+      const before = requests.length;
+      modelReply = () => ({ tool_calls: [{ index: 0, id: toolCallId, type: 'function', function: {
+        name: 'plan', arguments: JSON.stringify({ task }),
+      } }] });
+      assert.deepEqual(await within(bridge.submit('Stop a waiting launch')), { stopReason: 'cancelled' });
+      await within(settled);
+      await within(released);
+      assert.equal(requests.length - before, 1, 'only the parent model should be called');
+      assert.equal(childEvents.length, 1);
+      assert.equal(childEvents[0].name, 'subagent:done');
+      assert.deepEqual(childEvents[0].payload, {
+        task, toolCallId, cancelled: true, degraded: null, tokensUsed: 0,
+      });
+    } finally {
+      bridge.cancel();
+      off();
+      onSubagentProbe = undefined;
+      modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+    }
+  });
+  await check('subagent continuation retains long task and tool evidence without crossing approval or cancellation boundaries', async () => {
+    const task = 'Record one verified receipt.\n' + 'Original task constraint. '.repeat(160) + 'ORIGINAL_TASK_TAIL';
+    const detail = 'Recorded detail. '.repeat(520) + 'TOOL_EVIDENCE_AT_END';
+    const recap = 'The approved operation is complete. '.repeat(160) + 'ASSISTANT_RESULT_AT_END';
+    const originalPath = path.join(dir, 'resumed-original.txt');
+    const deniedPath = path.join(dir, 'resumed-denied.txt');
+    const appendTool = {
+      ...committedTool, name: 'fixture_continuation_receipt',
+      async execute(args) {
+        return { ...await committedTool.execute(args), content: detail };
+      },
+    };
+    bridge.extCtx.agent.registerTool(appendTool);
+    const toolCall = (id, target) => ({ tool_calls: [{ index: 0, id, type: 'function', function: {
+      name: appendTool.name, arguments: JSON.stringify({ path: target }),
+    } }] });
+    const toolResult = (data, id) => data.messages.find(message => message.role === 'tool' && message.tool_call_id === id)?.content;
+    const resultId = result => {
+      const id = /\n\nSubagent id: (\S+) /.exec(result)?.[1];
+      assert(id, 'completed child must carry its continuation ID');
+      return id;
+    };
+    const assertEvidence = data => {
+      assert(data.messages.some(message => message.role === 'user' && message.content === task));
+      const call = data.messages.find(message => message.role === 'assistant' && message.tool_calls?.some(tool => tool.id === 'original-receipt'));
+      assert.deepEqual(call?.tool_calls[0]?.function, { name: appendTool.name, arguments: JSON.stringify({ path: originalPath }) });
+      assert.equal(toolResult(data, 'original-receipt'), detail);
+      assert(data.messages.some(message => message.role === 'assistant' && message.content === recap));
+    };
+    let approvals = 0, decision = 'approved';
+    const offApproval = bridge.onEvent(event => {
+      if (event.name !== 'permission:request') return;
+      approvals++;
+      const verdict = decision;
+      queueMicrotask(() => bridge.decidePermission(event.payload.requestId, verdict));
+    });
+    try {
+      modelReply = data => toolResult(data, 'original-receipt') ? { content: recap } : toolCall('original-receipt', originalPath);
+      const original = await within(bridge.core.handlers.call('subagent:run', { task, tools: [appendTool, subagentProbe] }));
+      assert.match(original, /ASSISTANT_RESULT_AT_END/);
+      const originalId = resultId(original);
+
+      decision = 'denied';
+      const followUp = 'Try appending a separate receipt, subject to fresh approval.';
+      let before = requests.length;
+      modelReply = data => toolResult(data, 'denied-receipt') ? { content: 'NEW_WRITE_DENIED' } : toolCall('denied-receipt', deniedPath);
+      const continued = await within(bridge.core.handlers.call('subagent:resume', { id: originalId, task: followUp }));
+      assert.match(continued, /NEW_WRITE_DENIED/);
+      assert.equal(requests.length - before, 2);
+      assertEvidence(requests[before]);
+      assert.equal(requests[before].messages.at(-1).content, followUp);
+      assert.match(toolResult(requests.at(-1), 'denied-receipt'), /Permission denied/);
+      const continuedId = resultId(continued);
+
+      const controller = new AbortController();
+      const cancelledEvents = [];
+      const offCancelled = bridge.onEvent(event => {
+        if (event.name === 'subagent:done' && event.payload.cancelled) cancelledEvents.push(event.payload);
+      });
+      try {
+        onSubagentProbe = () => controller.abort();
+        modelReply = subagentProbeDelta;
+        const cancelled = await within(bridge.core.handlers.call('subagent:resume', {
+          id: continuedId, task: 'Interrupted follow-up must not become evidence', signal: controller.signal,
+        }));
+        assert.deepEqual(cancelled, { subagentCancelled: true, message: 'Subagent cancelled.' });
+        assert.equal(cancelledEvents.length, 1);
+        before = requests.length;
+        assert.match(await within(bridge.core.handlers.call('subagent:resume', {
+          id: cancelledEvents[0].subagentId, task: 'Attempt to reuse cancelled evidence',
+        })), /^Error: .*no (?:resumable result|completed subagent run)/);
+        assert.equal(requests.length, before);
+      } finally { offCancelled(); }
+
+      modelReply = () => ({ content: 'CHAINED_CONTINUATION_OK' });
+      const chained = await within(bridge.core.handlers.call('subagent:resume', { id: continuedId, task: 'Report the earlier approval outcomes.' }));
+      assert.match(chained, /CHAINED_CONTINUATION_OK/);
+      const lastRequest = requests.at(-1);
+      assertEvidence(lastRequest);
+      assert.match(toolResult(lastRequest, 'denied-receipt'), /Permission denied/);
+      assert.doesNotMatch(JSON.stringify(lastRequest.messages), /Interrupted follow-up|UNFINISHED_CHILD_TEXT/);
+      assert.equal(approvals, 2);
+      assert.equal(await fs.readFile(originalPath, 'utf8'), 'one write\n');
+      await assert.rejects(fs.stat(deniedPath), { code: 'ENOENT' });
+    } finally {
+      offApproval();
+      onSubagentProbe = undefined;
+      modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+    }
+  });
+  await check('concurrent continuations isolate retry history, late approvals and cancellation', async () => {
+    const starting = 'Record the original concurrent fixture receipt';
+    const retrying = 'Continue the branch that will recover from a cut';
+    const stopping = 'Continue the branch that will stop during approval';
+    const checking = 'Check the checkpoint without granting either continuation approval';
+    const targets = new Map([starting, retrying, stopping, checking].map((task, index) => [task, path.join(dir, `parallel-receipt-${index}.txt`)]));
+    const toolIds = new Map([...targets.keys()].map((task, index) => [task, `parallel-call-${index}`]));
+    const taskOf = data => data.messages.findLast(message => message.role === 'user')?.content;
+    const output = (data, task) => data.messages.find(message => message.role === 'tool' && message.tool_call_id === toolIds.get(task))?.content;
+    let waitingApproval;
+    const approvalReached = new Promise(resolve => { waitingApproval = resolve; });
+    const controller = new AbortController();
+    const completions = [], approvals = [], toolStarts = [];
+    let cut = false, retryNotices = 0;
+    const off = bridge.onEvent(event => {
+      if (event.name === 'permission:request') {
+        const task = [...targets].find(([, target]) => target === event.payload.metadata?.filePath)?.[0];
+        if (!task) return;
+        const {requestId} = event.payload;
+        approvals.push(task);
+        if (task === stopping) waitingApproval(requestId);
+        else queueMicrotask(() => bridge.decidePermission(requestId, task === checking ? 'denied' : 'approved'));
+      }
+      if (event.name === 'agent:tool-started' && event.payload.name === committedTool.name) toolStarts.push(event.payload.rawInput.path);
+      if (event.name === 'subagent:done' && targets.has(event.payload.task)) completions.push(event.payload);
+      if (event.name === 'ui:info' && cut && /\bretrying\b/.test(event.payload?.message ?? '')) {
+        retryNotices++;
+        controller.abort();
+      }
+    });
+    modelReply = data => {
+      const task = taskOf(data);
+      if (output(data, task) !== undefined) return { content: task === retrying && !cut ? 'DISCARDED_RETRY_FRAGMENT' : 'PARALLEL_RECEIPT_REVIEWED' };
+      return { tool_calls: [{ index: 0, id: toolIds.get(task), type: 'function', function: {
+        name: committedTool.name, arguments: JSON.stringify({ path: targets.get(task) }),
+      } }] };
+    };
+    cutModelStream = data => {
+      if (cut || taskOf(data) !== retrying || output(data, retrying) === undefined) return false;
+      cut = true;
+      return true;
+    };
+    const before = requests.length;
+    try {
+      const original = await within(bridge.core.handlers.call('subagent:run', { task: starting, tools: [committedTool] }));
+      const id = /\n\nSubagent id: (\S+) /.exec(original)?.[1];
+      assert(id);
+      const resume = (task, signal) => bridge.core.handlers.call('subagent:resume', { id, task, signal });
+      const cancelled = resume(stopping, controller.signal);
+      const lateId = await within(approvalReached);
+      const recovered = resume(retrying);
+      const [cancelledResult, recoveredResult] = await within(Promise.all([cancelled, recovered]));
+      assert.deepEqual(cancelledResult, { subagentCancelled: true, message: 'Subagent cancelled.' });
+      assert.match(recoveredResult, /PARALLEL_RECEIPT_REVIEWED/);
+      assert.doesNotMatch(recoveredResult, /DISCARDED_RETRY_FRAGMENT/);
+      // An approval arriving after its child was cancelled must not grant a
+      // write to this or any later continuation.
+      bridge.decidePermission(lateId, 'approved', true);
+      assert.match(await within(resume(checking)), /PARALLEL_RECEIPT_REVIEWED/);
+
+      const observed = requests.slice(before);
+      const resumedRequests = observed.filter(data => taskOf(data) === retrying);
+      assert.equal(retryNotices, 1);
+      assert.equal(resumedRequests.length, 3);
+      assert.deepEqual(resumedRequests[1].messages, resumedRequests[2].messages);
+      assert.equal(observed.filter(data => taskOf(data) === stopping).length, 1);
+      assert(!JSON.stringify(resumedRequests[2].messages).includes(stopping));
+      const checkingRequests = observed.filter(data => taskOf(data) === checking);
+      assert.equal(checkingRequests.length, 2);
+      assert.equal(output(checkingRequests[0], starting), 'COMMITTED_TOOL_RECEIPT');
+      assert.equal(output(checkingRequests[0], retrying), undefined);
+      assert.match(output(checkingRequests[1], checking), /Permission denied/);
+      assert.deepEqual(approvals, [starting, stopping, retrying, checking]);
+      assert.deepEqual(toolStarts, [targets.get(starting), targets.get(retrying)]);
+      assert.equal(completions.filter(event => event.task === stopping && event.cancelled).length, 1);
+      assert.equal(completions.filter(event => event.task === retrying && event.resumable && !event.cancelled && !event.error).length, 1);
+      for (const task of [starting, retrying]) assert.equal(await fs.readFile(targets.get(task), 'utf8'), 'one write\n');
+      for (const task of [stopping, checking]) await assert.rejects(fs.stat(targets.get(task)), { code: 'ENOENT' });
+    } finally {
+      controller.abort();
+      off();
+      cutModelStream = undefined;
+      modelReply = () => ({ content: 'KERNEL_REPLY_OK' });
+    }
+  });
   await check('real tool execution and permission denial stay enforced', async () => {
     const target = path.join(dir, 'denied.txt');
     let round = 0; modelReply = () => ++round === 1
@@ -379,7 +905,7 @@ try {
   await check('new subagent transcript/stop hooks preserve tools and usage', async () => {
     const messages = [], usages = [], meta = {}; let toolRuns = 0, streams = 0;
     const result = await runSubagent({
-      llmClient: { stream: async function* () { streams++; yield { choices: [{ delta: { content: 'one round', tool_calls: [{ index: 0, id: 't1', function: { name: 'probe', arguments: '{}' } }] } }], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }; } },
+      llmClient: { stream: async function* () { streams++; yield { choices: [{ delta: { content: 'one round', tool_calls: [{ index: 0, id: 't1', function: { name: 'probe', arguments: '{}' } }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }; } },
       tools: [{ name: 'probe', description: 'local fixture', input_schema: { type: 'object', properties: {} }, execute: async () => { toolRuns++; return { content: 'tool-ok' }; } }],
       systemPrompt: 'fixture', task: 'probe', onMessage: m => messages.push(m), onUsage: u => usages.push(u), shouldStop: () => true, outMeta: meta,
     });

@@ -4,6 +4,7 @@ const { once } = require('node:events');
 const { env, Bridge, path, fs } = require('./harness.cjs');
 const { zip } = require('./plugin-zip-fixture.cjs');
 const http = require('node:http');
+const net = require('node:net');
 
 async function fixture(extra = {}) {
   const e = env(extra);
@@ -91,6 +92,59 @@ test('slow optional extension startup does not block real core HTTP queries', as
   } finally { await f.app.shutdown(); }
 });
 
+test('HTTP shutdown drains a response that becomes idle after server.close', async () => {
+  const { shutdownHub } = env({ globals: { setTimeout, clearTimeout, setInterval, clearInterval } }).hub();
+  let activeResponse;
+  const server = http.createServer((_req, res) => {
+    activeResponse = res;
+    res.writeHead(200);
+    res.write('first ');
+  });
+  // The normal keep-alive timer must not be what makes shutdown succeed.
+  server.keepAliveTimeout = 30_000;
+  const agent = new http.Agent({ keepAlive: true });
+  server.listen(0, '127.0.0.1');
+  try {
+    await once(server, 'listening');
+    const request = http.get({ host: '127.0.0.1', port: server.address().port, agent });
+    const [response] = await once(request, 'response');
+    assert.equal(response.headers.connection, 'keep-alive');
+    const body = (async () => {
+      let text = '';
+      for await (const chunk of response) text += chunk;
+      return text;
+    })();
+    const shutdown = shutdownHub(server);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(server.listening, false);
+    activeResponse.end('last');
+    assert.equal(await body, 'first last', 'shutdown must preserve the full in-flight response');
+    const failures = await shutdown;
+    assert.equal(failures.length, 0, 'shutdown failed: ' + failures.map(String).join('; '));
+  } finally {
+    agent.destroy();
+    server.closeAllConnections();
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('host shutdown closes a speculative TCP connection that never sent a request', async () => {
+  const f = await fixture({ globals: { setTimeout, clearTimeout, setInterval, clearInterval } });
+  const accepted = once(f.app.server, 'connection');
+  const client = net.connect(f.app.server.address().port, '127.0.0.1');
+  const disconnected = once(client, 'close');
+  try {
+    const [socket] = await accepted;
+    assert.equal(socket.bytesRead, 0);
+    await f.app.shutdown();
+    await disconnected;
+    assert.equal(f.app.server.listening, false);
+  } finally {
+    client.destroy();
+    if (f.app.server.listening) await f.app.shutdown();
+  }
+});
+
 test('failed optional cleanup still closes HTTP and flushes durable core session metadata', async () => {
   class FailingRegistry {
     start() { return Promise.resolve(); }
@@ -110,7 +164,214 @@ test('failed optional cleanup still closes HTTP and flushes durable core session
     const saved = JSON.parse(fs.readFileSync(path.join(f.e.dir, 'hub-sessions', id + '.meta.json'), 'utf8'));
     assert.equal(saved.title, 'Keep durable metadata');
     assert.equal(closed, true, 'session bridge must be torn down after optional cleanup failure');
+    const messages = JSON.parse(fs.readFileSync(path.join(f.e.dir, 'hub-sessions', 'extension-messages.json'), 'utf8'));
+    assert.equal(messages.cleanShutdown, false, 'a failed host cleanup cannot authorize queue recovery');
   } finally { await f.app.shutdown().catch(() => {}); }
+});
+
+test('the message recovery checkpoint is written only after host cleanup finishes', async () => {
+  let release;
+  const cleanup = new Promise(resolve => { release = resolve; });
+  class DelayedRegistry {
+    async start() {}
+    snapshot() { return { version: 1, features: [] }; }
+    async close() { await cleanup; }
+  }
+  const f = await fixture({ modules: { './extensions/application.js': { ApplicationExtensionRegistry: DelayedRegistry } } });
+  const file = path.join(f.e.dir, 'hub-sessions', 'extension-messages.json');
+  const shutdown = f.app.shutdown();
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).cleanShutdown, false);
+  } finally {
+    release();
+    await shutdown;
+  }
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).cleanShutdown, true);
+});
+
+test('failed session history sealing still closes its bridge and prevents recovery checkpoint', async () => {
+  const modules = {};
+  let sealCalls = 0;
+  const f = await fixture({ modules, beforeBoot(e) {
+    const original = e.load('src/history/session-store.ts');
+    modules['./history/session-store.js'] = { ...original, SessionStore: class extends original.SessionStore {
+      async seal() { sealCalls++; throw Error('fixture session sealing failed'); }
+    } };
+  } });
+  try {
+    assert.equal((await f.api('/sessions', { cwd: f.e.dir, kind: 'agent' })).status, 200);
+    let closed = false;
+    f.instances[0].once('closed', () => { closed = true; });
+    await assert.rejects(f.app.shutdown(), error =>
+      /Core session cleanup failed/.test(error.message) &&
+      error.errors.some(cause => /fixture session sealing failed/.test(cause.message)));
+    assert(sealCalls > 0);
+    assert(closed, 'session bridge must still be closed after a history failure');
+    assert.equal(f.app.server.listening, false);
+    const state = JSON.parse(fs.readFileSync(path.join(f.e.dir, 'hub-sessions', 'extension-messages.json'), 'utf8'));
+    assert.equal(state.cleanShutdown, false);
+  } finally { await f.app.shutdown().catch(() => {}); }
+});
+
+for (const detached of [false,true]) test(`a poisoned journal prevents a clean recovery checkpoint (${detached?'bridge exited early':'active session'})`, async () => {
+  let store, journal, fail = false;
+  const modules = { 'node:fs': { ...fs,
+    appendFileSync(file, data, ...args) {
+      if (fail && file === journal) {
+        fs.appendFileSync(file, data.slice(0, 10));
+        throw Error('fixture partial history write');
+      }
+      return fs.appendFileSync(file, data, ...args);
+    },
+    truncateSync(file, size) {
+      if (fail && file === journal) throw Error('fixture history rollback failed');
+      return fs.truncateSync(file, size);
+    },
+  } };
+  const f = await fixture({ modules, beforeBoot(e) {
+    const original = e.load('src/history/session-store.ts');
+    modules['./history/session-store.js'] = { ...original, SessionStore: class extends original.SessionStore {
+      constructor(file, opts) { super(file, opts); store = this; journal = file; }
+    } };
+  } });
+  try {
+    assert.equal((await f.api('/sessions', { cwd: f.e.dir, kind: 'agent' })).status, 200);
+    const [first] = await store.appendMessages([{role:'user',content:'one'}, {role:'assistant',content:'two'}]);
+    fail = true;
+    assert.throws(() => store.setActiveLeaf(first), /partial history write/);
+    fail = false;
+    let closed = false;
+    f.instances[0].once('closed', () => { closed = true; });
+    if (detached) {
+      f.instances[0].close();
+      assert.deepEqual((await f.api('/sessions')).value, []);
+    }
+    await assert.rejects(f.app.shutdown(), error =>
+      /Core session cleanup failed/.test(error.message) &&
+      error.errors.some(cause => /Session history requires recovery/.test(cause.message)));
+    assert(closed);
+    const state = JSON.parse(fs.readFileSync(path.join(f.e.dir, 'hub-sessions', 'extension-messages.json'), 'utf8'));
+    assert.equal(state.cleanShutdown, false);
+  } finally { await f.app.shutdown().catch(() => {}); }
+});
+
+for (const fromCapture of [false, true]) test(`host shutdown waits for an in-progress history append from ${fromCapture ? 'capture' : 'the store'}`, { timeout: 12000 }, async () => {
+  const io = require('node:fs/promises');
+  let store, journal, delayWrite = false, release, entered;
+  const writing = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const modules = { 'node:fs/promises': { ...io,
+    async appendFile(file, data, ...args) {
+      if (delayWrite && file === journal) {
+        entered(); await gate;
+        await io.appendFile(file, data.slice(0, 10));
+        throw Error('fixture delayed partial history write');
+      }
+      return io.appendFile(file, data, ...args);
+    },
+    async truncate(file, size) {
+      if (delayWrite && file === journal) throw Error('fixture delayed rollback failed');
+      return io.truncate(file, size);
+    },
+  } };
+  const f = await fixture({ modules, globals: { setTimeout, clearTimeout }, beforeBoot(e) {
+    const original = e.load('src/history/session-store.ts');
+    modules['./history/session-store.js'] = { ...original, SessionStore: class extends original.SessionStore {
+      constructor(file, opts) { super(file, opts); store = this; journal = file; }
+    } };
+  } });
+  try {
+    const created = await f.api('/sessions', { cwd: f.e.dir, kind: 'agent' });
+    assert.equal(created.status, 200);
+    await store.appendMessages([{role:'user',content:'initial'}]);
+    delayWrite = true;
+    let write;
+    if (fromCapture) {
+      assert.equal((await f.api(`/${created.value.instanceId}/submit`, { query: 'Finish pending capture' })).status, 200);
+    } else {
+      write = assert.rejects(store.appendMessages([{role:'assistant',content:'pending'}]), /delayed partial history write/);
+    }
+    await writing;
+    f.instances[0].close();
+    const shutdown = f.app.shutdown();
+    const completedEarly = await Promise.race([shutdown.then(()=>true,()=>true), new Promise(resolve=>setTimeout(()=>resolve(false),3400))]);
+    assert.equal(completedEarly, false, 'a second host must not acquire the journal before the old write finishes');
+    release();
+    await write;
+    await assert.rejects(shutdown, error => /Core session cleanup failed/.test(error.message) &&
+      error.errors.some(cause => /Session history requires recovery/.test(cause.message)) &&
+      (!fromCapture || error.errors.some(cause => /Timed out waiting for detached session history/.test(cause.message))));
+    const state = JSON.parse(fs.readFileSync(path.join(f.e.dir, 'hub-sessions', 'extension-messages.json'), 'utf8'));
+    assert.equal(state.cleanShutdown, false);
+  } finally { release(); await f.app.shutdown().catch(() => {}); }
+});
+
+for (const outcome of ['saved', 'snapshot failed', 'rolled back', 'rollback failed', 'snapshot retried', 'timed out']) test(`host shutdown accounts for pending history capture (${outcome})`, { timeout: 12000 }, async () => {
+  const io = require('node:fs/promises');
+  let journal, release, entered;
+  const snapshotStarted = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  let appendCount = 0;
+  const f = await fixture({ globals: outcome === 'timed out' ? { setTimeout, clearTimeout } : undefined, modules: { 'node:fs/promises': { ...io,
+    async appendFile(file, data, ...args) {
+      if (file === journal) {
+        appendCount++;
+        if (outcome === 'rolled back' || outcome === 'rollback failed') {
+          await io.appendFile(file, data.slice(0, 10));
+          throw Error('fixture partial capture write');
+        }
+      }
+      return io.appendFile(file, data, ...args);
+    },
+    async truncate(file, size) {
+      if (outcome === 'rollback failed' && file === journal) throw Error('fixture capture rollback failed');
+      return io.truncate(file, size);
+    },
+  } } });
+  try {
+    const created = await f.api('/sessions', { cwd: f.e.dir, kind: 'agent' });
+    assert.equal(created.status, 200);
+    const id = created.value.instanceId;
+    journal = path.join(f.e.dir, 'hub-sessions', `${id}.jsonl`);
+    const bridge = f.instances[0];
+    const snapshot = bridge.snapshot.bind(bridge);
+    let captureRequested = false;
+    bridge.snapshot = async opts => {
+      if (opts?.skipTokens && !captureRequested) {
+        captureRequested = true;
+        entered();
+        await gate;
+        if (outcome === 'snapshot failed' || outcome === 'snapshot retried') throw Error('fixture capture snapshot failed');
+      }
+      return snapshot(opts);
+    };
+    assert.equal((await f.api(`/${id}/submit`, { query: 'Capture after bridge exit' })).status, 200);
+    await snapshotStarted;
+    assert.equal(appendCount, 0);
+    if (outcome !== 'snapshot retried') {
+      bridge.close();
+      assert.deepEqual((await f.api('/sessions')).value, []);
+    }
+    const shutdown = f.app.shutdown();
+    const completedEarly = await Promise.race([shutdown.then(() => true, () => true), new Promise(resolve => setTimeout(() => resolve(false), 100))]);
+    assert.equal(completedEarly, false, 'shutdown must wait before the first store write starts');
+    const finishedCapture = outcome === 'saved' || outcome === 'snapshot retried';
+    if (outcome === 'timed out') {
+      await assert.rejects(shutdown, error => /Core session cleanup failed/.test(error.message) &&
+        error.errors.some(cause => /Timed out waiting for detached session history/.test(cause.message)));
+      release();
+      await new Promise(resolve => setImmediate(resolve));
+    } else {
+      release();
+      if (finishedCapture) await shutdown;
+      else await assert.rejects(shutdown, error => /Core session cleanup failed/.test(error.message) &&
+        error.errors.some(cause => /Session history capture did not finish/.test(cause.message)));
+    }
+    assert.equal(appendCount, ['snapshot failed', 'timed out'].includes(outcome) ? 0 : 1);
+    const state = JSON.parse(fs.readFileSync(path.join(f.e.dir, 'hub-sessions', 'extension-messages.json'), 'utf8'));
+    assert.equal(state.cleanShutdown, finishedCapture);
+  } finally { release(); await f.app.shutdown().catch(() => {}); }
 });
 
 test('shutdown closes an incomplete extension toggle upload without changing settings', { timeout: 6000 }, async () => {

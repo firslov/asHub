@@ -1,4 +1,5 @@
 import { committedReplay } from '../history/replay-writer.js';
+import { recoverSubagentReplay } from '../history/replay-frame.js';
 import { createHistoryReader } from "../history/history-reader.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -82,13 +83,14 @@ export function installLazySessionRestore(
 
           // Load / create SessionStore
           if (!session.store) {
+            const historyOptions = { metaPath: sessionMetaPath(id), ...session._historyWriterLifecycle };
             try {
               if (fs.existsSync(treePath)) {
-                session.store = new SessionStore(treePath, { metaPath: sessionMetaPath(id) });
+                session.store = new SessionStore(treePath, historyOptions);
               } else {
                 session.store = new SessionStore(treePath, {
                   create: { cwd: session.cwd, sessionId: id },
-                  metaPath: sessionMetaPath(id),
+                  ...historyOptions,
                 });
               }
             } catch (err) {
@@ -177,6 +179,16 @@ export function installLazySessionRestore(
               if (m) session.lastFrameSeq = Math.max(session.lastFrameSeq, Number(m[1]));
             }
           }
+          const recovered = recoverSubagentReplay(session.replay);
+          const settleInterrupted = (name: string, handle: string | undefined, payload: object) => {
+            const frame = sseFrame({ source: id, ts: Date.now(), id: `hub:${id}:child-recovery:${handle}`, name },
+              { ...payload, cancelled: true });
+            session.replay.push(frame);
+            const m = frame.match(frameIdRe);
+            if (m) session.lastFrameSeq = Math.max(session.lastFrameSeq, Number(m[1]));
+          };
+          for (const child of recovered.children) settleInterrupted("subagent:done", child.subagentId ?? child.toolCallId, { ...child, degraded: null });
+          for (const swarm of recovered.swarms) settleInterrupted("subagent:swarm-done", swarm.swarmId, swarm);
 
           session._needsRestore = false;
           // Repair the projection even if the external backend fails to start.
@@ -205,7 +217,11 @@ export function installLazySessionRestore(
         try { routeEvent(session, { name: "agent:error", payload: { message: String(err) } }); } catch (e) { console.error("[hub] bridge onError error:", e); }
       });
       if (storeRef) {
-        session.capture = createCapture(b, () => session.store ?? null, { onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`) });
+        session.capture = createCapture(b, () => session.store ?? null, {
+          onWarn: (msg) => console.error(`[hub] ${id}: ${msg}`),
+          onFlushResult: session._historyWriterLifecycle?.onCaptureResult,
+          shutdownSignal: session._historyWriterLifecycle?.shutdownSignal,
+        });
         const { entryIds } = storeRef.buildBranchWithIds();
         session.capture.resetTo(entryIds);
       }

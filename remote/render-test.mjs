@@ -2027,6 +2027,12 @@ for(const kind of ['tool','collaborator']) test(`compact replay preserves long $
 });
 
 const eventContractCases = (await import('../tests/fixtures/conversation-events.cjs')).default;
+const diagnosticResult = {
+ failed: ['incomplete', '未完成'],
+ partial: ['incomplete', '部分完成'],
+ cancelled: ['cancelled', '已取消'],
+ ended: ['done', '已结束'],
+};
 for (const mode of ['full', 'preview']) for (const kind of ['tool', 'subagent']) {
  test(`${mode} ${kind} results share the desktop event contract`, () => {
   for (const c of eventContractCases) {
@@ -2040,12 +2046,124 @@ for (const mode of ['full', 'preview']) for (const kind of ['tool', 'subagent'])
    r.send(name, event.payload); r.send('agent:processing-done');
    const phase = r.run('[...phases][0]'); phase.box.open = true; phase.box.ontoggle();
    const call = phase.callRows.get(`${child ? 'agent' : 'tool'}:call`);
-   assert.equal(call.row.dataset.state, c.outcome === 'ended' ? 'done' : 'incomplete', c.name);
-   assert.equal(call.status.textContent, c.outcome === 'failed' ? '未完成' : c.outcome === 'partial' ? '部分完成' : '已结束', c.name);
+   assert.deepEqual([call.row.dataset.state, call.status.textContent], diagnosticResult[c.outcome], c.name);
    assert.equal(phase.box.dataset.outcome, '', 'an individual result does not fail the main turn');
    assert.equal(phase.box.dataset.state, 'settled');
   }
  });
+}
+
+function subagentDiagnosticFixture(mode) {
+ const r = setup({ mobile: true });
+ const send = (name, payload = {}) => {
+  if (mode === 'live') return r.send(name, payload);
+  const wire = mobileReplayFrame(`data: ${JSON.stringify({ meta: { name }, payload })}\n\n`);
+  r.context.input = JSON.parse(wire.slice(6));
+  r.run('enqueueFrame(input); drainFrames()');
+ };
+ return { r, send };
+}
+
+for (const mode of ['live', 'compact replay']) {
+ test(`late child cancellation does not settle a newer launch that reused its call ID (${mode})`, () => {
+  const { r, send } = subagentDiagnosticFixture(mode);
+  send('agent:query', { query: 'Start background review' });
+  send('agent:processing-start');
+  send('agent:tool-started', { toolCallId: 'shared-call', name: 'review' });
+  send('subagent:started', { subagentId: 'old-child', toolCallId: 'shared-call', task: 'Old review' });
+  const old = r.run('details');
+  send('agent:tool-completed', { toolCallId: 'shared-call', exitCode: 0 });
+  send('agent:processing-done');
+  send('agent:query', { query: 'Review again' });
+  send('agent:processing-start');
+  send('agent:tool-started', { toolCallId: 'shared-call', name: 'review' });
+  send('subagent:started', { subagentId: 'new-child', toolCallId: 'shared-call', task: 'New review' });
+  const newer = r.run('details');
+  assert.notEqual(old, newer);
+  send('subagent:done', { subagentId: 'old-child', toolCallId: 'shared-call', cancelled: true, task: 'Old review '.repeat(200) });
+  for (const phase of [old, newer]) { phase.box.open = true; phase.box.ontoggle(); }
+  assert.equal(old.callRows.get('tool:shared-call').status.textContent, '已取消');
+  assert.equal(old.callRows.get('agent:old-child').status.textContent, '已取消');
+  assert.equal(newer.callRows.get('tool:shared-call').row.dataset.state, 'pending');
+  assert.equal(newer.callRows.get('agent:new-child').row.dataset.state, 'pending');
+  assert.equal(newer.tools.has('shared-call'), true);
+ });
+
+ test(`a child completion outside the visible window cannot claim the current launch (${mode})`, () => {
+  const { r, send } = subagentDiagnosticFixture(mode);
+  send('agent:query', { query: 'Visible current request' });
+  send('agent:processing-start');
+  send('agent:tool-started', { toolCallId: 'shared-call', name: 'review' });
+  send('permission:request', { requestId: 'current-approval', expiresAt: Date.now()+60000 });
+  send('subagent:done', { subagentId: 'hidden-old-child', toolCallId: 'shared-call', cancelled: true, task: 'Earlier review '.repeat(200) });
+  const phase = r.run('details'); phase.box.open = true; phase.box.ontoggle();
+  assert.equal(phase.callRows.get('tool:shared-call').row.dataset.state, 'pending');
+  assert.equal(phase.callRows.has('agent:hidden-old-child'), false);
+  assert.equal(phase.tools.has('shared-call'), true);
+  assert.equal(r.run("permissions.has('current-approval')"), true);
+ });
+
+ test(`subagent cancellation stays distinct from partial and successful results (${mode})`, () => {
+  const { r, send } = subagentDiagnosticFixture(mode);
+  send('agent:query', { query: 'Run three subagents' });
+  send('agent:processing-start');
+  send('agent:tool-started', { toolCallId: 'worker-launch', name: 'review' });
+  const launchPhase = r.run('details');
+  send('agent:response-segment', { text: 'Preparing collaboration.' });
+  send('subagent:started', { subagentId: 'worker', toolCallId: 'worker-launch', task: 'Review' });
+  for (const id of ['partial', 'complete']) send('subagent:started', { subagentId: id, task: id });
+  const phase = r.run('details');
+  assert.notEqual(launchPhase, phase);
+  if (mode === 'live') { phase.box.open = true; phase.box.ontoggle(); }
+  send('subagent:done', { subagentId: 'complete', result: 'Finished' });
+  send('subagent:done', { subagentId: 'partial', degraded: 'budget', result: 'Some findings' });
+  send('agent:cancelled');
+  send('agent:processing-done');
+  send('agent:query', { query: 'Start a separate turn' });
+  send('agent:processing-start');
+  send('subagent:started', { subagentId: 'new-worker', task: 'Separate run' });
+  send('subagent:done', { subagentId: 'worker', toolCallId: 'worker-launch', cancelled: true, result: 'Unfinished work '.repeat(140) });
+  if (mode === 'compact replay') { phase.box.open = true; phase.box.ontoggle(); }
+  launchPhase.box.open = true; launchPhase.box.ontoggle();
+
+  const worker = phase.callRows.get('agent:worker');
+  assert.equal(worker.row.dataset.state, 'cancelled');
+  assert.equal(worker.status.textContent, '已取消');
+  if (mode === 'compact replay') assert.equal(worker.result.detailsOmitted, true);
+  assert.equal(phase.callRows.get('agent:partial').status.textContent, '部分完成');
+  assert.equal(phase.callRows.get('agent:complete').status.textContent, '已结束');
+  assert.equal(launchPhase.callRows.get('tool:worker-launch').status.textContent, '已取消');
+  assert.equal(launchPhase.tools.has('worker-launch'), false);
+  assert.equal(phase.box.dataset.state, 'settled');
+  assert.equal(phase.box.dataset.outcome, 'stopped');
+  assert.equal(r.run("details.agents.has('new-worker')"), true);
+  assert.equal(r.run('details.box.dataset.state'), 'running');
+ });
+
+ for (const order of ['generic first', 'cancellation first']) {
+  test(`queued subagent cancellation settles only its launch row (${mode}, ${order})`, () => {
+   const { r, send } = subagentDiagnosticFixture(mode);
+   send('agent:processing-start');
+   send('agent:tool-started', { toolCallId: 'launch', name: 'review' });
+   send('agent:tool-started', { toolCallId: 'sibling', name: 'read_file' });
+   const phase = r.run('details');
+   if (mode === 'live') { phase.box.open = true; phase.box.ontoggle(); }
+   const generic = () => send('agent:tool-completed', { toolCallId: 'launch', exitCode: 1, rawOutput: 'Interrupted' });
+   if (order === 'generic first') generic();
+   send('subagent:done', { toolCallId: 'launch', cancelled: true, task: 'Queued review '.repeat(180) });
+   assert.equal(phase.tools.has('launch'), false);
+   assert.equal(phase.tools.has('sibling'), true);
+   if (order === 'cancellation first') generic();
+   if (mode !== 'live') { phase.box.open = true; phase.box.ontoggle(); }
+   const launch = phase.callRows.get('tool:launch'), sibling = phase.callRows.get('tool:sibling');
+   assert.equal(phase.callRows.size, 2);
+   assert.equal(launch.row.dataset.state, 'cancelled');
+   assert.equal(launch.status.textContent, '已取消');
+   assert.equal(sibling.row.dataset.state, 'pending');
+   assert.equal(sibling.status.textContent, '');
+   assert.equal(r.run('details.box.dataset.state'), 'running');
+  });
+ }
 }
 
 

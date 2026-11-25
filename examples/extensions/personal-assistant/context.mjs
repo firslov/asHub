@@ -1,7 +1,7 @@
 import { projectNameLeftBoundary, projectNameRightBoundary } from './project-mentions.mjs';
 import { defaultStyle, retrieve } from './retrieval.mjs';
 import { identifiers } from './precision.mjs';
-import { themeEvidenceValid } from './theme-overviews.mjs';
+import { validThemeStatements } from './theme-overviews.mjs';
 import { observedAt } from './memory-context.mjs';
 import { previewText } from './store.mjs';
 import { generatedHistory, forgetCommand } from './forgotten-history.mjs';
@@ -72,7 +72,6 @@ export function themeRecall(assistant, session, query) {
     if(typeof project.name!=='string' || !project.name.trim())continue;
     const needle=normalized(project.name);let from=0,at;
     while((at=text.indexOf(needle,from))!==-1){
-      const before=text[at-1]??'',after=text[at+needle.length]??'';
       const latin=/[a-z0-9_]/i.test(needle[0]);
       const left=projectNameLeftBoundary(text.slice(0,at),latin);
       const right=projectNameRightBoundary(text.slice(at+needle.length),/[a-z0-9_]/i.test(needle.at(-1)));
@@ -96,23 +95,17 @@ export function themeRecall(assistant, session, query) {
   const refersToCurrent=/(?:本|当前|这个|这一个|该|此|我们(?:的)?)(?:项目)/u.test(query);
   const projectId=named.length===1 ? named[0].id : (refersToCurrent ? session.projectId : null);
   const rows=assistant.store.listThemeStatements?.() ?? [];
+  const overviews=rows.filter(row=>
+    row.kind===kind && (kind==='project' ? projectId && row.projectId===projectId : !row.projectId));
   const groups=new Map();
-  for (const row of rows) {
-    if (row.kind!==kind) continue;
-    if (kind==='project' && (!projectId || row.projectId!==projectId)) continue;
-    if (kind==='preference' && row.projectId) continue;
+  for (const {overview:row,statement} of validThemeStatements(assistant,overviews)) {
     const key=JSON.stringify([row.themeKey,row.kind,row.projectId ?? null]);
-    const candidates=Array.isArray(row.statements)?row.statements:[row];
-    for (const statement of candidates) {
-      try { if (themeEvidenceValid(assistant,statement,row) !== true) continue; } catch { continue; }
-      if (!groups.has(key)) groups.set(key,{row,statements:[]});
-      const group=groups.get(key);
-      const candidate={text:statement.text,...(statement.validFrom!==undefined?{validFrom:statement.validFrom}:{}),...(statement.validTo!==undefined?{validTo:statement.validTo}:{}),evidence:statement.evidence};
-      group.statements.push(candidate);
-    }
+    if (!groups.has(key)) groups.set(key,{row,statements:[]});
+    const group=groups.get(key);
+    const candidate={text:statement.text,...(statement.validFrom!==undefined?{validFrom:statement.validFrom}:{}),...(statement.validTo!==undefined?{validTo:statement.validTo}:{}),evidence:statement.evidence.filter(ref=>ref.role==='support')};
+    group.statements.push(candidate);
   }
   for (const {row,statements} of groups.values()) {
-    if(!statements.length)continue;
     // Preserve both ends of a timeline when evidence must fit the shared
     // budget; display retained statements in their original chronological order.
     if(row.kind==='project') statements.sort((a,b)=>new Date(a.validFrom??0).getTime()-new Date(b.validFrom??0).getTime());

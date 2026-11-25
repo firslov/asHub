@@ -149,9 +149,14 @@ try {
   assert.equal(upstreamBodies.at(-1).prompt_cache_key,session.instanceId);
   cachedTokens=5;
   console.log('PASS stable session headers and cache keys; raw positive/zero/missing usage stays distinct');
+  const foregroundUsages=usageFrames.length;
   const child=await b.core.handlers.call('subagent:run',{task:'Local mock child',systemPrompt:'Reply briefly',tools:[],maxIterations:2});
   assert(JSON.stringify(child).includes('CODEX_PROXY_OK'));
-  console.log('PASS subagent travels through Codex Responses proxy');
+  const childScope=upstreamSessions.at(-1);
+  assert(childScope.startsWith(session.instanceId+':subagent:'));
+  assert.equal(upstreamBodies.at(-1).prompt_cache_key,childScope);
+  assert.equal(usageFrames.length,foregroundUsages);
+  console.log('PASS subagent Codex routing keeps cache and foreground usage separate');
   assert.equal(await b.complete([{role:'user',content:'Local mock completion'}]),'CODEX_PROXY_OK');
   console.log('PASS non-streaming completion travels through Codex Responses proxy');
   const catalog=await (await fetch(url+'/api/models',{headers})).json();

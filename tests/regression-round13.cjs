@@ -49,9 +49,9 @@ await check('AD01 optional agent Shell exit cleans only the Shell',async()=>{
  await x.h.shutdownHub(undefined,sessions);assert(x.stats().shellKilled===1&&x.stats().killed===1,'optional Shell cleaned twice');
 });
 await check('AD01 terminal exit clears permissions and aborts subagents',async()=>{
- const x=await terminal();let aborted=0,decision;const timer=x.e.context.setTimeout(()=>{},1000);
- x.s.bridge._subagents.set('child',{controller:{abort(){aborted++}}});x.s.bridge.pendingPermissions.set('permission',{timer,resolve:v=>decision=v});
- x.exit({exitCode:0});assert(aborted===1&&decision.outcome==='denied'&&!x.e.timers.has(timer)&&!x.s.bridge.pendingPermissions.size&&!x.s.bridge._subagents.size,'pending work retained');
+ const x=await terminal(),controller=new AbortController();let decision;const timer=x.e.context.setTimeout(()=>{},1000);
+ x.s.bridge.subagentControllers.add(controller);x.s.bridge._subagents.set('child',{});x.s.bridge.pendingPermissions.set('permission',{timer,resolve:v=>decision=v});
+ x.exit({exitCode:0});assert(controller.signal.aborted&&decision.outcome==='denied'&&!x.e.timers.has(timer)&&!x.s.bridge.pendingPermissions.size&&!x.s.bridge._subagents.size,'pending work retained');
 });
 await check('AD01 failed Core cleanup still releases Shell and closes session',async()=>{
  const x=await terminal({coreKillThrows:true});x.exit({exitCode:0});assert(x.stats().shellKilled===1&&!x.sessions.size&&x.s._closed,'Core exception prevented cleanup');

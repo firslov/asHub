@@ -22,7 +22,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setBackgroundSettings: (patch) => ipcRenderer.invoke('desktop:background:set', patch),
   onBackgroundSettings: (cb) => onChannel('desktop:background:changed', cb),
   onRevealPluginResource: (cb) => onChannel('desktop:reveal-plugin-resource', cb),
-  onOpenMobileAccess: (cb) => onChannel('desktop:open-mobile', cb),
   notifyDesktopReady: () => ipcRenderer.send('desktop:ready'),
   browserStatus: id => ipcRenderer.invoke('desktop:browser-status', id),
   browserLayout: (id, bounds) => ipcRenderer.send('desktop:browser-layout', id, bounds),

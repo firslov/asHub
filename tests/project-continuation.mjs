@@ -18,7 +18,15 @@ function fixture(t) {
  const authorize=()=>{const row=app.view().rows[0],a=row.actions[0];const p=app.prepare(a.id,a.values);const id=messages.approve('plugin',messages.prepare('plugin',p.authorization));p.execute(id);return id;};
  const advance=(ms=31000)=>{now+=ms;app.tick();};
  t.after(()=>{app.stop();messages.close();control.abort();fs.rmSync(dir,{recursive:true,force:true});});
- return {get app(){return app},host,tasks,plan,save,authorize,advance,get messages(){return messages},get api(){return api},services,messageFile,sent,hostRestart:(checkpoint)=>{app.stop();messages.prepareShutdown();control.abort();messages.close();if(checkpoint)fs.writeFileSync(messageFile,checkpoint.store);control=new AbortController();messages=new ExtensionMessages(messageFile,port,()=>now);api=messages.bind('plugin',control.signal);services.messages=api;app=new Continuation(services,{now:()=>now,delay:100});if(checkpoint)app.save(checkpoint.record);app.tick();},get hints(){return hints},busy:v=>{busy=v;host.sessions[0].isProcessing=v},restart:()=>{app.stop();app=new Continuation(services,{now:()=>now,delay:100});app.tick();}};
+ const hostRestart=(checkpoint,{faulted=false}={})=>{
+  app.stop();messages.prepareShutdown();control.abort();
+  if(faulted)assert.throws(()=>messages.close(),/persistence/);
+  else {messages.close();messages.finishShutdown();}
+  if(checkpoint)fs.writeFileSync(messageFile,checkpoint.store);
+  control=new AbortController();messages=new ExtensionMessages(messageFile,port,()=>now);api=messages.bind('plugin',control.signal);services.messages=api;
+  app=new Continuation(services,{now:()=>now,delay:100});if(checkpoint)app.save(checkpoint.record);app.tick();
+ };
+ return {get app(){return app},host,tasks,plan,save,authorize,advance,get messages(){return messages},get api(){return api},services,messageFile,sent,hostRestart,get hints(){return hints},busy:v=>{busy=v;host.sessions[0].isProcessing=v},restart:()=>{app.stop();app=new Continuation(services,{now:()=>now,delay:100});app.tick();}};
 }
 test('existing workflows stay off; only user-confirmed grant enables continuation',t=>{
  const f=fixture(t);f.tasks[0].state='completed';f.advance();assert.equal(f.app.records().length,0);assert.equal(f.app.view().rows[0].status,'自动接续未开启');
@@ -37,6 +45,120 @@ test('active coordinator consumes deliveries without an extra wakeup when it rev
 test('coalesces multiple completions into one compact message',async t=>{
  const f=fixture(t);f.plan.steps[1].dependsOn=[];f.plan.steps[1].attempts=[{id:'b',taskId:'other'}];f.save();f.tasks.push({id:'other',sourceId:'owner',recipientId:'member',state:'running',revision:1});f.authorize();
  f.tasks.forEach(s=>{s.state='completed';s.revision++});f.advance();f.advance();await f.messages.pump();assert.equal(f.sent.length,1,JSON.stringify({records:f.app.records(),fault:f.app.fault}));assert.match(f.sent[0].d.message,/2 项待验收/);
+});
+for (const recovery of [false,true]) test(`a rejected submission pauses only its own workflow (${recovery?'recovery':'new'})`,async t=>{
+ const f=fixture(t);f.tasks[0].state='completed';
+ f.app.db.prepare('INSERT INTO work VALUES(?,?,?,?)').run('p','owner','other',JSON.stringify(f.plan));
+ const ids=Object.fromEntries(f.app.view().rows.map(row=>[row.title,row.actions[0].values.id]));
+ const grantFor=name=>{
+  const plan=f.app.prepare('enable',{id:ids[name],epoch:''});
+  const grant=f.messages.approve('plugin',f.messages.prepare('plugin',plan.authorization));
+  plan.execute(grant);return grant;
+ };
+ const bad=grantFor('other'),healthy=grantFor('work');
+ const submit=f.api.submit;
+ // The real message service rejects only the malformed request before changing its grant or queue.
+ f.services.messages={...f.api,submit:request=>request.grantId===bad
+  ? (recovery?{state:'queued'}:submit({...request,values:{unexpected:'value'}}))
+  : submit(request)};
+ f.advance();
+ if(recovery){
+  assert(f.app.records().find(r=>r.id===ids.other).pending);
+  f.services.messages={...f.api,submit:request=>request.grantId===bad
+   ? submit({...request,values:{unexpected:'value'}}):submit(request)};
+  f.advance();
+ }
+ await f.messages.pump();
+ assert.equal(f.app.fault,null);
+ assert.equal(f.app.records().find(r=>r.id===ids.other).state,'error');
+ assert.equal(f.api.authorization(bad).revoked,true);
+ assert.equal(f.api.authorization(healthy).revoked,false);
+ assert.equal(f.sent.length,1);
+ assert.equal(f.sent[0].d.grantId,healthy);
+});
+test('an uncertain message service failure suspends every related grant', t=>{
+ const f=fixture(t),first=f.authorize();
+ f.app.db.prepare('INSERT INTO work VALUES(?,?,?,?)').run('p','owner','other',JSON.stringify(f.plan));
+ const other=f.app.view().rows.find(row=>row.title==='other').actions[0];
+ const p=f.app.prepare(other.id,other.values),second=f.messages.approve('plugin',f.messages.prepare('plugin',p.authorization));
+ p.execute(second);
+ f.services.messages={...f.api,submit:()=>{throw Error('unclassified storage error');}};
+ f.tasks[0].state='completed';f.advance();f.advance();
+ assert.match(f.app.fault,/storage error/);
+ assert.equal(f.api.authorization(first).revoked,true);
+ assert.equal(f.api.authorization(second).revoked,true);
+});
+test('a failed host storage commit cannot restart stale continuation grants',async t=>{
+ const f=fixture(t);f.tasks[0].state='completed';const existing=f.authorize();f.advance();
+ const key=f.app.records()[0].pending.key;
+ assert.equal(f.api.lookup(key).state,'queued');
+ f.app.db.prepare('INSERT INTO work VALUES(?,?,?,?)').run('p','owner','other',JSON.stringify(f.plan));
+ const newGrant=f.authorize();
+ const originalRename=fs.renameSync;
+ fs.renameSync=(source,target)=>{
+  if(target===f.messageFile)throw Object.assign(Error('injected host receipt I/O failure'),{code:'EIO'});
+  return originalRename(source,target);
+ };
+ try{f.advance();}finally{fs.renameSync=originalRename;}
+ assert.match(f.app.fault,/I\/O failure/);
+ assert(f.app.records().every(r=>!r.enabled));
+ await f.messages.pump();assert.equal(f.sent.length,0);
+ f.hostRestart(undefined,{faulted:true});
+ await f.messages.pump();
+ assert.equal(f.api.lookup(key).state,'cancelled');
+ assert.equal(f.api.authorization(existing).revoked,true);
+ assert.equal(f.api.authorization(newGrant).revoked,true);
+ assert.equal(f.sent.length,0);
+});
+test('a continuation ledger read failure durably revokes its queued authorization in the host',async t=>{
+ const f=fixture(t);f.tasks[0].state='completed';const grant=f.authorize();f.advance();
+ const pending=f.app.records()[0].pending;
+ assert.equal(f.api.lookup(pending.key).state,'queued');
+ f.app.records=()=>{throw Object.assign(Error('injected plugin ledger read failure'),{code:'SQLITE_IOERR'});};
+ f.advance();
+ assert.match(f.app.fault,/plugin ledger read failure/);
+ assert.equal(f.api.authorization(grant).revoked,true);
+ f.hostRestart();
+ await f.messages.pump();
+ assert.equal(f.app.records()[0].enabled,false);
+ assert.equal(f.api.lookup(pending.key).state,'cancelled');
+ assert.equal(f.sent.length,0);
+});
+test('a dual ledger outage does not restore old queued continuation after restart',async t=>{
+ const f=fixture(t);f.tasks[0].state='completed';const grant=f.authorize();f.advance();
+ const pending=f.app.records()[0].pending;
+ const oldStore=fs.readFileSync(f.messageFile,'utf8');
+ assert.equal(JSON.parse(oldStore).cleanShutdown,false);
+ f.app.records=()=>{throw Object.assign(Error('plugin read failure'),{code:'SQLITE_IOERR'});};
+ const rename=fs.renameSync;
+ fs.renameSync=(source,target)=>{
+  if(target===f.messageFile)throw Object.assign(Error('message write failure'),{code:'EIO'});
+  return rename(source,target);
+ };
+ try{f.advance();}finally{fs.renameSync=rename;}
+ assert.equal(fs.readFileSync(f.messageFile,'utf8'),oldStore);
+ f.hostRestart(undefined,{faulted:true});
+ await f.messages.pump();
+ assert.equal(f.app.records()[0].enabled,false);
+ assert.equal(f.api.authorization(grant).revoked,true);
+ assert.equal(f.api.lookup(pending.key).state,'cancelled');
+ assert.equal(f.sent.length,0);
+});
+test('restart at an in-progress submit checkpoint pauses instead of replaying an unknown commit',async t=>{
+ const f=fixture(t);f.tasks[0].state='completed';const grant=f.authorize();
+ const submit=f.api.submit;let checkpoint;
+ f.services.messages={...f.api,submit:request=>{
+  checkpoint={record:f.app.records()[0],store:fs.readFileSync(f.messageFile,'utf8')};
+  return submit(request);
+ }};
+ f.advance();
+ assert.equal(checkpoint.record.pending.submitting,true);
+ checkpoint.store=JSON.stringify({...JSON.parse(checkpoint.store),cleanShutdown:true});
+ f.hostRestart(checkpoint);
+ await f.messages.pump();
+ assert.equal(f.app.records()[0].state,'error');
+ assert.equal(f.api.authorization(grant).revoked,true);
+ assert.equal(f.sent.length,0);
 });
 test('unchanged workflow after successful model turn pauses rather than looping',async t=>{
  const f=fixture(t);f.authorize();f.tasks[0].state='completed';f.advance();f.advance();await f.messages.pump();f.sent[0].settled('completed');f.advance();assert.equal(f.app.records()[0].state,'stalled');f.advance();await f.messages.pump();assert.equal(f.sent.length,1);
@@ -90,7 +212,8 @@ test('a pause checkpoint and legacy paused record cannot resurrect a queued noti
  const f=fixture(t);f.authorize();f.tasks[0].state='completed';f.advance();f.advance();const previousStore=fs.readFileSync(f.messageFile,'utf8');
  const checkpoints=[],save=f.app.save.bind(f.app);f.app.save=r=>{save(r);checkpoints.push({record:structuredClone(r),store:fs.readFileSync(f.messageFile,'utf8')})};
  const a=f.app.view().rows[0].actions[0];checkpoints.length=0;f.app.prepare(a.id,a.values).execute();
- const checkpoint=checkpoints.find(c=>!c.record.enabled);assert(checkpoint);if(legacy)checkpoint.store=previousStore;
+ const checkpoint=checkpoints.find(c=>!c.record.enabled);assert(checkpoint);
+ checkpoint.store=JSON.stringify({...JSON.parse(legacy?previousStore:checkpoint.store),cleanShutdown:true});
  f.hostRestart(checkpoint);await f.messages.pump();assert.equal(f.sent.length,0,'paused work cannot recover a queued delivery');assert.equal(f.app.records()[0].enabled,false);
  }
 });
@@ -109,12 +232,13 @@ test('full host restart recovers only unstarted notices and never replays a runn
  }
 });
 
-test('restart after cancelling an obsolete notice continues the new ready step without repeating the old notice',async t=>{
+test('clean restart after cancelling an obsolete notice continues the new ready step without repeating the old notice',async t=>{
  const f=fixture(t);f.authorize();f.tasks[0].state='completed';f.advance();f.advance();const key=f.app.records()[0].pending.key;
  f.plan.steps[0].attempts[0].review={decision:'accepted'};f.save();
  let checkpoint;const cancel=f.api.cancel;
  f.services.messages={...f.api,cancel:k=>{cancel(k);checkpoint={record:structuredClone(f.app.records()[0]),store:fs.readFileSync(f.messageFile,'utf8')}}};
  f.app.tick();assert(checkpoint);assert.equal(f.api.lookup(key).state,'cancelled');
+ checkpoint.store=JSON.stringify({...JSON.parse(checkpoint.store),cleanShutdown:true});
  f.hostRestart(checkpoint);f.advance();f.advance();await f.messages.pump();await f.messages.pump();
  assert.equal(f.sent.length,1,'internal supersession must not pause the workflow as an interrupted execution');
  assert.notEqual(f.sent[0].d.key,key);assert.match(f.sent[0].d.message,/1 项 ready/);assert.equal(f.api.lookup(key).state,'cancelled');

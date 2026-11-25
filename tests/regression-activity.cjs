@@ -19,7 +19,8 @@ function sseHandler(x,name){
 }
 function completionFixture(){
  const x=fixture();
- Object.assign(x.e.context,{refreshActivity:x.activity.refreshActivity,renderToolBody:lines=>x.node('tool-body',lines.join('\n')),t:k=>'en:'+k});
+ const {renderSubagentCancellation}=x.e.load('web/js/stream/renderers.js');
+ Object.assign(x.e.context,{refreshActivity:x.activity.refreshActivity,renderSubagentCancellation,renderToolBody:lines=>x.node('tool-body',lines.join('\n')),t:k=>'en:'+k});
  const complete=sseHandler(x,'agent:tool-completed');
  function launch(id){
   const block=x.node('subagent-block'),head=x.node('subagent-head'),spinner=x.node('subagent-spinner'),icon=x.node('subagent-icon','initial'),result=x.node('subagent-result');
@@ -75,7 +76,7 @@ async function runSwarmTool(x,items,entries){
   core:{bus:{emit:(name,payload)=>events.push({name,payload})}},extCtx:{agent:{getTools:()=>[]}},
   getSettings:()=>({}),getSubagentBudgetOverrides:()=>({}),resolveSubagentReasoningParams:()=>({}),
   SUBAGENT_TYPES:{explore:{tools:[]}},SUBAGENT_TOOL_NAMES:new Set(),MAX_CONCURRENT_SUBAGENTS:4,
-  _swarmSeq:0,_runningSubagents:0,_subagents:agents,
+  _swarmSeq:0,_runningSubagents:0,_subagents:agents,subagentControllers:new Set(),
   launchSubagent:()=>{const id='sa'+next;agents.set(id,{...entries[next++],promise:Promise.resolve()});return id;},
  });
  const js=ts.transpileModule('({'+execute.getText(sf)+'}).execute',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
@@ -198,6 +199,14 @@ async function runSwarmTool(x,items,entries){
   assert(!a.result.hidden&&a.result.textContent==='Historical review result','replay result lost');
   assert(x.box().dataset.state==='settled'&&x.box().querySelector('.execution-activity-body').hidden);
  });
+ await check('Activity rebuilt subagent shows cancellation and retains actual tool output',()=>{
+  const x=completionFixture(),a=x.launch('call');
+  x.complete({toolCallId:'call',cancelled:true,exitCode:1,rawOutput:'Historical cancellation'});x.finish();
+  assert(a.icon.textContent==='■'&&a.block.classList.contains('subagent-cancelled'));
+  assert(!a.block.classList.contains('subagent-failed')&&!a.block.querySelector('.subagent-spinner'));
+  assert(a.head.querySelector('.subagent-cancelled-badge')?.textContent==='en:subagent.cancelled');
+  assert(a.result.textContent==='Historical cancellation'&&x.box().dataset.attention==='false');
+ });
  for(const [reason,note] of [['budget','completion-token budget (1000) exhausted after 1000 completion tokens'],['iterations','max iterations (10) reached']])await check('Activity rebuilt partial subagent retains '+reason+' warning',()=>{
   const x=completionFixture(),a=x.launch('partial');
   const output='Useful partial findings.\n[Subagent terminated: '+note+'. Returning partial progress.]';
@@ -212,6 +221,11 @@ async function runSwarmTool(x,items,entries){
   const x=completionFixture(),a=x.launch('failed');
   x.complete({toolCallId:'failed',exitCode:1,rawOutput:'Error: failed\n[Subagent terminated: max iterations (10) reached. Returning partial progress.]'});x.finish();
   assert(a.icon.textContent==='✗'&&a.block.classList.contains('subagent-failed')&&!a.head.querySelector('.subagent-degraded'));
+ });
+ await check('Activity recorded subagent success takes precedence over quoted legacy limit text',()=>{
+  const x=completionFixture(),a=x.launch('success');
+  x.complete({toolCallId:'success',exitCode:0,subagentOutcome:true,rawOutput:'Documented output: [Subagent terminated: max iterations (10) reached.]'});x.finish();
+  assert(a.icon.textContent==='✓'&&!a.head.querySelector('.subagent-degraded'));
  });
  await check('Activity termination text cannot settle a linked running background launch',()=>{
   const x=completionFixture(),a=x.launch('async');a.block._saId='live';
@@ -288,6 +302,16 @@ async function runSwarmTool(x,items,entries){
   x.complete({toolCallId:'second',exitCode:0,rawOutput:'Second findings'});x.complete({toolCallId:'first',exitCode:0,rawOutput:'First findings'});
   assert(first.querySelector('.subagent-result').textContent==='First findings'&&second.querySelector('.subagent-result').textContent==='Second findings','parallel results crossed');
  });
+ await check('Activity recovered swarm settles as cancelled without changing its sibling',()=>{
+  const x=swarmFixture(),start=sseHandler(x,'subagent:swarm-started'),done=sseHandler(x,'subagent:swarm-done');
+  x.e.context.swarms=s=>s._swarms??=new Map();
+  x.e.context.updateSwarmCount=()=>{};
+  start.call(x.session,{swarmId:'interrupted',total:4});start.call(x.session,{swarmId:'sibling',total:2});
+  const first=x.session._swarms.get('interrupted'),second=x.session._swarms.get('sibling');
+  done.call(x.session,{swarmId:'interrupted',done:1,failed:1,cancelled:true});
+  assert(first.querySelector('.subagent-cancelled-badge')&&!first.querySelector('.subagent-spinner'));
+  assert(second.querySelector('.subagent-spinner')&&!second.querySelector('.subagent-cancelled-badge'));
+ });
  await check('Activity swarm rejected without output retains failure in details',()=>{
   const x=swarmFixture();x.session._pendingSwarmCalls=new Map([['empty',[]]]);x.complete({toolCallId:'empty',exitCode:1,rawOutput:''});x.finish();
   assert(x.box()?.dataset.attention==='false'&&x.box().dataset.state==='settled'&&x.box().querySelector('.swarm-failed'),'empty failure detail lost');
@@ -312,6 +336,48 @@ async function runSwarmTool(x,items,entries){
   assert(a.block.querySelector('.subagent-spinner')&&x.box().dataset.state==='running');
   a.spinner.remove();a.head.classList.add('subagent-done');x.activity.refreshActivity(a.block);
   assert(x.box().dataset.state==='settled'&&a.result.textContent==='Launched in background');
+ });
+ await check('Activity explicit child cancellation survives late generic tool failure in either event order',()=>{
+  for(const cancellationFirst of [true,false]){
+   const x=completionFixture(),a=x.launch('call');
+   a.block._saId='child';x.session._saBlocksBySaId=new Map([['child',a.block]]);
+   const cancel=()=>sseHandler(x,'subagent:done').call(x.session,{subagentId:'child',cancelled:true});
+   const complete=()=>x.complete({toolCallId:'call',exitCode:1,rawOutput:'Error: aborted'});
+   if(cancellationFirst){cancel();complete();}else{complete();cancel();}
+   const sibling=x.launch('call');sibling.block._saId='sibling';x.session._subagent=sibling.block;
+   cancel();sseHandler(x,'subagent:done').call(x.session,{subagentId:'child',toolCallId:'call',cancelled:true});x.finish();
+   assert(a.icon.textContent==='■'&&a.block.classList.contains('subagent-cancelled'));
+   assert(!a.block.classList.contains('subagent-failed')&&!a.block.querySelector('.subagent-spinner'));
+   assert(a.head.querySelectorAll('.subagent-cancelled-badge').length===1&&sibling.block.querySelector('.subagent-spinner'));
+  }
+ });
+ await check('Activity queued child cancellation can arrive without a child start in either event order',()=>{
+  for(const cancellationFirst of [true,false]){
+   const x=completionFixture(),a=x.launch('queued');
+   const cancel=()=>sseHandler(x,'subagent:done').call(x.session,{toolCallId:'queued',cancelled:true,degraded:null,tokensUsed:0});
+   const complete=()=>x.complete({toolCallId:'queued',exitCode:1,rawOutput:'Error: aborted'});
+   if(cancellationFirst){cancel();complete();}else{complete();cancel();}
+   x.finish();
+   assert(a.icon.textContent==='■'&&a.block.classList.contains('subagent-cancelled')&&!a.block.classList.contains('subagent-failed'));
+   assert(!a.block.querySelector('.subagent-spinner')&&a.head.querySelectorAll('.subagent-cancelled-badge').length===1);
+  }
+ });
+ await check('Activity a late known child cannot claim an unbound launch that reused its call ID',()=>{
+  const x=completionFixture(),sibling=x.launch('reused');
+  sseHandler(x,'subagent:done').call(x.session,{subagentId:'old-child',toolCallId:'reused',cancelled:true});
+  assert(sibling.block.querySelector('.subagent-spinner'));
+  assert(!sibling.block.classList.contains('subagent-cancelled'));
+ });
+ await check('Activity only offers a resume reference for a retained or legacy successful result',()=>{
+  for(const {outcome,hasBadge} of [
+   {outcome:{resumable:true},hasBadge:true}, {outcome:{resumable:false},hasBadge:false},
+   {outcome:{},hasBadge:true}, {outcome:{error:'timed out'},hasBadge:false},
+  ]){
+   const x=completionFixture(),a=x.launch('resume-reference');
+   a.block._saId='child';x.session._saBlocksBySaId=new Map([['child',a.block]]);
+   sseHandler(x,'subagent:done').call(x.session,{subagentId:'child',...outcome});
+   assert(!!a.head.querySelector('.subagent-id')===hasBadge);
+  }
  });
  await check('Activity completion keeps existing partial and failed lifecycle states',()=>{
   for(const cls of ['subagent-degraded','subagent-failed']){
@@ -463,17 +529,19 @@ async function runSwarmTool(x,items,entries){
   launched.block._saId='child';x.session._saBlocksBySaId=new Map([['child',launched.block]]);
   Object.assign(x.e.context,{fmtNum:String});
   sseHandler(x,'subagent:done').call(x.session,{subagentId:'child',...c.payload});
-  assert(launched.icon.textContent===(c.outcome==='failed'?'✗':c.outcome==='partial'?'◐':'✓'));
+  assert(launched.icon.textContent===(c.outcome==='cancelled'?'■':c.outcome==='failed'?'✗':c.outcome==='partial'?'◐':'✓'));
   assert(launched.block.classList.contains('subagent-failed')===(c.outcome==='failed'));
+  assert(launched.block.classList.contains('subagent-cancelled')===(c.outcome==='cancelled'));
   x.finish();assert(x.box().dataset.attention==='false','a child result must not fail the main turn');
  });
- for(const c of require('./fixtures/conversation-events.cjs').filter(c=>c.outcome!=='partial')) await check('Desktop tool result contract: '+c.name,()=>{
+ for(const c of require('./fixtures/conversation-events.cjs')) await check('Desktop tool result contract: '+c.name,()=>{
   const x=fixture(),row=x.tool('bash');
   x.session.streamEl.querySelector=()=>row;
   Object.assign(x.e.context,{saIdFromToolId:()=>'',refreshActivity:x.activity.refreshActivity,
-   refreshToolSummaries:x.groups.refreshToolSummaries,absorbAsToolBody:()=>true,maybeScroll(){},CSS:{escape:x=>x}});
+   refreshToolSummaries:x.groups.refreshToolSummaries,absorbAsToolBody:()=>true,maybeScroll(){},t:k=>'en:'+k,CSS:{escape:x=>x}});
   sseHandler(x,'agent:tool-completed').call(x.session,{toolCallId:'call',...c.payload});
-  assert(row.classList.contains(c.outcome==='failed'?'err':'ok'));
+  assert(row.classList.contains(c.outcome==='failed'?'err':c.outcome==='ended'?'ok':c.outcome));
+  if(c.outcome==='cancelled') assert(row.querySelector('.tool-mark').textContent.includes('subagent.cancelled'));
   assert(!row.textContent.includes('exit undefined'));
  });
  console.log(JSON.stringify({checks:results.length,passed:results.filter(x=>x.passed).length,failed:results.filter(x=>!x.passed).length}));

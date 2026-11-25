@@ -17,6 +17,7 @@
       "background-services",
       "conversation-entries",
       "scoped-history",
+      "project-name-history",
       "remote-resources",
       "conversation-resource-popovers",
       "conversation-scoped-sessions"
@@ -25,6 +26,7 @@
   "permissions": [
     "只读取个人助手专属对话，经用户授权后进行有额度限制的后台整理",
     "记忆存储在本机，可追溯、纠正和忘记；其他对话默认不参与学习或召回",
+    "在已授权的专属对话中核对项目主题时，可读取项目名称的历史变更，不读取其他项目的对话和文件",
     "已共享的个人助手可在远控端聊天及关闭长期记忆，开启授权在桌面确认"
   ],
   "configNamespaces": [],

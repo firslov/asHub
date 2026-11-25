@@ -5,7 +5,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-787868.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-22-787868.svg)](.nvmrc)
-[![agent-sh](https://img.shields.io/badge/agent--sh-0.16.1-a58b5d.svg)](https://github.com/guanyilun/agent-sh/releases/tag/v0.16.1)
+[![agent-sh](https://img.shields.io/badge/agent--sh-0.17.0-a58b5d.svg)](https://www.npmjs.com/package/agent-sh/v/0.17.0)
 
 asHub is an open-source desktop workspace powered by [agent-sh](https://github.com/guanyilun/agent-sh). Keep conversations, models, subagents, terminals and project files together, with a readable result and an inspectable execution trail.
 
@@ -123,7 +123,9 @@ The [scheduled-tasks plugin](examples/extensions/scheduled-tasks) requires **v0.
 
 ## Run from source
 
-The project pins **Node.js 22.23.3** (minimum **22.12.0**) and the official **agent-sh 0.16.1** release. Windows Codex login and queued-message compatibility patches are applied automatically. With nvm:
+Use **Node.js 22 or 24** to run from source (the `.nvmrc` pins **22.23.3**). The CLI requires `>=22.12.0 <26` and refuses to start on Node.js 26 and later because the current proxy configuration is incompatible with Node.js 26. This restriction does not affect the bundled Electron app.
+
+The project pins the official **agent-sh 0.17.0** npm release. Installation verifies Windows Codex login and applies the remaining provider and retry compatibility patches. With nvm:
 
 ```sh
 git clone https://github.com/firslov/asHub.git

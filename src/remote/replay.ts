@@ -24,9 +24,10 @@ export function mobileReplayFrame(frame: string): string {
   data.payload = {
     name: p.name, title: p.title, toolName: p.toolName, toolCallId: p.toolCallId,
     subagentId: p.subagentId, swarmId: p.swarmId,
-    // Identity and result semantics must survive previewing. Limit only the
-    // error's detail; dropping it would turn a failed call into an ended one.
+    // Preserve terminal states even when a long diagnostic is previewed.
     success: p.success, isError: p.isError, exitCode: p.exitCode,
+    cancelled: p.cancelled === true ? true : undefined,
+    resumable: typeof p.resumable === 'boolean' ? p.resumable : undefined,
     error: typeof p.error === 'string' ? unicodeSlice(p.error, 0, 240) : p.error ? true : p.error,
     degraded: p.degraded, tokensUsed: p.tokensUsed, kind: p.kind,
     task: typeof p.task === 'string' ? unicodeSlice(p.task, 0, 160) : undefined,

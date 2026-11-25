@@ -31,6 +31,8 @@ export interface Capture {
 
 export interface CaptureOpts {
   onWarn?(msg: string): void;
+  onFlushResult?(failure?: { error: unknown }): void;
+  shutdownSignal?: AbortSignal;
 }
 
 export function createCapture(
@@ -53,9 +55,10 @@ export function createCapture(
     return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
   };
 
-  const flush = async (): Promise<void> => {
+  const captureMessages = async (): Promise<boolean> => {
+    opts?.shutdownSignal?.throwIfAborted();
     const store = getStore();
-    if (!store || desynced) return;
+    if (!store || desynced) return false;
     let snap;
     try {
       // Only the message list is needed — skip the kernel's full-conversation
@@ -68,10 +71,11 @@ export function createCapture(
       // still propagate to the caller's catch-log.
       if (err instanceof Error && /does not support/.test(err.message)) {
         desynced = true;
-        return;
+        return false;
       }
       throw err;
     }
+    opts?.shutdownSignal?.throwIfAborted();
     const messages = snap.messages as AgentMessage[];
 
     if (messages.length < liveEntryIds.length) {
@@ -108,10 +112,10 @@ export function createCapture(
         // until hub re-syncs via resetTo/truncateTo.
         desynced = true;
         opts?.onWarn?.(`capture: snapshot shrank (${messages.length} < ${liveEntryIds.length}) and shares no verifiable prefix with the persisted tree — history persistence halted (desynced) to prevent corruption; restart or re-sync required`);
-        return;
+        return false;
       }
     }
-    if (messages.length === liveEntryIds.length) return;
+    if (messages.length === liveEntryIds.length) return true;
     const newMessages = messages.slice(liveEntryIds.length);
     // System notes (project-skills discovery messages) are invisible to the
     // UI and must not be persisted into the tree — but liveEntryIds must stay
@@ -123,10 +127,18 @@ export function createCapture(
     let ai = 0;
     const aligned = newMessages.map((m) => (isSystemNoteMessage(m) ? null : newIds[ai++]));
     liveEntryIds = [...liveEntryIds, ...aligned];
+    return true;
   };
 
   return {
-    flush,
+    async flush() {
+      try {
+        if (await captureMessages()) opts?.onFlushResult?.();
+      } catch (error) {
+        opts?.onFlushResult?.({ error });
+        throw error;
+      }
+    },
     getEntryIdAt: (i) => liveEntryIds[i] ?? null,
     // resetTo/truncateTo are hub-driven re-syncs (load, rewind, compaction):
     // they re-establish a trusted alignment, so they clear the desynced flag.

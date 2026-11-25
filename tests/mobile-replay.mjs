@@ -35,6 +35,15 @@ test('large collaborator records preserve identifiers used to pair start and com
   }
 });
 
+test('compact child completions preserve checkpoint availability',()=>{
+  for (const resumable of [undefined, true, false]) {
+    const raw=frame('subagent:done',{subagentId:'reviewer-1',resumable,task:'Review '.repeat(400)});
+    const {payload}=JSON.parse(mobileReplayFrame(raw).split('data: ')[1]);
+    assert.equal(payload.resumable,resumable);
+    assert.equal(payload.detailsOmitted,true);
+  }
+});
+
 test('mobile preview counts tasks rather than mid-task follow-ups',()=>{
  const frames=[];const starts=[];
  for(let turn=0;turn<14;turn++){

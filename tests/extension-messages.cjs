@@ -63,6 +63,54 @@ test('admission race is retried safely; pre-dispatch failures settle instead of 
     assert.equal(f.sent.length, 0);
     f.service.close();
 });
+test('bound message service waits for application activation, including at final admission', async () => {
+    const f = fixture(), g = f.grant({recoverQueued:true});
+    const receipt = f.api.submit(f.request(g));
+    let active = false;
+    f.port.activePlugin = () => active;
+    await f.service.pump();
+    assert.equal(f.api.status(receipt.id).state,'queued');
+    assert.equal(f.sent.length,0);
+    active = true;
+    const dispatch = f.port.dispatch;
+    f.port.dispatch = async (_delivery, before) => { active = false; before(); };
+    await f.service.pump();
+    assert.equal(f.api.status(receipt.id).state,'queued');
+    active = true;
+    f.port.dispatch = dispatch;
+    await f.service.pump();
+    assert.equal(f.sent.length,1);
+    f.service.close();
+});
+test('suspending an activation stops its queued messages but allows revoking them', async () => {
+    const f = fixture(), g = f.grant(), receipt = f.api.submit(f.request(g));
+    f.port.dispatch = async (_delivery, before) => { f.api.suspendAdmission(); before(); };
+    await f.service.pump();
+    assert.equal(f.api.status(receipt.id).state,'queued');
+    await f.service.pump();
+    assert.equal(f.sent.length,0);
+    assert.throws(()=>f.api.submit(f.request(g,'more')),/admission suspended/);
+    f.api.revoke(g);
+    assert.equal(f.api.status(receipt.id).state,'cancelled');
+    f.service.close();
+});
+test('suspending one plugin durably revokes only its recoverable grants', async () => {
+    const f = fixture(), recoverable = f.grant({ recoverQueued: true }), ordinary = f.grant();
+    const queued = f.api.submit(f.request(recoverable));
+    const otherSignal = new AbortController(), other = f.service.bind('other', otherSignal.signal);
+    const otherGrant = f.service.approve('other', f.service.prepare('other', {
+        targetId:'target',label:'Task',template:'work',minIntervalMs:0,recoverQueued:true,
+    }));
+    const independent = other.submit({grantId:otherGrant,key:'other work',expiresAt:5000});
+    f.api.suspendAdmission();
+    assert(f.api.authorization(recoverable).revoked);
+    assert(!f.api.authorization(ordinary).revoked);
+    assert(!other.authorization(otherGrant).revoked);
+    await f.service.pump();
+    assert.equal(f.api.status(queued.id).state,'cancelled');
+    assert.equal(other.status(independent.id).state,'running');
+    f.service.close();
+});
 test('expiry and target binding are rechecked inside the dispatch lock', async () => {
     for (const change of ['expiry', 'binding']) {
         const f = fixture(), g = f.grant(), r = f.api.submit(f.request(g));
@@ -150,10 +198,30 @@ test('opt-in unstarted messages survive restart but running uncertain turns neve
  for(const running of [false,true]) {
   const f=fixture(),g=f.grant({recoverQueued:true,pauseOnStop:true});const r=f.api.submit(f.request(g));
   if(running)await f.service.pump();
-  f.service.prepareShutdown();f.control.abort();f.service.close();
+  f.service.prepareShutdown();f.control.abort();f.service.close();f.service.finishShutdown();
   const next=new f.ExtensionMessages(f.file,f.port,()=>1000),control=new AbortController(),api=next.bind('example',control.signal);
   assert.equal(api.status(r.id).state,running?'interrupted':'queued');await next.pump();assert.equal(f.sent.length,1);next.close();control.abort();
  }
+});
+for (const legacy of [false,true]) test(`unverified shutdown needs a fresh continuation grant (${legacy?'legacy':'dirty'})`,async()=>{
+ const f=fixture(),continuation=f.grant({recoverQueued:true,pauseOnStop:true}),ordinary=f.grant();
+ const queued=f.api.submit(f.request(continuation));
+ if(legacy){
+  const state=JSON.parse(fs.readFileSync(f.file,'utf8'));delete state.cleanShutdown;
+  fs.writeFileSync(f.file,JSON.stringify(state));
+ }
+ const next=new f.ExtensionMessages(f.file,f.port,()=>1000),api=next.bind('example',new AbortController().signal);
+ await next.pump();
+ assert(api.authorization(continuation).revoked);
+ assert(!api.authorization(ordinary).revoked);
+ assert.equal(api.status(queued.id).state,'cancelled');
+ assert.equal(f.sent.length,0);
+ const fresh=next.approve('example',next.prepare('example',{targetId:'target',label:'Continue',template:'Fresh confirmation',minIntervalMs:0,recoverQueued:true}));
+ const resumed=api.submit({grantId:fresh,key:'fresh',expiresAt:5000});
+ await next.pump();
+ assert.equal(api.status(resumed.id).state,'running');
+ assert.equal(f.sent.length,1);
+ next.close();
 });
 test('explicit stop and plugin disable cancel queued continuation without revoking unrelated grants', async () => {
  const f=fixture(),g=f.grant({pauseOnStop:true,recoverQueued:true}),other=f.grant();const r=f.api.submit(f.request(g));
@@ -194,7 +262,7 @@ test('late bridge initialization after shutdown cannot overwrite a recoverable q
  const receipt=f.api.submit(request),dispatch=f.port.dispatch;let release;
  f.port.dispatch=async(d,before,settled)=>{await new Promise(r=>release=r);before();f.sent.push({d,settled});};
  const pumping=f.service.pump();assert(release);
- f.service.prepareShutdown();f.control.abort();f.service.close();
+ f.service.prepareShutdown();f.control.abort();f.service.close();f.service.finishShutdown();
  // The bridge finishes initialization only after the durable shutdown commit.
  if(!restartFirst){release();await pumping;assert.equal(f.sent.length,0);}
  f.port.dispatch=dispatch;
@@ -215,6 +283,7 @@ test('shutdown preparation blocks new admission, while ordinary Stop still cance
  release();await running;assert.equal(f.sent.length,0);await f.service.pump();
  if(mode==='stop')assert.equal(f.api.status(r.id).state,'cancelled');
  f.service.close();
+ if(mode==='shutdown')f.service.finishShutdown();
  const recovered=new f.ExtensionMessages(f.file,f.port,()=>1000),api=recovered.bind('example',new AbortController().signal);
  assert.equal(api.status(r.id).state,mode==='shutdown'?'queued':'cancelled');recovered.close();
  }

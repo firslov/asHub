@@ -1,6 +1,6 @@
 import { mountToolMenu } from './tool-menu.js';
 import { registerPanel, closePanel } from '../panel-manager.js';
-import { bundledFeatures, features, featureEnabled, loadFeature, featuresReady, refreshFeatures } from './feature-state.js';
+import { bundledFeatures, features, featureEnabled, loadFeature, featuresReady, refreshFeatures, refreshFeaturesForNavigation } from './feature-state.js';
 import { panelKey } from './declarative-schema.js';
 import { mountDeclarativeUI } from './declarative-ui.js';
 
@@ -30,7 +30,7 @@ export function initializeFeatureUI() {
     if (!menuHost) return;
     for (const feature of snapshot.features) {
       if (!feature.enabled || !feature.ui || bundledFeatures.some(builtin => builtin.id === feature.id)) continue;
-      const signature = JSON.stringify([feature.ui, feature.pluginId, feature.configNamespaces]);
+      const signature = JSON.stringify([feature.ui, feature.pluginId, feature.configNamespaces, feature.capabilities]);
       present.add(feature.id);
       if (contributions.get(feature.id)?.signature === signature) continue;
       contributions.get(feature.id)?.dispose();
@@ -43,18 +43,29 @@ export function initializeFeatureUI() {
       if (!present.has(id)) { contribution.dispose(); contributions.delete(id); }
     }
   });
-  window.electronAPI?.onRevealPluginResource?.(async ({ plugin, resource }) => {
-    await refreshFeatures();
-    const feature = features.snapshot().features.find(f => f.pluginId === plugin && f.enabled && f.ui?.panels?.some(p => p.components.some(c => c.type === 'resource' && c.id === resource)));
-    if (feature) { contributions.get(feature.id)?.dispose(); contributions.delete(feature.id); features.emit(); }
-    const panel = feature?.ui.panels.find(p => p.components.some(c => c.type === 'resource' && c.id === resource));
+  let revealRequest = 0;
+  window.electronAPI?.onRevealPluginResource?.(async ({ plugin, resource, feature: featureId }) => {
+    const request = ++revealRequest;
+    await refreshFeaturesForNavigation();
+    if (request !== revealRequest) return;
+    const feature = plugin && resource && features.snapshot().features.find(f => f.pluginId === plugin && f.enabled);
+    const panel = feature?.ui?.panels.find(p => p.components.some(c => c.type === 'resource' && c.id === resource));
+    if (panel) { contributions.get(feature.id)?.dispose(); contributions.delete(feature.id); features.emit(); }
     const key = panel && panelKey(feature.id, panel.id);
     const trigger = key && document.getElementById(key + '-toggle');
-    if (!trigger) { document.getElementById('plugins-toggle')?.click(); return; }
+    if (!trigger) {
+      const controls = featureId ? await import('../plugins-panel.js') : undefined;
+      if (request !== revealRequest) return;
+      const fallback = document.getElementById('plugins-toggle');
+      if (!fallback?.classList.contains('active')) fallback?.click();
+      controls?.focusFeatureControl(featureId);
+      return;
+    }
     // Remount a visible panel as well: its resource may have navigated to a form.
     closePanel(key);
     trigger.click();
   });
+  window.electronAPI?.notifyDesktopReady?.();
   void featuresReady();
   document.addEventListener('ash:extensions-changed', () => { void refreshFeatures(); });
   document.addEventListener('ash:host-state-changed', event => {

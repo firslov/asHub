@@ -29,12 +29,13 @@ test('download verification rejects same-size corruption and wrong sizes', async
 });
 test('metadata waits for every payload verification and a fresh release check', async () => {
   const r = release(), plan = planRelease(version, r, r), events = [];
-  await synchronize(plan, { assertCurrent: () => events.push('current'), upload: a => events.push('upload:' + a.name), verify: a => events.push('verify:' + a.name) });
+  await synchronize(plan, { inspect: () => new Set(), assertCurrent: () => events.push('current'), upload: a => events.push('upload:' + a.name), verify: a => events.push('verify:' + a.name) });
   const lastPayload = events.indexOf('verify:' + plan.filter(a => !a.metadata).at(-1).name);
   assert.equal(events[lastPayload + 1], 'current');assert.equal(events[lastPayload + 2], 'upload:latest.yml');
-  for (const failAt of ['upload', 'verify', 'current']) {
+  for (const failAt of ['inspect', 'upload', 'verify', 'current']) {
     const uploaded = [];let checks = 0;
     await assert.rejects(synchronize(plan, {
+      inspect() { if (failAt === 'inspect') throw Error('COS conflict'); return new Set(); },
       assertCurrent() { if (++checks === 2 && failAt === 'current') throw Error('changed'); },
       upload(a) { uploaded.push(a.name);if (failAt === 'upload') throw Error('upload failed'); },
       verify() { if (failAt === 'verify') throw Error('corrupt'); },

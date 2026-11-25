@@ -14,7 +14,7 @@ async function fixture(t,projectName='北辰') {
   const projects=[{id:'p1',name:projectName,nameObserved:projectName,nameSince:Date.now()-10000},{id:'p2',name:'南河',nameObserved:'南河',nameSince:Date.now()-10000}];
   const history=new SessionStore(path.join(dir,'history.jsonl'),{create:{sessionId:id,cwd:dir}});
   const host=new PluginBackground(path.join(dir,'grants.json'),{targets:()=>[session],store:()=>history,complete:async()=>{throw Error('model forbidden');}},life.signal);
-  const a=new Assistant({dataDirectory:dir,host:{snapshot:()=>({sessions:[session],projects}),projectNames:(entry,sid,grantId)=>{const g=host.bind('assistant',life.signal).status(grantId);if(entry!=='assistant'||sid!==id||g.modelSessionId!==id||g.includedIds?.length!==1||g.includedIds[0]!==id||g.excludedIds.includes(id))throw Error('project authorization');return projects;}},conversations:{get:()=>id},background:host.bind('assistant',life.signal)});
+  const a=new Assistant({dataDirectory:dir,host:{snapshot:()=>({sessions:[session],projects}),projectNameHistory:(entry,sid,grantId)=>{const g=host.bind('assistant',life.signal).status(grantId);if(entry!=='assistant'||sid!==id||g.modelSessionId!==id||g.includedIds?.length!==1||g.includedIds[0]!==id||g.excludedIds.includes(id))throw Error('project authorization');return {projects,gaps:[]};}},conversations:{get:()=>id},background:host.bind('assistant',life.signal)});
   const grant=host.approve('assistant',host.prepare('assistant',{modelSessionId:id,includedIds:[id],excludedIds:[],includeHistory:true,dailyCalls:4}));
   a.learning.configure(grant,{modelSessionId:id,includeHistory:true,includedIds:[id]});
   const texts=[`${projectName}项目最初决定采用离线处理`,`${projectName}项目后来决定改为本地缓存`,'协作时我偏好先给结论再说明理由','换个话题，我希望先说结论并解释原因'];
@@ -47,12 +47,34 @@ test('pilot is opt-in, shares budget and exposes traceable IDs through search',a
   const found=f.a.search(f.id,projectQuery).find(x=>x.kind==='theme-overview');assert(found);assert.equal(found.id,undefined);assert.equal(f.a.read(f.id,found.statements[0].evidence[0].memoryId).id,f.rows[0].id);assert.equal(f.a.historyRead(f.id,found.statements[0].evidence[0].sourceId).id,f.ids[0]);
   f.setEnabled(false);assert.deepEqual(withMemory([{role:'user',content:projectQuery}],f.a,f.id),before);
 });
+test('recall shares project-name history only within the current authorized pass',async t=>{
+  const f=await fixture(t);f.setEnabled(true);
+  const host=f.a.services.host, read=host.projectNameHistory;
+  let allowed=true;
+  const projectNameHistory=t.mock.method(host,'projectNameHistory',(...args)=>{
+    if(!allowed)throw Error('project authorization');
+    return read(...args);
+  });
+  assert.equal(theme(f)?.statements.length,2);
+  assert.equal(projectNameHistory.mock.callCount(),1);
+  assert.equal(theme(f,'我过去的协作沟通偏好有什么变化？')?.statements.length,1);
+  assert.equal(projectNameHistory.mock.callCount(),1);
+  allowed=false;
+  assert.equal(theme(f),undefined);
+  assert.equal(projectNameHistory.mock.callCount(),2);
+});
 test('separate statements survive independent revisions and forgotten evidence is excluded',async t=>{
   const f=await fixture(t);f.setEnabled(true);
   f.a.store.edit(f.rows[0].id,f.rows[0].revision,{title:'北辰项目决策',content:'修订后决定暂缓',kind:'fact',scope:'project:p1'});
   const result=theme(f);assert.equal(result.statements.length,1);assert.equal(result.statements[0].text,'北辰项目后来决定改为本地缓存');
   assert.equal(f.a.search(f.id,projectQuery).find(x=>x.kind==='theme-overview').statements.length,1);
   f.a.store.forget(f.rows[1].id,f.rows[1].revision);assert.equal(theme(f),undefined);
+});
+test('out-of-bounds evidence cannot support a project statement',async t=>{
+  const f=await fixture(t);
+  f.themes[0].statements[0].evidence[0].end+=50;
+  f.setEnabled(true);
+  assert.deepEqual(theme(f)?.statements.map(s=>s.text),['北辰项目后来决定改为本地缓存']);
 });
 test('exact, unrelated, foreign and duplicate project names do not route to themes',async t=>{
   const f=await fixture(t);f.setEnabled(true);
@@ -113,7 +135,7 @@ test('one-character project name needs a project marker and resolves uniquely',a
 test('zero timestamp survives and long timeline retains both ends within budget',async t=>{
  const f=await fixture(t);f.themes[1].statements[0].validFrom=0;f.setEnabled(true);
  assert.equal(theme(f,'我过去的协作沟通偏好有什么变化？').statements[0].validFrom,0);
- const texts=Array.from({length:8},(_,i)=>`北辰项目决定阶段${i}方案`+'稳'.repeat(95));
+ const texts=Array.from({length:8},(_,i)=>`北辰项目：决定采用阶段${i}方案`+'稳'.repeat(95));
  const ids=await f.history.appendMessages(texts.map(content=>({role:'user',content})));
  const statements=texts.map((text,i)=>{const row=f.a.store.add({title:'北辰项目决策',content:text,kind:'fact',scope:'project:p1'},
   {type:'learned',namespace:'assistant-v4',grantId:f.grant,context:{subject:'project',projectId:'p1',conversationId:f.id},mode:'explicit',refs:[{id:ids[i],conversationId:f.id,quote:text,at:i+1}],topic:'timeline'+i},'active');

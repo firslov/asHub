@@ -74,9 +74,10 @@ export class PluginInteractions {
     reveal(pluginId: string, resourceId: string) {
         this.signal.throwIfAborted();
         const entry = this.entries.get(pluginId + '/' + resourceId);
-        if (!entry || entry.signal.aborted) return;
+        if (!entry || entry.signal.aborted) return false;
         this.requireActive(pluginId);
         entry.resource.onReveal?.();
+        return true;
     }
     catalog() { return [...this.entries.values()].filter(e=>!e.signal.aborted && e.resource.remote).map(e=>({pluginId:e.pluginId,resourceId:[...this.entries.entries()].find(([,v])=>v===e)![0].split('/')[1],sessionId:e.resource.remote!.conversationId()})); }
     async handle(req: IncomingMessage, res: ServerResponse, read: (req: IncomingMessage) => Promise<string>) {

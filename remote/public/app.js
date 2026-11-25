@@ -73,6 +73,7 @@ const phases = new Set(), toolSteps = new Map();
 // Ownership follows the displayed history, independently of active-work maps.
 // Completed/previous-turn rows can still receive buffered output or results.
 const diagnosticOwners = new Map();
+const subagentLaunchOwners = new Map();
 const agentSteps = new Map(), activityNode = $('activity'), activityText = $('activity-text');
 let requestPhase = '', responseStreaming = false, streamPaused = false, recordsDirty = false;
 const requestLabels = { sending: '正在发送上下文并等待响应', waiting: '已连接，正在等待回复', retrying: '正在重试连接' };
@@ -955,7 +956,7 @@ function resetMessages() {
   if (batchingFrames) batchNear = true;
   if (modelPicker) { modelPicker = null; taskView++; $('modal').close(); }
   clearTimeout(renderTimer); renderTimer = null; reply = null; liveSegment = false; details = null; todo = null;
-  permissions.clear(); permissionRecords.clear(); phases.clear(); toolSteps.clear(); agentSteps.clear(); diagnosticOwners.clear(); turnOutcome = ''; modelInfo = {}; modelRevision++; usage = null; streamPaused = false;
+  permissions.clear(); permissionRecords.clear(); phases.clear(); toolSteps.clear(); agentSteps.clear(); diagnosticOwners.clear(); subagentLaunchOwners.clear(); turnOutcome = ''; modelInfo = {}; modelRevision++; usage = null; streamPaused = false;
   $('usage').textContent = ''; $('messages').replaceChildren(); setActivity(false);
 }
 function phaseLabel(phase) {
@@ -1209,10 +1210,18 @@ async function showArtifactDownload(url, name, did) {
     if (current()) status.textContent = e.name === 'AbortError' ? '文件准备超时，请关闭后重试' : e.message;
   } finally { clearTimeout(timeout); }
 }
+const markdownTableState = new WeakMap();
 function renderMarkdown(target, text, owner = session, did = device) {
   const savedImages = globalThis.AsHubImageResources?.preserve(target);
   const savedArtifacts = globalThis.AsHubArtifactImages?.preserve(target);
   const epoch = generation, viewer = session;
+  const previous = markdownTableState.get(target);
+  // Only carry positions across a redraw or append of the same message.
+  const tablePositions = previous && previous.epoch === epoch && previous.viewer === viewer &&
+    previous.owner === owner && previous.did === did && text.startsWith(previous.text)
+    ? Array.from(target.querySelectorAll('table'), table =>
+      table.scrollLeft && table.tHead ? { left: table.scrollLeft, heading: table.tHead.textContent } : null)
+    : [];
   target.innerHTML = DOMPurify.sanitize(marked.parse(globalThis.AsHubMath?.extractMath(text) ?? text), { FORBID_TAGS: ['img', 'style', 'form', 'input', 'video', 'audio', 'iframe', 'svg'], FORBID_ATTR: ['style'] });
   globalThis.AsHubMath?.renderMathIn(target);
   globalThis.AsHubArtifactImages?.hydrate(target, {
@@ -1249,6 +1258,13 @@ function renderMarkdown(target, text, owner = session, did = device) {
       };
     } else if (!/^https?:/.test(a.href) || ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(a.href).hostname)) a.removeAttribute('href');
   }
+  const tables = target.querySelectorAll('table');
+  tables.forEach((table, index) => {
+    const position = tablePositions[index];
+    if (position && table.tHead?.textContent === position.heading) table.scrollLeft = position.left;
+  });
+  if (tables.length) markdownTableState.set(target, { epoch, viewer, owner, did, text });
+  else markdownTableState.delete(target);
 }
 function renderReply() { if (!reply) return; const near = nearBottom(); renderMarkdown(reply.el, reply.text); scroll(near); }
 function chunk(text) { if (!text) return; requestPhase = ''; responseStreaming = true; if (!details?.replyAnchor || details.replyAnchor !== reply?.el) sealDetails(); refreshProgress(); if (!reply) { reply = { el: el('article', undefined, 'message reply'), text: '' }; $('messages').append(reply.el); } reply.text += text; if (!renderTimer) renderTimer = setTimeout(() => { renderTimer = null; renderReply(); }, 100); }
@@ -1272,8 +1288,9 @@ function diagnosticTrace(phase, name, payload) {
   }
   if (phase.traceRow.open) phase.traceRow.ontoggle();
 }
-function diagnosticCall(phase, name, payload) {
-  const child = name.startsWith('subagent:');
+const diagnosticStatus = { failed: '未完成', partial: '部分完成', cancelled: '已取消', ended: '已结束' };
+function diagnosticCall(phase, name, payload, forLaunch) {
+  const child = !forLaunch && name.startsWith('subagent:');
   const started = name === 'agent:tool-started' || name === 'subagent:started';
   const completed = name === 'agent:tool-completed' || name === 'subagent:done';
   const output = name === 'agent:tool-output' || name === 'agent:tool-output-chunk';
@@ -1294,7 +1311,7 @@ function diagnosticCall(phase, name, payload) {
     row.ontoggle = () => { if (row.open) renderDiagnosticCall(call); };
   }
   if (started) call.start = payload;
-  if (completed) call.result = payload;
+  if (completed && (payload.cancelled === true || call.result?.cancelled !== true)) call.result = payload;
   if (output) {
     phase.outputs ||= new Map();
     const outputKey = typeof id === 'string' ? id : '';
@@ -1310,8 +1327,8 @@ function diagnosticCall(phase, name, payload) {
   call.hint.title = call.hint.textContent;
   const result = call.result;
   const outcome = diagnosticState(result);
-  call.row.dataset.state = outcome === 'pending' ? 'pending' : outcome === 'ended' ? 'done' : 'incomplete';
-  call.status.textContent = outcome === 'pending' ? '' : outcome === 'failed' ? '未完成' : outcome === 'partial' ? '部分完成' : '已结束';
+  call.row.dataset.state = outcome === 'pending' || outcome === 'cancelled' ? outcome : outcome === 'ended' ? 'done' : 'incomplete';
+  call.status.textContent = diagnosticStatus[outcome] || '';
   if (call.row.open) renderDiagnosticCall(call);
 }
 function setDiagnosticText(node, value) {
@@ -1353,17 +1370,32 @@ function renderDiagnosticCall(call) {
 }
 
 function flushDiagnostics(phase) {
-  for (const item of phase.pending.splice(0)) diagnostic(item.name, item.payload, phase);
+  for (const item of phase.pending.splice(0)) diagnostic(item.name, item.payload, phase, item.forLaunch);
 }
-function diagnostic(name, payload, targetPhase = null) {
+function diagnostic(name, payload, targetPhase = null, forLaunch = null) {
   const materializing = !!targetPhase;
   const summaryEvent = name === 'agent:thinking-chunk' || name === 'agent:thinking';
   const outputEvent = name === 'agent:tool-output' || name === 'agent:tool-output-chunk';
   const toolId = typeof payload.toolCallId === 'string' ? payload.toolCallId : '';
+  const toolOwner = forLaunch || toolSteps.get(toolId) || diagnosticOwners.get('tool:'+toolId);
+  const childFinished = name === 'subagent:done';
+  const agentOwner = payload.subagentId && (agentSteps.get(payload.subagentId) || diagnosticOwners.get('agent:'+payload.subagentId));
+  if (!materializing && !forLaunch && childFinished) {
+    // A recent-history replay can omit the child's start. Its completion
+    // cannot claim the current phase or another launch with the same tool ID.
+    if (payload.subagentId && !agentOwner) return;
+    if (payload.cancelled === true && toolId) {
+      const launch = subagentLaunchOwners.get(payload.subagentId);
+      const owner = payload.subagentId ? (launch?.toolId === toolId ? launch.phase : null) : toolOwner;
+      if (owner) diagnostic(name, payload, null, owner);
+      if (!payload.subagentId) return;
+    }
+  }
+  const toolFinished = forLaunch || name === 'agent:tool-completed';
   const childId = toolId.includes('-tool-') ? toolId.slice(0, toolId.lastIndexOf('-tool-')) : '';
   const child = childId ? (agentSteps.get(childId) || diagnosticOwners.get('agent:'+childId)) : null;
-  const linked = targetPhase || (name === 'subagent:done' && (agentSteps.get(payload.subagentId) || diagnosticOwners.get('agent:'+payload.subagentId)))
-    || ((name === 'agent:tool-completed' || outputEvent) && (toolSteps.get(toolId) || diagnosticOwners.get('tool:'+toolId))) || child;
+  const linked = targetPhase || (childFinished && !forLaunch && agentOwner)
+    || ((toolFinished || outputEvent) && toolOwner) || child;
   // A late result belongs to its original phase, not the current reply summary.
   if (!materializing && !linked && details?.replyAnchor && (!summaryEvent || details.replyAnchor !== reply?.el)) sealDetails();
   if (!details && !linked) {
@@ -1383,13 +1415,21 @@ function diagnostic(name, payload, targetPhase = null) {
   // Track lifecycle even while the disclosure is collapsed. Materializing its
   // queued details later must not restart tools or overwrite current progress.
   if (!materializing) {
-    if (toolId && (name === 'agent:tool-started' || name === 'agent:tool-completed' || outputEvent)) diagnosticOwners.set('tool:'+toolId,phase);
-    if (typeof payload.subagentId === 'string' && payload.subagentId && (name === 'subagent:started' || name === 'subagent:done')) diagnosticOwners.set('agent:'+payload.subagentId,phase);
+    if (!forLaunch && toolId && (name === 'agent:tool-started' || toolFinished || outputEvent)) diagnosticOwners.set('tool:'+toolId,phase);
+    if (!forLaunch && typeof payload.subagentId === 'string' && payload.subagentId && (name === 'subagent:started' || childFinished)) diagnosticOwners.set('agent:'+payload.subagentId,phase);
     if (activityEventTime && (!phase.lastWorkAt || activityEventTime.iso > phase.lastWorkAt.iso)) phase.lastWorkAt = activityEventTime;
     if (name === 'agent:tool-started' && toolId) { phase.tools.set(toolId, payload); toolSteps.set(toolId, phase); }
-    if (name === 'agent:tool-completed' && toolId) { phase.tools.delete(toolId); toolSteps.delete(toolId); }
-    if (name === 'subagent:started' && payload.subagentId) { phase.agents.add(payload.subagentId); agentSteps.set(payload.subagentId, phase); }
-    if (name === 'subagent:done' && payload.subagentId) { phase.agents.delete(payload.subagentId); agentSteps.delete(payload.subagentId); }
+    if (toolFinished && toolId) {
+      phase.tools.delete(toolId);
+      if (toolSteps.get(toolId) === phase) toolSteps.delete(toolId);
+    }
+    if (name === 'subagent:started' && payload.subagentId) {
+      phase.agents.add(payload.subagentId); agentSteps.set(payload.subagentId, phase);
+      if (toolOwner) subagentLaunchOwners.set(payload.subagentId, { toolId, phase: toolOwner });
+    }
+    if (childFinished && !forLaunch && payload.subagentId) {
+      phase.agents.delete(payload.subagentId); agentSteps.delete(payload.subagentId); subagentLaunchOwners.delete(payload.subagentId);
+    }
     if (phase === details && ['agent:tool-started', 'agent:thinking', 'agent:thinking-chunk', 'subagent:started'].includes(name)) { requestPhase = ''; responseStreaming = false; }
     phaseLabel(phase); refreshProgress();
   }
@@ -1397,7 +1437,7 @@ function diagnostic(name, payload, targetPhase = null) {
   // live event that observes open=true, even if ontoggle has not run yet.
   if (!materializing && phase.box.open) flushDiagnostics(phase);
   if (!materializing && !phase.box.open) {
-    phase.pending.push({ name, payload });
+    phase.pending.push({ name, payload, forLaunch });
     return;
   }
   if (name === 'agent:thinking-chunk' || name === 'agent:thinking') {
@@ -1417,7 +1457,7 @@ function diagnostic(name, payload, targetPhase = null) {
   // Late parallel results do not end the model's current thinking segment.
   if (name === 'agent:tool-started' || name === 'subagent:started') phase.thinking = null;
   if (outputEvent || ['agent:tool-started', 'agent:tool-completed', 'subagent:started', 'subagent:done'].includes(name)) {
-    diagnosticCall(phase, name, payload);
+    diagnosticCall(phase, name, payload, forLaunch);
     return;
   }
   // Batch bookkeeping and unknown extension events remain inspectable without

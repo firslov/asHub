@@ -65,6 +65,26 @@ test('project commands publish after commit and retain membership on partial del
   assert.equal(projects.list()[0].sessionIds[0], f.session.id);
 });
 
+test('a failed name coverage replace does not leave a project with deleted conversations', async t => {
+  const f = services(); f.sessions.set(f.session.id, f.session);
+  const [project] = await f.projects.change({ action: 'create', name: 'Remove', cwd: f.e.dir, add: [f.session.id] });
+  const [, survivor] = await f.projects.change({ action: 'create', name: 'Keep', cwd: f.e.dir });
+  const rename = fs.renameSync;
+  const fault = t.mock.method(fs, 'renameSync', (from, to) => {
+    if (to === path.join(f.e.dir, 'projects.json.name-coverage')) throw Object.assign(Error('coverage replace failed'), {code: 'EPERM'});
+    return rename(from, to);
+  });
+  f.e.clock(120000);
+  const result = await f.projects.change({ action: 'delete', id: project.id, deleteConversations: true });
+  assert.deepEqual([...result.deletedSessionIds], [f.session.id]);
+  assert.equal(f.sessions.has(f.session.id), false);
+  assert.deepEqual(plain(f.projects.list()).map(p => p.id), [survivor.id]);
+  assert.throws(() => f.projects.nameHistory(), /coverage replace failed/);
+  fault.mock.restore();
+  f.e.clock(130000);
+  assert.deepEqual(plain(f.projects.nameHistory().gaps), [{from: 0, to: 130000}]);
+});
+
 test('host SSE starts with current version, carries invalidations, and releases subscriptions on disconnect/backpressure/shutdown', () => {
   const f = services(), { handleHostQuery } = f.e.load('src/transport/host-http.ts');
   const signal = new AbortController();

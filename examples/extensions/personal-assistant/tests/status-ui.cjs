@@ -7,8 +7,16 @@ const root = path.resolve(__dirname, '../../../..');
 (async () => {
   const { AssistantPanel } = await import(pathToFileURL(path.join(__dirname, '../app.mjs')));
   let enabled = true, health = {};
-  const learning = { access: () => enabled, health: () => health, config: () => ({ enabled: false }) };
-  const panel = new AssistantPanel({ conversationId: () => 'assistant', store: { profile: () => ({ enabled: true }) }, services: {}, learning });
+  const learning = {
+    access: () => enabled, health: () => health, config: () => ({ enabled, grantId: 'grant' }),
+    cancelThemeOverview() {}, modelPolicyChanged() {},
+  };
+  const store = {
+    profile: () => ({ enabled: true }), themeOverviewEnabled: () => false,
+    setThemeOverviewEnabled() {}, themeOverviewGeneration: () => 0,
+  };
+  const background = { status: () => ({ followModel: true }), models: () => [] };
+  const panel = new AssistantPanel({ dedicated: true, conversationId: () => 'assistant', store, services: { background }, learning });
   const views = [panel.overview()];
   health = { backlog: true }; views.push(panel.overview());
   learning.inferenceSignal = new AbortController().signal; views.push(panel.overview());
@@ -44,47 +52,85 @@ const root = path.resolve(__dirname, '../../../..');
           const page = await browser.newPage({ viewport: { width, height: 844 }, isMobile: remote, hasTouch: remote });
           const errors = []; page.on('pageerror', e => errors.push(e.message));
           await page.goto(`http://127.0.0.1:${server.address().port}/fixture`);
-          for (const url of remote ? ['/remote/style.css'] : ['/css/styles.css', '/css/panels/sidebar.css', '/css/panels/plugins.css']) await page.addStyleTag({ url });
+          for (const url of remote ? ['/remote/style.css'] : ['/css/styles.css', '/css/panels.css', '/css/panels/sidebar.css', '/css/panels/plugins.css']) await page.addStyleTag({ url });
           await page.evaluate(async ({ views, remote, theme }) => {
             const assert = (condition, text) => { if (!condition) throw Error(text); };
             document.documentElement.dataset.theme = theme;
-            let refresh, current = 0;
-            // Trigger the renderer's real polling path deterministically.
-            const interval = window.setInterval; window.setInterval = fn => { refresh = fn; return 0; };
+            let current = 0;
+            const callbacks = new Set();
+            window.setInterval = fn => { callbacks.add(fn); return callbacks.size; };
             const { mountResource } = await import(remote ? '/remote/plugin-resource-view.js' : '/js/extensions/resource-view.js');
-            const row = document.createElement('div'); row.className = remote ? 'plugin-entry' : 'conversation-entry';
+            const row = document.createElement('div');
+            row.className = remote ? 'plugin-entry' : 'conversation-entry';
             row.style.cssText = 'position:fixed;left:16px;top:24px;width:240px;max-width:calc(100vw - 32px)';
-            const open = document.createElement('button'); open.className = remote ? 'plugin-entry-open' : 'conversation-entry-open'; open.textContent = '个人助手';
-            const host = document.createElement('div'); host.className = remote ? 'plugin-entry-control' : 'conversation-entry-control';
-            row.append(open, host); document.body.append(row);
-            const dispose = mountResource(host, { pluginId: 'fixture' }, 'assistant', { inlineToggle: true, request: async body => {
-              assert(!body, 'status polling must not mutate authorization'); return { view: views[current] };
-            } });
+            const open = document.createElement('button');
+            open.className = remote ? 'plugin-entry-open' : 'conversation-entry-open';
+            open.textContent = '个人助手';
+            const host = document.createElement('div');
+            host.className = remote ? 'plugin-entry-control' : 'conversation-entry-control';
+            row.append(open, host);
+            document.body.append(row);
+            const view = () => {
+              const desktop = views[current];
+              if (!remote) return desktop;
+              const actions = desktop.actions.filter(a => a.id === 'pause' || a.id === 'overview');
+              const note = desktop.note + (actions.length < desktop.actions.length ? '\n授权与首次设置请在桌面端完成' : '');
+              return {...desktop, actions, note};
+            };
+            const request = async body => {
+              assert(!body, 'reading settings must not mutate authorization');
+              return { view: view() };
+            };
+            const dialog = document.createElement('dialog');
+            dialog.className = remote ? '' : 'conversation-resource-dialog';
+            const content = document.createElement('div');
+            content.className = remote ? 'plugin-resource-container' : 'p-body extension-resource-host';
+            dialog.append(content);
+            document.body.append(dialog);
+            let closeSettings;
+            const dispose = mountResource(host, { pluginId: 'fixture' }, 'assistant', {
+              inlineToggle: true, request, onManage() {
+                dialog.showModal();
+                closeSettings = mountResource(content, { pluginId: 'fixture' }, 'assistant', { request });
+              },
+            });
             const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-            await settle(); host.querySelector('[role=switch]').focus();
+            await settle();
+            const settings = host.querySelector('button');
+            assert(host.querySelectorAll('button').length === 1 && settings.textContent === '···', 'entry needs only one settings control');
+            const y = el => {const r = el.getBoundingClientRect();return r.top + r.height / 2;};
+            assert(Math.abs(y(open) - y(settings)) <= 1 && row.getBoundingClientRect().height <= 46, 'entry is taller than one row');
+            settings.focus();
+            settings.click();
+            await settle();
+            assert(dialog.open, 'settings control does not open the dialog');
             for (current = 0; current < views.length; current++) {
-              await refresh(); await settle();
-              const expected = views[current].toggle, button = host.querySelector('[role=switch]'), status = host.querySelector('.resource-inline-status');
-              assert(button.getAttribute('aria-checked') === String(expected.checked), 'status changed authorization state');
-              assert(document.activeElement === button, 'status update lost focus');
-              assert((status?.textContent) === expected.status, 'stale or missing status');
-              assert(host.querySelectorAll('button').length === 1, 'status adds controls');
-              if (status) {
-                const rect = status.getBoundingClientRect(), bounds = row.getBoundingClientRect();
-                assert(rect.top >= button.getBoundingClientRect().bottom - 1, 'status overlaps switch');
-                assert(rect.left >= bounds.left && rect.right <= bounds.right + 1 && row.scrollWidth <= row.clientWidth + 1, 'status overflows narrow entry');
-                assert(status.scrollWidth <= status.clientWidth + 1, 'status truncates the next retry or last completion time');
-                assert(button.getAttribute('aria-describedby') === status.id && button.title.includes(expected.status), 'full status is inaccessible');
-                assert(parseFloat(getComputedStyle(status).fontSize) <= 12, 'status is too prominent');
+              for (const refresh of callbacks) await refresh();
+              await settle();
+              const expected = view(), note = content.querySelector('.extension-resource-note');
+              assert(!host.querySelector('.resource-inline-status,[role=switch]'), 'entry gained an extra row or switch');
+              assert(note?.textContent === expected.note, 'settings status is missing or stale');
+              assert(content.querySelectorAll('.extension-resource-action').length === expected.actions.length, 'wrong actions in settings');
+              for (const control of content.querySelectorAll('.extension-resource-action')) {
+                const range = document.createRange();
+                range.selectNodeContents(control);
+                assert(range.getClientRects().length === 1, 'button label wraps: ' + control.textContent);
               }
-              assert(!document.querySelector('.resource-toggle-confirm'), 'status opens dialog');
+              const range = document.createRange();
+              range.selectNodeContents(note);
+              const lines = new Set([...range.getClientRects()].filter(r => r.width > 0).map(r => r.top)).size;
+              assert(lines === expected.note.split('\n').length, 'status line wraps: ' + note.textContent);
+              assert(dialog.scrollWidth <= dialog.clientWidth + 1, 'settings overflow');
             }
-            dispose(); window.setInterval = interval;
+            assert(!document.querySelector('.extension-resource-confirm'), 'reading settings opened a confirmation');
+            dialog.close();
+            closeSettings();
+            dispose();
           }, { views, remote, theme });
           if (errors.length) throw Error(errors.join('\n'));
           await page.close();
         }
-        console.log(`PASS ${remote ? 'remote WebKit' : 'desktop Chromium'}: actual plugin statuses, 320/390px, light/dark, polling, focus, authorization and recovery`);
+        console.log(`PASS ${remote ? 'remote WebKit' : 'desktop Chromium'}: compact entry and settings, 320/390px, light/dark, polling and single-line labels`);
       } finally { await browser.close(); }
     }
   } finally { await new Promise(resolve => server.close(resolve)); }

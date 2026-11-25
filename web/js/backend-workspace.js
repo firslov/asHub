@@ -386,13 +386,25 @@ function newPhase() { const box = el('details', undefined, 'bw-phase'), summary 
 else
     $('messages').append(box); return item; }
 function diagnostic(name, p) {
-    const id = p.toolCallId ? 'tool:' + p.toolCallId : p.subagentId ? 'agent:' + p.subagentId : p.swarmId ? 'swarm:' + p.swarmId : null;
+    const id = name.startsWith('subagent:') && p.subagentId ? 'agent:' + p.subagentId
+        : p.toolCallId ? 'tool:' + p.toolCallId : p.subagentId ? 'agent:' + p.subagentId : p.swarmId ? 'swarm:' + p.swarmId : null;
     const isThinking = name === 'agent:thinking' || name === 'agent:thinking-chunk';
-    if (!isThinking && id && owners.has(id) && !name.endsWith('started')) {
-        const owner = owners.get(id);
+    const matched = owners.get(id);
+    const launch = name === 'subagent:done' && p.cancelled === true && p.toolCallId
+        ? p.subagentId ? matched?.launch : owners.get('tool:' + p.toolCallId) : null;
+    const owner = matched ?? launch;
+    if (!isThinking && owner && !name.endsWith('started')) {
         owner.output.textContent = typeof (p.rawOutput ?? p.text ?? p.output) === 'string' ? (p.rawOutput ?? p.text ?? p.output) : JSON.stringify(p.rawOutput ?? p.output ?? p);
-        if (name.endsWith('completed') || name === 'subagent:done')
-            owner.label.textContent = owner.title + (presentation.diagnosticState(p) === 'failed' ? ' · 失败' : ' · 完成');
+        if (name.endsWith('completed') || name === 'subagent:done') {
+            const outcome = owner.cancelled ? 'cancelled' : presentation.diagnosticState(p);
+            owner.cancelled = outcome === 'cancelled';
+            const label = outcome === 'cancelled' ? '已取消' : outcome === 'partial' ? '部分完成' : outcome === 'failed' ? '失败' : '完成';
+            owner.label.textContent = owner.title + ' · ' + label;
+            if (launch && launch !== owner) {
+                launch.cancelled = true;
+                launch.label.textContent = launch.title + ' · ' + label;
+            }
+        }
         return;
     }
     if (!isThinking && !name.endsWith('started'))
@@ -419,8 +431,10 @@ function diagnostic(name, p) {
         const details = el('details'), title = presentation.toolDisplayName(p, 'zh'), label = el('summary', title), output = el('pre', JSON.stringify(p.rawInput ?? p.input ?? {}, null, 2));
         details.append(label, output);
         phase.body.append(details);
-        if (id)
-            owners.set(id, { label, output, title });
+        if (id) {
+            const launch = name === 'subagent:started' && p.toolCallId ? owners.get('tool:' + p.toolCallId) : null;
+            owners.set(id, { label, output, title, launch });
+        }
     }
 }
 function frame({ meta = {}, payload: p = {} }) {

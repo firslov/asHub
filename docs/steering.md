@@ -25,11 +25,8 @@ continue to use the normal queue by default.
 - Old hosts keep the existing queue UI. Updating only the remote website does
   not enable steering on an older desktop build.
 
-The pinned agent-sh already implements safe-boundary steering. The explicit
-`scripts/patch-steering.cjs` compatibility patch adds optional IDs to its events
-and targeted withdrawal, including duplicate texts. It changes no provider or
-transport behavior. Installation/build verifies every patch hunk and fails on
-an unknown upstream shape, rather than silently accepting an incompatible core.
+The pinned agent-sh version implements safe-boundary steering with event IDs and
+targeted withdrawal, including duplicate texts.
 
 This avoids deliberately restarting generation or rewriting the system/tools
 prefix. Additional instructions and answers still consume tokens; provider
@@ -37,7 +34,7 @@ cache hits and actual cost are not guaranteed by this mechanism.
 
 ## Verification
 
-- `npm run test:steering`: patch compatibility, composer intent, real agent-sh
+- `npm run test:steering`: composer intent, real agent-sh
   against a local synthetic model, and real Hub HTTP/SSE/history handling.
 - `npm run test:steering:ui`: live/replay placement in Electron.
 - `npm test` and `npm test --prefix remote`: existing desktop/remote regression.
@@ -56,7 +53,7 @@ safe model boundary; an already promoted message cannot be added twice.
 (`edit` with `query`, or `promote`). Stale revisions and consumed messages return
 409. Bounded receipts make retries idempotent. `agent:queue-updated` synchronizes
 live and replay views. The bridge mutates its pending queues synchronously;
-the kernel identity patch replaces an existing steering ID without moving it.
+the kernel replaces an existing steering ID without moving it.
 Editing does not pause execution; changes apply only if saved before consumption.
 The remote `queueActions` capability gates the new controls for older desktops.
 

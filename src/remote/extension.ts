@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ApplicationExtensionDefinition } from '../extensions/application.js';
 import { RemoteConnector } from './connector.js';
+import { legacyMobileFeature } from './migration.js';
 
 /** Legacy migration fallback only. The Hub injects one connector; application toggles reuse its identity and
  * durable receipts without touching connection-level authorization settings. */
@@ -11,7 +12,7 @@ export class MobileAccessExtension {
 
   constructor(private readonly connector: RemoteConnector) {
     this.definition = {
-      id: 'mobile-access', name: '移动访问', scope: 'application',
+      ...legacyMobileFeature,
       create: context => {
         if (context.signal.aborted) throw new Error('Mobile access activation cancelled');
         if (this.active) throw new Error('Mobile access is already active');

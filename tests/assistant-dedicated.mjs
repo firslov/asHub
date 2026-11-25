@@ -351,7 +351,7 @@ test('assistant is a conversation with a minimal memory popover, not a settings 
  assert.deepEqual(view.actions.map(a=>a.id),['authorize']);assert.throws(()=>f.p.prepare('configure-model',{}));
  f.authorize();const enabled=await f.p.overview();
  assert.deepEqual(enabled.actions.map(a=>a.id),['enable-theme-overviews','pause']);
- assert.equal(enabled.toggle.action,'pause');assert.equal(f.a.store.themeOverviewEnabled(),false);
+ assert.equal(enabled.toggle,undefined);assert.equal(f.a.store.themeOverviewEnabled(),false);
 });
 
 test('fresh combined onboarding can explicitly skip memory and enter the created chat',async t=>{
@@ -379,7 +379,7 @@ test('the pilot can opt in under a fixed-model grant without upgrading that gran
  const input={modelSessionId:id,includedIds:[id],excludedIds:[],includeHistory:true,dailyCalls:4};
  const grant=f.host.approve('assistant',f.host.prepare('assistant',input));f.a.learning.configure(grant,input);
  const view=f.p.overview();assert.deepEqual(view.actions.map(a=>a.id),['enable-theme-overviews','pause']);
- assert.equal(view.toggle.action,'pause');assert.equal(f.a.store.themeOverviewEnabled(),false);
+ assert.equal(f.a.store.themeOverviewEnabled(),false);
  const action=view.actions.find(a=>a.id==='enable-theme-overviews');const enable=f.p.prepare(action.id,action.values);
  assert(enable.preview);assert.equal(enable.backgroundAuthorization,undefined);enable.execute();
  assert.equal(f.a.learning.config().grantId,grant);assert.equal(f.a.store.themeOverviewEnabled(),true);

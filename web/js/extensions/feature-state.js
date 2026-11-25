@@ -9,6 +9,18 @@ export const bundledFeatures = [
 export const features = new FeatureRegistry(bundledFeatures);
 export const featureEnabled = id => features.enabled(id);
 export const loadFeature = async id => { await featuresReady(); return features.load(id); };
-let ready;
-export const refreshFeatures = () => features.refresh();
+let ready, latestRefresh;
+export const refreshFeatures = () => latestRefresh = features.refresh();
 export const featuresReady = () => ready ||= refreshFeatures();
+
+export async function refreshFeaturesForNavigation() {
+  let pending = refreshFeatures();
+  // A newer catalog read or an extension toggle can supersede this read.
+  // Wait for that update before treating the requested extension as absent.
+  while (true) {
+    await pending;
+    await features.waitForWrite();
+    if (pending === latestRefresh && !features.busy) return;
+    pending = latestRefresh;
+  }
+}

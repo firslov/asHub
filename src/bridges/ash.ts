@@ -22,9 +22,11 @@ import { RequestMonitor } from "../request-diagnostics.js";
 import { SessionThinking, reasoningProfile, nativeReasoningParams, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
 import { configureDeepSeek } from "../providers/deepseek.js";
 import { guardCodexRetries, withSilentCodexRetries } from "../providers/codex-retry.js";
+import { retainSubagentHistory, sanitizeSubagentCompactionMarkers, type SubagentHistory } from "./subagent-history.js";
 import { EventEmitter } from "node:events";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setTimeout as waitForRetry } from "node:timers/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { CodexUsage } from "../providers/codex-usage.js";
 import * as fs from "node:fs";
 import { updateSettingsFile } from "../settings-store.js";
@@ -36,7 +38,7 @@ import { activateAgent } from "agent-sh/agent";
 import { builtinPluginCatalog, type PluginStatus } from "../plugins.js";
 import { PluginRuntime, prepareScopedHandlers, preparePluginRegistrations } from "../plugin-runtime.js";
 import { loadBuiltinExtensions } from "agent-sh/extensions";
-import { CodexProviderHost, codexStatus } from "../providers/codex.js";
+import { CodexProviderHost, codexCatalogVersion, codexStatus } from "../providers/codex.js";
 import { getSettings, reloadSettings, resolveProvider, CONFIG_DIR } from "agent-sh/settings";
 import { resolveApiKey } from "agent-sh/auth";
 import type { BackgroundModelSelection, Bridge, BridgeOpts, BusEvent, ContextSnapshot, ContextStrategy } from "./types.js";
@@ -65,13 +67,6 @@ function formatShellExchange(ex: ShellExchange): string {
 
 function indentLines(text: string, prefix: string): string {
   return text.split("\n").map((line) => prefix + line).join("\n");
-}
-
-// AbortSignal.timeout() aborts with a TimeoutError reason. runSubagent only
-// breaks its loop on signal.aborted and returns partial text, so callers
-// must check this to tell a wall-clock timeout apart from a normal finish.
-function isTimeoutSignal(signal: AbortSignal): boolean {
-  return signal.aborted && (signal.reason as { name?: string } | undefined)?.name === "TimeoutError";
 }
 
 function defaultShell(): string {
@@ -268,9 +263,9 @@ const SUBAGENT_TOOL_NAMES = new Set([...Object.keys(SUBAGENT_TYPES), "agentswarm
 const MAX_CONCURRENT_SUBAGENTS = 10;
 /** Wall-clock cap per subagent run, merged with any caller/cancel signal. */
 const SUBAGENT_TIMEOUT_MS = 20 * 60 * 1000;
-/** Bounded retention for the subagent registry: at most this many finished
- *  entries are kept for subagent:resume; older injected ones are evicted so
- *  long sessions don't accumulate full result texts in memory. */
+const subagentCancelledResult = { subagentCancelled: true as const, message: "Subagent cancelled." };
+/** Keep at most this many resumable histories, even if background results
+ * have not yet been surfaced to the main agent. */
 const MAX_SUBAGENT_ENTRIES = 20;
 
 // Guard to ensure the Electron tsx-worker/Chromium init race is
@@ -278,25 +273,69 @@ const MAX_SUBAGENT_ENTRIES = 20;
 let _firstBridge = true;
 
 
-    interface SubagentEntry {
-      id: string;
-      type: string;
-      task: string;
-      startedAt: number;
-      promise: Promise<string>;
-      controller?: AbortController;
-      result?: string;
-      error?: string;
-      /** Early-exit reason reported by the (patched) kernel: the completion
-       *  token budget or the iteration cap was hit, so the result is partial. */
-      degraded?: "budget" | "iterations" | null;
-      /** Completion tokens consumed by the run (0 when unknown). */
-      tokensUsed?: number;
-      /** Result already surfaced to the main agent — entry is kept (within
-       *  the MAX_SUBAGENT_ENTRIES window) so subagent:resume can continue
-       *  the run later. */
-      injected?: boolean;
+interface SubagentScope {
+  cwd: string;
+  provider?: string;
+  endpoint: string;
+  pluginId?: string;
+}
+
+type SubagentToolScope = Pick<ToolDefinition, "name" | "execute" | "modifiesFiles" | "readOnly"> & { schema: string };
+type SubagentOverrides = { model?: string; budgetTokens?: number; maxIterations?: number };
+
+interface SubagentCheckpoint {
+  history: SubagentHistory;
+  systemPrompt: string;
+  model: string;
+  scope: SubagentScope;
+  tools: SubagentToolScope[];
+  overrides: SubagentOverrides;
+}
+
+interface SubagentEntry {
+  id: string;
+  type: string;
+  task: string;
+  startedAt: number;
+  promise: Promise<string>;
+  result?: string;
+  error?: string;
+  cancelled?: true;
+  checkpoint?: SubagentCheckpoint;
+  degraded?: "budget" | "iterations" | null;
+  tokensUsed?: number;
+  /** Keep a settled result addressable while preventing re-injection. */
+  injected?: boolean;
+}
+
+type SubagentCompletion = Pick<SubagentEntry, "result" | "error" | "cancelled"> &
+  Required<Pick<SubagentEntry, "degraded" | "tokensUsed">> & { timedOut?: true };
+type SubagentRunResult = string | { concurrencyLimited: true; message: string } |
+  { subagentTimedOut: true; message: string } | typeof subagentCancelledResult;
+type SubagentOptions = Parameters<typeof runSubagent>[0];
+type SubagentRunMeta = NonNullable<SubagentOptions["outMeta"]>;
+type SubagentOutcome = { result: string; checkpoint?: SubagentCheckpoint } | { error: unknown };
+
+function subagentCompletion(
+  signal: AbortSignal,
+  meta: Pick<SubagentEntry, "degraded" | "tokensUsed">,
+  outcome: SubagentOutcome,
+): SubagentCompletion {
+  const tokensUsed = meta.tokensUsed ?? 0;
+  // The kernel may return text or throw after an abort. The signal is
+  // authoritative in both cases. Discard text for user-cancelled runs.
+  if (signal.aborted) {
+    if ((signal.reason as { name?: string } | undefined)?.name === "TimeoutError") {
+      const error = `timeout after ${SUBAGENT_TIMEOUT_MS / 60000}min`;
+      const result = "result" in outcome && outcome.result ? outcome.result + "\n\n" : "";
+      return { timedOut: true, result: `${result}[subagent terminated: ${error}]`, error, degraded: null, tokensUsed };
     }
+    return { cancelled: true, degraded: null, tokensUsed };
+  }
+  if ("error" in outcome) return { error: String(outcome.error), degraded: null, tokensUsed };
+  const degraded = meta.degraded === undefined ? sniffDegraded(outcome.result) : meta.degraded;
+  return { result: outcome.result, degraded, tokensUsed };
+}
 
 // ── todolist tool ─────────────────────────────────────────────────
 
@@ -379,6 +418,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     return [...local, ...builtins];
   }
   private _subagents: Map<string, SubagentEntry> = new Map();
+  private subagentControllers = new Set<AbortController>();
   private _todos: TodoItem[] = [];
   private shell: Shell | null = null;
   private bridgedTerminal: BridgedTerminal | null = null;
@@ -465,6 +505,9 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
       const access = this.opts.conversationAccess;
+      if (access.dispatchReceipt) core.handlers.define("ashub:collaboration:dispatch-receipt", (p: {taskId?: string; requestKey?: string; signal?: AbortSignal}) => {
+        this.assertOpen(); return access.dispatchReceipt!(p, p.signal);
+      });
       if (access.signal) core.handlers.define("ashub:collaboration:signal", (p: {id:string; requestKey:string; message?:string; signal?:AbortSignal}) => {
         this.assertOpen(); return access.signal!(p.id,p.requestKey,p.message,p.signal);
       });
@@ -509,7 +552,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     // so ctx.shell.compositor + tui-renderer are wired before the input mode prompt fires.
     if (exposeTerminal) registerShellHandlers(extCtx);
     preparePluginRegistrations(extCtx);
-    activateAgent(extCtx);
+    const startupProviderGeneration = this.providerGeneration;
+    activateAgent(extCtx, {
+      canPublishOpenRouterCatalog: key => this.isCurrentOpenRouterCatalog(key, startupProviderGeneration),
+    });
     preparePluginRegistrations(extCtx);
     if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
       const agent = (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent;
@@ -522,9 +568,16 @@ export class AshBridge extends EventEmitter implements Bridge {
     if (typeof instructions === "string" && instructions) {
       (extCtx as unknown as { agent: { registerInstruction(name: string, text: string): void } }).agent.registerInstruction("conversation-brief", instructions);
     }
-    guardLlmUnicode(core.handlers.call("llm:get-client"));
-    guardImageContext(core.handlers.call("llm:get-client"), path.join(CONFIG_DIR, "hub-sessions", "uploads"), sessionId);
-    guardCodexRetries(core.handlers.call("llm:get-client"), message => core.bus.emit("ui:info", { message }));
+    const notifyChild = (id: string, message: string) => core.bus.emit("ui:info", { message: `(subagent ${id}) ${message}` });
+    const guardClient = (client: LlmClient, child?: { id: string; source: LlmClient }): void => {
+      guardLlmUnicode(client);
+      guardImageContext(client, path.join(CONFIG_DIR, "hub-sessions", "uploads"), sessionId);
+      guardCodexRetries(client, message => {
+        if (child) notifyChild(child.id, message);
+        else core.bus.emit("ui:info", { message });
+      }, { scopedEndpoint: child !== undefined, sourceClient: child?.source });
+    };
+    guardClient(core.handlers.call("llm:get-client"));
     configureDeepSeek(extCtx);
 
     // Clarify task authorization without changing the actual permission gate.
@@ -592,45 +645,84 @@ export class AshBridge extends EventEmitter implements Bridge {
     // and results are injected into the main conversation via a dynamic
     // context producer on the next LLM iteration.
 
-    // runSubagent emits its own tool-started/completed/chunk events when
-    // given a bus. Our execute wrapper below already routes every call
-    // through the kernel's "tool:execute" handler (which emits those same
-    // events), so runSubagent gets a muted bus to avoid double rendering.
-    const mutedSubagentBus = {
-      emit: () => {},
-      emitTransform: (_name: string, payload: unknown) => payload,
-    } as unknown as NonNullable<Parameters<typeof runSubagent>[0]["bus"]>;
+    const getSubagentTools = (): ToolDefinition[] =>
+      (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
+
+    const subagentToolScope = ({ name, execute, modifiesFiles, readOnly, input_schema }: ToolDefinition): SubagentToolScope =>
+      ({ name, execute, modifiesFiles, readOnly, schema: JSON.stringify(input_schema) });
+    const sameSubagentTool = (left: SubagentToolScope, right: SubagentToolScope): boolean =>
+      left.name === right.name && left.execute === right.execute &&
+      !!left.modifiesFiles === !!right.modifiesFiles && !!left.readOnly === !!right.readOnly && left.schema === right.schema;
+
+    const getSubagentScope = (client: LlmClient): SubagentScope => {
+      const { provider } = (core.handlers.call("agent:get-model") as { provider?: string } | undefined) ?? {};
+      const config = (client as unknown as { config?: { baseURL?: string; apiKey?: string; requestBody?: Record<string, unknown> } }).config;
+      // The managed Codex proxy may retain its address while its signed-in
+      // account changes. Regular token refresh and catalog edits are allowed.
+      const account = provider && provider === this.codexHost?.lastRegisteredProviderId
+        ? (JSON.parse(codexCatalogVersion()) as [unknown, string])[1] : undefined;
+      const endpoint = createHash("sha256")
+        .update(JSON.stringify([config?.baseURL, config?.apiKey, config?.requestBody, account])).digest("hex");
+      return { cwd: path.resolve(this.liveCwd || this.opts.cwd || os.homedir()), provider, endpoint, pluginId: currentPluginIdentity() };
+    };
+    const scopeError = "The subagent's workspace, provider or caller changed. Start a new subagent for this scope.";
+    const matchesSubagentScope = (scope: SubagentScope, client: LlmClient = core.handlers.call("llm:get-client")): boolean => {
+      const current = getSubagentScope(client);
+      return current.cwd === scope.cwd && current.provider === scope.provider &&
+        current.endpoint === scope.endpoint && current.pluginId === scope.pluginId;
+    };
+
+    const childModelDetails = (provider: string | undefined, model: string | undefined) => {
+      const modes = (core.handlers.call("agent:get-models") ?? []) as Array<{ id: string; provider?: string; contextWindow?: number }>;
+      return modes.find(mode => mode.id === model && (!provider || provider === mode.provider));
+    };
+    const resumeModelError = "The subagent's original model is unavailable. Start a new subagent with an available model.";
+    const originalModelAvailable = (checkpoint: SubagentCheckpoint): boolean => {
+      const active = core.handlers.call("agent:get-model") as { model?: string } | undefined;
+      return active?.model === checkpoint.model || !!childModelDetails(checkpoint.scope.provider, checkpoint.model);
+    };
+    const childToolCapability = new AsyncLocalStorage<{ name: string; isAllowed: () => boolean }>();
+    const unavailableChildTool = () => ({ content: "This tool is no longer available for this subagent run.", exitCode: 1, isError: true });
 
     // Wrap each tool so execution goes through core.handlers "tool:execute"
     // — the same path the main agent loop takes — instead of runSubagent's
     // direct tool.execute(). This makes the permission gate (file-write
     // approval) and the image gate apply to subagents too. The wrapper
-    // re-emits output chunks itself since runSubagent's bus is muted.
-    const wrapSubagentTools = (tools: ToolDefinition[], signal: AbortSignal, prefix: string, onMutatingExecute?: () => void): ToolDefinition[] => {
+    // re-emits output chunks itself instead of forwarding the child's tool events.
+    const wrapSubagentTools = (tools: ToolDefinition[], signal: AbortSignal, prefix: string, previous?: SubagentCheckpoint): ToolDefinition[] => {
       let toolCallSeq = 0;
-      return tools.map((tool) => ({
-        ...tool,
-        execute: (args: Record<string, unknown>) => {
-          // Track file-modifying executions so the retry wrapper can tell a
-          // safe-to-retry early stream failure apart from a mid-run one.
-          if (tool.modifiesFiles === true) onMutatingExecute?.();
-          // Prefix with the launch's subagentId (matches subagent:started) so
-          // concurrent subagents can't emit colliding toolCallIds — the
-          // frontend pairs tool events by data-call-id.
-          const toolCallId = `${prefix}-tool-${++toolCallSeq}`;
-          return core.handlers.call("tool:execute", {
-            name: tool.name,
-            id: toolCallId,
-            args,
-            tool,
-            onChunk: (chunk: string) => {
-              (core.bus.emit as (name: string, payload: unknown) => void)(
-                "agent:tool-output-chunk", { chunk, toolCallId });
-            },
-            signal,
-          }) as ReturnType<ToolDefinition["execute"]>;
-        },
-      }));
+      const registeredTools = new Set(getSubagentTools().map(tool => tool.name));
+      return tools.map(tool => {
+        const original = subagentToolScope(tool);
+        const wasRegistered = registeredTools.has(original.name);
+        const isAllowed = () => {
+          if (previous && (!matchesSubagentScope(previous.scope) || !originalModelAvailable(previous))) return false;
+          const current = getSubagentTools().find(entry => entry.name === original.name);
+          if (wasRegistered) return !!current && sameSubagentTool(original, subagentToolScope(current));
+          return !previous && !current && sameSubagentTool(original, subagentToolScope(tool));
+        };
+        return {
+          ...tool,
+          execute: (args: Record<string, unknown>) => {
+            if (!isAllowed()) return Promise.resolve(unavailableChildTool());
+            // Prefix with the launch's subagentId (matches subagent:started) so
+            // concurrent subagents can't emit colliding toolCallIds — the
+            // frontend pairs tool events by data-call-id.
+            const toolCallId = `${prefix}-tool-${++toolCallSeq}`;
+            return childToolCapability.run({ name: original.name, isAllowed }, () => core.handlers.call("tool:execute", {
+              name: tool.name,
+              id: toolCallId,
+              args,
+              tool,
+              onChunk: (chunk: string) => {
+                (core.bus.emit as (name: string, payload: unknown) => void)(
+                  "agent:tool-output-chunk", { chunk, toolCallId });
+              },
+              signal,
+            }) as ReturnType<ToolDefinition["execute"]>);
+          },
+        };
+      });
     };
 
     // Budget note appended to a subagent task so the model KNOWS its
@@ -644,6 +736,69 @@ export class AshBridge extends EventEmitter implements Bridge {
         `(tool-call arguments and any intermediate text count against it, not just your final report). ` +
         `Plan accordingly: keep tool usage lean, prioritize conclusions and evidence over exhaustive detail, ` +
         `and start your final report well before the budget runs out — a truncated report loses its tail sections.]`;
+    };
+
+    const runChild = async (id: string, type: string | undefined,
+      opts: Omit<SubagentOptions, "llmClient" | "cwd" | "requestHeaders" | "bus" | "onUsage" | "signal"> & { signal: AbortSignal },
+      overrides: SubagentOverrides = {}, previous?: SubagentCheckpoint,
+    ): Promise<{ result: string; checkpoint?: SubagentCheckpoint }> => {
+      const parent: LlmClient = core.handlers.call("llm:get-client");
+      if (previous && !matchesSubagentScope(previous.scope, parent)) throw new Error(scopeError);
+      if (previous && !originalModelAvailable(previous)) throw new Error(resumeModelError);
+      const scope = getSubagentScope(parent);
+      const toolScopes = opts.tools.map(subagentToolScope);
+      // The kernel forks before opening its child engine. Apply the same
+      // request protections to that independent client, not the parent twice.
+      const fork = parent.fork;
+      const llmClient: LlmClient = typeof fork === "function" ? Object.create(parent, {
+        fork: { value: (overrides: Parameters<LlmClient["fork"]>[0]) => {
+          const child = fork.call(parent, overrides);
+          if (previous) {
+            const stream = child.stream.bind(child);
+            child.stream = options => {
+              if (!matchesSubagentScope(previous.scope)) throw new Error(scopeError);
+              if (!originalModelAvailable(previous)) throw new Error(resumeModelError);
+              const messages = sanitizeSubagentCompactionMarkers(options.messages);
+              return stream(messages === options.messages ? options : { ...options, messages });
+            };
+          }
+          guardClient(child, { id, source: parent });
+          return child;
+        } },
+      }) : parent;
+      const active = core.handlers.call("agent:get-model") as { provider?: string; model?: string } | undefined;
+      const model = previous?.model ?? opts.model ?? active?.model ?? parent.model;
+      const contextWindow = childModelDetails(active?.provider, model)?.contextWindow;
+      const history = previous ? retainSubagentHistory(previous.history, contextWindow) : undefined;
+      if (previous && !history) throw new Error("The retained subagent history does not fit the selected model's context window.");
+      const endpoint = active?.provider && model ? core.handlers.call("agent:resolve-endpoint", { provider: active.provider, id: model }) as
+        { buildRequestHeaders?: (info: { sessionId: string }) => Record<string, string> } | undefined : undefined;
+      const requestHeaders = endpoint?.buildRequestHeaders?.({ sessionId: `${sessionId}:subagent:${id}` });
+      // Only model retry diagnostics cross the child bus. Tool events come
+      // from the parent tool handler so they retain permission and linkage.
+      const bus = {
+        emit: (name: string, payload: { message?: string }) => {
+          if (name === "ui:info" && payload?.message) notifyChild(id, payload.message);
+        },
+        emitTransform: (_name: string, payload: unknown) => payload,
+      } as unknown as NonNullable<SubagentOptions["bus"]>;
+      // The shared kernel retries the current stream before recording its
+      // assistant message. The preceding tool calls/results stay in history.
+      const result = await withNetworkSession(sessionId, () => runSubagent({
+        ...opts, llmClient, cwd: scope.cwd, bus, requestHeaders, history, model,
+        // A follow-up sees the saved conversation, including completed actions.
+        systemPrompt: history ? opts.systemPrompt + "\n\nContinue the existing task from the recorded conversation. Reuse completed tool results and execute only what the follow-up requires." : opts.systemPrompt,
+        // Codex already owns the request budget and validates its terminator.
+        // A valid but empty completion must not start another retry budget.
+        retryEmptyReplies: !active?.provider || active.provider !== this.codexHost?.lastRegisteredProviderId,
+        task: withBudgetNote(opts.task, opts.budgetTokens),
+        tools: wrapSubagentTools(opts.tools, opts.signal, id, previous),
+        onUsage: (usage) => (core.bus.emit as (name: string, payload: unknown) => void)("subagent:usage", { ...usage, type }),
+      }));
+      const retained = !opts.signal.aborted && matchesSubagentScope(scope)
+        ? retainSubagentHistory(opts.outMeta?.messages, contextWindow) : undefined;
+      if (!retained || !model) return { result };
+      return { result, checkpoint: { history: retained, systemPrompt: opts.systemPrompt, model, scope, overrides, tools: toolScopes } };
     };
 
     // Build the reasoning/thinking request params for a subagent run.
@@ -669,6 +824,27 @@ export class AshBridge extends EventEmitter implements Bridge {
       } catch { return undefined; }
     };
 
+    interface SubagentLaunch { toolCallId: string; started?: true; cancelled?: true }
+    const subagentLaunchCall = new AsyncLocalStorage<SubagentLaunch>();
+    const emitSubagentDone = (task: string, subagentId: string | undefined, completion: SubagentCompletion,
+      toolCallId?: string, resumable?: boolean): void => {
+      const { degraded, tokensUsed, cancelled, error } = completion;
+      (core.bus.emit as (name: string, payload: unknown) => void)(
+        "subagent:done", {
+          task, degraded, tokensUsed,
+          ...(subagentId ? { subagentId } : {}),
+          ...(toolCallId ? { toolCallId } : {}),
+          ...(resumable !== undefined ? { resumable } : {}),
+          ...(cancelled ? { cancelled } : {}),
+          ...(error !== undefined ? { error } : {}),
+        });
+    };
+    const cancelSubagentLaunch = (task: string, launch = subagentLaunchCall.getStore()): void => {
+      if (!launch || launch.started || launch.cancelled) return;
+      launch.cancelled = true;
+      emitSubagentDone(task, undefined, { cancelled: true, degraded: null, tokensUsed: 0 }, launch.toolCallId);
+    };
+
     const launchSubagent = (
       task: string,
       type: string,
@@ -679,89 +855,47 @@ export class AshBridge extends EventEmitter implements Bridge {
       budgetTokens: number | undefined,
       swarmId?: string,
       reasoningParams?: Record<string, unknown>,
+      swarmSignal?: AbortSignal,
+      overrides?: SubagentOverrides,
     ) => {
-      const id = `sa${++_subagentSeq}`;
-      const llmClient = core.handlers.call("llm:get-client");
-      const abortController = new AbortController();
-      // Cancel sources: our own controller (main-turn cancel via the
-      // agent:cancelled listener / bridge close) and the wall-clock timeout.
-      // The caller's (turn-scoped) signal is deliberately NOT merged here:
+      const id = `sa${subagentNamespace}${++_subagentSeq}`;
+      const launch = swarmId ? undefined : subagentLaunchCall.getStore();
+      const toolCallId = launch?.toolCallId;
+      const controller = new AbortController();
+      this.subagentControllers.add(controller);
+      // The caller's turn signal is only merged for a blocking swarm:
       // the kernel aborts the previous turn's controller on every new query,
-      // which would silently kill fire-and-forget subagents on the user's
-      // next message — exactly when their results are due to be injected.
-      const signal = AbortSignal.any([abortController.signal, AbortSignal.timeout(SUBAGENT_TIMEOUT_MS)]);
+      // while standalone background runs must outlive the launching turn.
+      const signals = [controller.signal, AbortSignal.timeout(SUBAGENT_TIMEOUT_MS)];
+      if (swarmSignal) signals.push(swarmSignal);
+      const signal = AbortSignal.any(signals);
       _runningSubagents++;
 
+      if (launch) launch.started = true;
       (core.bus.emit as (name: string, payload: unknown) => void)(
-        "subagent:started", { task, subagentId: id, type, ...(swarmId ? { swarmId } : {}) });
+        "subagent:started", { task, subagentId: id, type, ...(swarmId ? { swarmId } : {}), ...(toolCallId ? { toolCallId } : {}) });
 
-      // Retry is only safe when the run is side-effect-free SO FAR.  The
-      // upstream kernel reports mutating tool executions via outMeta; the
-      // wrapper callback below tracks the same thing kernel-independently.
-      // A subagent whose toolset includes file-modifying tools (implement
-      // preset has ["*"]) may have already executed tools when a later LLM
-      // stream fails — re-running would repeat writes/commands, so retry is
-      // gated per-attempt on "no modifiesFiles tool has run yet".  Read-only
-      // presets never trip the flag and retry as before.
-      const attemptState = { mutatingExecuted: false };
-      const meta: { degraded?: "budget" | "iterations" | null; tokensUsed?: number } = {};
-      const runOnce = () => {
-        attemptState.mutatingExecuted = false;
-        return runSubagent({
-          llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
-          tools: wrapSubagentTools(tools, signal, id, () => { attemptState.mutatingExecuted = true; }),
-          systemPrompt,
-          task: withBudgetNote(task, budgetTokens),
-          model,
-          bus: mutedSubagentBus,
-          maxIterations,
-          budgetTokens,
-          reasoningParams,
-          outMeta: meta,
-          onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
-            "subagent:usage", { ...u, type }),
-          signal,
-        });
+      const meta: SubagentRunMeta = {};
+      // Settle the registry and emit before consumers (such as the swarm)
+      // read the outcome, including when the upstream request rejects.
+      const settle = (outcome: SubagentOutcome) => {
+        const completion = subagentCompletion(signal, meta, outcome);
+        Object.assign(entry, completion);
+        const resumable = !completion.cancelled && !completion.timedOut && "result" in outcome;
+        if (resumable) rememberSubagentCheckpoint(entry, outcome.checkpoint);
+        evictSubagentEntries();
+        this.subagentControllers.delete(controller);
+        _runningSubagents--;
+        emitSubagentDone(task, id, completion, toolCallId, resumable ? !!entry.checkpoint : undefined);
+        return completion.result ?? "";
       };
-      const promise = runSubagentWithRetry(runOnce, {
-        signal,
-        canRetry: () => !attemptState.mutatingExecuted,
-        onRetry: (info) => {
-          (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {
-            message: `(subagent ${id} hit transient LLM error: ${info.err.message} — retrying in ${info.delayMs / 1000}s, attempt ${info.attempt + 1}/3)`,
-          });
-        },
-      });
+      const promise = runChild(id, type, {
+        task, systemPrompt, tools, model, maxIterations, budgetTokens, reasoningParams, signal, outMeta: meta,
+      }, overrides).then(settle, error => settle({ error }));
 
-      const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise, controller: abortController };
+      const entry: SubagentEntry = { id, type, task, startedAt: Date.now(), promise };
       _subagents.set(id, entry);
       evictSubagentEntries();
-
-      promise.then((result) => {
-        entry.degraded = meta.degraded ?? sniffDegraded(result);
-        entry.tokensUsed = meta.tokensUsed ?? 0;
-        if (isTimeoutSignal(signal)) {
-          // Wall-clock timeout: runSubagent broke out silently and returned
-          // partial text — mark it so it isn't presented as a success.
-          const minutes = SUBAGENT_TIMEOUT_MS / 60000;
-          entry.result = `${result}\n\n[subagent terminated: timeout after ${minutes}min]`;
-          entry.error = `timeout after ${minutes}min`;
-        } else {
-          entry.result = result;
-        }
-      }).catch((err) => {
-        entry.error = String(err);
-        entry.tokensUsed = meta.tokensUsed ?? 0;
-      }).finally(() => {
-        _runningSubagents--;
-        (core.bus.emit as (name: string, payload: unknown) => void)(
-          "subagent:done", {
-            task, subagentId: id,
-            degraded: entry.error ? null : (entry.degraded ?? null),
-            tokensUsed: entry.tokensUsed ?? 0,
-            ...(entry.error ? { error: entry.error } : {}),
-          });
-      });
 
       // Register context producer once (idempotent) to surface completed
       // subagent results in the next LLM iteration.
@@ -775,15 +909,15 @@ export class AshBridge extends EventEmitter implements Bridge {
             for (const [eid, e] of _subagents) {
               // Already surfaced once — keep the entry for subagent:resume.
               if (e.injected) continue;
-              if (e.result || e.error) {
+              if (e.result !== undefined || e.error !== undefined || e.cancelled) {
                 // Prefer the error narrative: a timeout/error entry may also
                 // carry partial result text — don't label it "Completed".
                 // Head+tail clip keeps the trailing "[Subagent terminated: ...]"
                 // note that marks a budget/iteration-degraded result.
-                const body = e.error
+                const body = e.cancelled ? subagentCancelledResult.message : e.error !== undefined
                   ? `Error: ${e.error}${e.result ? `\nPartial: ${clipHeadTail(e.result, 1500, 500)}` : ""}`
                   : clipHeadTail(e.result ?? "", 1500, 500);
-                const status = e.error
+                const status = e.cancelled ? "Cancelled" : e.error !== undefined
                   ? "Failed"
                   : e.degraded
                     ? `Completed (partial: ${e.degraded} exhausted)`
@@ -794,11 +928,11 @@ export class AshBridge extends EventEmitter implements Bridge {
                   body +
                   `\n</subagent_result>`
                 );
-                // Mark instead of delete: the retained entry lets
-                // subagent:resume brief a follow-up run with this result.
+                // Mark instead of delete so a retained checkpoint can resume.
                 e.injected = true;
               }
             }
+            evictSubagentEntries();
             if (completed.length === 0) return null;
             return `\nSubagent results available:\n${completed.join("\n")}`;
           },
@@ -807,60 +941,6 @@ export class AshBridge extends EventEmitter implements Bridge {
       }
 
       return id;
-    };
-
-    // ── Transient-error retry for subagent runs ───────────────────────
-    // agent-sh's main loop wraps every LLM call in streamWithRetry (429/
-    // 5xx/network → exponential backoff), but runSubagent's internal
-    // streamOnce is a bare llmClient.stream() — a single "Connection
-    // error." kills the whole subagent run.  We can't reach inside
-    // runSubagent, so retry the WHOLE run instead.
-    //
-    // SAFETY: retry is gated per-attempt by canRetry() — the call sites
-    // pass a check that no modifiesFiles tool has executed in the failed
-    // attempt (tracked by wrapSubagentTools' onMutatingExecute callback,
-    // kernel-independent).  A run that died on the FIRST stream (before
-    // any tool ran) is side-effect-free even for the implement preset, so
-    // transient LLM errors no longer kill it; a run that died mid-way
-    // after writes/commands is never retried.
-    const runSubagentWithRetry = async <R,>(
-      launch: () => Promise<R>,
-      opts?: {
-        signal?: AbortSignal;
-        canRetry?: () => boolean;
-        onRetry?: (info: { attempt: number; delayMs: number; err: Error }) => void;
-      },
-    ): Promise<R> => {
-      const RETRIES = 2; // 1 initial + 2 retries
-      const DELAYS = [2_000, 4_000];
-      const RETRYABLE = /econnreset|econnrefused|etimedout|fetch failed|network|socket hang up|connection error/i;
-      const isRetryable = (err: unknown): boolean => {
-        if (!(err instanceof Error)) return false;
-        // Codex acknowledges SSE before upstream headers. Its explicit retry
-        // decision survives in the SDK error envelope, not APIError.status.
-        // Honor false before message matching (partial output, TLS, deadlines).
-        const proxy = err as Error & { type?: string; error?: { status?: unknown; retryable?: unknown } };
-        if (proxy.type === "codex_proxy_error" && typeof proxy.error?.status === "number"
-            && Number.isInteger(proxy.error.status) && proxy.error.status >= 400 && proxy.error.status <= 599
-            && typeof proxy.error.retryable === "boolean") return proxy.error.retryable;
-        if (RETRYABLE.test(err.message)) return true;
-        const status = (err as { status?: number }).status;
-        return status === 429 || status === 500 || status === 502 || status === 503 || status === 529;
-      };
-      let lastErr: unknown;
-      for (let attempt = 0; attempt <= RETRIES; attempt++) {
-        opts?.signal?.throwIfAborted();
-        try {
-          return await launch();
-        } catch (err) {
-          lastErr = err;
-          if (opts?.signal?.aborted || attempt >= RETRIES || !isRetryable(err) || opts?.canRetry?.() === false) throw err;
-          const delayMs = DELAYS[attempt] ?? 4_000;
-          opts?.onRetry?.({ attempt: attempt + 1, delayMs, err: err instanceof Error ? err : new Error(String(err)) });
-          await waitForRetry(delayMs, undefined, { signal: opts?.signal });
-        }
-      }
-      throw lastErr; // unreachable — kept for type completeness
     };
 
     // ── Subagent model overrides ────────────────────────────────
@@ -967,10 +1047,21 @@ export class AshBridge extends EventEmitter implements Bridge {
       if (_subagents.size <= MAX_SUBAGENT_ENTRIES) return;
       for (const [eid, e] of _subagents) {
         if (_subagents.size <= MAX_SUBAGENT_ENTRIES) break;
-        if (!e.injected) continue;
+        if (!e.injected || e.checkpoint) continue;
         _subagents.delete(eid);
       }
     };
+    const rememberSubagentCheckpoint = (entry: SubagentEntry, checkpoint: SubagentCheckpoint | undefined): void => {
+      if (!checkpoint) return;
+      entry.checkpoint = checkpoint;
+      // Unreported background results may stay in the map. Their evidence
+      // must still obey the same retention limit as synchronous histories.
+      const saved = [..._subagents.values()].filter(candidate => candidate.checkpoint);
+      for (const old of saved.slice(0, Math.max(0, saved.length - MAX_SUBAGENT_ENTRIES))) delete old.checkpoint;
+    };
+    // A stale ID from another bridge or a previous app lifetime must not
+    // accidentally resolve to this bridge's unrelated first run.
+    const subagentNamespace = randomBytes(6).readUIntBE(0, 6).toString().padStart(15, "0");
     let _subagentSeq = 0;
     let _runningSubagents = 0;
     // Bounded wait for a free subagent slot.  The model often calls
@@ -983,22 +1074,34 @@ export class AshBridge extends EventEmitter implements Bridge {
       const deadline = Date.now() + 90_000;
       while (_runningSubagents >= MAX_CONCURRENT_SUBAGENTS && Date.now() < deadline) {
         if (signal?.aborted) return false;
-        await new Promise((r) => setTimeout(r, 5_000));
+        try {
+          await waitForRetry(5_000, undefined, { signal });
+        } catch (error) {
+          if (signal?.aborted) return false;
+          throw error;
+        }
       }
       return _runningSubagents < MAX_CONCURRENT_SUBAGENTS;
     };
 
-    core.handlers.define("subagent:run", async (opts: {
+    type SubagentRunInput = SubagentOverrides & {
       task: string;
       type?: string;
       async?: boolean;
       systemPrompt?: string;
-      model?: string;
-      budgetTokens?: number;
-      maxIterations?: number;
       signal?: AbortSignal;
       tools?: ToolDefinition[];
-    }) => {
+    };
+    const runSubagentRequest = async (opts: SubagentRunInput, previous?: SubagentCheckpoint): Promise<SubagentRunResult> => {
+      const launch = subagentLaunchCall.getStore();
+      const toolCallId = launch?.toolCallId;
+      const cancelBeforeLaunch = () => {
+        // The parent tool can already be visible while waiting for a slot.
+        // Settle that card without pretending a child started.
+        cancelSubagentLaunch(opts.task, launch);
+        return subagentCancelledResult;
+      };
+      if (opts.signal?.aborted) return cancelBeforeLaunch();
       // Concurrency cap.  Synchronous launches (incl. subagent_resume, which
       // reruns synchronously) wait briefly for a slot instead of failing
       // instantly — resuming right after a swarm finishes is the common case
@@ -1009,20 +1112,32 @@ export class AshBridge extends EventEmitter implements Bridge {
         if (opts.async) {
           return { concurrencyLimited: true as const, message: `Error: subagent concurrency limit reached (${MAX_CONCURRENT_SUBAGENTS} running). Wait for a running subagent to finish, then retry.` };
         }
-        const gotSlot = await waitForSubagentSlot(opts.signal);
+        const waiting = new AbortController();
+        const waitSignal = opts.signal ? AbortSignal.any([waiting.signal, opts.signal]) : waiting.signal;
+        this.subagentControllers.add(waiting);
+        let gotSlot: boolean;
+        try {
+          gotSlot = await waitForSubagentSlot(waitSignal);
+        } finally {
+          this.subagentControllers.delete(waiting);
+        }
+        if (waitSignal.aborted) return cancelBeforeLaunch();
         if (!gotSlot) {
           return { concurrencyLimited: true as const, message: `Error: subagent concurrency limit reached (${MAX_CONCURRENT_SUBAGENTS} running, still busy after waiting 90s). Wait for a running subagent to finish, then retry.` };
         }
       }
+      if (previous && !matchesSubagentScope(previous.scope)) return `Error: ${scopeError}`;
+      if (previous && !originalModelAvailable(previous)) return `Error: ${resumeModelError}`;
       // Resolve type preset.  Budget chain: explicit caller opts →
       // settings.json subagentBudgets[type] override → SUBAGENT_TYPES preset.
       const preset = opts.type ? SUBAGENT_TYPES[opts.type] : null;
       const override = (opts.type ? getSubagentBudgetOverrides()[opts.type] : undefined) ?? {};
-      const systemPrompt = opts.systemPrompt ?? preset?.systemPrompt ?? "";
+      const systemPrompt = previous?.systemPrompt ?? opts.systemPrompt ?? preset?.systemPrompt ?? "";
+      const overrides = previous?.overrides ?? { model: opts.model, budgetTokens: opts.budgetTokens, maxIterations: opts.maxIterations };
       const maxIterations = opts.maxIterations ?? override.maxIterations ?? preset?.maxIterations ?? 20;
       const budgetTokens = opts.budgetTokens ?? override.budgetTokens ?? preset?.budgetTokens;
       const reasoning = override.reasoning ?? preset?.reasoning;
-      const rawModel = opts.model ?? (opts.type ? (getSettings() as any).subagentModels?.[opts.type] : undefined) ?? preset?.model;
+      const rawModel = previous?.model ?? opts.model ?? (opts.type ? (getSettings() as any).subagentModels?.[opts.type] : undefined) ?? preset?.model;
       // Strip @provider suffix — subagent reuses the main session's provider.
       const stripped = typeof rawModel === "string" ? rawModel.replace(/@.+$/, "") : rawModel;
       // A stale override can reference a model from a previous provider (e.g.
@@ -1045,19 +1160,24 @@ export class AshBridge extends EventEmitter implements Bridge {
 
       // Tool filtering
       let tools: ToolDefinition[];
-      if (opts.tools) {
+      if (previous) {
+        const authorized = new Map(previous.tools.map(tool => [tool.name, tool]));
+        tools = getSubagentTools().filter(tool => {
+          const original = authorized.get(tool.name);
+          return original !== undefined && sameSubagentTool(original, subagentToolScope(tool));
+        }).map(tool => ({ ...tool, input_schema: structuredClone(tool.input_schema) }));
+      } else if (opts.tools) {
         tools = opts.tools;
       } else if (preset) {
         if (preset.tools.length === 0) {
           tools = [];
         } else if (preset.tools[0] !== "*") {
-          const allTools: ToolDefinition[] = (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
-          tools = allTools.filter(t => preset.tools.includes(t.name));
+          tools = getSubagentTools().filter(t => preset.tools.includes(t.name));
         } else {
-          tools = (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
+          tools = getSubagentTools();
         }
       } else {
-        tools = (extCtx as unknown as { agent: { getTools(): ToolDefinition[] } }).agent?.getTools?.() ?? [];
+        tools = getSubagentTools();
       }
       // Never hand a subagent the subagent tools themselves — `["*"]`
       // (implement) would otherwise allow unbounded nesting.
@@ -1068,107 +1188,76 @@ export class AshBridge extends EventEmitter implements Bridge {
       // background subagent must outlive the turn that launched it.
       if (opts.async) {
         const type = opts.type ?? "generic";
-        const id = launchSubagent(opts.task, type, systemPrompt, tools, model, maxIterations, budgetTokens, undefined, reasoningParams);
+        const id = launchSubagent(opts.task, type, systemPrompt, tools, model, maxIterations, budgetTokens, undefined, reasoningParams, undefined, overrides);
         return `subagent:${id}`;
       }
 
       // Synchronous: block until subagent completes.
-      const llmClient = core.handlers.call("llm:get-client");
-      const syncId = `sync-${_subagentSeq++}`;
-      // Merge the caller's cancel signal with a wall-clock timeout.
-      const syncSignals = [AbortSignal.timeout(SUBAGENT_TIMEOUT_MS)];
+      const syncId = `sync-${subagentNamespace}${_subagentSeq++}`;
+      const controller = new AbortController();
+      const syncSignals = [controller.signal, AbortSignal.timeout(SUBAGENT_TIMEOUT_MS)];
       if (opts.signal) syncSignals.push(opts.signal);
       const signal = AbortSignal.any(syncSignals);
 
-      (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", { task: opts.task, systemPrompt, type: opts.type, subagentId: syncId });
-
-      // Declared outside the try so the catch can still report tokensUsed.
-      const attemptState = { mutatingExecuted: false };
-      const meta: { degraded?: "budget" | "iterations" | null; tokensUsed?: number } = {};
+      const meta: SubagentRunMeta = {};
+      this.subagentControllers.add(controller);
+      _runningSubagents++;
       try {
-        // Increment inside the try so an emit/launch failure above can't leak
-        // the concurrency counter (finally always decrements).
-        _runningSubagents++;
-        // Same per-attempt side-effect guard as the async path: retry only
-        // while no modifiesFiles tool has executed in the failed attempt —
-        // this now also covers implement-type runs that died on their first
-        // LLM stream, while mid-run failures after writes never retry.
-        const runOnce = () => {
-          attemptState.mutatingExecuted = false;
-          return runSubagent({
-            llmClient: llmClient as Parameters<typeof runSubagent>[0]["llmClient"],
-            tools: wrapSubagentTools(tools, signal, syncId, () => { attemptState.mutatingExecuted = true; }),
-            systemPrompt,
-            task: withBudgetNote(opts.task, budgetTokens),
-            model,
-            bus: mutedSubagentBus,
-            signal,
-            maxIterations,
-            budgetTokens,
-            reasoningParams,
-            outMeta: meta,
-            onUsage: (u) => (core.bus.emit as (name: string, payload: unknown) => void)(
-              "subagent:usage", { ...u, type: opts.type }),
-          });
-        };
-        const result = await runSubagentWithRetry(runOnce, {
-          signal,
-          canRetry: () => !attemptState.mutatingExecuted,
-          onRetry: (info) => {
-            (core.bus.emit as (name: string, payload: unknown) => void)("ui:info", {
-              message: `(subagent ${syncId} hit transient LLM error: ${info.err.message} — retrying in ${info.delayMs / 1000}s, attempt ${info.attempt + 1}/3)`,
-            });
-          },
+        if (launch) launch.started = true;
+        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:started", {
+          task: opts.task, systemPrompt, type: opts.type, subagentId: syncId, ...(toolCallId ? { toolCallId } : {}),
         });
-        const degraded = meta.degraded ?? sniffDegraded(result);
-        const tokensUsed = meta.tokensUsed ?? 0;
-        if (isTimeoutSignal(signal)) {
-          // Wall-clock timeout: runSubagent broke out silently and returned
-          // partial text — surface as an error so neither the model nor the
-          // UI treats truncated output as success.
-          const minutes = SUBAGENT_TIMEOUT_MS / 60000;
-          (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId, error: `timeout after ${minutes}min`, degraded: null, tokensUsed });
-          return { subagentTimedOut: true as const, message: `${result}\n\n[subagent terminated: timeout after ${minutes}min]` };
+        const outcome = await runChild(syncId, opts.type, {
+          task: opts.task, systemPrompt, tools, model, maxIterations, budgetTokens, reasoningParams, signal, outMeta: meta,
+        }, overrides, previous).then(value => value, (error: unknown) => ({ error }));
+        const completion = subagentCompletion(signal, meta, outcome);
+        if (completion.cancelled || completion.timedOut || "error" in outcome) {
+          emitSubagentDone(opts.task, syncId, completion, toolCallId);
         }
-        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, subagentId: syncId, degraded, tokensUsed });
+        if (completion.cancelled) return subagentCancelledResult;
+        if (completion.timedOut) return { subagentTimedOut: true, message: completion.result! };
+        if ("error" in outcome) throw outcome.error;
+        const { result } = outcome;
+        const { degraded, tokensUsed } = completion;
         // Keep the result addressable (marked injected so the context
         // producer ignores it) so subagent:resume can continue this run.
-        _subagents.set(syncId, { id: syncId, type: opts.type ?? "generic", task: opts.task, startedAt: Date.now(), promise: Promise.resolve(result), result, degraded, tokensUsed, injected: true });
+        const entry = { id: syncId, type: opts.type ?? "generic", task: opts.task, startedAt: Date.now(), promise: Promise.resolve(result), result, degraded, tokensUsed, injected: true } satisfies SubagentEntry;
+        _subagents.set(syncId, entry);
+        rememberSubagentCheckpoint(entry, outcome.checkpoint);
         evictSubagentEntries();
-        return `${result}\n\nSubagent id: ${syncId} — call subagent_resume with this id and a follow-up task to continue this work.`;
-      } catch (err) {
-        (core.bus.emit as (name: string, payload: unknown) => void)("subagent:done", { task: opts.task, error: String(err), subagentId: syncId, degraded: null, tokensUsed: meta.tokensUsed ?? 0 });
-        throw err;
+        const resumable = !!_subagents.get(syncId)?.checkpoint;
+        emitSubagentDone(opts.task, syncId, completion, toolCallId, resumable);
+        const description = resumable ? "call subagent_resume with this id and a follow-up task to continue this work."
+          : "continuation history is unavailable.";
+        return `${result}\n\nSubagent id: ${syncId} — ${description}`;
       } finally {
+        this.subagentControllers.delete(controller);
         _runningSubagents--;
       }
-    });
+    };
+    core.handlers.define("subagent:run", (opts: SubagentRunInput) => runSubagentRequest(opts));
 
-    // ── Subagent resume (lightweight) ────────────────────────────
-    // No real session restore: the follow-up runs as a fresh synchronous
-    // subagent briefed with the previous task and a truncated result.
-    // Its own result carries a new subagent id, so resumes can be chained.
+    // ── Subagent resume ──────────────────────────────────────────
+    // Start a new bounded run with the saved child conversation. The prior
+    // completed tool calls are history, and the old checkpoint remains valid
+    // even if this new run is cancelled.
     core.handlers.define("subagent:resume", async (opts: {
       id: string;
       task: string;
       signal?: AbortSignal;
     }) => {
       const entry = _subagents.get(opts.id);
-      if (!entry || (!entry.result && !entry.error)) {
-        return `Error: no completed subagent run with id '${opts.id}' — only runs that already returned a result can be resumed, and results are only kept for the ${MAX_SUBAGENT_ENTRIES} most recent runs.`;
+      if (entry?.cancelled) return `Error: subagent run '${opts.id}' was cancelled and has no resumable result.`;
+      const checkpoint = entry?.checkpoint;
+      if (!checkpoint) {
+        return `Error: no completed subagent run with resumable history for id '${opts.id}' in this session. Only the ${MAX_SUBAGENT_ENTRIES} most recent retained checkpoints can be resumed.`;
       }
-      const prev = unicodeSlice(entry.result ?? `Error: ${entry.error}`, 0, 2000);
-      const task =
-        `Continuation of subagent ${entry.id}.\n\n` +
-        `Previous task: ${entry.task}\n\n` +
-        `Previous result:\n${prev}\n\n` +
-        `Follow-up task: ${opts.task}`;
-      return core.handlers.call("subagent:run", {
-        task,
-        type: SUBAGENT_TYPES[entry.type] ? entry.type : undefined,
-        async: false,
+      return runSubagentRequest({
+        ...checkpoint.overrides,
+        task: opts.task,
+        type: Object.hasOwn(SUBAGENT_TYPES, entry.type) ? entry.type : undefined,
         signal: opts.signal,
-      });
+      }, checkpoint);
     });
 
     // ── Subagent tools ──────────────────────────────────────────────
@@ -1193,10 +1282,9 @@ export class AshBridge extends EventEmitter implements Bridge {
             // Forward the kernel's abort signal so cancelling the main
             // turn also cancels a running synchronous subagent.
             signal: toolCtx?.signal,
-          }) as string | { concurrencyLimited: true; message: string } | { subagentTimedOut: true; message: string };
+          }) as SubagentRunResult;
           if (typeof result !== "string") {
-            // Concurrency-cap / timeout — surface as a real tool error so
-            // the model doesn't have to sniff the text.
+            // Surface a stopped or rejected subagent as a tool error.
             return { exitCode: 1, content: result.message, isError: true };
           }
           return {
@@ -1222,10 +1310,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool({
       name: "subagent_resume",
       description:
-        `Continue a previously completed subagent run with a follow-up task. ` +
-        `Every synchronous subagent result ends with a 'Subagent id: ...' line — pass that id here. ` +
-        `The follow-up runs as a fresh subagent briefed with the previous task and result (truncated), ` +
-        `so use it to drill into a finding or fix issues a subagent reported without redoing its work.`,
+        `Continue a completed or partial subagent run from this session using its retained conversation and tool results. ` +
+        `Pass the subagent id from the result and describe only the follow-up task.`,
       input_schema: {
         type: "object",
         properties: {
@@ -1239,9 +1325,9 @@ export class AshBridge extends EventEmitter implements Bridge {
           id: (args as { id: string }).id,
           task: (args as { task: string }).task,
           signal: toolCtx?.signal,
-        }) as string | { concurrencyLimited: true; message: string } | { subagentTimedOut: true; message: string };
+        }) as SubagentRunResult;
         if (typeof result !== "string") {
-          // Concurrency-cap / timeout — same surfacing as the preset tools.
+          // Use the same tool error result as the preset tools.
           return { exitCode: 1, content: result.message, isError: true };
         }
         const isErr = result.startsWith("Error:");
@@ -1261,6 +1347,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     // subagent:started/done and subagent:swarm-* events stream meanwhile,
     // which keeps the hub's idle watchdog fed.
     let _swarmSeq = 0;
+    const subagentControllers = this.subagentControllers;
     (extCtx as unknown as { agent: { registerTool(t: ToolDefinition): void } }).agent.registerTool({
       name: "agentswarm",
       description:
@@ -1340,52 +1427,63 @@ export class AshBridge extends EventEmitter implements Bridge {
 
         const swarmId = `swarm-${++_swarmSeq}`;
         const total = items.length;
+        const controller = new AbortController();
+        const signal = toolCtx?.signal ? AbortSignal.any([controller.signal, toolCtx.signal]) : controller.signal;
+        subagentControllers.add(controller);
         (core.bus.emit as (name: string, payload: unknown) => void)(
           "subagent:swarm-started", { swarmId, total, type });
 
-        const results: Array<{ ok: boolean; text: string; degraded?: "budget" | "iterations" | null } | null> = new Array(total).fill(null);
+        type MemberResult = { ok: boolean; text: string; degraded?: "budget" | "iterations" | null };
+        const results: Array<MemberResult | null> = new Array(total).fill(null);
         let next = 0;
         let done = 0;
         let failed = 0;
-        // Set when the main turn is cancelled: running items abort, and pump
-        // must NOT dispatch the queued remainder.
-        let cancelled = !!toolCtx?.signal?.aborted;
-        toolCtx?.signal?.addEventListener("abort", () => { cancelled = true; }, { once: true });
 
         await new Promise<void>((resolveSwarm) => {
+          let finished = false;
+          const finish = () => {
+            if (finished) return;
+            finished = true;
+            clearInterval(timer);
+            subagentControllers.delete(controller);
+            const degraded = results.filter((r) => r?.ok && r.degraded).length;
+            (core.bus.emit as (name: string, payload: unknown) => void)(
+              "subagent:swarm-done", { swarmId, done, failed, degraded });
+            resolveSwarm();
+          };
           const pump = () => {
+            if (finished) return;
             try {
-              while (!cancelled && next < total && _runningSubagents < MAX_CONCURRENT_SUBAGENTS) {
+              while (!signal.aborted && next < total && _runningSubagents < MAX_CONCURRENT_SUBAGENTS) {
                 const i = next++;
                 try {
                   // Bypass subagent:run's reject-on-cap: queue semantics are
                   // the whole point of a swarm, so launch directly and wait
                   // for slots instead of erroring out.
-                  const id = launchSubagent(prompts[i]!, type, preset.systemPrompt, tools, model, maxIterations, budgetTokens, swarmId, reasoningParams);
+                  const id = launchSubagent(prompts[i]!, type, preset.systemPrompt, tools, model, maxIterations, budgetTokens, swarmId, reasoningParams, signal);
                   const entry = _subagents.get(id)!;
-                  // launchSubagent's own .then was attached first, so
-                  // entry.result/entry.error are already set when ours runs.
-                  void entry.promise.then(() => {
-                    if (entry.error) {
-                      failed++;
-                      results[i] = { ok: false, text: entry.result ? `${entry.result}\n[${entry.error}]` : entry.error };
-                    } else {
-                      done++;
-                      results[i] = { ok: true, text: entry.result ?? "", degraded: entry.degraded ?? null };
-                    }
-                  }).catch((err) => {
-                    failed++;
-                    results[i] = { ok: false, text: String(err) };
-                  }).finally(() => {
-                    // Mark injected so the context producer does not also
-                    // push every item's full result into the main context —
-                    // the aggregated report below is the single source.
-                    // (In .finally so reject/abort paths are covered too.)
+                  // Count and publish the outcome together, before deciding
+                  // whether all members have reported their final progress.
+                  const complete = (result: MemberResult) => {
                     entry.injected = true;
+                    if (finished) return;
+                    results[i] = result;
+                    if (result.ok) done++;
+                    else failed++;
                     (core.bus.emit as (name: string, payload: unknown) => void)(
                       "subagent:swarm-progress", { swarmId, done, failed });
                     pump();
-                  });
+                  };
+                  // The promise settles after the entry's state was recorded.
+                  void entry.promise.then(() => {
+                    if (entry.cancelled) {
+                      complete({ ok: false, text: subagentCancelledResult.message });
+                    } else if (entry.error !== undefined) {
+                      complete({ ok: false, text: entry.result ? `${entry.result}\n[${entry.error}]` : entry.error });
+                    } else {
+                      complete({ ok: true, text: entry.result ?? "", degraded: entry.degraded ?? null });
+                    }
+                  }, (err) => complete({ ok: false, text: String(err) }));
                 } catch (err) {
                   failed++;
                   results[i] = { ok: false, text: String(err) };
@@ -1394,30 +1492,19 @@ export class AshBridge extends EventEmitter implements Bridge {
                 }
               }
               // Cancelled with queued remainder: mark the not-yet-launched
-              // slots as failed (explicit indices — pending launched items
-              // settle via their own .then and must not be double-counted).
-              if (cancelled) {
+              // slots as failed; launched items settle on their own.
+              if (signal.aborted) {
                 while (next < total) {
                   const i = next++;
                   failed++;
                   results[i] = { ok: false, text: "cancelled" };
                 }
               }
-              if (done + failed >= total) {
-                clearInterval(timer);
-                const degraded = results.filter((r) => r?.ok && r.degraded).length;
-                (core.bus.emit as (name: string, payload: unknown) => void)(
-                  "subagent:swarm-done", { swarmId, done, failed, degraded });
-                resolveSwarm();
-              }
+              if (done + failed >= total) finish();
             } catch (err) {
               // A throw inside pump must not leak the interval (it would
               // re-fire every second and produce unhandled rejections).
-              clearInterval(timer);
-              const degraded = results.filter((r) => r?.ok && r.degraded).length;
-              (core.bus.emit as (name: string, payload: unknown) => void)(
-                "subagent:swarm-done", { swarmId, done, failed, degraded });
-              resolveSwarm();
+              finish();
             }
           };
           // Poll as a backstop: slots can also be freed by subagents outside
@@ -1550,6 +1637,33 @@ export class AshBridge extends EventEmitter implements Bridge {
       if (signal?.aborted) return { content: "Cancelled", exitCode: 1, isError: true };
       if (decision?.outcome !== "approved") {
         return { content: `Permission denied: ${decision?.reason || "denied by user"}`, exitCode: 1, isError: true };
+      }
+      return next(ctx);
+    });
+    // A registered tool or a continuation's scope can change while write
+    // approval is pending. Check the capability again at actual dispatch.
+    core.handlers.advise("tool:dispatch", (next, ctx) => {
+      const capability = childToolCapability.getStore();
+      if (capability && capability.name === (ctx as { name?: string }).name && !capability.isAllowed()) return unavailableChildTool();
+      return next(ctx);
+    });
+
+    // Associate child events with the exact launch tool even when launches
+    // wait for a slot or other tools start first.
+    core.handlers.advise("tool:execute", (next, ctx) => {
+      const { id, name } = ctx as { id?: unknown; name?: unknown };
+      if (typeof id === "string" && typeof name === "string" &&
+          (Object.hasOwn(SUBAGENT_TYPES, name) || name === "subagent_resume")) {
+        return subagentLaunchCall.run({ toolCallId: id }, () => next(ctx));
+      }
+      return next(ctx);
+    });
+    // In 0.17 an abort can win after tool-started but before dispatching the
+    // preset. Settle that exact launch even if subagent:run was never called.
+    core.handlers.advise("tool:cancel", (next, ctx) => {
+      const { name, args } = ctx as { name?: string; args?: { task?: unknown } };
+      if (name && (Object.hasOwn(SUBAGENT_TYPES, name) || name === "subagent_resume")) {
+        cancelSubagentLaunch(typeof args?.task === "string" ? args.task : "");
       }
       return next(ctx);
     });
@@ -2006,15 +2120,15 @@ export class AshBridge extends EventEmitter implements Bridge {
       // queued shell input, or it lingers until the NEXT turn settles.
       setTimeout(() => { this.drainShellQueue(); this.drainQueue(); }, 0);
     });
+    // Stop only the children present at the request. The parent can report
+    // cancellation later, after a new child has already been submitted.
+    onAny("agent:cancel-request", (payload) => {
+      if (!(payload as { silent?: boolean } | undefined)?.silent) this.cancelSubagents();
+    });
     onAny("agent:cancelled", () => {
       this.requests?.end();
       const t = this.pendingTurn;
       if (t) { this.pendingTurn = null; t.resolve({ stopReason: "cancelled" }); }
-      // Abort all running async subagents — their tool calls are still
-      // pumping events into the bus even after main cancel.
-      for (const [eid, entry] of (this as any)._subagents as Map<string, SubagentEntry>) {
-        entry.controller?.abort();
-      }
       // Stop means stop: discard queued queries instead of draining into
       // the next one. Pair each drop with queued-done (mirroring the
       // queued-submit/queued-done pair) so hub-side queue state settles.
@@ -2250,6 +2364,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
   }
 
+  private cancelSubagents(): void {
+    for (const controller of [...this.subagentControllers]) controller.abort();
+  }
+
   cancel(): void {
     this.steeringOpen = false;
     this.explicitApprovals?.cancel();
@@ -2394,6 +2512,10 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
   }
 
+  private isCurrentOpenRouterCatalog(apiKey: string, generation: number): boolean {
+    return !this.closed && generation === this.providerGeneration && resolveApiKey("openrouter").key === apiKey;
+  }
+
   private async refetchOpenRouterModels(
     ctxAgent: { providers?: { register: (reg: Record<string, unknown>) => unknown } },
     apiKey: string,
@@ -2405,7 +2527,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       });
       if (!res.ok || !ctxAgent.providers?.register) return;
       const data = (await res.json()) as { data?: Array<{ id: string; supported_parameters?: string[]; context_length?: number; architecture?: { input_modalities?: string[] } }> };
-      if (this.closed || generation !== this.providerGeneration) return;
+      if (!this.isCurrentOpenRouterCatalog(apiKey, generation)) return;
       const models = data.data ?? [];
       if (models.length === 0) return;
       ctxAgent.providers.register({
@@ -2780,11 +2902,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     }
     this.plugins?.close();
     this.codexHost?.close();
-    // Abort and clean up any async subagents still running.
-    for (const [, entry] of (this as any)._subagents as Map<any, any>) {
-      try { entry.controller?.abort(); } catch {}
-    }
-    (this as any)._subagents.clear();
+    this.cancelSubagents();
+    this._subagents.clear();
     this._todos = [];
     // Deny any pending permission requests
     for (const [, entry] of this.pendingPermissions) {

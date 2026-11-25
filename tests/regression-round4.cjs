@@ -34,7 +34,14 @@ await check('U05 initializing session observes disabled auto approval',async()=>
  Object.assign(e.context,{fs,path,CONFIG_DIR:e.dir});const sf=ast('src/bridges/ash.ts'),init=find(sf,n=>ts.isMethodDeclaration(n)&&n.name?.text==='init');const initializeApproval=vm.runInContext('(async function(){'+init.body.statements[0].getText(sf)+'})',e.context);const creating=h.createSession(ss,{makeBridge:o=>{b=new Bridge(o);b.autoApprove=false;b.setAutoApprove=v=>b.autoApprove=v;b.ready=async()=>{await initializeApproval.call(b);started();await gate};return b}},e.dir);await ready;const r=new Res();await h.setAutoApprove(req({autoApprove:false}),r,ss);release();await creating;assert(r.statusCode===200&&b.autoApprove===false&&JSON.parse(fs.readFileSync(file))['ashub.permissions.autoApprove']===false,'startup approval state synchronized');return{acknowledged:false,newSessionApproval:b.autoApprove};
 });
 await check('U06 shutdown prevents late startup listening',async()=>{
- let release,started,blocked=false,listens=0,listened;const listening=new Promise(r=>listened=r);const gate=new Promise(r=>release=r),ready=new Promise(r=>started=r),real=require('fs');const http={createServer:()=>({close:f=>f(),listen(){listens++;listened()}})};
+ let release,started,blocked=false,listens=0;
+ const gate=new Promise(r=>release=r),ready=new Promise(r=>started=r),real=require('fs');
+ const nodeHttp=require('node:http');
+ const http={...nodeHttp,createServer(...args){
+  const server=nodeHttp.createServer(...args);
+  server.listen=()=>{listens++;return server;};
+  return server;
+ }};
  const e=env({modules:{'node:http':http,'node:fs':{...real,promises:{...real.promises,readdir:async(...a)=>{if(!blocked){blocked=true;started();await gate}return real.promises.readdir(...a)}}}}});const h=hub(e),app=h.startHub({host:'127.0.0.1',port:0,webRoot:path.join(root,'web'),makeBridge:o=>new Bridge(o)});await ready;const shuttingDown=app.shutdown();assert(listens===0,'already listening');release();await shuttingDown;assert(listens===0,'shutdown allowed late listen');return{listensAfterShutdown:listens};
 });
 await check('U07 failed unarchive rolls back and can retry',async()=>{

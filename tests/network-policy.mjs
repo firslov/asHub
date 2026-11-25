@@ -70,3 +70,38 @@ test('Codex background HTTP requests inherit only the registered owner VPN polic
  }finally{stop();}
  assert.equal(await (await send('https://codex.invalid/responses',{headers:{session_id:'owner:background'}})).text(),'proxy');
 });
+
+for (const proxyEnabled of [true, false]) {
+  test(`Codex compaction honors the registered owner when global proxy is ${proxyEnabled ? 'on' : 'off'}`, async () => {
+    const url = 'https://codex.invalid/responses';
+    const stop = registerNetworkEndpoint(url, 'aaaa');
+    const overridden = proxyEnabled ? 'direct' : 'proxy';
+    const inherited = proxyEnabled ? 'proxy' : 'direct';
+    const send = createPolicyFetch(async () => new Response('proxy'), async () => new Response('direct'),
+      () => ({ proxyEnabled, sessions: { aaaa: !proxyEnabled, bbbb: !proxyEnabled } }));
+    const route = async (id, endpoint = url) => (await send(endpoint, { headers: { session_id: id } })).text();
+    try {
+      assert.equal(await route('aaaa'), overridden);
+      assert.equal(await route('aaaa:compact'), overridden);
+      assert.equal(await route('bbbb:compact'), inherited);
+      assert.equal(await route('aaaa:compact:other'), inherited);
+      assert.equal(await route('aaaa:compact', 'https://codex.invalid/other'), inherited);
+    } finally { stop(); }
+    assert.equal(await route('aaaa:compact'), inherited);
+  });
+}
+
+test('isolated Codex child headers inherit only the registered owner VPN policy', async () => {
+ const url='https://codex.invalid/responses';
+ const stop=registerNetworkEndpoint(url,'owner');
+ const send=createPolicyFetch(async()=>new Response('proxy'),async()=>new Response('direct'),()=>({proxyEnabled:true,sessions:{owner:false}}));
+ const route=async (id, endpoint=url) => (await send(endpoint, { headers: { session_id:id } })).text();
+ try {
+  assert.equal(await route('owner:subagent:sync-4'),'direct');
+  assert.equal(await route('owner:subagent:sa2'),'direct');
+  assert.equal(await route('other:subagent:sa2'),'proxy');
+  assert.equal(await route('owner:subagent:foreign'),'proxy');
+  assert.equal(await route('owner:subagent:sa2','https://other.invalid/responses'),'proxy');
+ } finally { stop(); }
+ assert.equal(await route('owner:subagent:sa2'),'proxy');
+});

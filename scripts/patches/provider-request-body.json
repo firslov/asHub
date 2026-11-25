@@ -1,0 +1,49 @@
+{
+  "files": [
+    {
+      "path": "src/agent/agent-loop.ts",
+      "hunks": [
+        {
+          "before": "      if (ep && (ep.apiKey !== this.activeEndpoint?.apiKey || ep.baseURL !== this.activeEndpoint?.baseURL)) {\n        this.llmClient.reconfigure({ apiKey: ep.apiKey, baseURL: ep.baseURL, model: prev.id, requestBody: this.settings().providers?.[prev.provider]?.requestBody });\n      } else if (!ep && this.activeEndpoint) {",
+          "after": "      if (ep) {\n        const requestBody = this.settings().providers?.[prev.provider]?.requestBody;\n        if (ep.apiKey !== this.activeEndpoint?.apiKey || ep.baseURL !== this.activeEndpoint?.baseURL) {\n          this.llmClient.reconfigure({ apiKey: ep.apiKey, baseURL: ep.baseURL, model: prev.id, requestBody });\n        } else {\n          this.llmClient.setRequestBody(requestBody);\n        }\n      } else if (this.activeEndpoint) {"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/agent-loop.js",
+      "hunks": [
+        {
+          "before": "            if (ep && (ep.apiKey !== this.activeEndpoint?.apiKey || ep.baseURL !== this.activeEndpoint?.baseURL)) {\n                this.llmClient.reconfigure({ apiKey: ep.apiKey, baseURL: ep.baseURL, model: prev.id, requestBody: this.settings().providers?.[prev.provider]?.requestBody });\n            }\n            else if (!ep && this.activeEndpoint) {",
+          "after": "            if (ep) {\n                const requestBody = this.settings().providers?.[prev.provider]?.requestBody;\n                if (ep.apiKey !== this.activeEndpoint?.apiKey || ep.baseURL !== this.activeEndpoint?.baseURL) {\n                    this.llmClient.reconfigure({ apiKey: ep.apiKey, baseURL: ep.baseURL, model: prev.id, requestBody });\n                }\n                else {\n                    this.llmClient.setRequestBody(requestBody);\n                }\n            }\n            else if (this.activeEndpoint) {"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/llm-client.ts",
+      "hunks": [
+        {
+          "before": "  /** Drop credentials when the active provider loses its key or endpoint. */\n  disable(): void {",
+          "after": "  /** Change body defaults for future requests without replacing the transport. */\n  setRequestBody(requestBody: LlmClientConfig[\"requestBody\"]): void {\n    this.config = { ...this.config, requestBody };\n  }\n\n  /** Drop credentials when the active provider loses its key or endpoint. */\n  disable(): void {"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/llm-client.js",
+      "hunks": [
+        {
+          "before": "    /** Drop credentials when the active provider loses its key or endpoint. */\n    disable() {",
+          "after": "    /** Change body defaults for future requests without replacing the transport. */\n    setRequestBody(requestBody) {\n        this.config = { ...this.config, requestBody };\n    }\n    /** Drop credentials when the active provider loses its key or endpoint. */\n    disable() {"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/llm-client.d.ts",
+      "hunks": [
+        {
+          "before": "    /** Drop credentials when the active provider loses its key or endpoint. */\n    disable(): void;",
+          "after": "    /** Change body defaults for future requests without replacing the transport. */\n    setRequestBody(requestBody: LlmClientConfig[\"requestBody\"]): void;\n    /** Drop credentials when the active provider loses its key or endpoint. */\n    disable(): void;"
+        }
+      ]
+    }
+  ]
+}

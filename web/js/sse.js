@@ -17,7 +17,7 @@ import { maybeScroll, forceScrollBottom } from "./stream/scroll.js";
 import { append, appendAfterPending, appendToGroup, bumpToolCount, insertStreamNode, closeToolGroup, refreshToolSummaries } from "./stream/tool-group.js";
 import {
   renderUsage, hideUsage, renderTurnSep, renderErrorCard,
-  renderDiffBlock, renderToolBody, buildToolRow,
+  renderDiffBlock, renderToolBody, buildToolRow, renderSubagentCancellation,
 } from "./stream/renderers.js";
 import {
   showThinking, hideThinking,
@@ -95,8 +95,8 @@ const sessionLabel = (session) => {
   return q.length > 60 ? q.slice(0, 60) + "…" : q;
 };
 
-// Subagent tool-name → type mapping (must match ash.ts SUBAGENT_TYPES keys)
-const SUBAGENT_TOOL_NAMES = { plan: "plan", explore: "explore", review: "review", research: "research", implement: "implement" };
+// Preset and resume tools both launch a subagent.
+const SUBAGENT_TOOL_NAMES = { plan: "plan", explore: "explore", review: "review", research: "research", implement: "implement", subagent_resume: "resume" };
 // The todolist tool renders as a single TODO card driven by agent:todo
 // events — its tool-started/completed frames must not build tool-rows.
 const TODO_TOOL_NAME = "todolist";
@@ -541,6 +541,13 @@ export const handlers = {
     // Sa maps are NOT cleared at turn boundaries: async subagents outlive the
     // turn and still need them for block attribution. Entries self-clean on
     // launch tool-completed (callId map) and subagent:done (saId map).
+    // The hub can suppress a cancelled launch's tool-completed frame. A
+    // rejected launch may also have waited for a late cancellation result.
+    for (const [callId, block] of this._saBlocksByCallId ?? []) {
+      if (block.classList.contains("subagent-cancelled") || (!block._saId && block.classList.contains("subagent-failed"))) {
+        this._saBlocksByCallId.delete(callId);
+      }
+    }
     // _subagentBlock survives — async subagents need it to find their block on completion.
     showThinking(this);
   },
@@ -882,23 +889,30 @@ export const handlers = {
         const rendered = renderToolBody(lines);
         if (rendered) result.appendChild(rendered);
       }
-      const failed = globalThis.AsHubConversationPresentation.diagnosticState(p) === "failed";
+      const outcome = globalThis.AsHubConversationPresentation.diagnosticState(p);
+      const cancelled = outcome === "cancelled" || launchBlock.classList.contains("subagent-cancelled");
+      const failed = outcome === "failed";
       // No linked lifecycle means a rebuilt historical call or a launch
       // rejected before subagent:started. Its tool result is terminal.
       // A linked background launch can finish its tool while still running.
-      if (!launchBlock._saId || failed) {
+      if (!launchBlock._saId || failed || cancelled) {
         const head = launchBlock.querySelector(".subagent-head");
         head?.querySelector(".subagent-spinner")?.remove();
         const icon = head?.querySelector(".subagent-icon");
-        if (failed) {
+        if (cancelled) {
+          renderSubagentCancellation(launchBlock, head);
+        } else if (failed) {
           launchBlock.classList.add("subagent-failed");
           if (icon) { icon.textContent = "✗"; icon.style.color = "var(--error)"; }
         } else if (icon && !head.classList.contains("subagent-done")) {
-          // Branch reconstruction has no subagent:done metadata. The kernel
-          // preserves early termination in the raw result despite exitCode 0.
-          const raw = typeof p?.rawOutput === "string" ? p.rawOutput : "";
-          const degraded = /\[Subagent terminated: completion-token budget/.test(raw) ? "budget"
-            : /\[Subagent terminated: max iterations/.test(raw) ? "iterations" : null;
+          let degraded = outcome === "partial" ? p.degraded : null;
+          // Older branch replays have only the kernel's explanatory footer.
+          // The recorded outcome takes precedence over text in new replays.
+          if (!degraded && p?.subagentOutcome !== true) {
+            const raw = typeof p?.rawOutput === "string" ? p.rawOutput : "";
+            degraded = /\[Subagent terminated: completion-token budget/.test(raw) ? "budget"
+              : /\[Subagent terminated: max iterations/.test(raw) ? "iterations" : null;
+          }
           icon.textContent = degraded ? "◐" : "✓";
           if (degraded) {
             icon.style.color = "var(--warning)";
@@ -912,7 +926,10 @@ export const handlers = {
       }
       refreshActivity(launchBlock);
       if (this._subagent === launchBlock) this._subagent = null;
-      this._saBlocksByCallId?.delete(id);
+      // While waiting for a slot the kernel can report a generic tool
+      // failure before the bridge emits the keyed cancellation. There is no
+      // child ID to look up on this path, so retain this launch until then.
+      if (launchBlock._saId || !failed || cancelled) this._saBlocksByCallId?.delete(id);
       return;
     }
     // Find the tool row.  Nested subagent tools search their owning block
@@ -925,11 +942,13 @@ export const handlers = {
     const root = saBlock || ((this.state.replaying && this._replayFrag) || this.streamEl);
     const row = id ? root?.querySelector(`.tool-row[data-call-id="${CSS.escape(id)}"]`) : null;
     if (!row) return;
-    const ok = globalThis.AsHubConversationPresentation.diagnosticState(p) !== "failed";
-    row.classList.add(ok ? "ok" : "err");
+    const outcome = globalThis.AsHubConversationPresentation.diagnosticState(p);
+    row.classList.add(outcome === "failed" ? "err" : outcome === "ended" ? "ok" : outcome);
     refreshToolSummaries(row);
     const summary = p?.resultDisplay?.summary ?? "";
-    const mark = ok ? "✓" : Number.isFinite(p?.exitCode) && p.exitCode !== 0 ? `✗ exit ${p.exitCode}` : "✗";
+    const mark = outcome === "cancelled" ? `■ ${t("subagent.cancelled")}`
+      : outcome === "partial" ? `◐ ${t(p.degraded === "budget" ? "subagent.partial.budget" : "subagent.partial.iterations")}`
+      : outcome !== "failed" ? "✓" : Number.isFinite(p?.exitCode) && p.exitCode !== 0 ? `✗ exit ${p.exitCode}` : "✗";
     const tail = document.createElement("span");
     tail.className = "tool-mark";
     tail.textContent = (summary ? ` ${summary} ` : "  ") + mark;
@@ -1232,13 +1251,18 @@ export const handlers = {
     const saId = p?.subagentId;
     if (!saId) return;
     saMaps(this);
-    for (const block of this._saBlocksByCallId.values()) {
-      if (block._saId) continue;
-      block._saId = saId;
-      this._saBlocksBySaId.set(saId, block);
-      break;
-    }
     if (this._saBlocksBySaId.has(saId)) return;
+    // A swarm owns its own child block. New frames identify the launch tool;
+    // only old replay frames need the launch-order fallback.
+    if (!p.swarmId) {
+      const block = p.toolCallId ? this._saBlocksByCallId.get(p.toolCallId)
+        : [...this._saBlocksByCallId.values()].find(launch => !launch._saId && !launch.classList.contains("subagent-failed"));
+      if (block && !block._saId) {
+        block._saId = saId;
+        this._saBlocksBySaId.set(saId, block);
+        return;
+      }
+    }
     // Swarm / async launches have no launch tool call, hence no block —
     // create one from the event itself, or this subagent's inner tools
     // would spill into the main stream as a flat tool-group.
@@ -1264,18 +1288,27 @@ export const handlers = {
     // one subagent's done can't mark another's block complete; the
     // single-slot pointers remain the fallback for no-id frames.
     const saId = p?.subagentId ?? "";
-    const block = (saId && this._saBlocksBySaId?.get(saId)) || this._subagent || this._subagentBlock;
+    let block = this._saBlocksBySaId?.get(saId);
+    if (!block && p?.toolCallId) {
+      const launch = this._saBlocksByCallId?.get(p.toolCallId);
+      if (launch && (!saId || launch._saId === saId)) block = launch;
+    }
+    if (!saId && !p?.toolCallId) block = this._subagent || this._subagentBlock;
     if (!block) return;
     const head = block.querySelector(".subagent-head");
     const spinner = head?.querySelector(".subagent-spinner");
     if (spinner) spinner.remove();
     const icon = head?.querySelector(".subagent-icon");
-    const outcome = globalThis.AsHubConversationPresentation.diagnosticState(p);
+    const outcome = block.classList.contains("subagent-cancelled") ? "cancelled"
+      : globalThis.AsHubConversationPresentation.diagnosticState(p);
+    const cancelled = outcome === "cancelled";
     const err = outcome === "failed" ? (typeof p?.error === "string" && p.error ? p.error : t("subagent.failed")) : null;
     // Ran to a limit instead of finishing: render a warning "partial" state
     // distinct from the success ✓ and the failure ✗.
     const degraded = outcome === "partial" ? p.degraded : null;
-    if (icon) {
+    if (cancelled) {
+      renderSubagentCancellation(block, head);
+    } else if (icon) {
       icon.textContent = err ? "✗" : degraded ? "◐" : "✓";
       if (err) icon.style.color = "var(--error)";
       else if (degraded) icon.style.color = "var(--warning)";
@@ -1295,10 +1328,10 @@ export const handlers = {
         head.appendChild(tk);
       }
     }
-    // Id badge for resume reference (e.g. #sa1).  Falls back to the id the
-    // block was linked with when the done frame carries none.
+    // A resume ID points to a retained checkpoint. Older success frames may
+    // lack a resumable flag, but failed or cancelled runs never offer one.
     const badgeId = saId || block._saId || "";
-    if (badgeId && head && !head.querySelector(".subagent-id")) {
+    if (!cancelled && !err && p?.resumable !== false && badgeId && head && !head.querySelector(".subagent-id")) {
       const badge = document.createElement("span");
       badge.className = "subagent-id";
       badge.textContent = `#${badgeId}`;
@@ -1385,7 +1418,10 @@ export const handlers = {
     head?.querySelector(".subagent-spinner")?.remove();
     const failed = Number(p?.failed ?? 0);
     const status = head?.querySelector(".swarm-status");
-    if (status) {
+    if (p?.cancelled === true) {
+      if (status) status.textContent = "";
+      renderSubagentCancellation(block, head);
+    } else if (status) {
       status.textContent = failed > 0 ? t("swarm.failed", { n: failed }) : t("swarm.done");
       if (failed > 0) status.classList.add("swarm-failed");
       // Items that hit a budget/iteration limit still finish the swarm —

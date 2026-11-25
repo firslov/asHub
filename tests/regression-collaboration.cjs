@@ -40,6 +40,31 @@ test('receipts track exact turn, preserve long Unicode output, wait without poll
   assert.throws(()=>f.tasks.page(receipt.taskId,8000),/offset/);
   assert.equal(new f.CollaborationTasks(path.join(f.e.dir,'tasks')).page(receipt.taskId).state,'completed');
 });
+test('keyed dispatch admits one exact attempt across simultaneous calls and restart', async t => {
+  const f = await setup(t);
+  let starts = 0, finish;
+  f.b.bridge.submit = () => { starts++; return new Promise(resolve => { finish = resolve; }); };
+  const key = 'attempt-12345678', message = 'Check this output';
+  const send = () => f.access.send(f.b.id, message, undefined, key);
+  const receipts = await Promise.all(Array.from({length:100}, send));
+  const [first] = receipts;
+  assert.equal(starts, 1);
+  assert(receipts.every(r => r.taskId === first.taskId));
+  assert.equal(receipts.filter(r => r.reused).length, 99);
+  await assert.rejects(f.access.send(f.b.id, 'Another message', undefined, key), /different parameters/);
+  assert.equal(f.tasks.get(first.taskId).state, 'running');
+  assert.deepEqual(f.access.dispatchReceipt({ requestKey:key }), f.access.dispatchReceipt({ taskId:first.taskId }));
+  assert.throws(() => f.b.bridge.opts.conversationAccess.dispatchReceipt({ taskId:first.taskId }), /outside this project or sender/);
+  const persisted = new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+  const { createConversationAccess } = f.e.load('src/services/conversation-service.ts');
+  const reopened = createConversationAccess(f.a.id,{sessions:f.sessions,projects:f.projects,tasks:persisted,
+    submitQuery:async()=>{throw Error('a recovered attempt must not be replayed');}});
+  const recovered = await reopened.send(f.b.id,message,undefined,key);
+  assert.equal(recovered.taskId,first.taskId);
+  assert.equal(recovered.state,'interrupted');
+  assert.equal(reopened.dispatchReceipt({requestKey:key}).state,'interrupted');
+  finish({stopReason:'done'});await tick();
+});
 for (const queued of [false,true]) test(`collaboration preserves reply boundaries around tools (${queued?'queued':'direct'})`,async t=>{
   const f=await setup(t);let done;
   f.b.bridge.supportsQueue=true;
@@ -371,6 +396,94 @@ async function supplementFixture(t, queued=false) {
  f.b.bridge.updateQueued=(id,text)=>{f.edits.push({id,text});return 'queue';};
  return f;
 }
+for (const [event, pending, edited] of [
+ ['agent:queued-submit','pending',false],
+ ['agent:steer-submit','uncertain',true],
+]) test(`failed ${event} receipt cannot restore pre-supplement delivery (${pending})`,async t=>{
+ const f=await supplementFixture(t), key='update-001', directory=path.join(f.e.dir,'tasks');
+ const file=path.join(directory,f.id+'.json');
+ await f.b.bridge.opts.conversationAccess.deliver(f.id,delivery('Pre-supplement evidence'));
+ if(pending==='uncertain') f.b.bridge.steer=(text,queueId)=>{
+  f.steers.push({text,queueId});throw Error('submission outcome unknown');
+ };
+ assert.equal((await f.access.supplement(f.id,key,'Exclude 2023')).state,pending);
+ const running=await f.access.waitTasks([{id:f.id}],0);
+ const {text,queueId}=f.steers[0], rename=fs.renameSync;
+ let failures=0;
+ const fault=t.mock.method(fs,'renameSync',(from,to)=>{
+  if(to===file){failures++;throw Error('fixture receipt rename failed');}
+  return rename(from,to);
+ });
+ const {createConversationAccess}=f.e.load('src/services/conversation-service.ts');
+ const reopen=()=>{
+  const tasks=new f.CollaborationTasks(directory);
+  const access=createConversationAccess(f.a.id,{sessions:f.sessions,projects:f.projects,tasks,withContextLock:(_session,read)=>read()});
+  return {tasks,access};
+ };
+ const verifyRecovery=async recovered=>{
+  const waited=await recovered.access.waitTasks(running.cursors,0);
+  assert.equal(waited.reason,'changed');
+  assert.equal(waited.results[0].state,'interrupted');
+  assert.equal(waited.results[0].delivery,null);
+  assert.equal(waited.results[0].deliverySubmitted,false);
+  assert.equal(recovered.tasks.snapshot(f.a.id)[0].deliverySubmitted,false);
+  assert.equal((await recovered.access.task(f.id)).state,'interrupted','the transcript receipt remains readable');
+  assert.equal((await recovered.access.supplement(f.id,key)).state,'interrupted');
+ };
+ try {
+  f.routeEvent(f.b,{name:event,payload:{queueId,query:edited?'Edited correction':text}});
+  assert.equal(failures,1,'the matching consumption receipt must hit the injected fault');
+  assert.equal((await f.access.supplement(f.id,key)).state,edited?'modified':'consumed');
+  assert.equal(f.tasks.get(f.id).delivery,undefined);
+  const stale=JSON.parse(fs.readFileSync(file,'utf8'));
+  assert.equal(stale.supplements[0].state,pending);
+  assert.equal(stale.delivery.summary,'Pre-supplement evidence');
+  await verifyRecovery(reopen()); // Even if writing the interrupted receipt also fails.
+  assert.equal(failures,2);
+ } finally { fault.mock.restore(); }
+ await verifyRecovery(reopen());
+ assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).delivery,undefined);
+ await verifyRecovery(reopen()); // A second restart must not resurrect it either.
+});
+
+test('an older host may have persisted an interrupted supplement alongside its stale delivery',async t=>{
+ const f=await supplementFixture(t), directory=path.join(f.e.dir,'tasks');
+ await f.b.bridge.opts.conversationAccess.deliver(f.id,delivery('Old delivery'));
+ await f.access.supplement(f.id,'update-001','Correction');
+ const file=path.join(directory,f.id+'.json'), old=JSON.parse(fs.readFileSync(file,'utf8'));
+ old.state='interrupted';old.supplements[0].state='interrupted';old.revision++;
+ fs.writeFileSync(file,JSON.stringify(old));
+ const restored=new f.CollaborationTasks(directory);
+ const result=await restored.waitMany([{id:f.id,afterRevision:old.revision,afterState:old.state}],0);
+ assert.equal(result.reason,'changed','coordinators with an old cursor must observe the correction');
+ assert.equal(result.results[0].delivery,null);
+ assert.equal(result.results[0].deliverySubmitted,false);
+});
+
+test('known unconsumed supplements preserve a valid partial delivery on restart',async t=>{
+ const f=await supplementFixture(t), access=f.b.bridge.opts.conversationAccess;
+ await access.deliver(f.id,delivery('Valid partial evidence'));
+ const rename=fs.renameSync, file=path.join(f.e.dir,'tasks',f.id+'.json');
+ const fault=t.mock.method(fs,'renameSync',(from,to)=>{
+  if(to===file)throw Error('fixture receipt cannot be armed');
+  return rename(from,to);
+ });
+ try { await assert.rejects(f.access.supplement(f.id,'update-failed','Never sent'),/cannot be armed/); }
+ finally { fault.mock.restore(); }
+ assert.equal(f.steers.length,0);
+ f.b.bridge.steer=()=>false;
+ assert.equal((await f.access.supplement(f.id,'update-rejected','Rejected')).state,'rejected');
+ f.b.bridge.steer=(text,queueId)=>{f.steers.push({text,queueId});return true;};
+ await f.access.supplement(f.id,'update-dropped','Withdrawn');
+ const {queueId,text}=f.steers[0];
+ f.routeEvent(f.b,{name:'agent:queued-done',payload:{queueId,query:text,dropped:true}});
+ assert.equal((await f.access.supplement(f.id,'update-dropped')).state,'dropped');
+ const restored=new f.CollaborationTasks(path.dirname(file));
+ const {results}=await restored.waitMany([{id:f.id}],0);
+ assert.equal(results[0].state,'interrupted');
+ assert.deepEqual(plain(results[0].delivery),delivery('Valid partial evidence'));
+});
+
 test('running supplements retain one active task, deduplicate concurrent retries and expose consumption',async t=>{
  const f=await supplementFixture(t);
  await f.b.bridge.opts.conversationAccess.deliver(f.id,delivery('Earlier delivery'));
@@ -385,6 +498,10 @@ test('running supplements retain one active task, deduplicate concurrent retries
  assert.equal(f.tasks.get(f.id).text,'Updated result');
  await f.b.bridge.opts.conversationAccess.deliver(f.id,delivery('Corrected evidence'));
  f.tasks.finish(f.id,'completed');
+ const restored=new f.CollaborationTasks(path.join(f.e.dir,'tasks'));
+ const {results}=await restored.waitMany([{id:f.id}],0);
+ assert.equal(results[0].state,'completed');
+ assert.deepEqual(plain(results[0].delivery),delivery('Corrected evidence'));
  assert.equal((await f.access.supplement(f.id,'update-001','Exclude 2023')).state,'consumed');
  assert.equal((await f.access.supplement(f.id,'update-002','Later')).state,'task_ended');assert.equal(f.steers.length,1);
 });

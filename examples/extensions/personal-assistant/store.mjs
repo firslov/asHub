@@ -58,6 +58,63 @@ const parsed = row => {
   return { ...row, source: row.state === 'forgotten' ? source : { ...source, context: memoryContext(row.scope, source) } };
 };
 
+const themeEvidenceRoles = new Set(['support', 'exception', 'counterexample', 'context']);
+const themeReviewDigest = /^[a-f0-9]{64}$/u;
+const parsedThemeEvidence = row => ({ memoryId:row.memory_id, revision:row.memory_revision,
+  conversationId:row.conversation_id, sourceId:row.source_id, start:row.start, end:row.end, role:row.role });
+
+function validProjectCommitment(commitment, sourceEnd, originalText) {
+  if (!commitment || Object.keys(commitment).length !== 2 ||
+      !Number.isSafeInteger(commitment.start) || !Number.isSafeInteger(commitment.end) ||
+      commitment.start < 0 || commitment.end <= commitment.start || commitment.end > sourceEnd) return false;
+  if (originalText === undefined) return true;
+  if (typeof originalText !== 'string' || originalText.length !== sourceEnd) return false;
+  const excerpt = originalText.slice(commitment.start, commitment.end);
+  return excerpt.isWellFormed() && !!excerpt.trim();
+}
+
+export function validProjectDecisionReview(review, evidence, originalText) {
+  if (!review || (review.version !== 1 && review.version !== 2) ||
+      Object.keys(review).length !== (review.version === 2 ? 3 : 2) || !Array.isArray(review.context) ||
+      !Array.isArray(evidence) || evidence.length > 16 || evidence.length !== 1 + review.context.length) return false;
+  const [source, ...dependencies] = evidence;
+  if (source?.role !== 'support' || source.start !== 0 || !Number.isSafeInteger(source.end) || source.end <= 0 ||
+      typeof source.memoryId !== 'string' || !Number.isSafeInteger(source.revision) || source.revision < 1 ||
+      typeof source.conversationId !== 'string' || typeof source.sourceId !== 'string' || !source.sourceId) return false;
+  if (review.version === 2 && !validProjectCommitment(review.commitment, source.end, originalText)) return false;
+  const seen = new Set([source.sourceId]);
+  return dependencies.every((dependency, index) => {
+    const reference = review.context[index];
+    if (!reference || Object.keys(reference).length !== 2 || typeof reference.sourceId !== 'string' || !reference.sourceId ||
+        typeof reference.digest !== 'string' || !themeReviewDigest.test(reference.digest) || seen.has(reference.sourceId) ||
+        dependency?.role !== 'context' || dependency.sourceId !== reference.sourceId ||
+        dependency.memoryId !== source.memoryId || dependency.revision !== source.revision ||
+        dependency.conversationId !== source.conversationId || dependency.start !== 0 ||
+        !Number.isSafeInteger(dependency.end) || dependency.end <= 0) return false;
+    seen.add(reference.sourceId);
+    return true;
+  });
+}
+
+function normalizeProjectReviewProgress(progress) {
+  if (!progress || !Array.isArray(progress.reviewed) || progress.reviewed.length > 1000 ||
+      Object.keys(progress).some(key=>key!=='reviewed' && key!=='complete') ||
+      (progress.complete!==undefined && (typeof progress.complete!=='string' || !themeReviewDigest.test(progress.complete)))) {
+    throw Error('无效的项目审查进度');
+  }
+  const sources = new Set();
+  const reviewed = Array.from(progress.reviewed,entry=>{
+    if (!entry || Object.keys(entry).length!==2 || typeof entry.basisKey!=='string' || !themeReviewDigest.test(entry.basisKey)) {
+      throw Error('无效的项目审查进度');
+    }
+    const sourceId = text(entry.sourceId,200,'来源标识');
+    if (sourceId!==entry.sourceId || sources.has(sourceId))throw Error('无效的项目审查来源');
+    sources.add(sourceId);
+    return {sourceId,basisKey:entry.basisKey};
+  });
+  return {reviewed,...(progress.complete===undefined?{}:{complete:progress.complete})};
+}
+
 // Routing tags are index-only metadata, never evidence or injected content.
 export const indexStyle = row => ['preference','principle'].includes(row.kind) && row.source.context?.subject==='user'
   && /回答|回复|表达|语言|称呼|简洁|中文|english|response|answer|tone/i.test(row.title+' '+row.content)
@@ -113,7 +170,7 @@ export class MemoryStore {
       this.transaction(()=>{
         this.enforceThemeAuthorizationInTransaction();
         if(this.themeOverviewEnabled())this.pruneThemeStatements();
-        else this.db.prepare('DELETE FROM theme_statements').run();
+        else this.clearThemeOverviewInTransaction();
       });
     } catch (e) { this.db.close(); throw e; }
   }
@@ -149,11 +206,15 @@ export class MemoryStore {
       this.db.prepare("INSERT INTO learning_state(key,value) VALUES('recall-index-format','3') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
     });
   }
+  clearThemeOverviewInTransaction() {
+    this.db.prepare('DELETE FROM theme_statements').run();
+    this.db.prepare("DELETE FROM learning_state WHERE key LIKE 'theme-overview:review:%'").run();
+  }
   disableThemeOverviewInTransaction() {
     if (!this.themeOverviewEnabled()) return;
     this.setState('theme-overview:generation',this.themeOverviewGeneration()+1);
     this.setState('theme-overview:enabled',false);
-    this.db.prepare('DELETE FROM theme_statements').run();
+    this.clearThemeOverviewInTransaction();
   }
   enforceThemeAuthorizationInTransaction() {
     const learning=this.state('learning');
@@ -169,7 +230,7 @@ export class MemoryStore {
       if(previous!==enabled) {
         this.setState('theme-overview:generation',this.themeOverviewGeneration()+1);
         this.setState('theme-overview:enabled',enabled);
-        if(!enabled)this.db.prepare('DELETE FROM theme_statements').run();
+        if(!enabled)this.clearThemeOverviewInTransaction();
       }
       return {enabled:this.themeOverviewEnabled(),generation:this.themeOverviewGeneration()};
     });
@@ -178,17 +239,22 @@ export class MemoryStore {
     const filter='SELECT statement_id FROM theme_evidence WHERE '+where;
     this.db.prepare('DELETE FROM theme_statements WHERE id IN ('+filter+')').run(...values);
   }
-  themeEvidenceCurrent(evidence, {pruning=false}={}) {
+  themeEvidenceCurrent(evidence, {pruning=false, decisionText, commitment}={}) {
     const row=this.get(evidence.memoryId);
     if(!row || row.state!=='active' || row.revision!==evidence.revision) return false;
-    const refs=[...(row.source.refs ?? []),...(row.source.feedback ?? [])];
-    const source=refs.find(ref=>ref.conversationId===evidence.conversationId && ref.id===evidence.sourceId);
-    if(!source || typeof source.quote!=='string')return false;
     const ignored=this.state('ignored:'+evidence.conversationId) ?? [];
     if(!Array.isArray(ignored) || ignored.includes(evidence.sourceId))return false;
+    const guard=historyGuard(this,evidence.conversationId);
+    // The reviewed dependency is bound to the support row by its envelope.
+    // Only the authorized history reader can revalidate the context digest.
+    if(evidence.role==='context')return guard.complete || pruning;
+    const refs=decisionText===undefined ? [...(row.source.refs ?? []),...(row.source.feedback ?? [])] : (row.source.refs ?? []);
+    const source=refs.find(ref=>ref.conversationId===evidence.conversationId && ref.id===evidence.sourceId);
+    if(!source || typeof source.quote!=='string')return false;
+    if(decisionText!==undefined && (source.quote.length!==evidence.end || source.quote.trim().toWellFormed()!==decisionText))return false;
+    if(commitment!==undefined && !validProjectCommitment(commitment,evidence.end,source.quote))return false;
     // Also block late results citing a different source that repeats forgotten
     // text. The same guard is used by the history authorization boundary.
-    const guard=historyGuard(this,evidence.conversationId);
     if(guard.matches(source.quote))return false;
     // An old database may have ignored IDs without recoverable fingerprints.
     // Refuse new writes, but retain independently sourced existing bodies until
@@ -198,12 +264,20 @@ export class MemoryStore {
   // On reopen/rollback, inspect current pointers directly. Do not rely on the
   // bounded changes log: legacy versions can change or forget old evidence.
   pruneThemeStatements() {
-    const all=this.db.prepare('SELECT id FROM theme_statements ORDER BY id').all();
+    const all=this.db.prepare('SELECT id,kind,body FROM theme_statements ORDER BY id').all();
     const query=this.db.prepare('SELECT * FROM theme_evidence WHERE statement_id=? ORDER BY ordinal');
     const remove=this.db.prepare('DELETE FROM theme_statements WHERE id=?');
-    for(const {id} of all) {
-      const evidence=query.all(id);
-      if(!evidence.length || evidence.some(e=>!this.themeEvidenceCurrent({memoryId:e.memory_id,revision:e.memory_revision,conversationId:e.conversation_id,sourceId:e.source_id},{pruning:true})))remove.run(id);
+    for(const {id,kind,body} of all) {
+      const evidence=query.all(id).map(parsedThemeEvidence);
+      let statement;
+      try { statement=JSON.parse(body); } catch { remove.run(id); continue; }
+      const review=statement?.decisionReview;
+      const validShape=review===undefined ? !evidence.some(ref=>ref.role==='context') :
+        kind==='project' && typeof statement.text==='string' && validProjectDecisionReview(review,evidence);
+      if(!evidence.length || !validShape || evidence.some(ref=>!this.themeEvidenceCurrent(ref,{
+        pruning:true,decisionText:review===undefined?undefined:statement.text,
+        commitment:review?.version===2?review.commitment:undefined,
+      })))remove.run(id);
     }
   }
   listThemeStatements() {
@@ -215,12 +289,14 @@ export class MemoryStore {
       const read=this.db.prepare('SELECT * FROM theme_evidence WHERE statement_id=? ORDER BY ordinal');
       return rows.map(row=>({id:row.id,revision:row.revision,themeKey:row.theme_key,kind:row.kind,
         ...(row.project_id ? {projectId:row.project_id} : {}),title:row.title,basisKey:row.basis_key,
-        ...JSON.parse(row.body),evidence:read.all(row.id).map(e=>({memoryId:e.memory_id,revision:e.memory_revision,
-          conversationId:e.conversation_id,sourceId:e.source_id,start:e.start,end:e.end,role:e.role}))}));
+        ...JSON.parse(row.body),evidence:read.all(row.id).map(parsedThemeEvidence)}));
     });
   }
   saveThemeStatements(input) {
     if(!input || typeof input!=='object' || !['project','preference'].includes(input.kind))throw Error('无效的主题类型');
+    if(input.reviewed!==undefined && (input.reviewed!==true || input.kind!=='project'))throw Error('无效的项目决策审查记录');
+    if(input.reviewProgress!==undefined && !input.reviewed)throw Error('缺少项目决策审查记录');
+    const reviewProgress=input.reviewProgress===undefined?undefined:normalizeProjectReviewProgress(input.reviewProgress);
     const themeKey=text(input.themeKey,200,'主题标识'),title=text(input.title,100,'主题标题'),basisKey=text(input.basisKey,256,'证据版本');
     const projectId=input.kind==='project' ? text(input.projectId,200,'项目标识') : '';
     if(input.kind==='preference' && input.projectId!=null)throw Error('偏好概览不能指定项目');
@@ -239,17 +315,27 @@ export class MemoryStore {
       const evidence=statement.evidence.map(ref=>{
         if(!ref || typeof ref!=='object' || !Number.isSafeInteger(ref.revision) || ref.revision<1 ||
           !Number.isSafeInteger(ref.start) || !Number.isSafeInteger(ref.end) || ref.start<0 || ref.end<=ref.start || ref.end>10000000 ||
-          !['support','exception','counterexample'].includes(ref.role))throw Error('无效的主题证据');
+          !themeEvidenceRoles.has(ref.role))throw Error('无效的主题证据');
         return {memoryId:text(ref.memoryId,200,'记忆标识'),revision:ref.revision,conversationId:text(ref.conversationId,200,'对话标识'),
           sourceId:text(ref.sourceId,200,'来源标识'),start:ref.start,end:ref.end,role:ref.role};
       });
       if(!evidence.some(e=>e.role==='support'))throw Error('主题陈述须有支持证据');
+      if(statement.decisionReview!==undefined) {
+        if(input.kind!=='project' || !validProjectDecisionReview(statement.decisionReview,evidence))throw Error('无效的项目决策审查记录');
+        const {version,context,commitment}=statement.decisionReview;
+        body.decisionReview={version,context:context.map(({sourceId,digest})=>({sourceId,digest})),
+          ...(version===2?{commitment:{start:commitment.start,end:commitment.end}}:{})};
+      } else if(input.reviewed || evidence.some(ref=>ref.role==='context'))throw Error('缺少项目决策审查记录');
       return {body,evidence};
     });
     return this.transaction(()=>{
       const learning=this.state('learning');
       if(!this.themeOverviewEnabled() || this.themeOverviewGeneration()!==input.generation || !learning?.enabled || !learning.grantId || !this.profile().enabled)throw Error('主题概览授权已变化');
-      for(const {evidence} of statements)for(const ref of evidence)if(!this.themeEvidenceCurrent(ref))throw Error('主题证据已变化');
+      for(const {body,evidence} of statements)for(const ref of evidence) {
+        if(!this.themeEvidenceCurrent(ref,{
+          decisionText:body.decisionReview?body.text:undefined,commitment:body.decisionReview?.commitment,
+        }))throw Error('主题证据已变化');
+      }
       const previous=this.db.prepare('SELECT * FROM theme_statements WHERE theme_key=? AND kind=? AND project_id=? ORDER BY slot').all(themeKey,input.kind,projectId);
       const write=this.db.prepare(`INSERT INTO theme_statements(id,revision,theme_key,kind,project_id,title,basis_key,slot,body,created,updated)
         VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,title=excluded.title,basis_key=excluded.basis_key,slot=excluded.slot,body=excluded.body,updated=excluded.updated`);
@@ -258,7 +344,7 @@ export class MemoryStore {
       const now=Date.now(),saved=[];
       for(let slot=0;slot<statements.length;slot++) {
         const {body,evidence}=statements[slot],old=previous[slot],id=old?.id ?? randomUUID();
-        const before=old?this.db.prepare('SELECT * FROM theme_evidence WHERE statement_id=? ORDER BY ordinal').all(id).map(e=>({memoryId:e.memory_id,revision:e.memory_revision,conversationId:e.conversation_id,sourceId:e.source_id,start:e.start,end:e.end,role:e.role})):[];
+        const before=old?this.db.prepare('SELECT * FROM theme_evidence WHERE statement_id=? ORDER BY ordinal').all(id).map(parsedThemeEvidence):[];
         const same=old && old.title===title && old.basis_key===basisKey && old.body===JSON.stringify(body) && JSON.stringify(before)===JSON.stringify(evidence);
         const revision=old ? old.revision+(same?0:1) : 1;
         write.run(id,revision,themeKey,input.kind,projectId,title,basisKey,slot,JSON.stringify(body),old?.created ?? now,now);
@@ -267,6 +353,8 @@ export class MemoryStore {
       }
       const remove=this.db.prepare('DELETE FROM theme_statements WHERE id=?');
       for(const old of previous.slice(statements.length))remove.run(old.id);
+      if(input.reviewed)this.setState('theme-overview:review:'+themeKey,reviewProgress??basisKey);
+      else if(input.kind==='project')this.db.prepare('DELETE FROM learning_state WHERE key=?').run('theme-overview:review:'+themeKey);
       return saved;
     });
   }

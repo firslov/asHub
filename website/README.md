@@ -61,4 +61,4 @@ Back up the template and affected assets first. Upload new, versioned assets bef
 
 After deployment, verify the live page, all four platform links, loaded images and fonts, keyboard tabs, clipboard success/failure, and mobile overflow. Rollback consists of atomically restoring the backed-up template; old assets should remain available for cached pages.
 
-The `#plugins` section distinguishes bundled local extensions from separately installed Personal Assistant and WeChat Bot. Desktop Control is bundled only on macOS.
+The `#plugins` section distinguishes bundled local extensions from the separately installed Personal Assistant and identifies WeChat Bot as an agent-sh example. Desktop Control is bundled only on macOS.

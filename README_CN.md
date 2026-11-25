@@ -19,7 +19,7 @@ asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌�
 
 **[v0.21.9](https://github.com/firslov/asHub/releases/tag/v0.21.9)** 将 agent-sh 内核升级至 0.17.0，并改进长任务、个人助手记忆和设备互联。
 
-- **子代理：**实时界面和历史记录区分取消、部分完成和成功。遇到可重试的断流时，只重试当前模型请求，保留已完成的工具结果。在同一会话续跑时，沿用原任务、已有结果和原有权限范围。
+- **子代理：**实时界面和历史记录区分取消、部分完成和成功。遇到可重试的断流时，只重试当前模型请求，保留已完成的工具结果。同一会话中，成功或部分完成且仍有续跑记录的子代理，可沿用原任务、工具结果和原有权限继续。
 - **个人助手：**授权原文可以和已有记忆一起检索，可为后台整理单独选择模型，也可试用带原文出处的项目决策概览。插件需单独安装。
 - **设备互联：**可查看当前执行设备、返回设备列表；同步过久时，可以重新同步当前对话，保留草稿，不会自动重发消息。
 
@@ -98,8 +98,8 @@ chmod +x ./asHub-*.AppImage
 [asHub 移动网页版](https://ashub.aihao.world/mobile/) 可继续电脑上的对话。桌面端的[设备互联](examples/extensions/multi-machine)也支持从一台电脑打开另一台电脑的工作区。
 
 1. 在负责执行任务的电脑上，通过「插件 → 本地扩展」启用「设备互联」。打开工具栏入口，选择「允许访问本机」，登录或注册账号并确认共享目录。从旧版「移动访问」升级会保留设备身份和授权。
-2. 首次设置时保存恢复码，点击「我已保存」。
-3. 在手机上用同一账号登录，或在桌面端选择「连接其他电脑」，再选择目标电脑。登录查看其他设备不会自动共享本机。
+2. 若显示恢复码，妥善保存后点击「恢复码已保存」。
+3. 在手机上用同一账号登录，或在桌面端的「访问其他电脑」中登录，再选择目标电脑。登录查看其他设备不会自动共享本机。
 
 目标电脑需联网、保持唤醒，且 asHub 正在运行。要在关闭窗口后继续访问，可开启「设置 → 后台运行 → 关闭窗口后继续运行」。退出应用或让电脑休眠仍可能中断连接。
 
@@ -113,7 +113,9 @@ chmod +x ./asHub-*.AppImage
 | --- | --- |
 | 随 macOS、Windows、Linux 版提供 | [Kimi Coding Plan](examples/extensions/kimi-coding-plan)、[项目管理](examples/extensions/project-management)、[会话浏览器](examples/extensions/browser-automation)、[图文展示](examples/extensions/image-display)、[设备互联](examples/extensions/multi-machine)、[定时任务](examples/extensions/scheduled-tasks)、[语音输入](examples/extensions/voice-input) |
 | 仅随 macOS 版提供 | [桌面控制](examples/extensions/desktop-control) |
-| 单独安装 | [个人助手](examples/extensions/personal-assistant)、[微信机器人](examples/extensions/wechat-bot) |
+| 单独安装 | [个人助手](examples/extensions/personal-assistant) |
+
+[微信机器人](examples/extensions/wechat-bot)是单独的 agent-sh 扩展示例，按它自己的说明安装。
 
 - **个人助手：**左侧入口打开专属对话。经授权后，只从这段对话整理和召回记忆，也可纠正、遗忘或暂停记忆。首次创建与授权在桌面完成；共享助手工作目录后，手机可继续同一段对话。
 - **项目管理：**派发或补充任务，跟踪投递与阻塞，在成员交付后接续获授权的流程。用户停止和工具审批仍然有效。

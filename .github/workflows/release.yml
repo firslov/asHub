@@ -77,6 +77,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
+      - name: Refuse an existing GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Include drafts and older releases. Do not mistake an API failure
+          # for absence or move a tag that already identifies a Release.
+          tags=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')
+          if [[ $'\n'"$tags"$'\n' == *$'\n'"v$RELEASE_VERSION"$'\n'* ]]; then
+            echo "::error::GitHub Release v$RELEASE_VERSION already exists. Use a new version to rebuild, or Sync release to COS with the existing release assets."
+            exit 1
+          fi
       - name: Prepare the validated version metadata
         env:
           ASHUB_RELEASE_VERSION: ${{ inputs.version }}
@@ -164,52 +177,75 @@ jobs:
             echo "::error::Release tag changed after validation; refusing to publish mismatched artifacts"
             exit 1
           fi
-      # Re-run safety: delete an existing release for this tag so
-      # action-gh-release can recreate it (a fresh tag was pushed above).
-      - name: Remove existing release
+      - uses: actions/checkout@v4
+        with:
+          # Workflow tooling must exist even for an older source_sha.
+          ref: ${{ github.workflow_sha }}
+          path: release-tools
+          persist-credentials: false
+      - name: Publish GitHub release and upload to COS
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          # --repo is required: this job has no checkout, and gh otherwise
-          # fails with "not a git repository" — which the 2>&1 on the old
-          # view call swallowed, so the cleanup silently never ran and a
-          # re-release kept the previous assets.  Leaving stderr alone means
-          # a real failure (auth, rate limit) reaches the log now.
-          if gh release view "v$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null; then
-            gh release delete "v$RELEASE_VERSION" --yes --repo "$GITHUB_REPOSITORY"
-            echo "removed existing release v$RELEASE_VERSION"
-          else
-            echo "no existing release for v$RELEASE_VERSION"
-          fi
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ inputs.version }}
-          name: v${{ inputs.version }}
-          files: release/*
-      # Upload artifacts to Tencent COS so the updater can download from a
-      # fast domestic endpoint instead of the slow VPS→GitHub link.
-      - name: Upload to COS
-        env:
           COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          if [ -z "$COS_SECRET_ID" ] || [ -z "$COS_SECRET_KEY" ]; then
+          set -euo pipefail
+
+          # Match assetNames() in scripts/resync-cos.cjs. The Linux AppImage
+          # embeds its blockmap and does not have a separate sidecar.
+          installers_with_blockmaps=(asHub-"$RELEASE_VERSION"-{arm64,x64}.{dmg,zip} "asHub-Setup-$RELEASE_VERSION.exe")
+          payloads=("${installers_with_blockmaps[@]}" "asHub-$RELEASE_VERSION.AppImage")
+          for f in "${installers_with_blockmaps[@]}"; do payloads+=("$f.blockmap"); done
+          metadata=(latest.yml latest-mac.yml latest-linux.yml)
+          for f in "${payloads[@]}" "${metadata[@]}"; do
+            if [ ! -f "release/$f" ] || [ ! -s "release/$f" ]; then
+              echo "::error::Missing or empty COS update asset: $f"
+              exit 1
+            fi
+          done
+
+          mirror=true
+          if [ -z "${COS_SECRET_ID:-}" ] && [ -z "${COS_SECRET_KEY:-}" ]; then
+            mirror=false
+          elif [ -z "${COS_SECRET_ID:-}" ] || [ -z "${COS_SECRET_KEY:-}" ]; then
+            echo "::error::COS credentials are incomplete"
+            exit 1
+          else
+            umask 077
+            pip install --quiet coscmd
+            # Check before creating the GitHub Release too, so a conflict with
+            # an older/orphaned COS release cannot leave two different builds
+            # of the same version. The shared workflow lock serializes writers.
+            python3 release-tools/scripts/check-cos-mirror.py new "$RELEASE_VERSION" release "${payloads[@]}"
+            coscmd config -a "$COS_SECRET_ID" -s "$COS_SECRET_KEY" \
+              -b ashub-release-1258678103 -e cos.accelerate.myqcloud.com --retry 10
+          fi
+
+          # Create, never edit or replace. gh uploads assets before exposing
+          # the Release; keep the versioned asset names and updater metadata.
+          files=()
+          for f in release/*; do
+            if [ -f "$f" ]; then files+=("$f"); fi
+          done
+          gh release create "v$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "v$RELEASE_VERSION" --notes '' "${files[@]}"
+          if [ "$mirror" = false ]; then
             echo "COS credentials not set — skipping upload"
             exit 0
           fi
-          pip install --quiet coscmd
-          # Use the global-acceleration endpoint (cos.accelerate.myqcloud.com)
-          # so the cross-pacific upload from the GitHub runner rides Tencent's
-          # backbone instead of the slow public internet path.
-          coscmd config -a "$COS_SECRET_ID" -s "$COS_SECRET_KEY" \
-            -b ashub-release-1258678103 -e cos.accelerate.myqcloud.com --retry 10
-          # Only upload what auto-update needs: the latest*.yml metadata,
-          # the installers, and their blockmaps.  Skip the unpacked app
-          # dirs (linux-unpacked/win-unpacked/mac*) — they're build
-          # byproducts, not update artifacts.
-          for f in release/latest*.yml release/*.dmg release/*.zip release/*.exe release/*.AppImage release/*.blockmap; do
-            [ -f "$f" ] && coscmd upload "$f" /
+
+          # GitHub is now the recovery source. A failed mirror can be retried
+          # with the original, verified assets, not by rebuilding this version.
+          trap 'echo "::error::COS upload failed. Retry with Sync release to COS for v$RELEASE_VERSION, not Release." >&2' ERR
+          # Do not expose any new update manifest until every payload upload
+          # has succeeded. The shell exits on any failed coscmd upload.
+          for f in "${payloads[@]}"; do
+            coscmd upload -f -y "release/$f" /
+          done
+          for f in "${metadata[@]}"; do
+            coscmd upload -f -y "release/$f" /
           done
           # Remove unpacked app dirs / junk left by earlier uploads (they are
           # build byproducts, not update artifacts, and just waste storage).

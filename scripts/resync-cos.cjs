@@ -34,12 +34,15 @@ async function verifyFile(file, asset) {
   for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
   if (hash.digest('hex') !== asset.sha256) throw Error(`SHA-256 mismatch: ${asset.name}`);
 }
-async function synchronize(plan, { upload, verify, assertCurrent }) {
-  // No update metadata is exposed until every installer and blockmap verifies.
+async function synchronize(plan, { inspect, upload, verify, assertCurrent }) {
+  // Inspect the whole mirror before writing anything. Existing versioned
+  // assets must be identical and are never rewritten, including on retry.
+  const matching = await inspect();
+  const pending = plan.filter(a => !matching.has(a.name));
   await assertCurrent();
-  for (const asset of plan.filter(a => !a.metadata)) { await upload(asset); await verify(asset); }
+  for (const asset of pending.filter(a => !a.metadata)) { await upload(asset); await verify(asset); }
   await assertCurrent();
-  for (const asset of plan.filter(a => a.metadata)) { await upload(asset); await verify(asset); }
+  for (const asset of pending.filter(a => a.metadata)) { await upload(asset); await verify(asset); }
 }
 async function main() {
   const version = validateVersion(process.env.RELEASE_VERSION);
@@ -58,6 +61,14 @@ async function main() {
     run('gh', ['release', 'download', `v${version}`, '--repo', repository, '--dir', source]);
     for (const asset of plan) await verifyFile(path.join(source, asset.name), asset);
     await synchronize(plan, {
+      inspect: () => {
+        const output = run('python3', [path.join(__dirname, 'check-cos-mirror.py'), 'resume', version, source,
+          ...plan.filter(a => !a.metadata).map(a => a.name)], true);
+        const matching = new Set(output.split(/\r?\n/).filter(Boolean));
+        // Do not let unexpected helper output cause a silent skip.
+        for (const name of matching) if (!plan.some(a => a.name === name)) throw Error(`Unexpected COS preflight output: ${name}`);
+        return matching;
+      },
       assertCurrent: () => {
         const current = planRelease(version, get(`releases/tags/v${version}`), get('releases/latest'));
         if (JSON.stringify(current) !== JSON.stringify(plan)) throw Error('Release assets changed during synchronization');
@@ -71,7 +82,7 @@ async function main() {
         console.log(`Verified ${asset.name}: ${asset.size} bytes, SHA-256 ${asset.sha256}`);
       },
     });
-    console.log(`Reuploaded and verified ${plan.length} files for v${version}`);
+    console.log(`Verified all ${plan.length} mirrored files for v${version}; existing matching assets were left in place`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 module.exports = { assetNames, planRelease, verifyFile, synchronize };

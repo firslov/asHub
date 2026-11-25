@@ -1,7 +1,8 @@
 # One-off recovery branch; do not merge into main.
 name: Recover existing v0.21.9 artifacts
 "on":
-  workflow_dispatch: {}
+  push:
+    tags: ['recover-release-v0.21.9']
 concurrency:
   group: ashub-release
   cancel-in-progress: false
@@ -10,7 +11,7 @@ permissions:
   actions: read
 jobs:
   release:
-    if: ${{ github.repository == 'firslov/asHub' && github.ref == 'refs/heads/ops/recover-v0.21.9' }}
+    if: ${{ github.repository == 'firslov/asHub' && github.ref == 'refs/tags/recover-release-v0.21.9' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

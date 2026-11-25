@@ -19,16 +19,39 @@ VERSION = r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'
 MAX_MANIFEST = 64 * 1024
 
 
-def object_or_missing(call, key, *, head=False):
+def check_error(key, error):
+    return RuntimeError(f'Cannot check COS object {key!r}: HTTP {error.get_status_code()}')
+
+
+def object_or_missing(call, key, **kwargs):
     try:
-        return call(Bucket=BUCKET, Key=key)
+        return call(Bucket=BUCKET, Key=key, **kwargs)
     except CosServiceError as error:
-        # Missing keys alone are safe. HEAD responses can have no error body.
-        if str(error.get_status_code()) == '404':
-            code = error.get_error_code()
-            if code == 'NoSuchKey' or (head and not code):
-                return None
-        raise RuntimeError(f'Cannot check COS object {key!r}: HTTP {error.get_status_code()}') from error
+        if str(error.get_status_code()) == '404' and error.get_error_code() == 'NoSuchKey':
+            return None
+        raise check_error(key, error) from error
+
+
+def payload_exists(client, key):
+    try:
+        client.head_object(Bucket=BUCKET, Key=key)
+        return True
+    except CosServiceError as error:
+        if str(error.get_status_code()) != '404':
+            raise check_error(key, error) from error
+        # The Tencent SDK synthesizes NoSuchResource for HEAD 404, without
+        # distinguishing an absent key from a wrong bucket or endpoint. Ask
+        # GET for the explicit error, without downloading a potentially large file.
+        code = error.get_error_code()
+        if code == 'NoSuchKey':
+            return False
+        if code not in ('NoSuchResource', 'Unknown', '', None):
+            raise check_error(key, error) from error
+    response = object_or_missing(client.get_object, key, Range='bytes=0-0')
+    if response is None:
+        return False
+    response['Body'].get_raw_stream().close()
+    return True
 
 
 def read_manifest(response):
@@ -77,7 +100,7 @@ def check(client, version, payloads, source=None):
         raise RuntimeError(f'COS {name} already advertises v{latest}; refusing to replace it with v{version}')
     for name in payloads:
         if source is None:
-            if object_or_missing(client.head_object, name, head=True) is not None:
+            if payload_exists(client, name):
                 raise RuntimeError(f'COS payload {name} already exists; refusing to overwrite it')
             continue
         remote = object_or_missing(client.get_object, name)

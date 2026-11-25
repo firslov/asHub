@@ -1,176 +1,52 @@
-name: Release
-
-on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version number (e.g. 0.19.9)'
-        required: true
-        type: string
-      source_sha:
-        description: 'Optional exact source commit (used by tag releases)'
-        required: false
-        type: string
-
+# One-off recovery branch; do not merge into main.
+name: Recover existing v0.21.9 artifacts
+"on":
+  workflow_dispatch: {}
 concurrency:
   group: ashub-release
   cancel-in-progress: false
-
 permissions:
   contents: write
-
+  actions: read
 jobs:
-  prepare:
+  release:
+    if: ${{ github.repository == 'firslov/asHub' && github.ref == 'refs/heads/ops/recover-v0.21.9' }}
     runs-on: ubuntu-latest
-    outputs:
-      source: ${{ steps.source.outputs.sha }}
+    timeout-minutes: 30
     steps:
-      - name: Validate source input
-        env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-        run: |
-          if [ -n "$SOURCE_SHA" ] && ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::source_sha must be an exact commit SHA"
-            exit 1
-          fi
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.source_sha || github.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-      - name: Validate version
-        env:
-          ASHUB_RELEASE_VERSION: ${{ inputs.version }}
-        run: node scripts/release-version.cjs --check
-      - id: source
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-  core-checks:
-    needs: prepare
-    uses: ./.github/workflows/core-checks.yml
-    with:
-      ref: ${{ needs.prepare.outputs.source }}
-      version: ${{ inputs.version }}
-  kernel-compat:
-    needs: prepare
-    uses: ./.github/workflows/kernel-compat.yml
-    with:
-      ref: ${{ needs.prepare.outputs.source }}
-      version: ${{ inputs.version }}
-  windows-compat:
-    needs: prepare
-    uses: ./.github/workflows/windows-compat.yml
-    with:
-      ref: ${{ needs.prepare.outputs.source }}
-      version: ${{ inputs.version }}
-
-  tag:
-    needs: [prepare, core-checks, kernel-compat, windows-compat]
-    runs-on: ubuntu-latest
-    outputs:
-      commit: ${{ steps.commit.outputs.sha }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.source }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-      - name: Refuse an existing GitHub Release
+      - name: Verify original release inputs, validation jobs, and build artifacts
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          SOURCE_RUN: "45627949887"
+          SOURCE_SHA: 4001324928ec208b9110e1034373fa9b0dc53239
         run: |
           set -euo pipefail
-          # Include drafts and older releases. Do not mistake an API failure
-          # for absence or move a tag that already identifies a Release.
-          tags=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')
-          if [[ $'\n'"$tags"$'\n' == *$'\n'"v$RELEASE_VERSION"$'\n'* ]]; then
-            echo "::error::GitHub Release v$RELEASE_VERSION already exists. Use a new version to rebuild, or Sync release to COS with the existing release assets."
-            exit 1
-          fi
-      - name: Prepare the validated version metadata
-        env:
-          ASHUB_RELEASE_VERSION: ${{ inputs.version }}
-        run: node scripts/release-version.cjs
-      - name: Commit version metadata and tag the validated source
-        id: commit
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_ACTOR: ${{ github.actor }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          DISPATCH_REF: ${{ github.ref }}
-        run: |
-          git config user.name "$RELEASE_ACTOR"
-          git config user.email "$RELEASE_ACTOR@users.noreply.github.com"
-          git add package.json package-lock.json
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: bump version to $RELEASE_VERSION"
-          fi
-          # Refuse a non-fast-forward main update if another change landed
-          # during validation. Never merge untested source into this release.
-          if [ "$DISPATCH_REF" = refs/heads/main ] && [ -z "$SOURCE_SHA" ]; then
-            git push origin HEAD:refs/heads/main
-          fi
-          git tag -f "v$RELEASE_VERSION"
-          git push --force origin "refs/tags/v$RELEASE_VERSION"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-  build:
-    needs: tag
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: mac
-            flags: --mac
-          - os: windows-latest
-            target: win
-            flags: --win
-          - os: ubuntu-latest
-            target: linux
-            flags: --linux
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.tag.outputs.commit }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-      - run: npm ci
-      - run: npm run build
-      - if: matrix.target == 'win'
-        run: node scripts/pre-dist-win.cjs
-      - run: npx electron-builder ${{ matrix.flags }} --publish never
-      - name: Verify packaged macOS runtime
-        if: matrix.target == 'mac'
-        run: |
-          node --test tests/mac-packaging.cjs
-          node tests/mac-runtime.cjs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: release/*
-          if-no-files-found: error
-
-  release:
-    needs: [build, tag]
-    runs-on: ubuntu-latest
-    steps:
+          base="repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN"
+          gh api "$base/attempts/2" | jq -e --arg sha "$SOURCE_SHA" '
+            .path == ".github/workflows/release.yml" and .head_sha == $sha and .head_branch == "main" and .event == "workflow_dispatch" and .status == "completed" and .conclusion == "failure"'
+          gh api "$base/attempts/2/jobs?per_page=100" | jq -e '
+            [.jobs[] | select(.name | startswith("build ("))] as $build
+            | [.jobs[] | select(.name == "release")] as $release
+            | ($build | length) == 3 and all($build[]; .conclusion == "success")
+              and ($release | length) == 1 and $release[0].conclusion == "failure"
+              and ([.jobs[] | select(.name == "tag" and .conclusion == "success")] | length) == 1'
+          gh api "$base/artifacts?per_page=100" | jq -e '
+            .total_count == 3 and ([.artifacts[].name] | sort) == ["linux", "mac", "win"]
+            and all(.artifacts[]; .expired == false and .size_in_bytes > 0)'
       - uses: actions/download-artifact@v4
         with:
-          pattern: '*'
+          pattern: "*"
           path: release
           merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: 45627949887
       - run: ls -la release/
       - name: Verify the tag still identifies the built commit
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
-          EXPECTED_COMMIT: ${{ needs.tag.outputs.commit }}
+          RELEASE_VERSION: 0.21.9
+          EXPECTED_COMMIT: ebd1dc5906e35669bc22bb22424e5b7966fbd982
         run: |
           actual=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$RELEASE_VERSION" --jq .object.sha)
           if [ "$actual" != "$EXPECTED_COMMIT" ]; then
@@ -179,7 +55,6 @@ jobs:
           fi
       - uses: actions/checkout@v4
         with:
-          # Workflow tooling must exist even for an older source_sha.
           ref: ${{ github.workflow_sha }}
           path: release-tools
           persist-credentials: false
@@ -189,7 +64,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: 0.21.9
         run: |
           set -euo pipefail
 

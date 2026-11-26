@@ -68,6 +68,117 @@ test('page script order loads shared presentation rules before the app consumes 
     assert.equal(r.$('usage').textContent, expected);
   }
 });
+test('real shared renderer displays verified collaboration in live and replayed mobile queries', () => {
+  const r = setup();
+  const metadata = {kind:'task',taskId:'task-' + 'a'.repeat(155),sender:{id:'source-id',title:'调度中枢'},body:'R12: 第一行\nPOOL: 第二行\n  原始缩进',authorization:'这不是新的用户授权'};
+  const payload = {query:'raw wrapper',collaboration:metadata};
+  const frames = [payload, JSON.parse(mobileReplayFrame('data: ' + JSON.stringify({meta:{name:'agent:query'},payload}) + '\n\n').slice(6)).payload];
+  const find = (node, cls) => node.classList.contains(cls) ? node : node.children.map(child => find(child, cls)).find(Boolean);
+  for (const item of frames) {
+    r.send('agent:query', item);
+    const article = r.$('messages').children.at(-1);
+    assert.equal(find(article,'collaboration-message-sender').textContent,'调度中枢');
+    assert.equal(find(article,'collaboration-message-body').textContent,'R12: 第一行\nPOOL: 第二行\n  原始缩进');
+    assert.equal(find(article,'collaboration-message-task-id').textContent,metadata.taskId);
+    assert.equal(find(article,'collaboration-message-authorization').textContent,'这不是新的用户授权');
+    assert.equal(item.query,'raw wrapper');
+  }
+  r.send('agent:query',{query:'raw wrapper',collaboration:{...metadata,taskId:''}});
+  assert.equal(r.$('messages').children.at(-1).textContent,'raw wrapper');
+  r.send('agent:query',{query:'普通用户消息\n保留换行'});
+  assert.equal(r.$('messages').children.at(-1).textContent,'普通用户消息\n保留换行');
+  const supplement = body => ({...metadata,kind:'supplement',body});
+  r.send('agent:query',{query:'combined wrapper',collaboration:{...metadata,supplements:[supplement('补充一\nR12'),supplement('补充二\nPOOL')]}});
+  const root = find(r.$('messages').children.at(-1),'collaboration-message');
+  assert.deepEqual(root.children.map(part => find(part,'collaboration-message-body').textContent),
+    ['R12: 第一行\nPOOL: 第二行\n  原始缩进','补充一\nR12','补充二\nPOOL']);
+});
+test('collaboration presentation uses the complete query payload and falls back for legacy messages', () => {
+  const r = setup();
+  r.run(`AsHubConversationPresentation = { ...AsHubConversationPresentation,
+    renderCollaborationMessage(document, payload) {
+      if (!payload.collaboration) return null;
+      const node = document.createElement('div'); node.className = 'collaboration-message';
+      node.textContent = payload.collaboration.body; return node;
+    } }`);
+  const payload = { query: 'raw wrapper', collaboration: {body:'first line\nsecond line'} };
+  const replay = 'data: ' + JSON.stringify({meta:{name:'agent:query'},payload}) + '\n\n';
+  for (const value of [payload, JSON.parse(mobileReplayFrame(replay).slice(6)).payload]) {
+    r.send('agent:query', value);
+    const message = r.$('messages').children.at(-1);
+    assert.equal(message.children[0].textContent, 'first line\nsecond line');
+    assert.equal(value.query, 'raw wrapper');
+  }
+  r.send('agent:query', {query:'ordinary'});
+  assert.equal(r.$('messages').children.at(-1).textContent, 'ordinary');
+});
+test('legacy queue uses collaboration metadata without changing the editable query', () => {
+  const r = setup();
+  r.run(`AsHubConversationPresentation = { ...AsHubConversationPresentation,
+    renderCollaborationMessage(document, payload) {
+      if (!payload.collaboration) return null;
+      const node = document.createElement('div'); node.className = 'collaboration-message';
+      node.textContent = payload.collaboration.body; return node;
+    } };
+    user='alice';device='desktop';session='aaaaaa';capabilities={queue:true};streamReady=true;
+    queuedMessages=[{id:'a',query:'raw wrapper',collaboration:{body:'visible body'}}];renderQueue()`);
+  let label = r.$('queued-messages').children[0].children[1];
+  assert.equal(label.children[0].textContent, 'visible body');
+  assert.equal(r.run('queuedMessages[0].query'), 'raw wrapper');
+  r.run(`queuedMessages=[{id:'a',query:'edited text'}];renderQueue()`);
+  label = r.$('queued-messages').children[0].children[1];
+  assert.equal(label.textContent, 'edited text');
+  assert.equal(label.children.length, 0);
+});
+test('queue refresh preserves an unchanged collaboration view and replaces removed metadata', () => {
+  const r = setup();
+  r.run(`globalThis.renderCount = 0; AsHubConversationPresentation = { ...AsHubConversationPresentation,
+    renderCollaborationMessage(document, payload) {
+      renderCount++;
+      if (!payload.collaboration) return null;
+      const node = document.createElement('div'); node.textContent = payload.collaboration.body; return node;
+    } };
+    globalThis.testLabel = document.createElement('span');
+    globalThis.testItem = {query:'raw',collaboration:{body:'body',taskId:'task-1'}};
+    renderQueueLabel(testLabel,testItem)`);
+  const original = r.context.testLabel.children[0];
+  r.run('renderQueueLabel(testLabel,testItem)');
+  assert.equal(r.context.testLabel.children[0], original);
+  assert.equal(r.context.renderCount, 1);
+  r.run(`renderQueueLabel(testLabel,{query:'changed'})`);
+  assert.equal(r.context.testLabel.children.length, 0);
+  assert.equal(r.context.testLabel.textContent, 'changed');
+});
+test('unchanged legacy queue refresh retains its live row and collaboration details', () => {
+  const r = setup();
+  r.run(`user='alice';device='desktop';session='aaaaaa';capabilities={queue:true};streamReady=true;
+    queuedMessages=[{id:'a',query:'raw',collaboration:{kind:'task',taskId:'task-1',sender:{id:'source',title:'调度中枢'},body:'R12\\nPOOL',authorization:'提示'}}];renderQueue()`);
+  const row = r.$('queued-messages').children[0];
+  const view = row.children[1].children[0];
+  r.run('renderQueue()');
+  assert.equal(r.$('queued-messages').children[0], row);
+  assert.equal(row.children[1].children[0], view);
+  r.run("queuedMessages[0].query='edited';delete queuedMessages[0].collaboration;renderQueue()");
+  assert.equal(r.$('queued-messages').children[0].children[1].textContent, 'edited');
+});
+test('legacy queue changes preserve other collaboration disclosures', () => {
+  const r = setup();
+  r.run(`user='alice';device='desktop';session='aaaaaa';capabilities={queue:true};streamReady=true;
+    queuedMessages=[{id:'a',query:'raw',collaboration:{kind:'task',taskId:'task-1',sender:{id:'source',title:'调度中枢'},body:'正文',authorization:'提示'}},{id:'b',query:'other'}];renderQueue()`);
+  const row = r.$('queued-messages').children[0];
+  const view = row.children[1].children[0];
+  r.run(`queuedMessages[1].query='other updated';renderQueue()`);
+  assert.equal(r.$('queued-messages').children[0], row);
+  assert.equal(row.children[1].children[0], view);
+  assert.equal(r.$('queued-messages').children[1].children[1].textContent, 'other updated');
+  r.run(`queuedMessages=[queuedMessages[1],queuedMessages[0],{id:'c',query:'new'}];renderQueue()`);
+  assert.equal(r.$('queued-messages').children[1], row);
+  assert.equal(row.children[1].children[0], view);
+  assert.equal(r.$('queued-messages').children[2].children[1].textContent, 'new');
+  r.run(`queuedMessages=[queuedMessages[1]];renderQueue()`);
+  assert.equal(r.$('queued-messages').children.length, 1);
+  assert.equal(r.$('queued-messages').children[0], row);
+});
 test('live completion followed by stored segment renders exactly once', () => {
   const r = setup(); r.send('agent:query', { query: 'hello' });
   r.send('agent:response-chunk', { blocks: [{ type: 'text', text: 'Hello ' }, { type: 'text', text: '🟡' }] });

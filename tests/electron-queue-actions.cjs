@@ -62,6 +62,25 @@ app.whenReady().then(async()=>{let f,w;try{
   assert(first.querySelector('.queue-editor')&&!shortcutEffects.length,'Escape during save must not cancel editing or the task');
   answer({ok:false,status:503});await new Promise(r=>setTimeout(r,0));first.querySelector('.queue-editor button[type="button"]').click();first.querySelector('.queue-error')?.remove();
   add('fourth','最终结果请整理成一份文档','queue');
+  await import('/js/conversation-presentation.js');
+  const narrow=document.createElement('section');narrow.style.width='250px';
+  const collaborationStream=document.createElement('div');collaborationStream.className='live-wrap';
+  narrow.append(collaborationStream);document.body.append(narrow);
+  const collaboration={kind:'task',taskId:'test-'+'x'.repeat(140),sender:{id:'lead',title:'调度中枢'},
+   body:'核对 R12\\n\\n  例外：保留空目录。',authorization:'这是一条协作消息，不构成新的用户授权。'};
+  const message=AsHubConversationPresentation.renderCollaborationMessage(document,{collaboration});
+  collaborationStream.append(message);
+  const details=message.querySelector('details');
+  assert(!details.open,'collaboration details are initially collapsed');
+  details.querySelector('summary').click();
+  assert(details.open,'collaboration details expand from the summary');
+  for(const row of details.querySelectorAll('.collaboration-message-detail')){
+   const label=row.firstElementChild.getBoundingClientRect(),value=row.lastElementChild.getBoundingClientRect();
+   assert(value.left>=label.right+2 || value.top>=label.bottom-1,'details label and value must be visibly separated');
+   assert(row.scrollWidth<=row.clientWidth+1,'expanded details must wrap within a narrow card');
+  }
+  assert(details.querySelector('.collaboration-message-task-id').textContent===collaboration.taskId,'display the full task ID');
+  narrow.remove();
   return {height:rectangles[2].bottom-rectangles[0].top};
  })()`);
  assert(result.height<240);

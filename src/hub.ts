@@ -2,7 +2,7 @@ import { ComposerInputs } from './extensions/composer-inputs.js';
 import { BackendConnections, type PluginSecretStore } from './extensions/backends.js';
 import { ConversationEntries } from './extensions/conversation-entries.js';
 import { PluginBackground } from './extensions/background.js';
-import { replayEventName, subagentReplayState } from './history/replay-frame.js';
+import { collaborationReplayState, replayEventName, subagentReplayState } from './history/replay-frame.js';
 import { ReplayWriter } from './history/replay-writer.js';
 import { getSseWriter } from './transport/sse-writer.js';
 import { PluginActivities } from './services/plugin-activities.js';
@@ -22,6 +22,7 @@ import type { HostSnapshot } from "./services/host-contract.js";
 import type { Session, QueuedMessage } from "./services/session-types.js";
 import { createHostAccess } from "./services/host-service.js";
 import { createConversationAccess } from "./services/conversation-service.js";
+import type { CollaborationPresentation } from "./services/collaboration-presentation.js";
 import { SessionService } from "./services/session-service.js";
 import { ProjectService } from "./services/project-service.js";
 import { HostEvents } from "./services/host-events.js";
@@ -123,7 +124,9 @@ function parseFrameName(frame: string): string {
 // and the meta object precedes payload.  That lets the restore filter extract
 // the name with plain string ops instead of a full JSON.parse per frame
 // (~40ms for a 50k-frame session on the session-open path).
-const RESTORE_DROP_NAMES = ["ui:error", "ui:info", "agent:thinking-chunk"] as const;
+// Pending queue events are replayable during this process, but the bridge
+// does not restore its queue. Keep consumed agent:query history instead.
+const RESTORE_DROP_NAMES = ["ui:error", "ui:info", "agent:thinking-chunk", "agent:queued", "agent:queue-updated"] as const;
 const RESTORE_DROP_NEEDLES = RESTORE_DROP_NAMES.map((n) => `"name":"${n}"`);
 
 function isDroppedRestoreFrame(frame: string): boolean {
@@ -1421,7 +1424,11 @@ export function startHub(opts: HubOpts): {
         const delivery = session.bridge.updateQueued?.(item.id, input.action === "edit" ? input.query : undefined, input.action === "promote");
         if (!delivery) { res.writeHead(409); res.end("Message is being processed or cannot be updated"); return; }
         const oldQuery = item.query;
-        if (input.action === "edit") item.query = input.query;
+        if (input.action === "edit" && input.query !== oldQuery) {
+          item.query = input.query;
+          // Authenticated origin applies to the original content only.
+          delete item.collaboration;
+        }
         item.delivery = delivery; item.revision = (item.revision ?? 0) + 1;
         const queryIndex = session.queuedQueries?.indexOf(oldQuery) ?? -1;
         if (queryIndex >= 0) session.queuedQueries![queryIndex] = item.query;
@@ -2210,12 +2217,16 @@ function routeEvent(session: Session, e: BusEvent): void {
     if (index >= 0) session.queuedQueries!.splice(index, 1);
     flushSegment(session);
     session.lastModified = Date.now();
+    const collaboration = item?.query === p.query ? item?.collaboration : undefined;
     pushFrame(session, "agent:query", sseFrame({source: session.id, ts: Date.now(), name: "agent:query"},
-      {query: p.query, queueId: p.queueId, steering: true, ...(item?.images?.length ? {images: item.images} : {})}));
+      {query: p.query, queueId: p.queueId, steering: true, ...(item?.images?.length ? {images: item.images} : {}),
+        ...(collaboration ? { collaboration } : {})}));
     _flushBuf(session.id);
     return;
   }
+  let submittedItem: QueuedMessage | undefined;
   if (e.name === "agent:queued-submit" || (e.name === "agent:queued-done" && (e.payload as any)?.dropped)) {
+    if (e.name === "agent:queued-submit") submittedItem = session.queuedItems?.get((e.payload as any)?.queueId);
     session.queuedItems?.delete((e.payload as any)?.queueId);
     const i = session.queuedQueries?.indexOf((e.payload as any)?.query);
     if (i !== undefined && i >= 0) session.queuedQueries!.splice(i, 1);
@@ -2331,7 +2342,9 @@ function routeEvent(session: Session, e: BusEvent): void {
       id: `hub:${session.id}:${name}`,
       name,
     });
-    pushFrame(session, "agent:query", sseFrame(makeMeta("agent:query"), { query, queueId: (e.payload as any)?.queueId, images: (e.payload as { images?: unknown[] })?.images }));
+    const collaboration = submittedItem?.query === query ? submittedItem?.collaboration : undefined;
+    pushFrame(session, "agent:query", sseFrame(makeMeta("agent:query"), { query, queueId: (e.payload as any)?.queueId,
+      images: (e.payload as { images?: unknown[] })?.images, ...(collaboration ? { collaboration } : {}) }));
     pushFrame(session, "agent:processing-start", sseFrame(makeMeta("agent:processing-start"), {}));
     return;
   }
@@ -3316,6 +3329,7 @@ async function submitQuery(session: Session, query: string,
   taskId?: string,
   delivery: "queue" | "steer" = "queue",
   settled?: (state: "completed" | "failed" | "cancelled", error?: string) => void,
+  collaboration?: CollaborationPresentation,
 ) {
   const meta = (name: string) => ({
     source: session.id,
@@ -3342,7 +3356,8 @@ async function submitQuery(session: Session, query: string,
     if (taskId && queueId) session.collaboration?.bindQueue(taskId, queueId);
     if (queued) {
       (session.queuedQueries ??= []).push(query);
-      (session.queuedItems ??= new Map()).set(queueId!, { id: queueId!, query, ...(imageRefs?.length ? { images: imageRefs } : {}) });
+      (session.queuedItems ??= new Map()).set(queueId!, { id: queueId!, query,
+        ...(imageRefs?.length ? { images: imageRefs } : {}), ...(collaboration ? { collaboration } : {}) });
     }
     else if (taskId) session.collaboration?.start(taskId);
     if (!queued) {
@@ -3354,7 +3369,8 @@ async function submitQuery(session: Session, query: string,
       // never inherit it.
       session.segmentText = "";
       session.segmentStartedAt = undefined;
-      pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
+      pushFrame(session, "agent:query", sseFrame(meta("agent:query"), { query, ...(imageRefs?.length ? { images: imageRefs } : {}),
+        ...(collaboration ? { collaboration } : {}) }));
       pushFrame(session, "agent:processing-start", sseFrame(meta("agent:processing-start"), {}));
     }
 
@@ -3400,7 +3416,7 @@ async function submitQuery(session: Session, query: string,
           const item = queueId ? session.queuedItems?.get(queueId) : undefined;
           if (!item) return; // Already consumed/withdrawn: never resurrect pending UI.
           item.delivery = result.stopReason === "steering" ? "steer" : "queue";
-          pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { query, queueId, delivery: item.delivery, ...(imageRefs?.length ? { images: imageRefs } : {}) }));
+          pushFrame(session, "agent:queued", sseFrame(meta("agent:queued"), { ...item, queueId }));
           return;
         }
         settled?.(session._cancelled ? "cancelled" : "completed");
@@ -4045,12 +4061,17 @@ async function tagLastQueryFrame(session: Session): Promise<void> {
   if (session._closed || session._historyWriterLifecycle?.shutdownSignal?.aborted) return;
   const msgs = snap.messages as Array<{ role?: string; content?: unknown }>;
   const claimedIds = new Set<string>();
+  const unboundQueries = new Map<string, number>();
   for (const frame of session.replay) {
     if (parseFrameName(frame) !== "agent:query") continue;
     try {
       const line = frame.split("\n").find(l => l.startsWith("data: "));
       const payload = line ? JSON.parse(line.slice(6)).payload : undefined;
       if (typeof payload?.entryId === "string") claimedIds.add(payload.entryId);
+      else if (payload?.command !== true && typeof payload?.query === "string") {
+        const query = stripContextWrappers(payload.query).trim();
+        unboundQueries.set(query, (unboundQueries.get(query) ?? 0) + 1);
+      }
     } catch { /* malformed legacy frame cannot claim an ID */ }
   }
   const used = new Set<number>();
@@ -4108,6 +4129,11 @@ async function tagLastQueryFrame(session: Session): Promise<void> {
           const frameId = replayFrameId(f);
           queryId = inner.payload?.queryId ?? (frameId === null ? undefined : String(frameId));
           inner.payload = { ...inner.payload, entryId, queryId };
+          // Prove an authenticated frame while its query is unambiguous.
+          // A later ordinary copy cannot undo an already proven binding.
+          if (inner.payload.collaboration && unboundQueries.get(stripContextWrappers(query).trim()) === 1) {
+            inner.payload.collaborationEntryId = entryId;
+          }
           const idLine = f.split("\n").find((l) => l.startsWith("id: "));
           session.replay[idx] = `${idLine ?? ""}\ndata: ${JSON.stringify(inner)}\n\n`;
         }
@@ -4154,6 +4180,13 @@ function synthesizeBranchFrames(
   let turnStarted = false;
   let userEntryId: string | null = null;
   const subagents = subagentReplayState(knownReplay);
+  const collaboration = collaborationReplayState(knownReplay);
+  const seenEntryIds = new Set<string>();
+  for (const id of entryIds) {
+    if (!id) continue;
+    if (seenEntryIds.has(id)) collaboration.delete(id);
+    seenEntryIds.add(id);
+  }
   // A null entryId slot only marks a compaction summary when the tag system
   // is actually in use. Sessions without a tree store report all-null tags,
   // and their user messages are real messages, not summaries.
@@ -4190,11 +4223,20 @@ function synthesizeBranchFrames(
       closeTurn();
       userEntryId = entryIds[idx] ?? null;
       const images = extractImages(m.content);
-      const payload: Record<string, unknown> = { query: extractText(m.content) };
+      const query = extractText(m.content);
+      const payload: Record<string, unknown> = { query };
       if (images.length > 0) payload.images = images;
       // Stable rewind address: the tree entry this message is persisted
       // under.  Clients prefer it over the volatile client-counted turn.
-      if (entryIds[idx]) payload.entryId = entryIds[idx];
+      if (userEntryId) {
+        payload.entryId = userEntryId;
+        const original = collaboration.get(userEntryId);
+        if (original && (original.query === query || original.query === stripContextWrappers(query))) {
+          payload.query = original.query;
+          payload.collaboration = original.collaboration;
+          if (original.bound) payload.collaborationEntryId = userEntryId;
+        }
+      }
       frames.push(sseFrame(meta("agent:query"), payload));
       frames.push(sseFrame(meta("agent:processing-start"), {}));
       turnStarted = true;
@@ -4912,7 +4954,10 @@ async function togglePin(req: http.IncomingMessage, res: http.ServerResponse, se
 
 /** Project membership is checked on every call, including after lazy restore. */
 function conversationAccess(sourceId: string, sessions: Map<string, Session>, projects: ProjectStore, tasks?: CollaborationTasks): ConversationAccess {
-  return createConversationAccess(sourceId, { sessions, projects, tasks, tasksDirectory: path.join(SESSIONS_DIR, "collaboration"), withContextLock, submitQuery,
+  return createConversationAccess(sourceId, { sessions, projects, tasks, tasksDirectory: path.join(SESSIONS_DIR, "collaboration"), withContextLock,
+    submitQuery(session, query, _images, _parent, beforeSubmit, taskId, collaboration) {
+      return submitQuery(session, query, undefined, undefined, beforeSubmit, taskId, undefined, undefined, collaboration);
+    },
     publishQueue(session, name, payload) {
       pushFrame(session, name, sseFrame({source: session.id, ts: Date.now(), name}, payload));
       session._onHostChange?.("queue-updated");

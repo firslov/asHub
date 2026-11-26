@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {env,Bridge,fs,path}=require('./harness.cjs');
 const {createHash}=require('node:crypto');
 const frame=(id,name,payload)=>`id: ${id}\ndata: ${JSON.stringify({meta:{name,source:'abcdef',ts:1},payload})}\n\n`;
-async function restore(t, {tail='', badHash=false, legacy=false, subagentFrames=''}={}) {
+async function restore(t, {tail='', badHash=false, legacy=false, subagentFrames='', collaboration, staleLeaf=false}={}) {
   const e=env(),h=e.hub(),sessions=new Map();
   const s=await h.createSession(sessions,{makeBridge:o=>new Bridge(o)},e.dir);
   t.after(()=>h.shutdownHub(undefined,sessions));
@@ -11,9 +11,9 @@ async function restore(t, {tail='', badHash=false, legacy=false, subagentFrames=
   await s.capture.flush();const leaf=s.store.getActiveLeaf(),id=s.id;
   await h.shutdownHub(undefined,sessions);
   const file=path.join(e.dir,'hub-sessions',id+'.replay.jsonl');
-  const saved=frame(10,'agent:query',{query:'saved question',entryId:s.store.buildBranchWithIds().entryIds[0]})+frame(11,'agent:response-segment',{text:'saved answer'})+frame(12,'agent:processing-done',{})+subagentFrames;
+  const saved=frame(10,'agent:query',{query:'saved question',entryId:s.store.buildBranchWithIds().entryIds[0],collaboration})+frame(11,'agent:response-segment',{text:'saved answer'})+frame(12,'agent:processing-done',{})+subagentFrames;
   fs.writeFileSync(file,saved+tail);
-  fs.writeFileSync(file.replace('.replay.jsonl','.replay-state.json'),JSON.stringify(legacy?{leaf}:{leaf,bytes:Buffer.byteLength(saved),sha256:badHash?'0'.repeat(64):createHash('sha256').update(saved).digest('hex')}));
+  fs.writeFileSync(file.replace('.replay.jsonl','.replay-state.json'),JSON.stringify(legacy?{leaf}:{leaf:staleLeaf?'stale-leaf':leaf,bytes:Buffer.byteLength(saved),sha256:badHash?'0'.repeat(64):createHash('sha256').update(saved).digest('hex')}));
   const restored=await h.createSession(sessions,{makeBridge:o=>new Bridge(o)},e.dir,{id,cwd:e.dir,title:'test',startedAt:1,replay:[],backendId:'ash'});
   await restored._ensureBridge();
   return {e,h,s:restored,file,saved};
@@ -36,6 +36,29 @@ test('mismatched checkpoint preserves evidence and rebuilds the active branch',a
 });
 test('legacy leaf-only checkpoints continue to restore',async t=>{
   const f=await restore(t,{legacy:true});assert(f.s.replay.join('').includes('saved answer'));
+});
+test('cold restore keeps consumed collaboration and drops closed process queue projections',async t=>{
+  const consumed = {kind:'task',taskId:'consumed-task',sender:{id:'lead',title:'Lead'},body:'Task\nbody',authorization:'Existing authorization notice'};
+  const pending = {id:'queued',queueId:'queued',query:'pending task',collaboration:{...consumed,taskId:'pending-task'}};
+  const f=await restore(t,{subagentFrames:
+    frame(13,'agent:query',{query:'consumed task',queueId:'consumed',collaboration:consumed})+
+    frame(14,'agent:processing-done',{})+
+    frame(15,'agent:queued',pending)+
+    frame(16,'agent:queue-updated',{...pending,revision:1})});
+  const events=Array.from(f.s.replay,data=>JSON.parse(data.split('\n').find(line=>line.startsWith('data: ')).slice(6)));
+  assert.deepEqual(events.find(event=>event.payload.queueId==='consumed')?.payload.collaboration,consumed);
+  assert.equal(f.s.queuedItems?.size ?? 0,0);
+  assert(events.every(event=>event.payload.queueId!=='queued'),'a restarted bridge cannot consume or edit the old queue');
+  assert(f.s.lastFrameSeq>=16,'filtered frames still advance the reconnect cursor');
+});
+test('cold branch repair accepts presentation only from a verified checkpoint',async t=>{
+  const collaboration={kind:'task',taskId:'trusted-task',sender:{id:'lead',title:'Lead'},body:'Task\nbody',authorization:'Original notice'};
+  for (const badHash of [false,true]) {
+    const f=await restore(t,{staleLeaf:true,collaboration,badHash});
+    const query=JSON.parse(f.s.replay.find(item=>item.includes('"agent:query"')).match(/^data: (.+)$/m)[1]).payload;
+    assert.equal(query.query,'saved question');
+    assert.deepEqual(query.collaboration,badHash?undefined:collaboration);
+  }
 });
 test('a late subagent cancellation survives a complete host restart',async t=>{
   const e=env(),h=e.load('src/hub.ts','export const recoveryAudit={createSession,routeEvent,shutdownHub};').recoveryAudit;

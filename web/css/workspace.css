@@ -306,3 +306,20 @@ dialog.artifact-preview { font-family: var(--font-sans); box-shadow: var(--shado
   .browser-pane[data-layout="compact"][data-view="web"] .browser-forward { grid-area:2 / 2; }
   .browser-pane[data-layout="compact"][data-view="web"] .browser-origin { grid-area:2 / 3 / 3 / -1; }
 }
+
+/* Verified collaboration envelopes are display-only; the original query stays
+   in the message model for editing, rewind and replay. */
+.live-wrap .agent-box.has-collaboration-message .q-text[hidden] { display: none !important; }
+.live-wrap .collaboration-message { min-width: 0; max-width: 100%; }
+.live-wrap .collaboration-message-part + .collaboration-message-part { margin-top: .75rem; padding-top: .65rem; border-top: 1px solid var(--border); }
+.live-wrap .collaboration-message-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; margin-bottom: .4rem; line-height: 1.4; }
+.live-wrap .collaboration-message-kind { color: var(--accent); font-weight: 650; font-size: var(--fs-xs); border: 1px solid currentColor; border-radius: 4px; padding: 0 .3rem; }
+.live-wrap .collaboration-message-sender { color: var(--text); font-weight: 650; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.live-wrap .collaboration-message-body { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.live-wrap .collaboration-message-details { margin-top: .45rem; color: var(--text-dim); font-size: var(--fs-xs); }
+.live-wrap .collaboration-message-details summary { cursor: pointer; width: fit-content; }
+.live-wrap .collaboration-message-detail { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .5rem; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: .3rem; }
+.live-wrap .collaboration-message-detail > :first-child { flex: none; }
+.live-wrap .collaboration-message-detail > :last-child { flex: 1 1 12rem; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.live-wrap .agent-box.pending .collaboration-message { grid-column: 1; grid-row: 2; }
+.live-wrap .agent-box.queue-editing .collaboration-message { display: none; }

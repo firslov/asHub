@@ -1,3 +1,6 @@
+import type { CollaborationPresentation } from '../services/collaboration-presentation.js';
+import { stripContextWrappers } from './summarize.js';
+
 /** Read the small metadata envelope without parsing a potentially multi-megabyte
  * tool result/image. Noncanonical legacy frames retain the general JSON path. */
 export function replayEventName(frame: string): string {
@@ -30,6 +33,38 @@ export function replayEventName(frame: string): string {
   }
   try { return name(JSON.parse(frame.slice(start, end < 0 ? undefined : end)).meta); }
   catch { return ''; }
+}
+
+/** Recover presentation only for a uniquely addressed entry in recorded host
+ * replay. Message content alone never supplies a sender or task identity. */
+export function collaborationReplayState(frames: string[]) {
+  const marked = new Map<string, { query: string; collaboration: CollaborationPresentation; bound: boolean }>();
+  if (!frames.some(frame => frame.includes('"collaboration":'))) return marked;
+  const claimed = new Set<string>();
+  const unboundQueries = new Set<string>();
+  for (const frame of frames) {
+    if (replayEventName(frame) !== 'agent:query') continue;
+    try {
+      const payload = JSON.parse(frame.match(/^data: (.+)$/m)?.[1] ?? 'null')?.payload;
+      if (payload?.command === true || typeof payload?.query !== 'string') continue;
+      if (typeof payload.entryId !== 'string' || !payload.entryId) {
+        unboundQueries.add(stripContextWrappers(payload.query).trim());
+        continue;
+      }
+      const id = payload.entryId;
+      if (claimed.has(id)) marked.delete(id);
+      else if (payload.collaboration && typeof payload.collaboration === 'object')
+        marked.set(id, { query: payload.query, collaboration: payload.collaboration, bound: payload.collaborationEntryId === id });
+      claimed.add(id);
+    } catch { /* Unreadable replay frames cannot identify authored messages. */ }
+  }
+  // The live rewind tagger pairs identical queries by order. If a matching
+  // frame never reached the kernel, the surviving entry could belong to
+  // either turn. Never carry authenticated presentation through that guess.
+  for (const [id, item] of marked) {
+    if (!item.bound && unboundQueries.has(stripContextWrappers(item.query).trim())) marked.delete(id);
+  }
+  return marked;
 }
 
 interface SubagentReplayOutcome {

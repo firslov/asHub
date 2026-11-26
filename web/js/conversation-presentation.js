@@ -1,5 +1,68 @@
-/* Shared verbatim with remote/public/conversation-presentation.js. Pure presentation and lifecycle rules; callers own session and transport state. */
+/* Shared verbatim with remote/public/conversation-presentation.js. Callers own session and transport state. */
 (() => {
+  function collaborationPart(value) {
+    if (!value || !['task', 'supplement', 'blocker'].includes(value.kind) ||
+        typeof value.taskId !== 'string' || !value.taskId.trim() || value.taskId.length > 160 ||
+        typeof value.sender?.id !== 'string' || !value.sender.id.trim() ||
+        typeof value.sender.title !== 'string' ||
+        typeof value.body !== 'string' || !value.body.trim() || value.body.length > 8000 ||
+        typeof value.authorization !== 'string' || !value.authorization.trim() || value.authorization.length > 1024) return null;
+    const { kind, taskId, sender, body, authorization } = value;
+    return { kind, taskId, sender: { id: sender.id, title: sender.title }, body, authorization };
+  }
+
+  function parseCollaborationMessage(payload) {
+    // The authenticated host marks authored events. Raw query text cannot
+    // supply or recreate provenance, even when copied from a real event.
+    const value = payload?.collaboration;
+    const part = collaborationPart(value);
+    if (!part || value.supplements === undefined) return part;
+    if (part.kind !== 'task' || !Array.isArray(value.supplements) || value.supplements.length > 32) return null;
+    const supplements = [];
+    for (const candidate of value.supplements) {
+      const update = collaborationPart(candidate);
+      if (update?.kind !== 'supplement' || update.taskId !== part.taskId ||
+          update.sender.id !== part.sender.id || candidate.supplements !== undefined) return null;
+      supplements.push(update);
+    }
+    return { ...part, supplements };
+  }
+
+  function renderCollaborationMessage(document, payload, options = {}) {
+    const message = parseCollaborationMessage(payload);
+    if (!message) return null;
+    const english = typeof options.locale === 'string' && options.locale.startsWith('en');
+    const labels = english
+      ? { task: 'Collaboration task', supplement: 'Task supplement', blocker: 'Blocker notice', details: 'Details', taskId: 'Task ID', authorization: 'Authorization' }
+      : { task: '协作任务', supplement: '任务补充', blocker: '阻塞通知', details: '详情', taskId: '任务 ID', authorization: '授权提示' };
+    const element = (tag, className, text) => {
+      const node = document.createElement(tag);
+      node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    };
+    const root = element('div', 'collaboration-message');
+    for (const part of [message, ...(message.supplements ?? [])]) {
+      const item = element('div', 'collaboration-message-part');
+      const heading = element('div', 'collaboration-message-heading');
+      heading.append(
+        element('span', 'collaboration-message-kind', labels[part.kind]),
+        element('bdi', 'collaboration-message-sender', part.sender.title.trim() ? part.sender.title : part.sender.id),
+      );
+      const body = element('div', 'collaboration-message-body', part.body);
+      const details = element('details', 'collaboration-message-details');
+      const task = element('div', 'collaboration-message-detail');
+      const authorization = element('div', 'collaboration-message-detail');
+      task.append(element('span', '', labels.taskId + ' '), element('code', 'collaboration-message-task-id', part.taskId));
+      authorization.append(element('span', '', labels.authorization + ' '),
+        element('span', 'collaboration-message-authorization', part.authorization));
+      details.append(element('summary', '', labels.details), task, authorization);
+      item.append(heading, body, details);
+      root.append(item);
+    }
+    return root;
+  }
+
   // Event schema v1: completion means execution ended, not that the user's
   // overall task succeeded. A failed child/tool attempt never changes the
   // main turn's outcome. Legacy providers may express failure in any of
@@ -194,5 +257,5 @@
   }
 
   // A classic script on remote and a side-effect ESM import on desktop.
-  globalThis.AsHubConversationPresentation = Object.freeze({ eventVersion: 1, diagnosticState, turnLifecycle, activityState, activityTimestamp, renderActivityTime, toolActivityKey, usageMetrics, toolDisplayName, thinkingPreview, renderThinkingContent, parseCompactionNotice, renderCompaction, mergeCompactionNotice });
+  globalThis.AsHubConversationPresentation = Object.freeze({ eventVersion: 1, diagnosticState, turnLifecycle, activityState, activityTimestamp, renderActivityTime, toolActivityKey, usageMetrics, toolDisplayName, thinkingPreview, renderThinkingContent, parseCompactionNotice, renderCompaction, mergeCompactionNotice, parseCollaborationMessage, renderCollaborationMessage });
 })();

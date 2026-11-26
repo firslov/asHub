@@ -267,7 +267,7 @@ function closeSessionView() {
     clearMessages();
     renderReceipt();
 }
-function clearMessages() { turnOutcome = ''; clearTimeout(renderTimer); reply = null; liveSegment = false; phase = null; owners.clear(); approvals.clear(); $('messages').replaceChildren(); busy = false; modelInfo = {}; $('model').textContent = '选择模型'; $('queue').replaceChildren(); }
+function clearMessages() { turnOutcome = ''; clearTimeout(renderTimer); reply = null; liveSegment = false; phase = null; owners.clear(); approvals.clear(); $('messages').replaceChildren(); busy = false; modelInfo = {}; $('model').textContent = '选择模型'; $('queue').replaceChildren(); $('queue')._renderedSignature = null; }
 function connect() {
     disconnect({ retainWait: true });
     if (!session || hidden() || !online)
@@ -455,7 +455,9 @@ function frame({ meta = {}, payload: p = {} }) {
     if (name === 'agent:query') {
         finishReply();
         liveSegment = false;
-        const user = el('article', p.query || '', 'bw-message user');
+        const collaboration = presentation.renderCollaborationMessage?.(document, p, { locale: document.documentElement.lang || 'zh-CN' });
+        const user = el('article', collaboration ? undefined : p.query || '', 'bw-message user');
+        if (collaboration) { user.classList.add('has-collaboration-message'); user.append(collaboration); }
         $('messages').append(user);
         for (const image of p.images || [])
             if (image.id) {
@@ -592,10 +594,38 @@ async function loadQueue() {
         if (g !== generation || !ready || version !== queueVersion)
             return;
         const items = Array.isArray(data) ? data : data.items || data.queue || [];
-        $('queue').replaceChildren();
+        const queue = $('queue');
+        const signature = JSON.stringify([g, sid, !!capabilities.queueActions, items]);
+        // Background refreshes must not collapse open details or replace a
+        // focused control when the authoritative queue has not changed.
+        if (queue._renderedSignature === signature) return;
+        queue._renderedSignature = signature;
+        const existing = new Map([...queue.children].filter(row => row._queueId).map(row => [row._queueId, row]));
+        const ids = new Set(items.map(item => item.id));
+        for (const row of [...queue.children]) {
+            if (!row._queueId || !ids.has(row._queueId)) { row.remove(); existing.delete(row._queueId); }
+        }
+        let cursor = queue.firstElementChild;
         for (const item of items) {
-            const row = el('div');
-            row.append(el('span', (item.delivery === 'steer' ? '等待接入 · ' : '排队 · ') + (item.query || '图片消息')));
+            const itemSignature = JSON.stringify([g, sid, !!capabilities.queueActions, item]);
+            let row = existing.get(item.id);
+            if (row?._queueSignature === itemSignature) {
+                if (row !== cursor) queue.insertBefore(row, cursor);
+                cursor = row.nextElementSibling;
+                existing.delete(item.id);
+                continue;
+            }
+            if (row) { if (row === cursor) cursor = row.nextElementSibling; row.remove(); existing.delete(item.id); }
+            row = el('div');
+            row._queueId = item.id;
+            row._queueSignature = itemSignature;
+            const collaboration = presentation.renderCollaborationMessage?.(document, item, { locale: document.documentElement.lang || 'zh-CN' });
+            if (collaboration) {
+                row.className = 'bw-queue-collaboration';
+                row.append(el('span', item.delivery === 'steer' ? '等待接入' : '排队'), collaboration);
+            } else {
+                row.append(el('span', (item.delivery === 'steer' ? '等待接入 · ' : '排队 · ') + (item.query || '图片消息')));
+            }
             if (capabilities.queueActions) {
                 for (const [label, action] of [['编辑', 'edit'], ['撤回', 'withdraw'], ['插队', 'promote']])
                     row.append(button(label, async () => {
@@ -615,8 +645,10 @@ async function loadQueue() {
                         }
                     }));
             }
-            $('queue').append(row);
+            queue.insertBefore(row, cursor);
+            cursor = row.nextElementSibling;
         }
+        for (const row of existing.values()) row.remove();
     }
     catch (e) {
         if (g === generation)

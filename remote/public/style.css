@@ -359,7 +359,8 @@ html[data-pwa=true] input,html[data-pwa=true] textarea,html[data-pwa=true] selec
 .queued-messages[hidden] { display:none; }
 .queued-message { display:flex; align-items:center; gap:10px; padding:7px 2px; font-size:12px; }
 .queued-message small { flex:none; opacity:.55; font-size:11px; }
-.queued-message > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.8; }
+.legacy-queue-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.8; }
+.legacy-queue-label.queue-collaboration { white-space:normal; opacity:1; }
 .queued-message button { flex:none; font-size:12px; padding:7px 5px; }
 
 .session-entry { position:relative; }
@@ -412,6 +413,17 @@ html[data-pwa=true] input,html[data-pwa=true] textarea,html[data-pwa=true] selec
 .queue-modern .queued-message + .queued-message { border-top:1px solid color-mix(in srgb,var(--text) 6%,transparent); }
 .queue-summary { min-width:0; }
 .queue-label { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.5; font-size:13px; }
+.queue-label.queue-collaboration { display:block; overflow:visible; }
+.collaboration-message { min-width:0; white-space:normal; }
+.collaboration-message-part + .collaboration-message-part { margin-top:12px; padding-top:10px; border-top:1px solid var(--line); }
+.collaboration-message-heading { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 8px; margin-bottom:7px; }
+.collaboration-message-kind { color:var(--accent); font-size:11px; font-weight:600; }
+.collaboration-message-sender { font-weight:700; overflow-wrap:anywhere; }
+.collaboration-message-body { white-space:pre-wrap; overflow-wrap:anywhere; }
+.collaboration-message-details { margin-top:8px; color:var(--muted); font-size:12px; }
+.collaboration-message-details summary { cursor:pointer; }
+.collaboration-message-detail { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+.collaboration-message-detail, .collaboration-message-task-id, .collaboration-message-authorization { white-space:pre-wrap; overflow-wrap:anywhere; }
 .queue-modern .queue-status { display:block; font-size:10px; opacity:.65; line-height:1.5; }
 .queue-actions { display:flex; align-items:center; gap:1px; }
 .queue-modern .queue-action { display:flex; align-items:center; justify-content:center; width:34px; height:36px; min-height:0; padding:0; border:0; border-radius:7px; color:var(--muted); background:none; }

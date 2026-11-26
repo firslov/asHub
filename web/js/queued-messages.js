@@ -34,6 +34,7 @@ export function updateQueuedBox(box, item) {
   if (!box.classList.contains('pending') || Number(box.dataset.revision || 0) > (item.revision ?? 0)) return;
   box._queryText = item.query ?? ''; box.dataset.queued = box._queryText;
   const text = box.querySelector('.q-text'); if (text) { text.textContent = box._queryText; text.title = box._queryText; }
+  box._presentUserBox?.(item);
   attachQueueEdit(box, box.dataset.queueSession, item.queueId || item.id, item.delivery, item.revision);
 }
 async function mutate(box, actionName, query, revision) {

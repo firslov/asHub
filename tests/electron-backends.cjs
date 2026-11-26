@@ -52,6 +52,7 @@ app.whenReady().then(async()=>{
    if(op==='queue'){if(queueDelay){const delay=queueDelay;queueDelay=null;return delay;}return queue;}
    if(op==='queue-withdraw'){queue=[];return {query:'排队消息'};}
    if(op==='queue-update'){assert(['edit','promote'].includes(args.action));queue=queue.map(m=>({...m,query:args.query??m.query,delivery:args.action==='promote'?'steer':'queue',revision:m.revision+1}));return queue[0];}
+   if(op==='image')return {mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1f8AAAAASUVORK5CYII='};
    if(op==='models'){if(modelDelay){const d=modelDelay;modelDelay=null;return d;}return {providers:[{name:'deepseek',models:[{id:'deepseek-v4'}]}]};}
    if(op==='model')return {model:args.model,provider:args.provider};
    if(op==='thinking')return {model:'deepseek-v4',provider:'deepseek',supported:true,level:'high',levels:['low','high']};
@@ -153,6 +154,32 @@ app.whenReady().then(async()=>{
    assert.deepEqual(await js(rows),want);
   }
   await wait("document.querySelector('#queue').textContent.includes('排队消息')");await click('编辑');await js("document.querySelector('#dialog textarea').value='修改后的排队消息'");await click('保存');await wait("document.querySelector('#queue').textContent.includes('修改后的排队消息')");await click('插队');await wait("document.querySelector('#queue').textContent.includes('等待接入')");let releaseQueue;queueDelay=new Promise(r=>releaseQueue=r);const beforeQueue=requests.filter(r=>r.op==='queue').length;streams.get('one:abcd')(frame('agent:queue-updated'));await wait('true');for(let n=0;n<100&&requests.filter(r=>r.op==='queue').length===beforeQueue;n++)await new Promise(r=>setTimeout(r,20));await click('撤回');await wait("!document.querySelector('#queue').textContent");releaseQueue([{id:'queue-message-000001',query:'stale queue',revision:1}]);await new Promise(r=>setTimeout(r,80));assert.equal(await js("document.querySelector('#queue').textContent"),'');assert(requests.some(r=>r.op==='queue-withdraw'));
+  const collab={kind:'task',taskId:'test-'+ 'x'.repeat(140),sender:{id:'lead',title:'调度中枢'},body:'R12：第一行\nPOOL：第二行',authorization:'提示第一行\n提示第二行'};
+  queue=[{id:'synthetic-collab',query:'原始协作报文',revision:1,collaboration:collab}];
+  emit(frame('agent:queue-updated'));await wait("!!document.querySelector('#queue .collaboration-message-details')");
+  await js("window.queueDetails=document.querySelector('#queue details');queueDetails.open=true;queueDetails.querySelector('summary').focus()");
+  const queueReads=requests.filter(r=>r.op==='queue').length;
+  emit(frame('agent:queue-updated'));
+  for(let n=0;n<100&&requests.filter(r=>r.op==='queue').length===queueReads;n++)await new Promise(r=>setTimeout(r,20));
+  await new Promise(r=>setTimeout(r,60));
+  assert(await js("queueDetails===document.querySelector('#queue details') && queueDetails.open && document.activeElement===queueDetails.querySelector('summary')"),'unchanged queue refresh preserves the open node and focus');
+  queue.push({id:'second-synthetic',query:'另一条普通消息',revision:1});
+  emit(frame('agent:queue-updated'));await wait("document.querySelector('#queue').textContent.includes('另一条普通消息')");
+  assert(await js("queueDetails===document.querySelector('#queue details') && queueDetails.open && document.activeElement===queueDetails.querySelector('summary')"),'adding another queued message preserves details and focus');
+  queue=queue.slice(0,1);emit(frame('agent:queue-updated'));await wait("!document.querySelector('#queue').textContent.includes('另一条普通消息')");
+  assert(await js("queueDetails===document.querySelector('#queue details') && queueDetails.open && document.activeElement===queueDetails.querySelector('summary')"),'removing another queued message preserves details and focus');
+  assert.equal(await js("document.querySelector('#queue .collaboration-message-body').textContent"),collab.body);
+  assert.equal(await js("document.querySelector('#queue .collaboration-message-task-id').textContent"),collab.taskId);
+  assert.equal(await js("getComputedStyle(document.querySelector('#queue .collaboration-message-authorization')).whiteSpace"),'pre-wrap');
+  assert.notEqual(await js("getComputedStyle(document.querySelector('#queue .collaboration-message-authorization')).overflow"),'hidden');
+  emit(frame('backend:reset'));emit(frame('hub:replay-done'));
+  await wait("!!document.querySelector('#queue .collaboration-message-details')");
+  emit(frame('agent:query',{query:'原始协作报文',collaboration:collab,images:[{id:'synthetic-image'}]}));
+  emit(frame('agent:query',{query:'原始协作报文'}));
+  await wait("document.querySelectorAll('.bw-message.user').length>=2");
+  assert.deepEqual(await js("[...document.querySelectorAll('.bw-message.user')].slice(-2).map(n=>[!!n.querySelector('.collaboration-message'),n.querySelector('.collaboration-message-body')?.textContent||n.textContent])"),[[true,collab.body],[false,'原始协作报文']]);
+  await wait("document.querySelector('.bw-message.user .collaboration-message')?.closest('.bw-message').querySelector('img')?.naturalWidth===1");
+  queue=[];emit(frame('agent:queue-updated'));await wait("!document.querySelector('#queue').textContent");
   await js("document.querySelector('#query').value='电脑一草稿';document.querySelector('#query').dispatchEvent(new Event('input'))");
   const second=await make(b.id),js2=code=>second.webContents.executeJavaScript(code);await wait("document.querySelectorAll('#sessions button').length===3",js2);
   assert.equal(await js2("document.querySelector('.bw-dedicated-session')"),null);

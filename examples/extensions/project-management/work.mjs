@@ -19,6 +19,26 @@ function key(value) {
     throw Error("工作和步骤编号限 1–64 位字母、数字、横线或下划线");
   return value;
 }
+const scenarioFields = ["initialState", "action", "expected"];
+const isStructured = (criteria) => Array.isArray(criteria) && typeof criteria[0] === "object";
+const checkOutcomes = ["met", "unmet", "unverified"];
+function normalizeCriteria(input) {
+  if (!Array.isArray(input)) return text(input, 1200, "criteria");
+  if (!input.length || input.length > 8) throw Error("验收条件须为 1–8 项");
+  const structured = isStructured(input);
+  const criteria = Array.from(input, (value) => {
+    if (!structured) return text(value, 240, "criterion");
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).some((name) => !scenarioFields.includes(name)))
+      throw Error("结构化条件须统一提供 initialState、action、expected");
+    return Object.fromEntries(scenarioFields.map((name) => [name, text(value[name], 240, name)]));
+  });
+  const keys = structured ? criteria.map((criterion) => JSON.stringify(criterion)) : criteria;
+  const characters = structured ? criteria.flatMap((criterion) => Object.values(criterion)) : criteria;
+  if (characters.join("\n").length > 1200 || new Set(keys).size !== criteria.length)
+    throw Error("验收条件须互不重复，合计最多 1200 字符");
+  return criteria;
+}
 function normalize(args, members) {
   const goal = text(args.goal, 800, "goal");
   if (
@@ -36,17 +56,11 @@ function normalize(args, members) {
       new Set(deps).size !== deps.length
     )
       throw Error("依赖列表无效");
-    const criteria = Array.isArray(s.criteria)
-      ? s.criteria.map((value) => text(value, 240, "criterion"))
-      : text(s.criteria, 1200, "criteria");
-    if (Array.isArray(criteria) &&
-      (!criteria.length || criteria.length > 8 || criteria.join("\n").length > 1200 || new Set(criteria).size !== criteria.length))
-      throw Error("验收条件须为 1–8 项不同的条件，合计最多 1200 字符");
     return {
       id: key(s.id),
       member: s.member,
       output: text(s.output, 1200, "output"),
-      criteria,
+      criteria: normalizeCriteria(s.criteria),
       dependsOn: deps.map(key).sort(),
     };
   });
@@ -114,17 +128,43 @@ function handoffArtifacts(plan, step, requested) {
   }
   return { available, selected };
 }
-function briefParts(work, plan, step, id, reworkReason, selected) {
+function briefParts(work, plan, step, id, previousAttempt, selected) {
+  const structured = isStructured(step.criteria);
+  const previousReview = previousAttempt?.review;
   const criteria = Array.isArray(step.criteria)
-    ? step.criteria.map((label, i) => (i + 1) + ". " + label).join("\n")
+    ? step.criteria.map((criterion, i) => {
+      const label = structured
+        ? "初始状态：" + JSON.stringify(criterion.initialState) + " · 操作：" + JSON.stringify(criterion.action) +
+           " · 预期结果：" + JSON.stringify(criterion.expected)
+        : criterion;
+      return (i + 1) + ". " + label;
+    }).join("\n")
     : step.criteria;
   const lines = [
     "[项目协作 " + work + "/" + step.id + " · " + id + "]",
     "目标：" + plan.goal,
     "交付：" + step.output,
-    "验收：" + criteria,
-    ...(reworkReason ? ["仅处理上一轮缺口：" + reworkReason] : []),
+    "验收：" + (structured ? "\n" : "") + criteria,
   ];
+  if (structured) {
+    lines.push(
+      '交付时将 conversation_deliver 的 summary 写为 JSON：{"checks":[{"criterion":1,"observation":"实际观察","outcome":"met","evidence":"证据或产物定位"}]}。',
+      "按原编号逐项提交。符合预期用 met，不符合用 unmet，材料不足用 unverified（在 observation 说明缺失，evidence 可留空）。较长证据放在 artifacts，summary 最多 2000 字符。",
+    );
+  }
+  if (previousReview) {
+    lines.push("仅处理上一轮缺口：" + previousReview.reason);
+    if (structured) {
+      const checks = previousReview.checks ?? [];
+      lines.push("上一轮任务：" + previousAttempt.taskId + " · 任务版本 " + previousReview.taskRevision);
+      for (const { criterion, outcome, evidence } of checks)
+        lines.push("上一轮核对 " + criterion + "（" + outcome + "）：" + JSON.stringify(evidence));
+      const confirmed = new Set(checks.filter((item) => item.outcome === "met").map((item) => item.criterion));
+      const remaining = step.criteria.map((_, i) => i + 1).filter((index) => !confirmed.has(index));
+      if (remaining.length) lines.push("上一轮未通过或未验证的编号：" + remaining.join("、"));
+      lines.push("返工沿用原条件及编号，仍提交各项结果。旧证据仅供参考，改动影响已核对项时须重验；需要核对原回复时，用 conversation_task 读取上一轮任务。");
+    }
+  }
   const summaries = [];
   let artifactChars = 0;
   for (const dependency of step.dependsOn) {
@@ -174,6 +214,31 @@ function indexed(items, size, indexOf, label) {
   }
   return [...items].sort((a, b) => indexOf(a) - indexOf(b));
 }
+function structuredDelivery(delivery, size) {
+  const checks = Array.from({ length: size }, (_, i) => ({
+    criterion: i + 1, outcome: "unverified", observation: "", evidence: "",
+  }));
+  if (!delivery) return { state: "missing", checks };
+  try {
+    const summary = text(delivery.summary, 2000, "summary");
+    const report = JSON.parse(summary);
+    if (!report || Object.keys(report).length !== 1 || !Array.isArray(report.checks)) throw Error("无效交付");
+    const submitted = indexed(report.checks, size, (item) => item?.criterion, "summary.checks").map((item) => {
+      if (Object.keys(item).some((name) => !["criterion", "observation", "outcome", "evidence"].includes(name)) ||
+        !checkOutcomes.includes(item.outcome)) throw Error("无效交付");
+      return {
+        criterion: item.criterion,
+        outcome: item.outcome,
+        observation: text(item.observation, 2000, "observation"),
+        evidence: item.outcome === "unverified" && item.evidence === "" ? "" : text(item.evidence, 2000, "evidence"),
+      };
+    });
+    for (const item of submitted) checks[item.criterion - 1] = item;
+    return { state: submitted.length === size ? "complete" : "incomplete", checks };
+  } catch {
+    return { state: "invalid", checks };
+  }
+}
 function reviewEvidence(step, args, host) {
   const accepted = args.decision === "accepted";
   const delivery = host.result?.delivery;
@@ -182,12 +247,17 @@ function reviewEvidence(step, args, host) {
   const issues = delivery?.unresolved ?? [];
   const artifacts = delivery?.artifacts ?? [];
   const checks = indexed(args.checks, criteria.length, (item) => item?.criterion, "checks").map((item) => {
-    if (!["met", "unmet", "unverified"].includes(item.outcome)) throw Error("无效的条件核对结果");
+    if (!checkOutcomes.includes(item.outcome)) throw Error("无效的条件核对结果");
     return { criterion: item.criterion, outcome: item.outcome, evidence: text(item.evidence, 420, "evidence") };
   });
   if (accepted && (Array.isArray(step.criteria) || checks.length) &&
     (checks.length !== criteria.length || checks.some((item) => item.outcome !== "met")))
     throw Error("通过前必须逐项满足验收条件并记录证据");
+  if (accepted && isStructured(step.criteria)) {
+    const report = structuredDelivery(delivery, criteria.length);
+    if (report.state !== "complete" || report.checks.some((item) => item.outcome !== "met"))
+      throw Error("结构化交付仍有未通过或未验证的条件，请核对实际观察和证据");
+  }
   const unresolved = indexed(args.unresolved, issues.length, (item) => item?.item, "unresolved").map((item) => {
     if (!["resolved", "accepted_exception", "blocking"].includes(item.disposition)) throw Error("无效的未决事项处理决定");
     return { item: item.item, issue: issues[item.item - 1], disposition: item.disposition, reason: text(item.reason, 420, "reason") };
@@ -448,9 +518,11 @@ export function workflow(ctx) {
           const result = await inspect(() =>
             hostTask(id, step.member, c, signal),
           );
-          if (result.value && result.members.has(step.member))
+          if (result.value && result.members.has(step.member)) {
             detail.host = result.value;
-          else detail.hostUnavailable = result.error ?? "成员已离开项目";
+            if (isStructured(step.criteria) && result.value.status.terminal)
+              detail.report = structuredDelivery(result.value.result?.delivery, step.criteria.length);
+          } else detail.hostUnavailable = result.error ?? "成员已离开项目";
         }
         return detail;
       }
@@ -509,12 +581,14 @@ export function workflow(ctx) {
         if (!last && args.previousTaskId) throw Error("没有可返工的上一轮任务");
         const id = randomUUID();
         const { available, selected } = handoffArtifacts(p, s, args.artifactSelection);
-        const parts = briefParts(scope[2], p, s, id, last?.review.reason, selected);
+        const parts = briefParts(scope[2], p, s, id, last, selected);
         const requiredCharacters = parts.base.length - parts.artifactChars;
         const remaining = dispatchLimit - requiredCharacters;
         if (remaining < 0) return {
           state: "handoff_capacity_exceeded",
-          note: "步骤说明和完整验收例外已超出单条派发容量。请按原验收记录拆分后续工作，分批交接所需例外。",
+          note: isStructured(s.criteria) && last?.review
+            ? "步骤说明、上一轮证据或完整验收例外超出单条派发容量。请按原验收记录拆分后续工作，核对所需证据和例外。"
+            : "步骤说明和完整验收例外已超出单条派发容量。请按原验收记录拆分后续工作，分批交接所需例外。",
           characterLimit: dispatchLimit,
           requiredCharacters,
         };
@@ -591,6 +665,9 @@ export function workflow(ctx) {
       throw Error("须在任务结束后选择有效的验收决定");
     if (args.decision === "accepted" && host.status.state !== "completed")
       throw Error("失败、中断或取消的任务不能验收通过");
+    if (isStructured(step.criteria) &&
+      (!Number.isSafeInteger(args.taskRevision) || args.taskRevision < 0 || args.taskRevision !== host.status.revision))
+      throw Error("结构化验收需要实际核对的 taskRevision，请重新查询交付版本后验收");
     const coreReview = {
       decision: args.decision,
       reason: text(args.reason, 420, "reason"),

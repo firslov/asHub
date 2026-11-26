@@ -61,7 +61,26 @@ const rewindFromBox = async (box) => {
   if (origin?.isConnected !== false) origin?.resync({ force: true });
 };
 
-export const createUserBox = (queryText, images, ts, turn) => {
+// Keep the raw query in the normal text node and on the box for queue edits,
+// rewind and retries. Collaboration metadata is presentation-only.
+export function presentUserBox(box, payload) {
+  const text = box.querySelector('.q-text');
+  if (!text) return;
+  const key = JSON.stringify(payload?.collaboration ?? null);
+  const query = payload?.query ?? '';
+  if (box._collaborationDisplayKey === key && box._collaborationDisplayQuery === query) return;
+  box._collaborationDisplayKey = key;
+  box._collaborationDisplayQuery = query;
+  box.querySelector('.collaboration-message')?.remove();
+  const node = globalThis.AsHubConversationPresentation?.renderCollaborationMessage?.(
+    document, payload, { locale: document.documentElement?.lang || 'zh-CN' },
+  );
+  text.hidden = !!node;
+  box.classList.toggle('has-collaboration-message', !!node);
+  if (node) text.after(node);
+}
+
+export const createUserBox = (queryText, images, ts, turn, payload) => {
   const box = document.createElement("div");
   box.className = "agent-box";
   let imagesHtml = "";
@@ -101,6 +120,9 @@ export const createUserBox = (queryText, images, ts, turn) => {
     box.appendChild(actions);
   }
   box._queryText = queryText;
+  // Queue updates share one presentation path for HTTP and SSE receipts.
+  box._presentUserBox = item => presentUserBox(box, item);
+  presentUserBox(box, payload ?? { query: queryText });
   // Image lightbox
   box.querySelectorAll(".agent-box-img").forEach((img) => {
     img.addEventListener("click", () => {

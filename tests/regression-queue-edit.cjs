@@ -76,3 +76,44 @@ test('a withdrawn chat clears terminal mode in its inactive draft without changi
  assert.equal(s.input.value,'Review the files\necho original');
  assert.equal(s.doc.getElementById('form').classList.contains('shell-mode'),false);
 });
+
+test('authoritative queue HTTP and SSE updates preserve collaboration details in either order',async()=>{
+ const {ts,fs,path,root,vm}=require('./harness.cjs');
+ for(const order of ['sse-first','http-first']) {
+  let renderCount=0,finish;
+  const doc={documentElement:{lang:'en'},addEventListener(){}};
+  const presentation={renderCollaborationMessage(_document,payload){
+   if(!payload?.collaboration)return null;
+   renderCount++;return {open:false,remove(){if(this.parent)this.parent.collaboration=null;}};
+  }};
+  const e=env({modules:{'./utils.js':{escape:String},'./state.js':{},'./session-manager.js':{},'./composer.js':{},'./i18n.js':{t:x=>x},'./toast.js':{}},
+   globals:{document:doc,AsHubConversationPresentation:presentation,crypto,fetch:()=>new Promise(resolve=>{finish=resolve})}});
+  const {presentUserBox}=e.load('web/js/actions.js');
+  const {findQueued,updateQueuedBox,reviewMutate}=e.load('web/js/queued-messages.js','export const reviewMutate=mutate;');
+  const box=new El();box.classList.add('pending');box.dataset.queueId='q1';box.dataset.queueSession='a';box.dataset.revision='1';box.dataset.delivery='queue';
+  const text=new El(),status=new El(),actions=new El(),promote=new El();
+  text.after=node=>{box.collaboration=node;node.parent=box;};
+  box.querySelector=selector=>({'.q-text':text,'.collaboration-message':box.collaboration,'.queue-status':status,'.queue-actions':actions,'[data-action="promote"]':promote}[selector]??null);
+  box.querySelectorAll=()=>[];box._presentUserBox=item=>presentUserBox(box,item);
+  const meta={kind:'task',taskId:'task-synthetic',sender:{id:'sender',title:'协作者'},body:'第一行\n第二行',authorization:'不增加授权'};
+  const item={queueId:'q1',id:'q1',query:'raw task envelope',revision:2,delivery:'queue',collaboration:meta};
+  presentUserBox(box,{...item,revision:1});assert.equal(renderCount,1);assert(text.hidden);
+  const initial=box.collaboration;initial.open=true;
+  e.context.findQueued=findQueued;e.context.updateQueuedBox=updateQueuedBox;
+  const source=ts.createSourceFile('sse.js',fs.readFileSync(path.join(root,'web/js/sse.js'),'utf8'),ts.ScriptTarget.Latest,true);
+  let handler;const visit=n=>{if(ts.isMethodDeclaration(n)&&n.name?.text==='agent:queue-updated')handler=n;ts.forEachChild(n,visit);};visit(source);
+  const onSse=vm.runInContext('({'+handler.getText(source)+'})["agent:queue-updated"]',e.context);
+  const receiver={state:{},streamEl:{querySelectorAll:()=>[box]}};
+  const pending=reviewMutate(box,'promote');
+  if(order==='sse-first')onSse.call(receiver,item);
+  finish({ok:true,json:async()=>item});await pending;
+  if(order==='http-first')onSse.call(receiver,item);
+  assert.strictEqual(box.collaboration,initial,order+' must retain the same details node');
+  assert.equal(box.collaboration.open,true);assert.equal(renderCount,1);
+  assert.equal(box._queryText,item.query);assert.equal(text.hidden,true);
+  const edit=reviewMutate(box,'edit','user edited content');
+  finish({ok:true,json:async()=>({...item,query:'user edited content',revision:3,collaboration:undefined})});
+  await edit;
+  assert.equal(box.collaboration,null);assert.equal(text.hidden,false);assert.equal(text.textContent,'user edited content');
+ }
+});

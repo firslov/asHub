@@ -33,7 +33,7 @@ import {
   appendLiveOutputChunk, finalizeLiveOutput, resetCompletedTools,
   absorbAsToolBody, trackToolRow,
 } from "./stream/live-output.js";
-import { createUserBox } from "./actions.js";
+import { createUserBox, presentUserBox } from "./actions.js";
 import { updateSessionTitle, setSessionStatus } from "./sidebar.js";
 import { startShellBlock, finishShellBlock, queueShellBlock } from "./stream/shell-block.js";
 import { createTodoBlock, updateTodoBlock, settleTodoBlock } from "./stream/todo-block.js";
@@ -402,7 +402,13 @@ export const handlers = {
     // the replay fragment, so search the container they were appended to.
     const pendRoot = (this.state.replaying && this._replayFrag) || this.streamEl;
     const existing = findQueued(pendRoot, p);
-    if (existing) { attachQueueEdit(existing, this.id, p?.queueId, p?.delivery, p?.revision); return; }
+    if (existing) {
+      if (Number(existing.dataset.revision || 0) <= (p?.revision ?? 0)) {
+        attachQueueEdit(existing, this.id, p?.queueId, p?.delivery, p?.revision);
+        presentUserBox(existing, p);
+      }
+      return;
+    }
     // Build turn-separator manually (same as renderTurnSep) but append
     // after any pending boxes to preserve submission order.
     const cwd = this.state.cwd ?? "";
@@ -415,7 +421,7 @@ export const handlers = {
       `<span class="turn-time">${date.toLocaleTimeString()}</span>` +
       `<span class="turn-line"></span>`;
     appendAfterPending(this, sep);
-    const box = createUserBox(queryText, p?.images ?? null, meta?.ts);
+    const box = createUserBox(queryText, p?.images ?? null, meta?.ts, undefined, p);
     box.classList.add("pending");
     box.dataset.queued = queryText;
     box._queryText = queryText;
@@ -459,6 +465,7 @@ export const handlers = {
       // The authoritative consumed payload wins over a stale optimistic/edit view.
       matched._queryText = queryText;
       const text = matched.querySelector('.q-text'); if (text) text.textContent = queryText;
+      presentUserBox(matched, p);
       matched.classList.remove("pending", "queue-editing");
       for (const node of matched.querySelectorAll('.queue-actions, .queue-editor, .queue-error')) node.remove();
       delete matched.dataset.revision;
@@ -482,7 +489,7 @@ export const handlers = {
       return;
     }
     if (!isCommand) this.state.currentTurn++;
-    const box = createUserBox(queryText, images, meta?.ts, isCommand ? null : this.state.currentTurn);
+    const box = createUserBox(queryText, images, meta?.ts, isCommand ? null : this.state.currentTurn, p);
     if (!isCommand) {
       box.dataset.turn = String(this.state.currentTurn);
       if (p?.queryId) box.dataset.queryId = p.queryId;

@@ -1,5 +1,6 @@
 const { env, Bridge, assert, path, root, fs } = require('../tests/harness.cjs');
-const { once } = require('node:events');
+const { EventEmitter, once } = require('node:events');
+const { deepStrictEqual } = require('node:assert/strict');
 (async () => {
   const { createGateway } = await import('./server.mjs');
   const e = env({ globals: { fetch, WebSocket, setTimeout, clearTimeout, setInterval, clearInterval,Response,ReadableStream } });
@@ -15,6 +16,7 @@ const { once } = require('node:events');
     decidePermission(requestId, outcome, sessionWide) { decision = { requestId, outcome, sessionWide }; }
     async submit(value) {
       received++;
+      await this.beforeReply?.();
       this.emit('event', { name: 'agent:response-chunk', payload: { blocks: [{ type: 'text', text: 'Hello from the desktop 🟡' }] } });
       this.emit('event', { name: 'agent:response-done', payload: { response: 'Hello from the desktop 🟡' } });
       return { stopReason: 'done' };
@@ -31,7 +33,32 @@ const { once } = require('node:events');
     assert(res.ok, `${route}: ${res.status}`); return { data: await res.json(), cookie: res.headers.get('set-cookie')?.split(';')[0] };
   }
   async function wait(fn) { for (let i = 0; i < 100; i++) { const r = await fn(); if (r) return r; await new Promise(r => setTimeout(r, 30)); } throw Error('timed out'); }
-  let reader;
+  let reader, disposeWorkflow, finishTask;
+  const collaborationReaders = [];
+  async function streamEvents(url, auth) {
+    const response = await fetch(url, { headers: auth, signal: AbortSignal.timeout(8000) });
+    assert(response.ok && response.body, 'open the collaboration event stream');
+    const input = response.body.getReader();
+    collaborationReaders.push(input);
+    const decoder = new TextDecoder();
+    let buffer = '';
+    return async (match) => {
+      for (;;) {
+        const end = buffer.indexOf('\n');
+        if (end < 0) {
+          const next = await input.read();
+          if (next.done) throw Error('Collaboration stream closed before its expected event');
+          buffer += decoder.decode(next.value, { stream: true });
+          continue;
+        }
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 1);
+        if (!line.startsWith('data: ')) continue;
+        const frame = JSON.parse(line.slice(6));
+        if (match(frame)) return frame;
+      }
+    };
+  }
   try {
     assert((await fetch(local + '/api/mobile')).status === 401, 'mobile setup requires local authentication');
     assert((await fetch(local + '/api/mobile', { headers: { Authorization: headers.Authorization } })).status === 403, 'mobile setup requires custom header');
@@ -44,6 +71,7 @@ const { once } = require('node:events');
     await rpc('create', { project: (await rpc('projects'))[0].id, requestId: 'create-hub-00000001' });
     const created = await wait(async () => { const r = await rpc('request-status', { requestId: 'create-hub-00000001' }); return r.state === 'done' && r.result; });
     const sid = created.instanceId; assert(sid, 'real Hub create shape');
+    const worker = bridge;
     assert((await rpc('sessions')).some(s => s.instanceId === sid), 'shared session missing');
     assert((await rpc('capabilities')).artifacts, 'new connector capabilities');
     assert((await rpc('capabilities')).thinking, 'native thinking capability advertised');
@@ -161,6 +189,123 @@ const { once } = require('node:events');
     assert((await fetch(download,{headers:{Cookie:cookie}})).status===403,'removed sharing blocks downloads');
     assert((await rpc('project-groups')).length===0,'removed sharing hides project groups');
     await rebind('Updated'); assert((await rpc('sessions')).some(s => s.instanceId === sid), 'restored roots share original sessions');
+    await reader.cancel();
+    const member = await fetch(local + '/api/projects/session', { method: 'POST', headers,
+      body: JSON.stringify({ projectId: groups[0].id, isolated: false, title: '合成调度对话' }) });
+    assert(member.ok && (await member.json()).instanceId !== sid, 'create a collaborating conversation');
+    const source = bridge.opts.sessionId;
+    const organizer = bridge.opts.conversationAccess;
+    const { workflow } = await import('../examples/extensions/project-management/work.mjs');
+    const projectId = groups[0].id;
+    const projectWork = workflow({
+      bus: new EventEmitter(),
+      list: () => ['ashub:collaboration:dispatch-receipt'],
+      services: { dataDirectory: path.join(e.dir, 'work') },
+      onDispose: (dispose) => { disposeWorkflow = dispose; },
+      call: (name, args) => {
+        if (name === 'ashub:catalog') return {
+          currentId: source, currentProjectId: projectId, conversations: [source, sid].map(id => ({id, projectId})),
+        };
+        if (name === 'ashub:collaboration:dispatch-receipt') return organizer.dispatchReceipt(args);
+        if (name === 'ashub:collaboration:wait') return organizer.waitTasks(args.targets, args.waitMs);
+        throw Error('Unexpected workflow call: ' + name);
+      },
+    });
+    const criteria = [
+      {initialState:'R12/POOL 为空',action:'尝试恢复目录',expected:'跳过空目录\n  例外：保留人工标记'},
+      {initialState:'原目录非空',action:'执行返工',expected:'保留新旧两份证据🟡'},
+    ];
+    const task = {work:'integration', step:'check'};
+    await projectWork('plan', {work:task.work, goal:'复核恢复与返工', steps:[
+      {id:task.step, member:sid, output:'report.md', criteria},
+    ]});
+    const brief = await projectWork('brief', task);
+    for (const [index, criterion] of criteria.entries()) {
+      assert(brief.send.message.includes((index + 1) + '. 初始状态：' + JSON.stringify(criterion.initialState)
+        + ' · 操作：' + JSON.stringify(criterion.action) + ' · 预期结果：' + JSON.stringify(criterion.expected)),
+        'dispatch scenario preserves its full initial state, action and expected result at the original number');
+    }
+
+    const phoneURL = remote + `api/devices/${device}/events?session=${sid}`;
+    const desktopURL = local + '/events?subs=' + sid + ':all';
+    const phoneHeaders = { Cookie: cookie };
+    const [desktopLive, phoneLive] = await Promise.all([streamEvents(desktopURL, headers), streamEvents(phoneURL, phoneHeaders)]);
+    const replayDone = ({meta}) => meta?.name === 'hub:replay-done';
+    await Promise.all([desktopLive(replayDone), phoneLive(replayDone)]);
+    const ready = new Promise(resolve => { finishTask = resolve; });
+    worker.beforeReply = () => ready;
+    const { taskId } = await organizer.send(brief.send.id, brief.send.message, undefined, brief.send.requestKey);
+    await projectWork('link', {...task, attempt:brief.attempt, taskId});
+    const eventForTask = ({meta, payload}) => meta?.name === 'agent:query' && payload?.collaboration?.taskId === taskId;
+    const [desktop, phone] = await Promise.all([desktopLive(eventForTask), phoneLive(eventForTask)]);
+    const presentation = desktop.payload.collaboration;
+    assert(presentation.sender.id === source && presentation.sender.title === '合成调度对话'
+      && presentation.body === brief.send.message && presentation.authorization.includes('不构成新的用户授权'),
+      'live collaboration shows the exact dispatch and trusted source');
+    deepStrictEqual(phone.payload, desktop.payload, 'desktop and mobile live event payloads must match');
+    const checks = [
+      {criterion:1,outcome:'met',observation:'跳过空目录，人工标记保留',evidence:'report.md §2'},
+      {criterion:2,outcome:'met',observation:'保留新旧证据',evidence:'report.md §5'},
+    ];
+    await worker.opts.conversationAccess.deliver(taskId, {summary:JSON.stringify({checks:[...checks].reverse()}),artifacts:[],unresolved:[]});
+    finishTask(); worker.beforeReply = undefined;
+    const deliveryStatus = await wait(async () => {
+      const status = await projectWork('status', task);
+      return status.host.status.terminal && status;
+    });
+    deepStrictEqual(deliveryStatus.report.checks, checks, 'out-of-order actual evidence is matched by number');
+    const review = await projectWork('review', {...task, taskId, attempt:brief.attempt,
+      taskRevision:deliveryStatus.host.status.revision, decision:'accepted', reason:'逐项复核通过',
+      checks:checks.map(({criterion,outcome,evidence}) => ({criterion,outcome,evidence})).reverse(),
+    });
+    assert(review.steps[0].state === 'accepted', 'numbered evidence supports acceptance');
+    for (const [url, auth] of [[desktopURL, headers],
+      [phoneURL + '&history=recent', phoneHeaders], [phoneURL + '&history=all', phoneHeaders]]) {
+      const read = await streamEvents(url, auth);
+      const replayed = await read(eventForTask);
+      deepStrictEqual(replayed.payload.collaboration, presentation, 'replay must preserve the live sender, body, task and authorization');
+      assert(replayed.payload.query === desktop.payload.query, 'replay retains the full original dispatch');
+      await read(replayDone);
+    }
+    worker.supportsQueue = true;
+    worker.isProcessing = () => true;
+    let pending;
+    worker.submit = async (query, id) => { pending = {id,query}; return {stopReason:'queued'}; };
+    worker.updateQueued = (id, query) => {
+      if (pending.id !== id) return null;
+      pending.query = query;
+      return 'queue';
+    };
+    worker.withdrawQueued = () => true;
+    const queued = await organizer.send(sid, '排队的协作任务\n\n  核对索引。');
+    const queuedEvent = ({meta,payload}) => meta?.name === 'agent:queued' && payload.collaboration?.taskId === queued.taskId;
+    const [desktopQueued, phoneQueued] = await Promise.all([desktopLive(queuedEvent), phoneLive(queuedEvent)]);
+    deepStrictEqual(phoneQueued.payload, desktopQueued.payload, 'same collaboration is marked in both initial queues');
+    const unchanged = {session:sid, id:pending.id, revision:0, action:'edit',
+      requestId:'same-collaboration-query', query:pending.query};
+    const same = await rpc('queue-update', unchanged);
+    assert(same.collaboration?.taskId === queued.taskId, 'no-op edit retains trusted attribution');
+    const editedText = '用户已编辑待处理的报文。\n\n  保留两行。';
+    const edited = await rpc('queue-update', {...unchanged, query:editedText, revision:1, requestId:'changed-collaboration-query'});
+    assert(edited.query === editedText && !edited.collaboration, 'editing must not preserve the original sender attribution');
+    const updatedEvent = ({meta,payload}) => meta?.name === 'agent:queue-updated'
+      && payload.queueId === pending.id && payload.revision === 2;
+    const [desktopUpdated, phoneUpdated] = await Promise.all([desktopLive(updatedEvent), phoneLive(updatedEvent)]);
+    deepStrictEqual(phoneUpdated.payload, desktopUpdated.payload, 'same edited revision sent to both clients');
+    const remoteQueue = await rpc('queue',{session:sid});
+    assert(remoteQueue.length === 1 && remoteQueue[0].query === editedText && !remoteQueue[0].collaboration,
+      'reloading the phone queue yields the same edited message');
+    worker.isProcessing = () => false;
+    worker.emit('event', {name:'agent:queued-submit',payload:{queueId:pending.id,query:pending.query}});
+    worker.emit('event', {name:'agent:queued-done',payload:{}});
+    const consumedEvent = ({meta,payload}) => meta?.name === 'agent:query' && payload.queueId === pending.id;
+    for (const result of await Promise.all([desktopLive(consumedEvent),phoneLive(consumedEvent)]))
+      assert(result.payload.query === editedText && !result.payload.collaboration, 'consumed edit stays ordinary on both live clients');
+    const afterEdit = await streamEvents(phoneURL, phoneHeaders);
+    const restored = await afterEdit(consumedEvent);
+    assert(restored.payload.query === editedText && !restored.payload.collaboration, 'consumed edit stays ordinary in replay');
+    await afterEdit(replayDone);
+    console.log('PASS numbered dispatch/evidence, desktop/mobile SSE, queue editing and recent/full gateway replay');
     if (sessionControls) {
     const deleteArgs={session:sid,confirm:true,requestId:'delete-integration-0001'};
     await rpc('session-delete',deleteArgs);
@@ -172,5 +317,10 @@ const { once } = require('node:events');
     }
     console.log('Session controls: '+(sessionControls?'new desktop verified':'released desktop fallback verified'));
     console.log('PASS actual Hub: local authentication, bind, create, shared projects, bounded file downloads and account isolation, streaming, image round trip, one-time approvals, disconnect, re-enable, stable identity, per-session VPN, confirmed/idempotent deletion');
-  } finally { await reader?.cancel(); await hub.shutdown(); await gateway.close(); }
+  } finally {
+    finishTask?.();
+    disposeWorkflow?.();
+    await Promise.allSettled([reader?.cancel(), ...collaborationReaders.map(input => input.cancel())]);
+    await hub.shutdown(); await gateway.close();
+  }
 })().catch(e => { console.error(e); process.exitCode = 1; });

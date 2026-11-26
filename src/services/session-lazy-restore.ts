@@ -44,38 +44,29 @@ export function installLazySessionRestore(
         try {
           let loadedReplay = false;
           let replayBytes: Buffer | undefined;
+          let verifiedReplay: string[] | undefined;
           const decodeReplay = (raw: string) => raw.split("\n\n").filter(l => l.trim()).map(l => l + "\n\n").filter(f => !isDroppedRestoreFrame(f));
           // Load replay file
           try {
             const replayPath = path.join(SESSIONS_DIR, `${id}.replay.jsonl`);
             replayBytes = await Promise.race([fs.promises.readFile(replayPath), cancelledRestore]);
-            const replayRaw = replayBytes.toString("utf8");
-            const replayFrames = replayRaw.split("\n\n").filter((l) => l.trim()).map((l) => l + "\n\n")
-              // Drop transient UI frames and legacy thinking-chunk frames
-              // (no longer persisted; they only inflate the frame count).
+            const diskFrames = replayBytes.toString("utf8").split("\n\n").filter((l) => l.trim());
+            const replayFrames = diskFrames.map((l) => l + "\n\n")
+              // Drop transient UI frames, legacy thinking chunks and the old process's queue.
               // Cheap substring pre-filter — no JSON.parse per frame.
               .filter((f) => !isDroppedRestoreFrame(f));
+            // Include filtered frames in the high-water mark. Clients may
+            // already have used those IDs as reconnect cursors.
+            const lastId = replayFrameId(diskFrames.at(-1) ?? "");
+            if (lastId !== null) {
+              advanceFrameSequence(lastId, true);
+              if (lastId > session.lastFrameSeq) session.lastFrameSeq = lastId;
+            }
             if (replayFrames.some(f => !["session:title", "agent:info"].includes(parseFrameName(f) ?? ""))) {
               // Keep the FULL history: tail=100 resyncs slice at send time
               // (openSseMulti), so truncating here only loses old turns.
               session.replay = replayFrames;
               loadedReplay = true;
-              // SSE control frames (hub:replay-starting/done, ui:error,
-              // reemit agent:info) are written straight to clients without
-              // touching meta lastFrameSeq, and an idle session has no 2s
-              // flush timer — so the persisted counters can lag the ids a
-              // client has already seen.  Raise frameSeq past the max id in
-              // the restored file (ids are monotonic, so the last frame's
-              // id is the max; the file was just fully read, so this is
-              // free) — otherwise a restart could reissue old ids and a
-              // since=N incremental reconnect would filter new frames
-              // permanently.  Monotonicity is preserved: the raised
-              // counter keeps every new frame id larger than replayed ones.
-              const lastId = replayFrameId(replayFrames[replayFrames.length - 1]!);
-              if (lastId !== null) {
-                advanceFrameSequence(lastId, true);
-                if (lastId > session.lastFrameSeq) session.lastFrameSeq = lastId;
-              }
             }
           } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
 
@@ -115,6 +106,7 @@ export function installLazySessionRestore(
                   loadedReplay = session.replay.some(f => !["session:title", "agent:info"].includes(parseFrameName(f) ?? ""));
                   replayNeedsCheckpoint = true;
                 }
+                verifiedReplay = session.replay;
               }
               if (saved.leaf !== session.store.getActiveLeaf()) {
                 loadedReplay = false;
@@ -153,7 +145,8 @@ export function installLazySessionRestore(
           }
           if (session.store && !loadedReplay && session.backendId !== "acp") {
             const { messages, entryIds } = session.store.buildBranchWithIds();
-            session.replay = synthesizeBranchFrames(session, messages, entryIds);
+            const verifiedQueries = verifiedReplay?.filter(frame => parseFrameName(frame) === "agent:query");
+            session.replay = synthesizeBranchFrames(session, messages, entryIds, verifiedQueries);
           }
 
           // Detect dangling agent:processing-start (app closed mid-response)

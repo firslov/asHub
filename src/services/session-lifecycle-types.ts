@@ -50,7 +50,7 @@ export interface SessionLifecycleAdapters {
     createCompactionStrategy: typeof createCompactionStrategy;
     withContextLock<T>(session: Session, fn: () => Promise<T>): Promise<T>;
     rebuildReplay(session: Session, messages: unknown[], entryIds?: (string | null)[]): Promise<void>;
-    synthesizeBranchFrames(session: Session, messages: unknown[], entryIds?: (string | null)[]): string[];
+    synthesizeBranchFrames(session: Session, messages: unknown[], entryIds?: (string | null)[], knownReplay?: string[]): string[];
     migrateLegacyQueryTags(session: Session): boolean;
     tagLastQueryFrame(session: Session): Promise<void>;
   };

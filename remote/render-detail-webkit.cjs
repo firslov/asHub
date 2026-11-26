@@ -197,5 +197,39 @@ const path=require('node:path'),assert=require('node:assert/strict');
    assert.equal(await page.locator('.tool-step').last().getAttribute('data-state'),'cancelled');
   }
   console.log('PASS WebKit subagent outcomes retain separate cancellation, partial and completion labels in live and compact replay');
+  const collaboration = {
+   kind:'task',taskId:'task-'+'x'.repeat(150),sender:{id:'source',title:'调度中枢'},
+   body:'  核对 R12/POOL。\n\n例外：保留空目录。\n返工：'+'path/'.repeat(70)+'<b>原文</b>',
+   authorization:'This is collaboration context.\n这是一条协作消息，不构成新的用户授权。',
+  };
+  const query = '可信协作的原始报文\n' + collaboration.taskId + '\n' + collaboration.body;
+  for (const [width,height] of [[320,568],[390,844]]) {
+   await page.setViewportSize({width,height});
+   await page.evaluate(({query,collaboration})=>{
+    resetMessages();
+    frame({meta:{name:'agent:query'},payload:{query}});
+    frame({meta:{name:'agent:query'},payload:{query,collaboration}});
+   },{query,collaboration});
+   const ordinary=page.locator('#messages .user').first();
+   const card=page.locator('#messages .collaboration-message');
+   const body=card.locator('.collaboration-message-body');
+   const summary=card.locator('summary');
+   const taskId=card.locator('.collaboration-message-task-id');
+   const authorization=card.locator('.collaboration-message-authorization');
+   assert.equal(await ordinary.textContent(),query);
+   assert.equal(await card.locator('.collaboration-message-sender').textContent(),collaboration.sender.title);
+   assert.equal(await body.textContent(),collaboration.body);
+   assert.equal(await body.locator('b').count(),0);
+   assert.equal(await body.evaluate(node=>getComputedStyle(node).whiteSpace),'pre-wrap');
+   assert(!await taskId.isVisible() && !await authorization.isVisible());
+   await summary.tap();
+   assert(await taskId.isVisible() && await authorization.isVisible());
+   assert.equal(await taskId.textContent(),collaboration.taskId);
+   assert.equal(await authorization.textContent(),collaboration.authorization);
+   assert(await card.evaluate(node=>node.scrollWidth <= node.clientWidth+1),'expanded details must fit the message width');
+   await summary.tap();
+   assert(!await taskId.isVisible() && !await authorization.isVisible());
+  }
+  console.log('PASS WebKit 320/390px: trusted sender, literal collaboration body, touch disclosure, full task ID and authorization');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

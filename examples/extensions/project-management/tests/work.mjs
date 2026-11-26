@@ -458,3 +458,210 @@ test("unavailable host receipt does not hide the plan or release dependencies", 
     /离开/,
   );
 });
+
+const syntheticScenarios = [
+  { initialState: "API 服务可访问", action: "读取 API 返回的 SLA 字段", expected: "返回用户指定的 SLA 指标及阈值" },
+  { initialState: "存在合成请求", action: "检查错误响应", expected: "记录错误码和响应示例" },
+];
+const structuredReport = checks => JSON.stringify({ checks });
+const syntheticCheck = (criterion, outcome, observation, evidence = "") => ({ criterion, outcome, observation, evidence });
+
+test("structured briefs preserve abbreviations and missing or failed numbered checks cannot pass", async t => {
+  const f = fixture(t), base = { work: "paper", step: "a" };
+  f.spec.steps[0].criteria = syntheticScenarios;
+  await f.run("plan", f.spec);
+  const a = await f.run("brief", base);
+  assert.match(a.send.message, /API 服务可访问/);
+  assert.match(a.send.message, /SLA 指标及阈值/);
+  assert.match(a.send.message, /1\. 初始状态/);
+  assert.match(a.send.message, /2\. 初始状态/);
+  receipt(f, a);
+  const delivery = { summary: structuredReport([syntheticCheck(2, "met", "已记录错误码", "api.md:2")]),
+    artifacts: [{ label: "API 说明", path: "api.md" }], unresolved: [] };
+  f.tasks.set("task1", { sourceId: "lead", recipientId: "worker", state: "completed", terminal: true,
+    revision: 7, deliverySubmitted: true, delivery });
+  const review = { ...base, attempt: a.attempt, taskId: "task1", decision: "accepted", reason: "合成核验",
+    checks: [{ criterion: 1, outcome: "met", evidence: "未定义 SLA 阈值" },
+      { criterion: 2, outcome: "met", evidence: "api.md:2" }], artifactIndexes: [1] };
+  const incomplete = await f.run("status", base);
+  await assert.rejects(f.run("review", review), /taskRevision/);
+  review.taskRevision = incomplete.host.status.revision;
+  assert.equal(incomplete.report.state, "incomplete");
+  assert.equal(incomplete.report.checks[0].criterion, 1);
+  assert.equal(incomplete.report.checks[0].outcome, "unverified");
+  await assert.rejects(f.run("review", review), /未通过|未验证/);
+  for (const outcome of ["unverified", "unmet"]) {
+    const checks = [{ criterion: 1, outcome, evidence: "SLA 目标未核定" }, review.checks[1]];
+    await assert.rejects(f.run("review", { ...review, checks }), /逐项满足/);
+  }
+  delivery.summary = structuredReport([syntheticCheck(1, "unmet", "未提供 SLA 阈值", "api.md:1"),
+    syntheticCheck(2, "met", "已记录错误码", "api.md:2")]);
+  await assert.rejects(f.run("review", review), /未通过|未验证/);
+  await assert.rejects(f.run("brief", { ...base, step: "b" }), /前置/);
+});
+
+test("structured accepted exception is traceable in the downstream handoff", async t => {
+  const f = fixture(t), base = { work: "paper", step: "a" };
+  f.spec.steps[0].criteria = [{ initialState: "目录输入已准备", action: "生成 JSON 清单", expected: "有效 JSON 包含中文内容" }];
+  await f.run("plan", f.spec);
+  const a = await f.run("brief", base); receipt(f, a);
+  f.tasks.set("task1", { sourceId: "lead", recipientId: "worker", state: "completed", terminal: true,
+    revision: 7, deliverySubmitted: true, delivery: { summary: structuredReport([
+      syntheticCheck(1, "met", "JSON 含中文内容", "catalog.json:1"),
+    ]), artifacts: [{ label: "中文目录", path: "catalog.json" }], unresolved: ["英文内容未制作"] } });
+  const review = { ...base, attempt: a.attempt, taskId: "task1", decision: "accepted", reason: "JSON 已核验",
+    checks: [{ criterion: 1, outcome: "met", evidence: "catalog.json:1" }], artifactIndexes: [1] };
+  review.taskRevision = (await f.run("status", base)).host.status.revision;
+  await assert.rejects(f.run("review", review), /未决事项/);
+  f.tasks.get("task1").revision = 8;
+  await assert.rejects(f.run("review", { ...review, unresolved: [{ item: 1, disposition: "accepted_exception", reason: "用户明确允许本次不含英文" }] }), /taskRevision/);
+  assert.equal((await f.run("status", base)).history[0].review, undefined);
+  review.taskRevision = (await f.run("status", base)).host.status.revision;
+  await f.run("review", { ...review, unresolved: [{ item: 1, disposition: "accepted_exception", reason: "用户明确允许本次不含英文" }] });
+  const stored = (await f.run("status", base)).history[0].review;
+  assert.equal(stored.taskRevision, 8);
+  assert.equal(stored.unresolved[0].item, 1);
+  assert.equal(stored.unresolved[0].reason, "用户明确允许本次不含英文");
+  const next = (await f.run("brief", { ...base, step: "b" })).send.message;
+  assert.match(next, /来源任务：task1 · 任务版本 8/);
+  assert.match(next, /catalog\.json/);
+  assert.match(next, /英文内容未制作/);
+  assert.match(next, /用户明确允许本次不含英文/);
+});
+
+test("structured scoped rework retains original numbers and immutable review history", async t => {
+  const f = fixture(t), base = { work: "paper", step: "a" };
+  f.spec.steps[0].criteria = [
+    { initialState: "报告已提交", action: "核对报告内容", expected: "包含背景和结论" },
+    { initialState: "测试已运行", action: "核对测试记录", expected: "三项测试均有结果" },
+    { initialState: "报告和测试记录均可用", action: "比较结论与结果", expected: "两者一致" },
+  ];
+  await f.run("plan", f.spec);
+  const first = await f.run("brief", base); receipt(f, first);
+  f.tasks.set("task1", { sourceId: "lead", recipientId: "worker", state: "completed", terminal: true,
+    revision: 11, deliverySubmitted: true, delivery: { summary: structuredReport([
+      syntheticCheck(1, "met", "报告包含背景与结论", "report.md:1"),
+      syntheticCheck(2, "met", "三项均有结果", "test.log:1-3"),
+      syntheticCheck(3, "unmet", "报告称均通过而第二项失败", "report.md:3; test.log:2"),
+    ]), artifacts: [{ label: "报告", path: "report.md" }, { label: "测试", path: "test.log" }], unresolved: [] } });
+  const firstReview = { ...base, attempt: first.attempt, taskId: "task1", decision: "revise", reason: "条件 3：报告与第二项测试结果不一致",
+    checks: [{ criterion: 1, outcome: "met", evidence: "report.md:1" }, { criterion: 2, outcome: "met", evidence: "test.log:1-3" },
+      { criterion: 3, outcome: "unmet", evidence: "report.md:3; test.log:2" }] };
+  firstReview.taskRevision = (await f.run("status", base)).host.status.revision;
+  await f.run("review", firstReview);
+  const rework = await f.run("brief", { ...base, previousTaskId: "task1" });
+  assert.match(rework.send.message, /上一轮未通过或未验证的编号：3/);
+  assert.match(rework.send.message, /返工沿用原条件及编号/);
+  assert.match(rework.send.message, /1\. 初始状态/);
+  assert.match(rework.send.message, /3\. 初始状态/);
+  receipt(f, rework, "task2");
+  f.tasks.set("task2", { sourceId: "lead", recipientId: "worker", state: "completed", terminal: true,
+    revision: 12, deliverySubmitted: true, delivery: { summary: structuredReport([
+      syntheticCheck(1, "met", "背景与结论未变", "report-v2.md:1"),
+      syntheticCheck(2, "met", "三项测试记录未变", "test.log:1-3"),
+      syntheticCheck(3, "met", "报告现记录第二项失败", "report-v2.md:3; test.log:2"),
+    ]), artifacts: [{ label: "修订报告", path: "report-v2.md" }], unresolved: [] } });
+  const taskRevision = (await f.run("status", base)).host.status.revision;
+  await f.run("review", { ...base, attempt: rework.attempt, taskId: "task2", taskRevision, decision: "accepted", reason: "修订结论与测试一致",
+    checks: [{ criterion: 1, outcome: "met", evidence: "report-v2.md:1" }, { criterion: 2, outcome: "met", evidence: "test.log:1-3" },
+      { criterion: 3, outcome: "met", evidence: "report-v2.md:3; test.log:2" }], artifactIndexes: [1] });
+  const history = (await f.run("status", base)).history;
+  assert.equal(history.length, 2);
+  assert.equal(history[0].review.decision, "revise");
+  assert.equal(history[0].review.checks[2].criterion, 3);
+  assert.equal(history[0].review.checks[2].outcome, "unmet");
+  assert.equal(history[1].review.taskRevision, 12);
+  assert.deepEqual(history[1].review.checks.map(c => c.criterion), [1, 2, 3]);
+  const handoff = (await f.run("brief", { ...base, step: "b" })).send.message;
+  assert.match(handoff, /report-v2\.md/);
+  assert.doesNotMatch(handoff, /"path":"report\.md"/);
+});
+
+test("parallel structured briefs keep similar numbered scenarios and out-of-order receipts bound to their own tasks", async t => {
+  const f = fixture(t), spec = structuredClone(f.spec);
+  spec.steps[0].criteria = [
+    { initialState: "API 的 SLA 指标已加载", action: "查询 p95", expected: "p95 不超过 120 ms" },
+    { initialState: "API 的 SLA 指标已加载", action: "查询 p99", expected: "p99 不超过 250 ms" },
+  ];
+  spec.steps[1] = { ...spec.steps[1], member: "worker", dependsOn: [], criteria: [
+    { initialState: "CDN 可连接", action: "核对缓存策略", expected: "静态资源遵循 TTL" },
+  ] };
+  await f.run("plan", spec);
+  const a = await f.run("brief", { work: "paper", step: "a" });
+  const b = await f.run("brief", { work: "paper", step: "b" });
+  assert.match(a.send.message, /1\. 初始状态.*API.*p95.*120 ms/);
+  assert.match(a.send.message, /2\. 初始状态.*API.*p99.*250 ms/);
+  assert.match(b.send.message, /CDN.*TTL/);
+  f.bus.emit("agent:tool-started", { name: "conversation_send", toolCallId: "call-a", rawInput: a.send });
+  f.bus.emit("agent:tool-started", { name: "conversation_send", toolCallId: "call-b", rawInput: b.send });
+  f.bus.emit("agent:tool-completed", { toolCallId: "call-b", exitCode: 0, rawOutput: JSON.stringify({ taskId: "task-b", recipientId: "worker" }) });
+  f.bus.emit("agent:tool-completed", { toolCallId: "call-a", exitCode: 0, rawOutput: JSON.stringify({ taskId: "task-a", recipientId: "worker" }) });
+  f.tasks.set("task-a", { sourceId: "lead", recipientId: "worker", state: "completed", terminal: true, revision: 8, deliverySubmitted: true,
+    delivery: { summary: structuredReport([
+      syntheticCheck(2, "unmet", "p99 为 290 ms", "latency.log:2"),
+      syntheticCheck(1, "met", "p95 为 110 ms", "latency.log:1"),
+    ]), artifacts: [{ label: "延迟记录", path: "latency.log" }], unresolved: [] } });
+  f.tasks.set("task-b", { sourceId: "lead", recipientId: "worker", state: "completed", terminal: true, revision: 3, deliverySubmitted: true,
+    delivery: { summary: structuredReport([syntheticCheck(1, "met", "TTL 为 60 秒", "cache.log:1")]), artifacts: [], unresolved: [] } });
+  const aStatus = await f.run("status", { work: "paper", step: "a" });
+  const bStatus = await f.run("status", { work: "paper", step: "b" });
+  assert.equal(aStatus.history[0].taskId, "task-a");
+  assert.equal(bStatus.history[0].taskId, "task-b");
+  assert.deepEqual(aStatus.report.checks.map(({ criterion, outcome, evidence }) => ({ criterion, outcome, evidence })), [
+    { criterion: 1, outcome: "met", evidence: "latency.log:1" },
+    { criterion: 2, outcome: "unmet", evidence: "latency.log:2" },
+  ]);
+  assert.deepEqual(bStatus.report.checks.map(({ criterion, evidence }) => ({ criterion, evidence })), [
+    { criterion: 1, evidence: "cache.log:1" },
+  ]);
+  const review = { work: "paper", step: "a", attempt: a.attempt, taskId: "task-a", taskRevision: 8,
+    decision: "accepted", reason: "合成复核", checks: [
+      { criterion: 2, outcome: "met", evidence: "latency.log:2" },
+      { criterion: 1, outcome: "met", evidence: "latency.log:1" },
+    ] };
+  await assert.rejects(f.run("review", { ...review, taskId: "task-b" }), /已登记的回执/);
+  await assert.rejects(f.run("review", review), /未通过|未验证/);
+  await f.run("review", { ...review, decision: "revise", reason: "仅修复 p99", checks: [
+    { criterion: 2, outcome: "unmet", evidence: "latency.log:2" },
+    { criterion: 1, outcome: "met", evidence: "latency.log:1" },
+  ] });
+  const rework = await f.run("brief", { work: "paper", step: "a", previousTaskId: "task-a" });
+  assert.match(rework.send.message, /上一轮未通过或未验证的编号：2/);
+  assert.match(rework.send.message, /上一轮核对 1（met）："latency\.log:1"/);
+  assert.match(rework.send.message, /上一轮核对 2（unmet）："latency\.log:2"/);
+  assert.doesNotMatch(rework.send.message, /cache\.log/);
+});
+
+test("structured reports reject duplicate or foreign numbers without corrupting the eventual out-of-order review", async t => {
+  const f = fixture(t), base = { work: "paper", step: "a" };
+  f.spec.steps[0].criteria = syntheticScenarios;
+  await f.run("plan", f.spec);
+  const attempt = await f.run("brief", base); receipt(f, attempt);
+  const one = syntheticCheck(1, "met", "SLA 阈值与事实一致", "api.md:1");
+  const two = syntheticCheck(2, "met", "API 错误码已核对", "api.md:2");
+  const delivery = { summary: "", artifacts: [{ label: "API 说明", path: "api.md" }], unresolved: [] };
+  f.tasks.set("task1", { sourceId: "lead", recipientId: "worker", state: "completed", terminal: true,
+    revision: 4, deliverySubmitted: true, delivery });
+  const review = { ...base, attempt: attempt.attempt, taskId: "task1", taskRevision: 4,
+    decision: "accepted", reason: "两项均独立核对", checks: [
+      { criterion: 2, outcome: "met", evidence: "api.md:2" },
+      { criterion: 1, outcome: "met", evidence: "api.md:1" },
+    ], artifactIndexes: [1] };
+  for (const checks of [[one, one], [one, { ...two, criterion: 3 }]]) {
+    delivery.summary = structuredReport(checks);
+    const detail = await f.run("status", base);
+    assert.equal(detail.report.state, "invalid");
+    assert(detail.report.checks.every(check => check.outcome === "unverified"));
+    await assert.rejects(f.run("review", review), /未通过|未验证/);
+    await assert.rejects(f.run("brief", { ...base, step: "b" }), /前置/);
+  }
+  delivery.summary = structuredReport([two, one]);
+  const detail = await f.run("status", base);
+  assert.deepEqual(detail.report.checks.map(check => [check.criterion, check.evidence]), [[1, "api.md:1"], [2, "api.md:2"]]);
+  await f.run("review", review);
+  const stored = (await f.run("status", base)).history[0].review;
+  assert.deepEqual(stored.checks.map(check => [check.criterion, check.evidence]), [[1, "api.md:1"], [2, "api.md:2"]]);
+  const next = (await f.run("brief", { ...base, step: "b" })).send.message;
+  assert.match(next, /api\.md/);
+  assert.match(next, /来源任务：task1 · 任务版本 4/);
+});

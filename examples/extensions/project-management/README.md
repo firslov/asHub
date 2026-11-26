@@ -88,6 +88,20 @@
 
 project_work_brief 返回可直接交给 conversation_send 的参数。原样发送后，插件根据实际发送事件自动登记 taskId。状态记录本身不发送消息，不创建成员或提升权限。工作完成后先通过 conversation_wait 或 project_work_status 查看真实交付，再使用 project_work_review 写明验收依据。只有 accepted 可解锁下游；revise 或 blocked 保留此前成果，后续使用 previousTaskId 只补缺口。若下游需要文件，在验收理由中附上可用的路径。没有明确交付时应核对原始任务记录。
 
+### 按编号验收复杂任务（0.8.1）
+
+复杂复审（包括只分配给一人的复审）建议把 `criteria` 写成场景数组。每项分别填 `initialState`（初始状态）、`action`（操作）和 `expected`（预期结果），派单按原顺序从 1 编号。例如，「首次冷启动已重建一次 → 当天结束时再次冷启动 → 不触发第二次重建」。缩写可以保留；如果关键前提或预期没有定义，先澄清，不替用户猜。旧的单段条件和短句数组仍可使用。
+
+成员沿用 `conversation_deliver`，将实际观察、结果和证据按相同编号写入 `summary`。这是该字段的文本示例；完整日志可放在 `artifacts` 中，并在证据中注明文件和位置：
+
+```json
+{"checks":[{"criterion":1,"observation":"第二次冷启动后计数仍为 1","outcome":"met","evidence":"rebuild.log:21"},{"criterion":2,"observation":"缺少 CI 原始回执","outcome":"unverified","evidence":""}]}
+```
+
+符合预期填 `met`，不符合填 `unmet`，材料不足填 `unverified`。协调者可以通过 `project_work_status` 查看解析后的报告，独立核对后向 `project_work_review` 传入实际核对的 `taskRevision` 和逐项证据。缺项、重复编号、过期版本或仍未验证的条件不能放行下游。用户明确接受的未决事项例外仍记录在原有验收流程中，不等于已满足原验收条件。
+
+返工派单会附上上一轮任务、版本和按原编号记录的验收证据。不重做无关步骤；再次交付仍按原编号给出结果，可引用仍然有效的旧证据。修改影响了原已通过项时，重新核对受影响的证据。
+
 工作按当前项目和协调对话隔离。重开同一协调对话后，可直接询问“上次还有哪些步骤待验收”。`receipt_pending` 表示已准备说明但没有登记发送回执，先用 `project_work_link` 核对原派发。无法确认时保留待核对状态。
 
 此功能需要宿主提供 catalog/wait/deliver 和带 node:sqlite 的运行时。记录存储在插件的 profile 数据目录；旧版 asHub 通过插件菜单安装时也支持，不写入项目工作树。

@@ -108,6 +108,7 @@ pending 只表示等待送入；consumed 只表示进入模型上下文，不证
     const step = {type:'string', description:'方案内的步骤编号'};
     const attempt = {type:'string', description:'由 brief 或 status 返回的派发尝试编号'};
     const taskId = {type:'string', description:'本步骤实际 conversation_send 回执中的 taskId'};
+    const scenarioText = {type:'string',minLength:1,maxLength:240};
     let workRuntime;
     const workTool = (action, description, properties, required, readOnly = false) => register(
       'project_work_' + action, description, properties, required, async (args, signal) => {
@@ -120,12 +121,15 @@ pending 只表示等待送入；consumed 只表示进入模型上下文，不证
       work, goal:{type:'string',description:'本次目标与共同约束'}, steps:{type:'array',minItems:1,maxItems:12,items:{
         type:'object',additionalProperties:false,required:['id','member','output','criteria'],properties:{
           id:step,member:{type:'string',description:'负责人对话 ID'},output:{type:'string',description:'具体交付物、材料引用及写入范围'},
-          criteria:{description:'优先列出 1–8 项可独立核对的验收条件。也接受旧的单段文字格式。',
-            anyOf:[{type:'array',minItems:1,maxItems:8,items:{type:'string',maxLength:240}},{type:'string',maxLength:1200}]},
+          criteria:{description:'复杂验证列出 1–8 个场景（初始状态、操作、预期结果），编号按顺序从 1 开始。简单条件仍用短句或文字列表。',
+            anyOf:[{type:'array',minItems:1,maxItems:8,items:{
+              type:'object',additionalProperties:false,required:['initialState','action','expected'],
+              properties:{initialState:scenarioText,action:scenarioText,expected:scenarioText},
+            }},{type:'array',minItems:1,maxItems:8,items:scenarioText},{type:'string',maxLength:1200}]},
           dependsOn:{type:'array',items:step}
         }}}
     }, ['work','goal','steps']);
-    workTool('status','查看协调对话的工作记录。省略 work 列出工作，指定 step 查看该步骤的历史、宿主交付与未决事项。',{
+    workTool('status','查看协调对话的工作记录。省略 work 列出工作，指定 step 查看历史、宿主交付、未决事项和结构化交付 report。report 是成员自报，缺项按未验证标记。',{
       work,step
     },[],true);
     const numbered = {type:'integer',minimum:1,maximum:8};
@@ -138,15 +142,16 @@ pending 只表示等待送入；consumed 只表示进入模型上下文，不证
       work,step,attempt,taskId
     },['work','step','attempt']);
     const reason = {type:'string',minLength:1,maxLength:420};
-    workTool('review','核对交付或原始结果。accepted 要求所有结构化条件通过且交付中无未处理阻塞。选中的产物引用随验收依据传给下游。',{
+    workTool('review','独立核对交付或原始结果。复杂场景须提供实际核对的 taskRevision，成员交付和协调者逐项核对均须完整通过。材料不足记 unverified；未决事项的例外不能替代验收条件。',{
       work,step,attempt,taskId,decision:{type:'string',enum:['accepted','revise','blocked']},reason,
+      taskRevision:{type:'integer',minimum:0,description:'实际核对的任务版本，取自 conversation_wait 的结果或详细 status 的 host.status.revision；复杂场景必填。'},
       checks:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,required:['criterion','outcome','evidence'],
         properties:{criterion:numbered,outcome:{type:'string',enum:['met','unmet','unverified']},evidence:reason}}},
       unresolved:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,required:['item','disposition','reason'],
         properties:{item:numbered,disposition:{type:'string',enum:['resolved','accepted_exception','blocking']},reason}}},
       artifactIndexes:{type:'array',maxItems:8,description:'从该次交付中选择要传给下游的产物，编号从 1 开始。',items:numbered},
     },['work','step','attempt','taskId','decision','reason']);
-    ctx.agent.registerInstruction('project-work', '多成员任务有并行或依赖关系时，用 project_work_plan 记录目标、负责人、产物和逐项验收条件。独立短任务直接使用原工具。对 ready 步骤生成 brief，在已授权范围内原样用 conversation_send 发出（包含返回的 requestKey）；插件会匹配并记录回执。receipt_pending 时先用 project_work_link 查询回执，勿换 key 或盲目重发。用 conversation_wait 批量等待，核对实际证据后逐项 review。条件、未决事项和产物的编号均从 1 开始。accepted 前说明每个未决事项的处理，选择下游所需的产物引用；材料仍需下游在已有权限内核对。completed 只代表成员结束回复。仅 accepted 放行后继；返工只处理缺口。');
+    ctx.agent.registerInstruction('project-work', '多成员并行或有依赖、或需要严格复审的复杂任务（含单成员复审），用 project_work_plan 记录目标、负责人、产物和验收条件。复杂验证写成初始状态、操作、预期结果明确的场景；关键条件不明先澄清，独立短任务直接使用原工具。对 ready 步骤生成 brief，在已授权范围内原样用 conversation_send 发出（包含返回的 requestKey）。receipt_pending 时先用 project_work_link 查回执，勿换 key 或盲目重发。用 conversation_wait 批量等待，取得交付后独立核对证据再逐项 review，复杂场景带实际核对的 taskRevision。自报仅作为核对线索，材料不足记 unverified。条件、未决事项和产物均从 1 编号。accepted 前说明未决事项的处理，选择下游所需的产物；例外不能替代未通过的条件。仅 accepted 放行后继；返工只处理缺口，沿用原条件和编号。');
     ctx.agent.registerInstruction('project-management-delivery', `项目协作交付约定：在用户授权范围内分派任务时，明确每位成员的职责、文件写入范围、验收方式和交付物，不复制整段会话历史。独立任务可以并行开展；同目录写入仍需分工。
 协调者用 conversation_wait 一次等待多个 taskId，收到一个结果即可安排有依赖的后续工作；完整使用返回的 cursors 继续等待，避免反复读取同一结果；hasMore 为真时用同一组 cursors 和 waitMs:0 继续读取其余交付。timeout 只表示本次等待结束，不需要向成员发催问消息。settled 表示所关注任务均已结束且结果已读取，停止等待。
 成员处理带 Task ID 的协作任务时，结束前用 conversation_deliver 提交简明结论（含实际验证结果）、产物引用及未解决问题；没有产物或未解决问题时传空数组。大报告保留在产物中，不把过程日志复制到 summary。提交结果不会另起模型轮次，不需再自动向协调者发消息。

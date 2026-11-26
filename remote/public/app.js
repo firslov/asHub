@@ -713,22 +713,65 @@ const withdrawing = new Set();
 function pendingWithdrawals(k = key('withdrawals')) {
   try { return JSON.parse(storage.get(k) || '[]'); } catch { return []; }
 }
+function collaborationView(payload) {
+  return globalThis.AsHubConversationPresentation?.renderCollaborationMessage?.(document, payload) || null;
+}
+function renderQueueLabel(label, item) {
+  const signature = item.collaboration ? JSON.stringify(item.collaboration) : null;
+  // Reuse the live node so a periodic queue refresh does not close details or
+  // move focus, and avoid constructing an unused subtree on every refresh.
+  if (signature && label._collaborationSignature === signature) return;
+  const view = collaborationView(item);
+  label.classList.toggle('queue-collaboration', !!view);
+  label.title = view ? '' : (item.query || '图片消息');
+  if (view) {
+    if (label._collaborationSignature !== signature) label.replaceChildren(view);
+    label._collaborationSignature = signature;
+  } else {
+    label._collaborationSignature = null;
+    label.replaceChildren(); label.textContent = item.query || '图片消息';
+  }
+}
 function renderLegacyQueue() {
   const container = $('queued-messages'); if (!container) return;
   // Queue RPCs settle after replay. Capture following intent before the
   // composer changes height, otherwise it can look like a scroll into history.
   const near = nearBottom();
-  container.replaceChildren(); container.classList.toggle('queue-modern', false); delete container.dataset.owner;
-  if (!session || !capabilities.queue) { container.hidden = true; scroll(near); return; }
+  if (!session || !capabilities.queue) {
+    container.replaceChildren(); container._legacySignature = null; container._legacyOwner = null;
+    container.classList.toggle('queue-modern', false); delete container.dataset.owner;
+    container.hidden = true; scroll(near); return;
+  }
   const pending = pendingWithdrawals();
   const items = [...queuedMessages, ...pending.filter(p => !queuedMessages.some(m => m.id === p.id))];
+  const signature = JSON.stringify({ owner: key('withdrawals'), session, items, pending, streamReady, sending,
+    withdrawing: items.map(item => withdrawing.has(key('withdrawals') + ':' + item.id)) });
+  if (container._legacySignature === signature) { scroll(near); return; }
+  container._legacySignature = signature;
+  const owner = key('withdrawals');
+  if (container._legacyOwner !== owner) container.replaceChildren();
+  container._legacyOwner = owner;
+  container.classList.toggle('queue-modern', false); delete container.dataset.owner;
   container.hidden = !items.length;
-  for (const item of items) {
-    const row = el('div', undefined, 'queued-message');
-    const label = el('span', item.query || '图片消息'); label.title = item.query || '图片消息';
-    const edit = button(pending.some(p => p.id === item.id) ? '恢复草稿' : '撤回编辑', () => void withdrawMessage(item), 'text-button');
+  const existing = new Map([...container.children].filter(row => row.classList.contains('queued-message')).map(row => [row.dataset.id, row]));
+  const ids = new Set(items.map(item => item.id));
+  for (const [id, row] of existing) if (!ids.has(id)) { row.remove(); existing.delete(id); }
+  for (const [index, item] of items.entries()) {
+    let row = existing.get(item.id);
+    if (!row) {
+      row = el('div', undefined, 'queued-message'); row.dataset.id = item.id;
+      const edit = button('', () => void withdrawMessage(row._item), 'text-button');
+      row.append(el('small'), el('div', undefined, 'legacy-queue-label'), edit);
+    }
+    row._item = item;
+    const [status, label, edit] = row.children;
+    renderQueueLabel(label, item);
+    status.textContent = item.delivery === 'steer' ? '等待接入' : '排队中';
+    edit.textContent = pending.some(p => p.id === item.id) ? '恢复草稿' : '撤回编辑';
     edit.disabled = !streamReady || sending || withdrawing.has(key('withdrawals') + ':' + item.id);
-    row.append(el('small', item.delivery === 'steer' ? '等待接入' : '排队中'), label, edit); container.append(row);
+    const at = container.children[index];
+    if (at !== row) { if (at) container.insertBefore(row, at); else container.append(row); }
+    existing.delete(item.id);
   }
   scroll(near);
 }
@@ -751,6 +794,8 @@ function queueState(id) {
 function renderQueue() {
   if (!capabilities.queueActions) { renderLegacyQueue(); return; }
   const container = $('queued-messages'); if (!container) return;
+  container._legacyOwner = null;
+  container._legacySignature = null;
   const near = nearBottom(), owner = key('queue-actions');
   if (container.dataset.owner !== owner) { container.replaceChildren(); container.dataset.owner = owner; }
   if (!session || !capabilities.queue) { container.hidden = true; scroll(near); return; }
@@ -783,7 +828,7 @@ function renderQueue() {
       row.append(summary, actions);
     }
     row._item = item;
-    const label = row.querySelector('.queue-label'); label.textContent = item.query || '图片消息'; label.title = item.query || '图片消息';
+    const label = row.querySelector('.queue-label'); renderQueueLabel(label, item);
     row.querySelector('.queue-status').textContent = (item.delivery === 'steer' ? '等待接入' : '排队中') + (item.images?.length ? ` · ${item.images.length} 张图片` : '');
     for (const control of row.querySelectorAll('.queue-action')) control.disabled = !streamReady || state.busy || (control.dataset.action === 'promote' && (item.delivery === 'steer' || !!state.editor));
     row.classList.toggle('queue-editing', !!state.editor);
@@ -1541,7 +1586,10 @@ function frame(data) {
     if (p.command === true) sealDetails();
     else if (p.steering === true) { sealDetails(); liveSegment = false; }
     else { settlePhases(turnOutcome); phases.clear(); toolSteps.clear(); turnOutcome = ''; todo = null; liveSegment = false; details = null; }
-    const article = el('article', p.query || '', 'message user'); $('messages').append(article);
+    const article = el('article', undefined, 'message user');
+    const collaboration = collaborationView(p);
+    if (collaboration) article.append(collaboration); else article.textContent = p.query || '';
+    $('messages').append(article);
     for (const img of p.images || []) renderImage(article, img, generation, session, device);
   } else if (name === 'agent:response-chunk') { chunk((p.blocks || []).filter(b => b.type === 'text').map(b => b.text || '').join('')); liveSegment = true; }
   else if (name === 'agent:response-segment') { if (!liveSegment) chunk(p.text || ''); liveSegment = false; }

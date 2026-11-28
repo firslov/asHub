@@ -75,6 +75,7 @@
   <link rel="stylesheet" href="/css/browser-pane.css" />
   <link rel="stylesheet" href="/css/panels.css" />
   <link rel="stylesheet" href="/css/panels/files.css" />
+  <link rel="stylesheet" href="/css/panels/archive.css" />
   <link rel="stylesheet" href="/css/panels/context.css" />
   <link rel="stylesheet" href="/css/panels/tree.css" />
   <link rel="stylesheet" href="/css/panels/prompt.css" />
@@ -145,6 +146,7 @@
       </span>
     </header>
     <aside class="sidebar" id="sidebar">
+      <nav id="sidebar-conversations" class="conversation-entries" data-i18n-aria="sidebar.dedicatedConversations" aria-label="Dedicated conversations" hidden></nav>
       <div class="sidebar-head">
         <div class="sidebar-view-picker">
           <button type="button" id="sidebar-view-select" class="sidebar-view-select" popovertarget="sidebar-view-menu" aria-haspopup="menu" aria-expanded="false" aria-controls="sidebar-view-menu" data-i18n-title="sidebar.view.switch">
@@ -155,35 +157,28 @@
           <div id="sidebar-view-menu" class="sidebar-view-menu" popover="auto" role="menu" data-i18n-aria="sidebar.view.switch" aria-label="Switch sidebar view">
             <button type="button" class="sidebar-view-option" data-view="sessions" role="menuitemradio" aria-checked="true" tabindex="-1"><svg class="sidebar-view-symbol" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9H13a8.5 8.5 0 0 1 8 8v.5Z"/></svg><span data-i18n="sidebar.view.sessions">Sessions</span><svg class="sidebar-view-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
             <button type="button" class="sidebar-view-option" data-view="projects" role="menuitemradio" aria-checked="false" tabindex="-1"><svg class="sidebar-view-symbol" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/><path d="M3 11h18"/></svg><span data-i18n="projects.title">Projects</span><svg class="sidebar-view-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
-            <button type="button" class="sidebar-view-option" data-view="workspaces" role="menuitemradio" aria-checked="false" tabindex="-1"><svg class="sidebar-view-symbol" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span data-i18n="sidebar.view.workspaces">Workspaces</span><svg class="sidebar-view-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
-            <button type="button" class="sidebar-view-option" data-view="archive" role="menuitemradio" aria-checked="false" tabindex="-1"><svg class="sidebar-view-symbol" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="5" rx="1.5"/><path d="M5 8v12h14V8M10 12h4"/></svg><span data-i18n="sidebar.view.archive">Archive</span><svg class="sidebar-view-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
             <button type="button" class="sidebar-view-option" data-view="terminals" role="menuitemradio" aria-checked="false" tabindex="-1"><svg class="sidebar-view-symbol" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></svg><span data-i18n="sidebar.view.terminals">Terminals</span><svg class="sidebar-view-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
           </div>
         </div>
-        <button type="button" id="sidebar-search-toggle" class="sidebar-icon-btn" aria-controls="sidebar-search" aria-expanded="false" data-i18n-title="sidebar.search" data-i18n-aria="sidebar.search" title="Search conversations" aria-label="Search conversations"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button>
+        <button type="button" id="sidebar-create" class="sidebar-icon-btn" data-i18n-title="new.session" data-i18n-aria="new.session" title="New session" aria-label="New session"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button type="button" id="sidebar-search-toggle" class="sidebar-icon-btn" aria-controls="sidebar-find" aria-expanded="false" data-i18n-title="sidebar.find.label" data-i18n-aria="sidebar.find.label" title="Find projects and conversations" aria-label="Find projects and conversations"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button>
       </div>
-      <div id="sidebar-search" class="sidebar-search" role="search" hidden>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
-        <input id="session-filter" data-i18n-aria="filter.sessions" aria-label="Search title or folder" class="sidebar-filter" type="text" data-i18n-placeholder="filter.sessions" placeholder="Search title or folder…" autocomplete="off" spellcheck="false" />
-        <button type="button" id="sidebar-search-close" class="sidebar-icon-btn" data-i18n-title="sidebar.search.close" data-i18n-aria="sidebar.search.close" title="Clear and close search" aria-label="Clear and close search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M7 17 17 7"/></svg></button>
+      <div class="sidebar-body">
+        <div id="sidebar-content" class="sidebar-content">
+          <section id="projects" hidden data-i18n-aria="projects.title" aria-label="Projects"></section>
+          <ul id="sessions" class="session-list"></ul>
+          <ul id="terminals" class="terminal-list" hidden></ul>
+        </div>
+        <div id="sidebar-find" class="sidebar-find" role="search" aria-label="Find projects and conversations" data-i18n-aria="sidebar.find.label" hidden>
+          <div class="sidebar-search">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+            <input id="sidebar-find-input" class="sidebar-filter" type="text" data-i18n-aria="sidebar.find.label" aria-label="Find projects and conversations" data-i18n-placeholder="sidebar.find.placeholder" placeholder="Project, title or folder…" autocomplete="off" spellcheck="false" />
+            <button type="button" id="sidebar-find-close" class="sidebar-icon-btn" data-i18n-title="sidebar.search.close" data-i18n-aria="sidebar.search.close" title="Clear and close search" aria-label="Clear and close search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M7 17 17 7"/></svg></button>
+          </div>
+          <p id="sidebar-find-status" class="sidebar-find-status" role="status" hidden></p>
+          <div id="sidebar-find-results" class="sidebar-find-results"></div>
+        </div>
       </div>
-      <div class="sidebar-action" id="sidebar-action-sessions">
-        <button id="new-session" class="sidebar-new-btn" data-i18n-title="new.session" title="New session">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          <span data-i18n="new.session">New session</span>
-        </button>
-      </div>
-      <section id="projects" hidden data-i18n-aria="projects.title" aria-label="Projects"></section>
-      <ul id="sessions" class="session-list"></ul>
-      <ul id="workspaces" class="workspace-list" hidden></ul>
-      <div class="sidebar-action" id="sidebar-action-terminals" hidden>
-        <button id="new-terminal" class="sidebar-new-btn" data-i18n-title="new.terminal" title="New terminal">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          <span data-i18n="new.terminal">New terminal</span>
-        </button>
-      </div>
-      <ul id="terminals" class="terminal-list" hidden></ul>
-      <ul id="archive" class="archive-list" hidden></ul>
       <div id="sidebar-resize" tabindex="0" aria-label="Resize sidebar" data-i18n-aria="sidebar.resize" aria-valuemin="200" aria-valuemax="480" aria-valuenow="260" class="sidebar-resize" role="separator" aria-orientation="vertical"></div>
     </aside>
 
@@ -203,32 +198,51 @@
       <div class="terminal-wrap live-wrap">
         <div class="terminal">
           <div class="no-session-empty terminal-body" id="no-session-empty" hidden>
-            <div class="stream-empty-mini">
-              <div class="stream-empty-logo">
+            <div class="welcome-content">
+              <header class="welcome-hero">
+                <div class="stream-empty-logo">
                 <svg class="brand-mark" width="88" height="88" viewBox="0 0 128 128" fill="none" aria-hidden="true">  <path d="M42 43C42 36 46 32 52 28L73 16C79 13 84 16 84 22V43L70 51C66 53 64 56 64 61V86L47 76C43 74 42 71 42 67Z" fill="currentColor"/>
   <path d="M42 67V70C42 74 45 77 49 79L58 84C62 87 65 87 69 84L82 76C87 73 90 76 90 80V91L65 106C58 110 53 113 46 109L19 93C13 89 13 82 19 78Z" fill="currentColor"/>
   <path d="M84 43L106 56C113 60 116 66 116 74V100C116 106 111 109 106 106L94 99C90 97 89 94 90 89V76C90 72 88 69 83 66L68 57C63 54 63 50 69 47Z" fill="var(--brand-metal, #c1a574)"/></svg>
+                </div>
+                <h1 class="welcome-title" data-i18n="welcome.title"></h1>
+                <p class="welcome-description" data-i18n="welcome.description"></p>
+              </header>
+              <form class="welcome-setup" id="welcome-setup" aria-labelledby="welcome-setup-title" hidden>
+                <div class="welcome-setup-heading">
+                  <h2 id="welcome-setup-title" data-i18n="onboarding.title"></h2>
+                  <p data-i18n="onboarding.subtitle"></p>
+                </div>
+                <div class="welcome-setup-field">
+                  <label for="welcome-provider" data-i18n="provider"></label>
+                  <div class="welcome-select-wrap">
+                    <select class="config-select" id="welcome-provider"></select>
+                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="m3 5 4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </div>
+                </div>
+                <div class="welcome-setup-field">
+                  <label for="welcome-api-key" data-i18n="api.key"></label>
+                  <input class="config-input" id="welcome-api-key" type="password" autocomplete="off" spellcheck="false" required>
+                </div>
+                <button class="p-btn-primary welcome-save" type="submit" data-i18n="onboarding.save"></button>
+              </form>
+              <button type="button" class="stream-empty-prompt" id="no-session-cta">
+                <span data-i18n="no.session.cta">New session</span>
+              </button>
+              <div class="stream-empty-templates">
+                <button type="button" class="stream-empty-prompt template" data-i18n="hint.review"
+                  data-query="Use the review subagent to check this project for bugs"
+                  data-query-en="Use the review subagent to check this project for bugs"
+                  data-query-zh="用 review 子代理检查这个项目里的 bug">🔍 Review codebase</button>
+                <button type="button" class="stream-empty-prompt template" data-i18n="hint.explore"
+                  data-query="Explore and explain how this project works"
+                  data-query-en="Explore and explain how this project works"
+                  data-query-zh="探索这个项目并解释它是如何工作的">🗺️ Explore project</button>
+                <button type="button" class="stream-empty-prompt template" data-i18n="hint.plan"
+                  data-query="Draft an implementation plan based on the goals and structure of this project"
+                  data-query-en="Draft an implementation plan based on the goals and structure of this project"
+                  data-query-zh="请根据当前项目的目标和目录结构，帮我制定一份实施计划。">📋 Plan a project</button>
               </div>
-              <div class="stream-empty-line"></div>
-            </div>
-            <h1 class="welcome-title" data-i18n="welcome.title"></h1>
-            <p class="welcome-description" data-i18n="welcome.description"></p>
-            <button type="button" class="stream-empty-prompt" id="no-session-cta">
-              <span data-i18n="no.session.cta">+  New session</span>
-            </button>
-            <div class="stream-empty-templates">
-              <button type="button" class="stream-empty-prompt template" data-i18n="hint.review"
-                data-query="Use the review subagent to check this project for bugs"
-                data-query-en="Use the review subagent to check this project for bugs"
-                data-query-zh="用 review 子代理检查这个项目里的 bug">🔍 Review codebase</button>
-              <button type="button" class="stream-empty-prompt template" data-i18n="hint.explore"
-                data-query="Explore and explain how this project works"
-                data-query-en="Explore and explain how this project works"
-                data-query-zh="探索这个项目并解释它是如何工作的">🗺️ Explore project</button>
-              <button type="button" class="stream-empty-prompt template" data-i18n="hint.plan"
-                data-query="Draft an implementation plan based on the goals and structure of this project"
-                data-query-en="Draft an implementation plan based on the goals and structure of this project"
-                data-query-zh="请根据当前项目的目标和目录结构，帮我制定一份实施计划。">📋 Plan a project</button>
             </div>
           </div>
           <form class="live-input" id="form">
@@ -342,6 +356,7 @@
           <button class="p-seg-item" data-role="tool"><span class="ctx-dot tool"></span><span data-i18n="ctx.tool">tool</span></button>
         </div>
         <button class="p-btn-danger" id="ctx-drop" title="Drop selected messages" disabled>drop</button>
+        <p id="ctx-drop-status" role="status" hidden></p>
       </div>
       <div class="p-body flush ctx-list" id="ctx-body"></div>
     </aside>
@@ -394,6 +409,40 @@
       </div>
     </aside>
 
+    <aside class="p-drawer" id="archive-panel" aria-labelledby="archive-title" hidden>
+      <div class="p-head">
+        <button type="button" id="archive-back" class="p-icon-btn" data-i18n-aria="archive.back" data-i18n-title="archive.back" aria-label="Back to archives" title="Back to archives" hidden>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8.5 3-4 4 4 4"/></svg>
+        </button>
+        <div class="p-heading">
+          <span id="archive-title" class="p-title" data-i18n="archive.title">Archived conversations</span>
+        </div>
+        <button type="button" class="p-icon-btn" id="archive-refresh" data-i18n-title="refresh" data-i18n-aria="refresh" title="Refresh" aria-label="Refresh">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <path d="M12 7a5 5 0 1 1-1.2-3.2"/><polyline points="9.5 1 12 1 12 3.5"/>
+          </svg>
+        </button>
+        <button type="button" class="p-icon-btn" id="archive-close" data-i18n-title="close" data-i18n-aria="close" title="Close" aria-label="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <path d="m2 2 8 8m0-8-8 8"/>
+          </svg>
+        </button>
+      </div>
+      <div id="archive-search" class="archive-search" role="search" aria-labelledby="archive-title">
+        <input id="archive-filter" class="p-input" type="search" aria-label="Search title or folder" data-i18n-aria="archive.search" placeholder="Search title or folder…" data-i18n-placeholder="archive.search" autocomplete="off" />
+      </div>
+      <div class="p-body flush" id="archive-body">
+        <p id="archive-status" class="p-empty" role="status" hidden></p>
+        <ul id="archive-list" aria-labelledby="archive-title"></ul>
+      </div>
+      <section id="archive-preview" class="p-body flush" aria-labelledby="archive-preview-title" hidden>
+        <h2 id="archive-preview-title"></h2>
+        <p class="archive-preview-note" data-i18n="archive.readOnly">Read-only conversation text</p>
+        <p id="archive-preview-status" class="p-empty" role="status" hidden></p>
+        <div id="archive-messages"></div>
+      </section>
+    </aside>
+
     <aside class="p-drawer" id="subagent-panel" hidden>
       <div class="p-head">
         <div class="p-heading">
@@ -421,6 +470,11 @@
       <button class="toolbar-btn" id="files-toggle" data-i18n-title="browse.files" title="Browse files">
         <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
           <path d="M1 3.5a1.5 1.5 0 0 1 1.5-1.5h3L7 4h4.5a1.5 1.5 0 0 1 1.5 1.5V11a1.5 1.5 0 0 1-1.5 1.5H2.5A1.5 1.5 0 0 1 1 11V3.5z"/>
+        </svg>
+      </button>
+      <button type="button" class="toolbar-btn" id="archive-toggle" aria-controls="archive-panel" aria-expanded="false" data-i18n-title="archive.title" data-i18n-aria="archive.title" title="Archived conversations" aria-label="Archived conversations">
+        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="1" y="2" width="12" height="3" rx="1"/><path d="M2 5v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5M5.5 8h3"/>
         </svg>
       </button>
       <button class="toolbar-btn" id="ctx-toggle" data-i18n-title="inspect.context" title="Inspect context">

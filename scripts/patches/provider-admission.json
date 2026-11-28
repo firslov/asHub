@@ -1,0 +1,38 @@
+{
+  "files": [
+    {
+      "path": "src/agent/index.ts",
+      "hunks": [
+        {
+          "before": "agentBackend(ctx: ExtensionContext): void",
+          "after": "agentBackend(ctx: ExtensionContext, includeProvider: (id: string) => boolean = () => true): void"
+        },
+        {
+          "before": "for (const p of providers) byId.set(p.id, p);",
+          "after": "for (const p of providers) if (includeProvider(p.id)) byId.set(p.id, p);"
+        },
+        {
+          "before": "if (out.has(id)) continue;",
+          "after": "if (out.has(id) || !includeProvider(id)) continue;"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/index.js",
+      "hunks": [
+        {
+          "before": "function agentBackend(ctx) {",
+          "after": "function agentBackend(ctx, includeProvider = () => true) {"
+        },
+        {
+          "before": "for (const p of providers)\n            byId.set(p.id, p);",
+          "after": "for (const p of providers)\n            if (includeProvider(p.id)) byId.set(p.id, p);"
+        },
+        {
+          "before": "if (out.has(id))\n                continue;",
+          "after": "if (out.has(id) || !includeProvider(id))\n                continue;"
+        }
+      ]
+    }
+  ]
+}

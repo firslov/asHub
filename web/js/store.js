@@ -16,11 +16,6 @@ export const activeSessionMeta = computed(() =>
   activeSessionId.value ? (_sessions.value.get(activeSessionId.value) ?? null) : null
 );
 
-// All agent sessions (non-terminal), sorted by server order.
-export const agents = computed(() =>
-  [..._sessions.value.values()].filter(s => (s.kind ?? "agent") === "agent")
-);
-
 // All sessions including terminals.
 export const allSessions = computed(() =>
   [..._sessions.value.values()]

@@ -394,10 +394,55 @@ app.whenReady().then(async () => {
       await until(()=>js("document.querySelector('session-view:not([hidden]) .usage-model-balance').ariaExpanded==='true'"),'keyboard model picker');
       for (const type of ['keyDown','keyUp']) win.webContents.sendInputEvent({type,keyCode:'Escape'});
       await until(()=>js("document.activeElement.matches('.usage-model-balance') && document.activeElement.ariaExpanded==='false'"),'model focus returned');
-      const geometry = await js(
-        `(()=>{const box=document.querySelector('.agent-box');return [box.offsetWidth,box.parentElement.clientWidth]})()`,
-      );
-      assert(geometry[0] < geometry[1] - 40, 'short message should hug its text');
+      for (const width of [390, 1440]) {
+        await resize(width);
+        for (const centered of [true, false]) {
+          const layout = await js(`(async () => {
+            const view = document.querySelector('session-view:not([hidden])');
+            const body = view.querySelector('.terminal-body'), wrap = body.closest('.terminal-wrap');
+            const oldCenter = wrap.getAttribute('data-ui-conversation-center');
+            const app = document.querySelector('.app'), collapsed = app.classList.contains('sidebar-collapsed');
+            const box = el => el.getBoundingClientRect().toJSON();
+            const {createUserBox} = await import('/js/actions.js');
+            const user = (text, images) => createUserBox(text, images, Date.UTC(2026,9,30,8,12), 1);
+            const canvas = document.createElement('canvas'); canvas.width = 1800; canvas.height = 40;
+            const short = user('好的'), long = user('LongUnbrokenText'.repeat(60));
+            const attachment = user('', [{mimeType:'image/png',data:canvas.toDataURL().split(',')[1]}]);
+            const img = attachment.querySelector('img'); await img.decode();
+            const fixtures = [short,long,attachment];
+            fixtures.forEach(el => { el.style.animation = 'none'; });
+            if (innerWidth <= 760) app.classList.add('sidebar-collapsed');
+            wrap.setAttribute('data-ui-conversation-center', '${centered}'); body.append(...fixtures);
+            try {
+              const reply = view.querySelector('.agent-reply');
+              const time = short.querySelector('time');
+              return {users:fixtures.map(box),reply:box(reply),image:box(img),
+                time:{iso:time.dateTime,label:time.textContent,full:time.title},
+                textAlign:getComputedStyle(long.querySelector('.q-text')).textAlign,
+                overflow:fixtures.some(el => el.scrollWidth > el.clientWidth + 1)};
+            } finally {
+              fixtures.forEach(el => el.remove());
+              app.classList.toggle('sidebar-collapsed', collapsed);
+              if (oldCenter === null) wrap.removeAttribute('data-ui-conversation-center');
+              else wrap.setAttribute('data-ui-conversation-center', oldCenter);
+            }
+          })()`);
+          const context = JSON.stringify({ width, centered, layout });
+          const [short, long, attachment] = layout.users, cap = layout.reply.width * .9;
+          assert(layout.reply.width > 0 && !layout.overflow, context);
+          assert(Math.abs(long.width - cap) <= 1 && short.width < long.width - 20, context);
+          for (const user of layout.users) {
+            assert(user.width <= cap + 1 && Math.abs(user.right - layout.reply.right) <= 1, context);
+          }
+          assert.match(layout.textAlign, /^(start|left)$/);
+          assert.equal(layout.time.iso, '2026-10-30T08:12:00.000Z');
+          assert(layout.time.label.length > 0 && layout.time.full.length > layout.time.label.length, 'full message date is still available');
+          assert(short.height < long.height, 'long text wraps naturally');
+          assert(layout.image.width > 0 && layout.image.left >= attachment.left && layout.image.right <= attachment.right, context);
+          assert(attachment.width - layout.image.width <= 36, 'image-only bubble fits the rendered thumbnail plus its padding');
+        }
+      }
+      console.log('PASS desktop sent messages: right-aligned adaptive bubbles at 390/1440px, with and without centered conversation');
       const locations = await js(
         "[...document.querySelectorAll('.session-cwd')].map(el=>[el.title,el.textContent])",
       );
@@ -435,6 +480,16 @@ app.whenReady().then(async () => {
       assert(await js("document.querySelector('.browser-controller').hidden"));
       rejectHandoff = false;
       await js("document.querySelector('.toast-container')?.remove()");
+      // The width cases above temporarily collapse the sidebar. The split is
+      // stored as a ratio, so test pixel coordinates only after the workspace
+      // geometry has finished transitioning back to its normal width.
+      await js(`(async () => {
+        const shell = document.querySelector('.app');
+        shell.getBoundingClientRect();
+        await Promise.allSettled(shell.getAnimations()
+          .filter(animation => animation.transitionProperty === 'grid-template-columns')
+          .map(animation => animation.finished));
+      })()`);
       const old = await js("document.querySelector('.browser-pane').offsetWidth");
       await js(
         "document.querySelector('.browser-divider').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}))",

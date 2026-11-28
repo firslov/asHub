@@ -8,6 +8,7 @@ import type { Session } from "./session-types.js";
 
 export interface SessionLifecycleOptions {
   makeBridge: BridgeFactory;
+  backendUnavailable?: (target: { kind: SessionKind; provider?: string; model?: string; projectWorker?: boolean }) => string | undefined;
   signal?: AbortSignal;
   conversationAccess?: (id: string) => ConversationAccess;
   pluginConversation?: (sessionId: string, pluginId: string, entryKeys: readonly string[]) => boolean;
@@ -21,6 +22,7 @@ export interface RestoredSession {
   messages?: unknown[]; firstQuery?: string; userTitle?: string; model?: string;
   provider?: string; lastModified?: number; lastFrameSeq?: number;
   backendState?: Record<string, unknown>; backendId?: string;
+  projectWorker?: true;
 }
 export interface PersistedLifecycleSession extends RestoredSession { cwd: string }
 export interface PendingSessionInitialization { cancel(): void; done: Promise<void> }

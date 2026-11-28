@@ -23,7 +23,9 @@ async function seed() {
   const tabs = document.querySelector('#session-tabs'); tabs.hidden = false;
   tabs.innerHTML = '<button class="session-tab active" role="tab" aria-selected="true">设计与实现</button><button class="session-tab" role="tab" aria-selected="false">资料整理</button>';
   document.querySelector('.sidebar-view-label').textContent = '会话';
-  document.querySelector('#new-session span').textContent = '新建对话';
+  const create = document.querySelector('#sidebar-create');
+  create.title = '新建会话';
+  create.setAttribute('aria-label', create.title);
   document.querySelector('#sessions').innerHTML = ['设计与实现', '资料整理', '验证与发布', '探索新的可能'].map((name,i) => `<li class="${i===0?'current':''}"><a href="#"><span class="session-title">${name}</span><span class="session-cwd">${i===0?'asHub · 产品设计':'asHub · 工作空间'}</span></a></li>`).join('');
   const wrap = document.querySelector('.terminal-wrap');
   // Entrance animation is disabled for deterministic captures; use its final state.

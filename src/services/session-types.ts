@@ -12,6 +12,10 @@ export interface Session {
   id: string;
   title: string;
   kind: SessionKind;
+  projectWorker?: true;
+  backendUnavailable?: string;
+  /** Host-owned controller for the current scoped collaboration turn. */
+  _taskAbort?: AbortController;
   cwd: string;
   bridge: Bridge;
   /** Lazy-init factory — only set for restored sessions; bridge is created

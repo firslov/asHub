@@ -4,6 +4,7 @@ import type { Capture } from "./capture.js";
 import type { AgentMessage, CompactionEntry, SessionStore } from "./session-store.js";
 import type { CompactionStrategyHook } from "../bridges/types.js";
 import { isSystemNoteMessage } from "./summarize.js";
+import { projectToolCalls } from "./tool-call-projection.js";
 import { estimateContextTokens, fallbackMemory, parseMemory, renderMemory, summaryInput, validateCheckpointMemory, type ContextCheckpoint } from "./context-memory.js";
 
 export interface CompactResult { before: number; after: number; evictedCount: number }
@@ -23,8 +24,46 @@ export function safeCutPoints(messages: AgentMessage[]): number[] {
   return points;
 }
 
-function fingerprint(messages: unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(messages, (key, value) => key === "meta" ? undefined : value)).digest("hex");
+function fingerprint(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function comparable(message: AgentMessage): string {
+  // Ignore only host/kernel entry tags at the message level. A nested `meta`
+  // in tool payloads and checkpoint markers are part of the context.
+  const { meta, ...rest } = message;
+  if (!meta) return JSON.stringify(rest);
+  const { treeEntryId: _tree, entryId: _kernel, ...metadata } = meta;
+  return JSON.stringify(Object.keys(metadata).length ? { ...rest, meta: metadata } : rest);
+}
+
+function alignContext(raw: AgentMessage[], ids: (string | null)[], durable: ReturnType<SessionStore["readBranchContext"]>, settled: boolean | undefined) {
+  const projected = projectToolCalls(durable.messages);
+  const messages = raw.slice();
+  let j = 0, usedProjection = false;
+  for (let i = 0; i < raw.length; i++) {
+    const message = raw[i]!;
+    if (isSystemNoteMessage(message) && ids[i] === null) continue;
+    const original = durable.messages[j], normalized = projected.messages[j], id = durable.entryIds[j];
+    const liveText = comparable(message);
+    const originalText = original && comparable(original);
+    const projectedText = normalized === original ? originalText : normalized && comparable(normalized);
+    const fail = (reason: string) => ({ mismatch: fingerprint([reason, id, ids[i], originalText, liveText]) });
+    if (!original || !normalized || ids[i] !== id || (liveText !== originalText && liveText !== projectedText)) return fail("different");
+    if (liveText !== projectedText) {
+      if (projected.ambiguous.has(j)) return fail("ambiguous");
+      if (settled !== true) return fail("pending");
+      usedProjection = true;
+      // Start with the live message to retain its entry tags in this view.
+      messages[i] = { ...normalized, ...(message.meta ? { meta: message.meta } : {}) };
+    }
+    j++;
+  }
+  if (j !== durable.messages.length) return { mismatch: fingerprint(["missing", durable.entryIds[j], durable.messages[j]]) };
+  // A supported runtime explicitly reports a live batch (even if its
+  // assistant message hasn't been appended to the history yet).
+  if (settled === false) return { mismatch: "pending-tool-batch" };
+  return { messages, usedProjection };
 }
 
 export function createCompactionStrategy(
@@ -35,7 +74,7 @@ export function createCompactionStrategy(
   runLocked?: <T>(fn: () => Promise<T>) => Promise<T>,
 ): CompactionStrategyHook {
   const locked = <T>(fn: () => Promise<T>) => runLocked ? runLocked(fn) : fn();
-  let running = false, lastUnproductive = "";
+  let running = false, lastUnproductive = "", lastMismatch = "";
   return async (helpers, opts, next) => {
     const options = opts as { target?: number; force?: boolean; strategy?: { kind?: string; target?: number; keepRecent?: number; force?: boolean } } | undefined;
     if (options?.strategy?.kind === "rewind" || options?.strategy?.kind === "replace") return await next(opts);
@@ -45,30 +84,44 @@ export function createCompactionStrategy(
     running = true;
     const started = Date.now();
     const diagnostic: CompactionDiagnostic = { outcome: "unchanged" };
-    let recoveryFailed = false;
+    let recoveryFailed = false, reportDiagnostic = true;
     try {
       const snapshot = await locked(async () => {
         await capture.flush();
-        const messages = helpers.getMessages() as AgentMessage[];
-        return { messages: JSON.parse(JSON.stringify(messages)) as AgentMessage[], fingerprint: fingerprint(messages),
-          ids: messages.map((_, i) => capture.getEntryIdAt(i)), leaf: store.getActiveLeaf(), revision: store.getRevision(),
-          branch: store.getBranch(), sources: store.getHistoryEntries(),
-          durableFingerprint: fingerprint(store.buildMessages()),
+        const serialized = JSON.stringify(helpers.getMessages());
+        const raw = JSON.parse(serialized) as AgentMessage[];
+        const ids = raw.map((_, i) => capture.getEntryIdAt(i));
+        return { raw, fingerprint: createHash("sha256").update(serialized).digest("hex"), ids,
+          alignment: alignContext(raw, ids, store.readBranchContext(), helpers.toolCallsSettled?.()),
+          leaf: store.getActiveLeaf(), revision: store.getRevision(), branch: store.getBranch(), sources: store.getHistoryEntries(),
           before: helpers.estimatePromptTokens(), contextKey: helpers.contextKey?.() };
       });
-      const { messages, branch, before } = snapshot;
+      const { alignment, raw, branch, before } = snapshot;
       Object.assign(diagnostic, { sourceLeaf: snapshot.leaf, revision: snapshot.revision, before });
-      if (messages.length < 4 || helpers.signal?.aborted) return null;
-      if (snapshot.durableFingerprint !== fingerprint(messages.filter(m => !isSystemNoteMessage(m)))) {
+      if (raw.length < 4 || helpers.signal?.aborted) return null;
+      const force = options?.force || options?.strategy?.force;
+      if ("mismatch" in alignment) {
         diagnostic.outcome = "stale";
-        onWarn?.("compaction skipped: live context is not aligned with durable history");
+        diagnostic.reason = "unaligned-context";
+        reportDiagnostic = !!force || lastMismatch !== alignment.mismatch;
+        lastMismatch = alignment.mismatch;
+        if (reportDiagnostic) onWarn?.("compaction skipped: live context is not aligned with durable history or tools are still active");
         return null;
       }
-      const overhead = Math.max(0, before - estimateContextTokens(messages));
-      const requested = options?.target ?? options?.strategy?.target;
+      lastMismatch = "";
+      const { messages } = alignment;
+      const contextStillMatches = () => {
+        const settled = helpers.toolCallsSettled?.();
+        return settled !== false && (!alignment.usedProjection || settled === true)
+          && helpers.contextKey?.() === snapshot.contextKey && fingerprint(helpers.getMessages()) === snapshot.fingerprint;
+      };
+      const overhead = Math.max(0, before - estimateContextTokens(raw));
+      // The kernel's context:compact event wraps a caller-supplied strategy
+      // with target: 0 (the default sentinel). Prefer the explicit strategy.
+      const requested = options?.strategy?.target ?? options?.target;
       const target = typeof requested === "number" && Number.isFinite(requested) && requested > 0 ? requested : 20000 + overhead;
       diagnostic.target = target;
-      if (!(options?.force || options?.strategy?.force) && before <= target && requested !== 0) { diagnostic.reason = "below-target"; return null; }
+      if (!force && before <= target && requested !== 0) { diagnostic.reason = "below-target"; return null; }
       const key = `${snapshot.revision}:${snapshot.contextKey}:${target}:${snapshot.fingerprint}`;
       if (key === lastUnproductive) return null;
       const allEntries = snapshot.sources, sourceIds = new Set(allEntries.map(e => e.id));
@@ -137,7 +190,7 @@ export function createCompactionStrategy(
       return await locked(async () => {
         if (helpers.signal?.aborted || getStore() !== store || getCapture() !== capture
           || store.getRevision() !== snapshot.revision || store.getActiveLeaf() !== snapshot.leaf
-          || helpers.contextKey?.() !== snapshot.contextKey || fingerprint(helpers.getMessages()) !== snapshot.fingerprint) {
+          || !contextStillMatches()) {
           diagnostic.outcome = "stale";
           onWarn?.("compaction skipped: conversation changed while preparing checkpoint");
           return null;
@@ -149,15 +202,14 @@ export function createCompactionStrategy(
         };
         // File I/O yielded. A manual compact can overlap a streaming response;
         // never replace a newer live view with the earlier checkpoint.
-        if (helpers.signal?.aborted || fingerprint(helpers.getMessages()) !== snapshot.fingerprint
-          || helpers.contextKey?.() !== snapshot.contextKey) {
+        if (helpers.signal?.aborted || !contextStillMatches()) {
           rollback(); diagnostic.outcome = "stale"; return null;
         }
         const { messages: liveView, entryIds } = store.buildBranchWithIds();
         try { helpers.replaceMessages(liveView); capture.resetTo(entryIds); }
         catch (error) {
           rollback();
-          try { helpers.replaceMessages(snapshot.messages); capture.resetTo(snapshot.ids); }
+          try { helpers.replaceMessages(snapshot.raw); capture.resetTo(snapshot.ids); }
           catch { recoveryFailed = true; helpers.failClosed?.(); }
           throw error;
         }
@@ -180,7 +232,7 @@ export function createCompactionStrategy(
       running = false;
       if (helpers.signal?.aborted && diagnostic.outcome !== "applied") diagnostic.outcome = "cancelled";
       diagnostic.elapsedMs = Date.now() - started;
-      try { helpers.diagnostic?.(diagnostic); } catch { /* diagnostic sinks cannot break compaction */ }
+      try { if (reportDiagnostic) helpers.diagnostic?.(diagnostic); } catch { /* diagnostic sinks cannot break compaction */ }
     }
   };
 }

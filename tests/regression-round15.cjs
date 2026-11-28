@@ -4,11 +4,11 @@ const {ui,El,signal}=require('./ui-harness.cjs');
 const tick=()=>new Promise(setImmediate),response=data=>({ok:true,json:async()=>data});
 const catalog={providers:[{name:'preview',models:[]}]};
 function variable(file,name,ctx){const sf=ts.createSourceFile(file,fs.readFileSync(path.join(root,file),'utf8'),ts.ScriptTarget.Latest,true);let found;function visit(n){if(ts.isVariableDeclaration(n)&&n.name?.text===name)found=n.initializer;ts.forEachChild(n,visit)}visit(sf);assert(found,name);return vm.runInContext('('+found.getText(sf)+')',ctx)}
-function callback(file,target,event,ctx){const sf=ts.createSourceFile(file,fs.readFileSync(path.join(root,file),'utf8'),ts.ScriptTarget.Latest,true);let found;function visit(n){if(ts.isCallExpression(n)&&n.expression.getText(sf)===target&&n.arguments[0]?.text===event)found=n.arguments[1];ts.forEachChild(n,visit)}visit(sf);assert(found,target);return vm.runInContext('('+found.getText(sf)+')',ctx)}
 function config(){const u=ui();u.e.context.CustomEvent=u.e.context.Event;u.doc.getElementById('config-auto-approve').closest=()=>null;u.modules['./sse.js']={invalidateModelCache(){},getModelCacheGeneration(){},setModelCache(){}};u.e.context.fetch=async url=>response(url==='/api/models'?catalog:{defaultProvider:'preview',providers:{preview:{apiKey:'masked'}},custom:'keep'});const m=u.e.load('web/js/config-panel.js');return{...u,m,el:id=>u.doc.getElementById(id)}}
 async function readConfig(e,h){const r=new Res(),done=new Promise(resolve=>r.on('finish',resolve));h.getConfig(r);await done;return r}
 function template(){
  const u=ui(),button=new El(),panel=u.doc.getElementById('no-session-empty'),input=u.doc.getElementById('query'),id=signal('');let resolve,opens=[],submitted=[];
+ u.doc.getElementById('welcome-setup').hidden=true;
  button.dataset.queryZh='review this project';panel.querySelectorAll=()=>[button];input.disabled=true;input.form={requestSubmit(){submitted.push({id:id.peek(),query:input.value})}};
  const activate=(next)=>{id.value=next;u.active.value={id:next,state:{replaying:false},streamEl:{querySelector:()=>null}};input.disabled=!next};
  u.modules['./session-manager.js']={activeSessionId:id,activeSession:u.active,openTab(next){opens.push(next);activate(next)}};
@@ -62,7 +62,14 @@ function panels(){const u=ui();delete u.modules['./panel-manager.js'];u.e.contex
  await check('R15 template preserves text typed while the new session becomes ready',async()=>{const x=template(),pending=x.button.events.click[0]();x.resolve('cccccc');await pending;x.input.value='my own draft';x.poll();assert(!x.submitted.length&&x.input.value==='my own draft')});
  await check('R15 failed creation never arms a template or navigates',async()=>{const x=template(),pending=x.button.events.click[0]();x.resolve(null);await pending;x.activate('bbbbbb');x.poll();assert(!x.submitted.length&&!x.opens.length)});
  await check('R15 session creation can stay in SPA and normal creation still navigates',async()=>{
-  const u=ui();Object.assign(u.e.context,{toast(){},t:x=>x,fetch:async()=>response({instanceId:'abcdef'})});const create=variable('web/js/sidebar.js','doCreateSession',u.e.context);assert(await create('/project',{navigate:false})==='abcdef'&&!u.e.context.window.location);u.e.context.window.location={};await create('/project');assert(u.e.context.window.location.href==='/abcdef/');
+  const u=ui();
+  u.e.context.window.location={href:'/bbbbbb/'};
+  Object.assign(u.e.context,{creating:false,createButton:new El(),activeSessionId:signal('bbbbbb'),sessions:new Map(),
+    effect:u.modules['../vendor/signals-core.js'].effect,toast(){},t:x=>x,
+    fetch:async()=>response({instanceId:'abcdef'})});
+  const create=variable('web/js/sidebar.js','doCreateSession',u.e.context);
+  assert(await create('/project',{navigate:false})==='abcdef'&&u.e.context.window.location.href==='/bbbbbb/');
+  await create('/project');assert(u.e.context.window.location.href==='/abcdef/');
  });
  await check('R15 rapid lazy panel switch respects last selection and can reopen canceled panel',async()=>{const x=panels(),pending=x.click('a');await x.click('b');x.resolve();await pending;assert(x.els.a.hidden&&!x.els.b.hidden);await x.click('a');assert(!x.els.a.hidden&&x.els.b.hidden)});
  await check('R15 Escape cancels pending first panel load',async()=>{const x=panels(),pending=x.click('a');x.u.doc.dispatchEvent({type:'keydown',key:'Escape',stopImmediatePropagation(){}});x.resolve();await pending;assert(x.els.a.hidden&&!x.u.doc.getElementById('a').disabled)});
@@ -76,9 +83,21 @@ function panels(){const u=ui();delete u.modules['./panel-manager.js'];u.e.contex
  });
  await check('R15 files list includes all entries beyond 200 and sorts directories first',async()=>{const e=env(),h=e.load('src/hub.ts','export const audit={listFiles};').audit,dir=path.join(e.dir,'large');fs.mkdirSync(dir);for(let i=0;i<205;i++)fs.writeFileSync(path.join(dir,'f'+String(i).padStart(3,'0')),'');fs.mkdirSync(path.join(dir,'z-dir'));const r=new Res();await h.listFiles(r,{cwd:dir});assert(r.statusCode===200&&r.json().files.length===206&&r.json().files[0].kind==='dir'&&r.json().files.some(f=>f.name==='f204'))});
  await check('R15 directory errors differ from an actually empty directory',async()=>{const e=env(),h=e.load('src/hub.ts','export const audit={listFiles};').audit,a=new Res(),b=new Res();await h.listFiles(a,{cwd:path.join(e.dir,'removed')});await h.listFiles(b,{cwd:e.dir});assert(a.statusCode===500&&a.json().error&&b.statusCode===200&&b.json().files.length===0)});
- await check('R15 root file HTTP errors show failure, never empty success',async()=>{const u=ui();u.doc.getElementById('files-panel').hidden=true;u.e.context.fetch=async()=>({ok:false,status:500,json:async()=>({error:'denied'})});const m=u.e.load('web/js/files-panel.js','export const audit={fetchFiles};');await m.audit.fetchFiles();assert(u.doc.getElementById('files-empty').innerHTML==='files.failed')});
- await check('R15 failed child directory expansion reports an error and remains retryable',async()=>{const u=ui(),row=new El(),dirs=new Map();row.dataset.path='src';Object.assign(u.e.context,{expandedDirs:()=>dirs,fetchSubdir:async()=>{throw Error('unreadable')},toast:(...args)=>u.toasts.push(args),t:x=>x});await variable('web/js/files-panel.js','toggleDir',u.e.context)(row);assert(u.toasts.length===1&&!dirs.has('src')&&!row.classList.contains('loading'))});
- await check('R15 new terminal network failure is caught, visible, and retryable',async()=>{const u=ui(),button=new El();let offline=true;Object.assign(u.e.context,{newTerminalBtn:button,getSession:()=>null,activeSessionId:{peek:()=>''},toast:(...args)=>u.toasts.push(args),t:x=>x,setSessionKind(){},fetch:async()=>{if(offline)throw Error('offline');return response({instanceId:'abcdef'})}});u.e.context.window.location={};const fn=callback('web/js/sidebar.js','newTerminalBtn?.addEventListener','click',u.e.context);await fn({});assert(u.toasts.length===1&&!button.disabled);offline=false;await fn({});assert(u.e.context.window.location.href==='/abcdef/'&&!button.disabled)});
+ await check('R15 root file HTTP errors show failure, never empty success',async()=>{const u=ui();u.doc.getElementById('files-panel').hidden=false;u.e.context.fetch=async()=>({ok:false,status:500,json:async()=>({error:'denied'})});const m=u.e.load('web/js/files-panel.js','export const audit={fetchFiles};');await m.audit.fetchFiles();assert(u.doc.getElementById('files-empty').innerHTML==='files.failed')});
+ await check('R15 failed child directory expansion reports an error and remains retryable',async()=>{const u=ui(),row=new El(),dirs=new Map();row.dataset.path='src';Object.assign(u.e.context,{expandedDirs:()=>dirs,currentSessionId:()=> 'aaaaaa',fetchAbort:new AbortController(),filesPanel:new El(),fetchSubdir:async()=>{throw Error('unreadable')},toast:(...args)=>u.toasts.push(args),t:x=>x});await variable('web/js/files-panel.js','toggleDir',u.e.context)(row);assert(u.toasts.length===1&&!dirs.has('src')&&!row.classList.contains('loading'))});
+ await check('R15 new terminal network failure is caught, visible, and retryable',async()=>{
+  const u=ui(),button=new El();let offline=true,request;
+  Object.assign(u.e.context,{creating:false,createButton:button,getSession:()=>null,activeSessionId:signal(''),
+    effect:u.modules['../vendor/signals-core.js'].effect,sessions:new Map(),
+    toast:(...args)=>u.toasts.push(args),t:x=>x,setSessionKind(){},
+    fetch:async(url,options)=>{request=JSON.parse(options.body);if(offline)throw Error('offline');return response({instanceId:'abcdef'})}});
+  u.e.context.window.location={};
+  u.e.context.doCreateSession=variable('web/js/sidebar.js','doCreateSession',u.e.context);
+  const create=variable('web/js/sidebar.js','createTerminal',u.e.context);
+  await create();assert(u.toasts.length===1&&!button.disabled);
+  offline=false;await create();
+  assert(request.kind==='terminal'&&!('cwd' in request)&&u.e.context.window.location.href==='/abcdef/'&&!button.disabled);
+ });
  await check('R15 context clears metadata on empty session and failed refresh',async()=>{const u=ui();u.active.peek().context={selected:new Set(),activeRoles:new Set(['all']),currentMsgs:[],currentGroups:[]};u.e.context.fetch=async()=>response({messages:[],activeTokens:999,contextWindow:4000});const m=u.e.load('web/js/context-panel.js','export const audit={renderContext};');await m.audit.renderContext();assert(u.doc.getElementById('ctx-meta').textContent.includes('999'));u.e.context.fetch=async()=>{throw Error('offline')};await m.audit.renderContext();assert(u.doc.getElementById('ctx-meta').textContent==='');u.doc.getElementById('ctx-meta').textContent='old';u.active.value=null;await m.audit.renderContext();assert(u.doc.getElementById('ctx-meta').textContent===''&&u.doc.getElementById('ctx-drop').disabled)});
  console.log(JSON.stringify({checks:results.length,passed:results.filter(x=>x.passed).length,failed:results.filter(x=>!x.passed).length}));
 })();

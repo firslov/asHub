@@ -3,7 +3,6 @@ import { currentSessionId } from "./state.js";
 import { activeSession } from "./session-manager.js";
 import { effect } from "../vendor/signals-core.js";
 import { t } from "./i18n.js";
-import { toast } from "./toast.js";
 
 const app = document.querySelector(".app");
 const ctxPanel = document.getElementById("ctx-panel");
@@ -13,6 +12,7 @@ const ctxRefresh = document.getElementById("ctx-refresh");
 const ctxBody = document.getElementById("ctx-body");
 const ctxMeta = document.getElementById("ctx-meta");
 const ctxDrop = document.getElementById("ctx-drop");
+const ctxDropStatus = document.getElementById("ctx-drop-status");
 const ctxFilters = document.getElementById("ctx-filters");
 
 // Set initial text (JS manages this dynamically, so no data-i18n in HTML)
@@ -104,11 +104,24 @@ const selectedSet = () => ctx()?.selected ?? new Set();
 const activeRolesSet = () => ctx()?.activeRoles ?? new Set(["all"]);
 const currentMsgsArr = () => ctx()?.currentMsgs ?? [];
 const currentGroupsArr = () => ctx()?.currentGroups ?? [];
+// In-flight writes and failures belong to their session view, not the drawer.
+const dropStates = new WeakMap();
 
 const updateDropButton = () => {
+  const context = ctx();
   const selected = selectedSet();
-  ctxDrop.disabled = !!ctx()?.readOnly || selected.size === 0;
-  ctxDrop.hidden = !!ctx()?.readOnly;
+  const drop = context && dropStates.get(context);
+  const pending = !!drop?.pending;
+  // Keep a focused Drop button in the tab order while its request is pending.
+  ctxDrop.disabled = !!context?.readOnly || selected.size === 0;
+  ctxDrop.hidden = !!context?.readOnly;
+  ctxDrop.setAttribute('aria-disabled', String(pending || ctxDrop.disabled));
+  ctxDrop.setAttribute('aria-busy', String(pending));
+  if (ctxDropStatus) {
+    const error = drop?.error ? t('ctx.drop.failed', { msg: drop.error }) : '';
+    if (ctxDropStatus.textContent !== error) ctxDropStatus.textContent = error;
+    ctxDropStatus.hidden = !error;
+  }
   if (selected.size > 0) {
     let tok = 0;
     const msgs = currentMsgsArr();
@@ -159,6 +172,15 @@ const measureChevrons = (rows) => {
         tn.offsetParent !== null);
     const fit = targets.map(([tn]) => tn.scrollHeight <= tn.clientHeight + 4);
     targets.forEach(([, chev], i) => { if (fit[i]) chev.hidden = true; });
+  });
+};
+
+const syncCtxFilterControls = () => {
+  const roles = activeRolesSet();
+  ctxFilters?.querySelectorAll('.p-seg-item').forEach(control => {
+    const active = roles.has(control.dataset.role);
+    control.classList.toggle('active', active);
+    control.setAttribute('aria-pressed', String(active));
   });
 };
 
@@ -324,10 +346,12 @@ const renderContext = async () => {
 ctxDrop?.addEventListener("click", async () => {
   const origin = ctx();
   const sid = currentSessionId();
-  const revision = origin?.revision;
-  const selected = selectedSet();
-  if (ctx()?.readOnly || selected.size === 0) return;
-  const indices = [...selected].sort((a, b) => a - b);
+  if (!origin || !sid || ctxPanel.hidden || origin.readOnly || origin.selected.size === 0 || dropStates.get(origin)?.pending) return;
+  const revision = origin.revision;
+  const indices = [...origin.selected].sort((a, b) => a - b);
+  dropStates.set(origin, { pending: true });
+  updateDropButton();
+  const ownsDrawer = () => !ctxPanel.hidden && sid === currentSessionId() && origin === ctx();
   try {
     const res = await fetch(`/${sid}/context/drop`, {
       method: "POST",
@@ -336,17 +360,14 @@ ctxDrop?.addEventListener("click", async () => {
     });
     if (!res.ok) throw new Error(await res.text());
   } catch (e) {
-    // Server error bodies can be whole HTML pages — keep the main message
-    // short and stash the full text behind the expandable detail.
-    const msg = String(e?.message ?? e);
-    const short = msg.length > 120 ? `${msg.slice(0, 120)}…` : msg;
-    toast(t("ctx.drop.failed", { msg: short }), {
-      type: "error",
-      detail: msg.length > 120 ? msg : undefined,
-    });
+    // Keep a potentially long server error bounded inside this drawer.
+    const msg = String(e?.message || e);
+    dropStates.set(origin, { error: msg.length > 120 ? `${msg.slice(0, 120)}…` : msg });
+    if (ownsDrawer()) updateDropButton();
     return;
   }
-  if (sid === currentSessionId() && origin === ctx()) renderContext();
+  dropStates.delete(origin);
+  if (ownsDrawer()) renderContext();
 });
 
 ctxRefresh?.addEventListener("click", () => renderContext());
@@ -365,21 +386,23 @@ ctxFilters?.addEventListener("click", (ev) => {
     else roles.add(role);
     if (roles.size === 0) roles.add("all");
   }
-  ctxFilters.querySelectorAll(".p-seg-item").forEach((c) => {
-    c.classList.toggle("active", roles.has(c.dataset.role));
-  });
+  syncCtxFilterControls();
   applyCtxFilter();
 });
 
 const setCtxOpen = (on) => {
   if (on) {
-    ctxPanel.removeAttribute("hidden"); app.classList.add("ctx-open"); renderContext(); ctxToggle?.classList.add("active");
+    ctxPanel.removeAttribute("hidden"); app.classList.add("ctx-open"); syncCtxFilterControls(); renderContext(); ctxToggle?.classList.add("active");
+  } else {
+    ++ctxFetchSeq;
+    ctxFetchAbort?.abort();
+    ctxFetchAbort = null;
+    ctxPanel.setAttribute("hidden", ""); app.classList.remove("ctx-open"); ctxToggle?.classList.remove("active");
   }
-  else { ctxPanel.setAttribute("hidden", ""); app.classList.remove("ctx-open"); ctxToggle?.classList.remove("active"); }
   try { localStorage.setItem(LS_CTX, on ? "1" : "0"); } catch {}
 };
 
-ctxClose?.addEventListener("click", () => setCtxOpen(false));
+ctxClose?.addEventListener("click", () => { setCtxOpen(false); ctxToggle?.focus(); });
 
 // Refresh context panel content when language changes while panel is open
 document.addEventListener("langchange", () => {
@@ -397,7 +420,10 @@ document.addEventListener("ash:branch-switched", () => {
 // Re-render when the active session changes (Phase 3 SPA switching).
 effect(() => {
   activeSession.value;
-  if (ctxPanel && !ctxPanel.hasAttribute("hidden")) renderContext();
+  if (ctxPanel && !ctxPanel.hasAttribute("hidden")) {
+    syncCtxFilterControls();
+    renderContext();
+  }
 });
 
 export { setCtxOpen };

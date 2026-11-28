@@ -20,14 +20,22 @@ function apply(root = path.resolve(__dirname, '../node_modules/agent-sh'), spec 
   for (const update of updates) if (update) fs.writeFileSync(update.file, update.source);
   return updates.filter(Boolean).length;
 }
-module.exports = { apply };
-if (require.main === module) {
-  const count = apply();
+function applyAll(project = path.resolve(__dirname, '..'), kernel = path.join(project, 'node_modules/agent-sh')) {
   const hunks = require('./patch-kernel-hunks.cjs');
-  hunks.apply(undefined, require('./patches/provider-refresh.json'), 'provider refresh');
-  hunks.apply(undefined, require('./patches/provider-request-body.json'), 'provider request body refresh');
-  hunks.apply(undefined, require('./patches/openrouter-catalog-lifecycle.json'), 'OpenRouter catalog lifecycle');
-  hunks.apply(undefined, require('./patches/codex-summary-boundaries.json'), 'Codex summary boundaries');
-  hunks.apply(undefined, require('./patches/subagent-request-retry.json'), 'subagent request retry');
+  return require('./patch-integration-kernel.cjs').configure(project, kernel, () => {
+    const count = apply(kernel);
+    hunks.apply(kernel, require('./patches/provider-refresh.json'), 'provider refresh');
+    hunks.apply(kernel, require('./patches/provider-admission.json'), 'provider admission');
+    hunks.apply(kernel, require('./patches/provider-request-body.json'), 'provider request body refresh');
+    hunks.apply(kernel, require('./patches/openrouter-catalog-lifecycle.json'), 'OpenRouter catalog lifecycle');
+    hunks.apply(kernel, require('./patches/codex-summary-boundaries.json'), 'Codex summary boundaries');
+    hunks.apply(kernel, require('./patches/subagent-request-retry.json'), 'subagent request retry');
+    hunks.apply(kernel, require('./patches/tool-cancel-settlement.json'), 'tool cancel settlement');
+    return count;
+  });
+}
+module.exports = { apply, applyAll };
+if (require.main === module) {
+  const count = applyAll();
   console.log(`Codex Windows login patch: ${count ? 'applied' : 'verified'}`);
 }

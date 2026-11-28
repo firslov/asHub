@@ -5,29 +5,47 @@ const {El} = require('./ui-harness.cjs');
 const tick=()=>new Promise(r=>setImmediate(r));
 function setup(options = {}) {
   class Node extends El {
-    constructor(tag='div'){super();this.tagName=tag.toUpperCase();this.textContent='';}
+    constructor(tag='div'){super();this.tagName=tag.toUpperCase();this.textContent='';this.disabled=false;}
     get lastChild(){return this.children.at(-1);}
+    get firstChild(){return this.children[0]??null;}
+    get nextSibling(){return this.parentNode?.children[this.parentNode.children.indexOf(this)+1]??null;}
+    insertBefore(node,before){node.remove();node.parentNode=this;node.isConnected=true;this.children.splice(before?this.children.indexOf(before):this.children.length,0,node);return node;}
+    appendChild(node){return this.insertBefore(node,null);}
+    remove(){if(this.parentNode)this.parentNode.children.splice(this.parentNode.children.indexOf(this),1);this.parentNode=null;super.remove();}
+    focus(){if(document.activeElement!==this){document.activeElement=this;document.dispatchEvent({type:'focusin'});}}
+    scrollIntoView(){this.revealed=true;}
+    contains(node){return node===this||this.children.some(c=>c.contains(node));}
+    closest(selector){return this.matches(selector)?this:this.parentNode?.closest(selector)??null;}
+    matches(selector){
+      if(selector==='[hidden]')return this.hidden;
+      if(selector===':popover-open')return !!this.popoverOpen;
+      if(selector.startsWith('.'))return (this.className||'').split(' ').includes(selector.slice(1));
+      return this.tagName===selector.toUpperCase();
+    }
     querySelectorAll(selector){
-      const tags=selector.split(',').map(s=>s.trim().toUpperCase());
-      return this.children.flatMap(c=>[...(tags.includes(c.tagName)?[c]:[]),...c.querySelectorAll(selector)]);
+      const selectors=selector.split(',').map(s=>s.trim());
+      return this.children.flatMap(c=>[...(selectors.some(s=>c.matches(s))?[c]:[]),...c.querySelectorAll(selector)]);
     }
     showModal(){this.open=true;}
     close(){this.open=false;this.dispatchEvent({type:'close'});}
   }
   const root=new Node(),body=new Node(); const calls=[], events=[], closed=[], snapshots=[];
+  const storage=new Map(Object.entries(options.storage??{'ash.project-folded':'[]'}));
+  const handlers={};
   const activeSessionId={value:options.active || ''};
   const allSessions={value:options.sessions || [{instanceId:'a',title:'Alpha',kind:'agent',cwd:'/workspace'},{instanceId:'b',title:'Beta',kind:'agent'}]},effects=[];
   const window=Object.assign(new Node(),{location:{}});
   const project={id:'project',name:'Existing',cwd:'/workspace',sessionIds:['a','archived']};
   let fail=false;
-  const document={body,activeElement:null,createElement:tag=>new Node(tag),getElementById:id=>id==='projects'?root:null,addEventListener(){},dispatchEvent(e){events.push(e.type);}};
+  const document={body,activeElement:null,createElement:tag=>new Node(tag),getElementById:id=>id==='projects'?root:null,
+    addEventListener(type,fn){(handlers[type]??=[]).push(fn);},dispatchEvent(e){events.push(e.type);for(const fn of handlers[e.type]??[])fn(e);}};
   const e=env({modules:{
     './network-settings.js':{networkPolicy:{value:null,peek:()=>null},loadNetworkPolicy:async()=>{},saveNetworkPolicy:async()=>{}},
     './toast.js':{toast(){}},
     './store.js':{setSessions:v=>{snapshots.push(v);if(options.liveSessions){allSessions.value=v;effects.forEach(fn=>fn());}},allSessions},
     './session-manager.js':{activeSessionId,spaEnabled:()=>options.spa || false,openTabs:{peek:()=>options.tabs || []},closeTab:async id=>{closed.push(id);if(activeSessionId.value===id)activeSessionId.value='';},sessions:new Map()},
-    '../vendor/signals-core.js':{effect:fn=>{effects.push(fn);fn();}}, './i18n.js':{t:key=>key},
-  }, globals:{document,window,localStorage:{getItem:()=>null,setItem(){}},fetch:async(url,opts)=>{
+    '../vendor/signals-core.js':{signal:value=>({value,peek(){return this.value;}}),effect:fn=>{effects.push(fn);fn();}}, './i18n.js':{t:key=>key},
+  }, globals:{document,window,AbortSignal,location:{pathname:options.pathname||'/'},localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,val)=>storage.set(key,val)},fetch:async(url,opts)=>{
     if (url === '/sessions') return {ok:true,json:async()=>options.sessionList ? options.sessionList() : []};
     if (url === '/api/projects/workspaces') return {ok:true,json:async()=>({})};
     calls.push({url,body:opts?.body?JSON.parse(opts.body):null});
@@ -35,7 +53,8 @@ function setup(options = {}) {
     return {ok:!fail,json:async()=>[project]};
   }}});
   const mod=e.load('web/js/projects.js','export const audit={refresh,edit,taskHistory,newProjectChat,deleteProjectChat,pollStatus};');
-  return {mod,root,body,calls,events,closed,snapshots,project,window,activeSessionId,fail:()=>fail=true};
+  return {mod,root,body,calls,events,closed,snapshots,project,window,activeSessionId,document,storage,
+    render:()=>effects.forEach(fn=>fn()),fail:()=>fail=true};
 }
 test('project picker preserves hidden and archived selections and sends only membership deltas',async()=>{
  const s=setup();s.mod.showProjects(true);await tick();s.mod.audit.edit(s.project);
@@ -113,6 +132,35 @@ test('failed collaboration shows its error alongside every page of partial outpu
  assert.equal(result.textContent,'Partial answer\nLast fragment','diagnostics must not contaminate paginated output');
  assert.equal(error.textContent,'Provider unavailable');assert.equal(more.hidden,true);
  assert(s.calls.at(-1).url.endsWith('&offset=15'));
+});
+
+for (const text of ['', 'Chat transcript']) test(`external task history displays delivery ${text ? 'alongside transcript' : 'without transcript'}`,async()=>{
+ const delivery={summary:'Review finished\n<em>Member report</em>',
+   artifacts:[{label:'<img src=x>',path:'javascript:alert(1)'},{label:'Report',path:'/private/report.txt'}],
+   unresolved:['Second check still pending']};
+ const s=setup({fetch:async url=>({ok:true,json:async()=>url.includes('&taskId=')
+   ? {state:'completed',text,nextOffset:text.length,hasMore:false}
+   : [{id:'external-task',sourceId:'a',recipientId:'b',message:'Review',state:'completed',totalChars:text.length,delivery}]})});
+ s.mod.audit.taskHistory(s.project);await tick();
+ const card=s.body.children.at(-1).querySelectorAll('details')[0];
+ card.open=true;
+ card.querySelectorAll('button')[0].dispatchEvent({type:'click'});await tick();
+ const section=card.querySelectorAll('.project-task-delivery')[0];
+ assert.deepEqual(section.querySelectorAll('strong').map(n=>n.textContent),[
+   'Member-reported delivery','References (not verified)','Unresolved issues']);
+ assert.equal(section.querySelectorAll('pre')[0].textContent,delivery.summary);
+ const [references,unresolved]=section.querySelectorAll('ul');
+ assert.deepEqual(references.children.map(n=>n.textContent),['<img src=x>: javascript:alert(1)','Report: /private/report.txt']);
+ assert.deepEqual(unresolved.children.map(n=>n.textContent),delivery.unresolved);
+ assert.equal(section.querySelectorAll('a,img,em').length,0,'delivery must render as literal text');
+ const result=card.children.find(n=>n.tagName==='PRE');
+ assert.equal(result.textContent,text,'empty transcript must not report no output when a delivery exists');
+ assert.equal(result.hidden,!text);
+ const download=card.querySelectorAll('a').find(n=>n.href.endsWith('&download=1'));
+ assert.equal(download.textContent,'Download task transcript');
+ assert.equal(download.hidden,!text);
+ assert.deepEqual(s.calls.map(c=>c.url),[
+   '/api/projects/tasks?projectId=project','/api/projects/tasks?projectId=project&taskId=external-task&offset=0']);
 });
 
 test('failed collaboration without output keeps the diagnostic separate from the result',async()=>{
@@ -237,7 +285,7 @@ test('archive removal retry does not archive twice or enable a destructive mode'
  assert.equal(archives,1);assert.equal(s.body.children.at(-1).open,true);
  assert(form.querySelectorAll('input').every(n=>n.disabled));
  failMembership=false;form.lastChild.dispatchEvent({type:'click'});await tick();
- assert.equal(archives,1);assert.equal(s.body.children.at(-1).open,false);
+ assert.equal(archives,1);assert.equal(s.body.children.length,0);
 });
 test('failed archive leaves membership intact and allows retry',async()=>{
  const s=setup({fetch:async()=>({ok:false,json:async()=>({error:'archive failed'})})});
@@ -319,6 +367,126 @@ test('project editor still sends an intentionally changed root',async()=>{
 });
 
 const descendants=node=>node.children.flatMap(child=>[child,...descendants(child)]);
+const foldFixture=[{id:'p',name:'One',cwd:'/one',sessionIds:['abcd']},{id:'q',name:'Two',cwd:'/two',sessionIds:['abcd2']}];
+const foldSessions=foldFixture.map(p=>({instanceId:p.sessionIds[0],kind:'agent',cwd:p.cwd,title:p.name}));
+const toggles=s=>s.root.querySelectorAll('.project-toggle');
+const opened=s=>toggles(s).filter(n=>n.getAttribute('aria-expanded')==='true').map(n=>n.dataset.projectId);
+
+test('route-based startup, explicit folding, and active changes do not fight user choices', async()=>{
+ const s=setup({storage:{},pathname:'/abcd/',sessions:foldSessions,fetch:async()=>({ok:true,json:async()=>foldFixture})});
+ s.mod.showProjects(true);await tick();assert.deepEqual(opened(s),['p']);
+ const [one,two]=toggles(s);one.dispatchEvent({type:'click'});
+ assert.deepEqual(opened(s),[]);assert.equal(s.storage.get('ash.project-expanded'),'[]');
+ assert(s.root.querySelectorAll('.project-details').every(n=>n.hidden));
+ assert(s.root.querySelectorAll('.project-heading').every(n=>n.querySelectorAll('.project-more')[0].hidden));
+ s.activeSessionId.value='abcd2';s.render();assert.equal(two.getAttribute('aria-current'),'true');
+ s.mod.showProjects(false);s.mod.showProjects(true);await tick();
+ assert.deepEqual(opened(s),[]);assert.equal(toggles(s)[1],two);
+});
+
+for(const [storage,expected] of [[{},[]],[{'ash.project-folded':'["q"]'},['p']],[{'ash.project-folded':'[]','ash.project-expanded':'["q"]'},['q']]]) {
+ test(`project expansion preference ${JSON.stringify(storage)}`,async()=>{
+  const s=setup({storage,sessions:foldSessions,fetch:async()=>({ok:true,json:async()=>foldFixture})});
+  s.mod.showProjects(true);await tick();assert.deepEqual(opened(s),expected);
+ });
+}
+
+test('pinned project folds the remainder and summarizes live whole-project status', async()=>{
+ const groups=[{id:'p',name:'Pinned',sessionIds:['a','b','c','d','archived'],pinnedSessionIds:['c','a','archived']}];
+ let sessions=[{instanceId:'a',isProcessing:true,queuedCount:2},{instanceId:'b',waitingApproval:true,isProcessing:true},
+   {instanceId:'c'},{instanceId:'d',lastTurnError:'Failed',hasUnread:true}].map(s=>({...s,kind:'agent'}));
+ const s=setup({sessions,active:'b',liveSessions:true,sessionList:()=>sessions,fetch:async()=>({ok:true,json:async()=>groups})});
+ s.mod.showProjects(true);await tick();
+ const [toggle]=s.root.querySelectorAll('.project-other-toggle'),[list]=s.root.querySelectorAll('.project-other-list');
+ const visibleLinks=()=>s.root.querySelectorAll('a').filter(a=>!a.closest('[hidden]')).map(a=>a.href);
+ assert.deepEqual(visibleLinks(),['/c/','/a/']);
+ assert.equal(toggle.getAttribute('aria-controls'),list.id);
+ assert.equal(toggle.getAttribute('aria-expanded'),'false');
+ assert.equal(toggle.querySelectorAll('.project-other-count')[0].textContent,'2');
+ assert.match(toggle.getAttribute('aria-label'),/projects.currentInOthers/);
+ const metric=()=>toggle.querySelectorAll('.project-other-metric').filter(n=>!n.hidden).map(n=>n.textContent);
+ assert.deepEqual(metric(),['projects.attentionCount','projects.runningCount','projects.queuedChats','projects.unreadCount']);
+ toggle.focus();sessions=sessions.map(({instanceId,kind})=>({instanceId,kind}));
+ await s.mod.audit.pollStatus();
+ assert.deepEqual(metric(),[]);
+ assert.equal(toggle.querySelectorAll('.project-other-status')[0].hidden,true);
+ assert.match(toggle.getAttribute('aria-label'),/projects.quiet/);
+ assert.equal(s.document.activeElement,toggle);
+ assert.deepEqual(visibleLinks(),['/c/','/a/']);
+ toggle.dispatchEvent({type:'click'});
+ assert.deepEqual(visibleLinks(),['/c/','/a/','/b/','/d/']);
+ const saved=Object.fromEntries(s.storage);assert.equal(saved['ash.project-others-expanded'],'["p"]');
+ const restored=setup({storage:saved,sessions,fetch:async()=>({ok:true,json:async()=>groups})});
+ restored.mod.showProjects(true);await tick();
+ assert.equal(restored.root.querySelectorAll('.project-other-toggle')[0].getAttribute('aria-expanded'),'true');
+ toggle.dispatchEvent({type:'click'});
+ assert.equal(s.mod.revealSidebarProject('p','b'),true);
+ assert.equal(s.document.activeElement.href,'/b/');assert.equal(s.storage.get('ash.project-others-expanded'),'[]');
+ s.mod.showProjects(false);s.mod.showProjects(true);await tick();
+ assert.deepEqual(visibleLinks(),['/c/','/a/']);
+ groups[0].pinnedSessionIds=[];await s.mod.audit.refresh();
+ assert.equal(s.root.querySelectorAll('.project-other-toggle').length,0);
+ assert.deepEqual(visibleLinks(),['/a/','/b/','/c/','/d/']);
+});
+
+test('search reads are shared in the hidden and visible views and retry after failure', async()=>{
+ let release,fail=false,calls=0,groups=foldFixture;
+ const s=setup({storage:{},sessions:foldSessions,fetch:async()=>{
+  if(++calls===1)await new Promise(done=>{release=done;});
+  return {ok:!fail,json:async()=>groups};
+ }});
+ const pending=s.mod.loadSidebarProjects();assert.equal(pending,s.mod.loadSidebarProjects());
+ s.mod.showProjects(true);assert.equal(calls,1);release();
+ assert.equal(await pending,foldFixture);assert.equal(s.mod.sidebarProjects.value,foldFixture);
+ assert.equal(s.mod.revealSidebarProject('q'),true);assert.equal(s.document.activeElement,toggles(s)[1]);
+ assert.deepEqual(opened(s),[]);
+ assert.equal(s.mod.revealSidebarProject('q','abcd2'),true);
+ assert.equal(s.document.activeElement.href,'/abcd2/');assert.deepEqual(opened(s),['q']);
+ assert(!s.storage.has('ash.project-expanded'),'search must not persist temporary expansion');
+ s.mod.showProjects(false);fail=true;await assert.rejects(s.mod.loadSidebarProjects(),/projects.loadFailed/);
+ assert.equal(s.mod.sidebarProjects.value,foldFixture);
+ fail=false;groups=[{...foldFixture[0],name:'Updated off-screen'}];
+ assert.equal(await s.mod.loadSidebarProjects(),groups);assert.equal(s.mod.sidebarProjects.value,groups);
+ s.mod.showProjects(true);await tick();assert.deepEqual(opened(s),[]);
+});
+
+test('a late search reveal cannot scroll or steal focus after a new search interaction', async()=>{
+ let release;const s=setup({storage:{},sessions:foldSessions,fetch:async()=>{
+  await new Promise(done=>{release=done;});return {ok:true,json:async()=>foldFixture};
+ }});
+ const picker=s.document.createElement('button'),search=s.document.createElement('input');
+ s.mod.showProjects(true);picker.focus();const delayed=s.mod.revealSidebarProject('p','abcd');
+ search.focus();picker.focus();release();assert.equal(await delayed,false);
+ assert.equal(s.document.activeElement,picker);assert.deepEqual(opened(s),[]);
+});
+
+test('a delayed reveal can wait for the project and its session in the existing reads', async()=>{
+ let releaseProject,releaseSessions;
+ const s=setup({storage:{},sessions:[],liveSessions:true,
+  sessionList:()=>new Promise(done=>{releaseSessions=done;}),fetch:async()=>{
+   await new Promise(done=>{releaseProject=done;});return {ok:true,json:async()=>foldFixture};
+  }});
+ const picker=s.document.createElement('button');s.mod.showProjects(true);picker.focus();
+ const pending=s.mod.revealSidebarProject('p','abcd');releaseProject();await tick();
+ assert.equal(s.document.activeElement,picker);assert.deepEqual(opened(s),[]);
+ releaseSessions(foldSessions);assert.equal(await pending,true);
+ assert.equal(s.document.activeElement.href,'/abcd/');assert.deepEqual(opened(s),['p']);
+});
+
+test('a hidden read from before host invalidation cannot replace the current search snapshot', async()=>{
+ let release,reads=0;
+ const s=setup({storage:{},fetch:async()=>{
+  const old=++reads===1;
+  if(old)await new Promise(done=>{release=done;});
+  return {ok:true,headers:{get:()=>old?'old-host:99':'new-host:1'},json:async()=>old?[foldFixture[0]]:[foldFixture[1]]};
+ }});
+ const old=s.mod.loadSidebarProjects();
+ s.document.dispatchEvent({type:'ash:host-state-changed',detail:{domains:['projects']}});
+ const newer=await s.mod.loadSidebarProjects();release();
+ await assert.rejects(old,/projects.loadFailed/);
+ assert.equal(s.mod.sidebarProjects.value,newer);assert.equal(newer[0].id,'q');
+});
+
 test('background polling discovers plugin-created project members without reopening or editing the project',async()=>{
  let groups=[{id:'project',name:'Team',cwd:'/workspace',sessionIds:['a']}];
  let chats=[{instanceId:'a',title:'Coordinator',kind:'agent',cwd:'/workspace',projectId:'project'}];
@@ -387,7 +555,7 @@ test('project pin stays locked across status redraws until its request settles',
  const pin=()=>s.root.querySelectorAll('button').find(b=>b.className.includes('project-chat-pin'));
  const original=pin();const pending=original.events.click[0]();
  title='After';await s.mod.audit.pollStatus();await tick();
- assert.notEqual(pin(),original);
+ assert.equal(pin(),original,'the status update retains the original control');
  const redraw=pin();if(!redraw.disabled)redraw.dispatchEvent({type:'click'});
  assert.equal(posts,1,'status redraw allowed a duplicate mutation while a pin request was pending');
  release();await pending;await tick();assert(!pin().disabled);

@@ -62,6 +62,36 @@ app.whenReady().then(async () => {
   }
   await run('activity=false;controls()');
   console.log('PASS steering composer: model, follow-up mode, stop and send remain visible at 320/390/1040px');
+  for (const width of [320, 390, 1040]) {
+    win.setContentSize(width, 760);
+    const layout = await run(`(async () => {
+      resetMessages();
+      const emit = (name, payload) => frame({meta:{name},payload});
+      const canvas = document.createElement('canvas'); canvas.width = 1800; canvas.height = 40;
+      emit('agent:query', {query:'好的'});
+      emit('agent:query', {query:'LongUnbrokenText'.repeat(60)});
+      emit('agent:query', {query:'',images:[{mimeType:'image/png',data:canvas.toDataURL().split(',')[1]}]});
+      emit('agent:response-segment', {text:'回复仍然使用完整正文栏'});
+      const m = $('messages'), users = [...m.querySelectorAll('.message.user')], imageMessage = users[2];
+      await imageMessage.querySelector('button').onclick();
+      const box = e => { const {left,right,width,height}=e.getBoundingClientRect(); return {left,right,width,height}; };
+      const img = imageMessage.querySelector('img');
+      return {users:users.map(box),reply:box(m.querySelector('.message.reply')),image:box(img),naturalWidth:img.naturalWidth,
+        textAlign:getComputedStyle(users[1]).textAlign,overflow:m.scrollWidth>m.clientWidth+1};
+    })()`);
+    const context = JSON.stringify({width,layout});
+    const [short, long, attachment] = layout.users, cap = layout.reply.width * .9;
+    assert(layout.reply.width > 0 && !layout.overflow, context);
+    assert(Math.abs(long.width - cap) <= 1 && short.width < long.width - 20, context);
+    for (const user of layout.users) {
+      assert(user.width <= cap + 1 && Math.abs(user.right - layout.reply.right) <= 1, context);
+    }
+    assert.match(layout.textAlign, /^(start|left)$/);
+    assert(short.height < long.height, 'long text wraps naturally');
+    assert.equal(layout.naturalWidth, 1800);
+    assert(layout.image.width > 0 && layout.image.left >= attachment.left && layout.image.right <= attachment.right, context);
+  }
+  console.log('PASS remote user messages: right-aligned adaptive bubbles and bounded attachments at 320/390/1040px');
   win.setContentSize(390,844);
   // Opening the software keyboard can shrink the visual viewport without
   // changing CSS media-query height (notably on iOS).

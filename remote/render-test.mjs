@@ -13,6 +13,11 @@ class Element {
       toggle: (name, force) => { const names = new Set(this.className.split(/\s+/).filter(Boolean)); if (force ?? !names.has(name)) names.add(name); else names.delete(name); this.className = [...names].join(' '); }
     };
     this.scrollHeight = 0; this.scrollTop = 0; this.clientHeight = 0;
+    this.listeners = new Map();
+  }
+  addEventListener(type, callback) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type).add(callback);
   }
   append(...items) { for (const item of items) { item.remove(); item.parentNode = this; item.isConnected = true; this.children.push(item); } }
   insertBefore(item, reference) {
@@ -562,6 +567,34 @@ test('a running task remains refreshable at its current output boundary', async 
   assert.deepEqual(offsets, [0,8]); assert.equal(article.innerHTML, 'First 🟡 finished');
   assert.equal(more.hidden, true);
 });
+test('mobile review task shows progress, then the structured conclusion without displaying its input', async () => {
+  const r = setup({ mobile: true }); r.run("user='alice';device='desktop';sessions=[{instanceId:'aaaaaa',title:'Coordinator'}]");
+  const argsSeen = []; const pending = deferred();
+  r.fetch(async (_url, options) => {
+    const {args} = JSON.parse(options.body); argsSeen.push(args);
+    if (!args.taskId) return ok([{id:'r',sourceId:'aaaaaa',recipientId:'bbbbbb',message:'not for display',taskProfile:'inline-review',state:'running'}]);
+    if (argsSeen.length === 2) return ok({taskProfile:'inline-review',state:'running',terminal:false});
+    return pending.promise;
+  });
+  await r.run("showTasks({id:'p',name:'Project'})");
+  const choice = r.$('modal-body').children.at(-1);
+  assert.deepEqual(choice.children.map(x=>x.textContent), ['Coordinator → 评审员','只读评审','进行中']);
+  await choice.onclick();
+  const body = r.$('modal-body'), status = body.children.find(n => n.role === 'status');
+  const article = body.querySelector('.task-output'), refresh = body.children.at(-1);
+  assert.equal(r.$('modal-title').textContent,'只读评审');
+  assert.equal(article.children[0].textContent,'等待评审结论');
+  const update = refresh.onclick();
+  await refresh.onclick(); assert.equal(argsSeen.length,3,'overlapping refreshes are ignored');
+  pending.resolve(ok({taskProfile:'inline-review',state:'completed',terminal:true,review:{summary:'结论 <b>逐字展示</b>',unresolved:['核对资料']}}));
+  await update;
+  assert.equal(status.textContent,'已完成');
+  assert.equal(article.children[0].textContent,'结论 <b>逐字展示</b>');
+  assert.equal(article.children.at(-1).children[0].textContent,'核对资料');
+  assert.equal(refresh.hidden,true);
+  assert.deepEqual(argsSeen.map(a=>[a.includeReviews,a.offset]), [[true,undefined],[true,0],[true,0]]);
+});
+
 test('task pagination errors are visible in the dialog and retry the same offset', async () => {
   const r = setup(); r.run("user='alice';device='desktop'");
   let count = 0; const offsets = [];
@@ -1387,9 +1420,18 @@ test('superseded device refresh failures cannot show a stale warning after recov
   pending.resolve(failure(503, 'Old connection failure')); await older;
   assert.equal(r.$('notice').textContent, ''); assert.equal(r.$('send').disabled, false);
 });
-test('the latest device refresh still reports a real connection failure', async () => {
+test('the latest device refresh clears only its own warning after recovery', async () => {
   const r = deviceRefreshFixture(); r.fetch(async () => failure(503, 'Current connection failure'));
   await r.$('refresh').onclick(); assert.equal(r.$('notice').textContent, 'Current connection failure');
+  const source = r.run('source');
+  freshDeviceResponse(r, true); await r.$('refresh').onclick();
+  assert.equal(r.$('notice').hidden, true); assert.equal(r.run('source'), source);
+  assert.equal(r.$('query').value, 'Keep this draft');
+  r.fetch(async () => failure(503, 'Retry failed'));
+  await r.$('refresh').onclick(); assert.equal(r.$('notice').textContent, 'Retry failed');
+  r.run("notice('Send result unknown; check before trying again')");
+  freshDeviceResponse(r, true); await r.$('refresh').onclick();
+  assert.equal(r.$('notice').textContent, 'Send result unknown; check before trying again');
 });
 
 for (const outcome of ['empty','failed']) test(`an obsolete ${outcome} session list cannot replace the newer offline view`, async () => {

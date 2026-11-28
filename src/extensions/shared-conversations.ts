@@ -2,11 +2,47 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { openArtifact } from '../artifacts.js';
+import { taskTerminal, type CollaborationTask } from '../collaboration.js';
+
+type SharedSession = { instanceId: string; kind: string; cwd: string; projectWorker?: boolean; projectTaskProfile?: string };
+type ProjectTaskRow = Omit<CollaborationTask, 'text' | 'query'> & { totalChars: number };
+const ordinary = (s: SharedSession) => s.kind === 'agent' && s.projectWorker !== true;
+const reviewer = (s: SharedSession) => s.projectWorker === true && s.projectTaskProfile === 'inline-review';
 
 export interface SharingInput { roots: string[] }
 type Grant = { pluginId: string; roots: string[] };
 type SharingStatus = { available: boolean; enabled: boolean; status: string };
 type SharingResource = { plugin: string; resource?: string };
+export type ArchivedConversation = { id: string; title: string; cwd: string; startedAt: number; archivedAt: number };
+export type ArchivedMessage = { role: 'user' | 'assistant'; text: string };
+export type ResolveArchiveCwd = (cwd: string) => string | null;
+type ArchivedConversations = {
+    list(resolveCwd: ResolveArchiveCwd): ArchivedConversation[];
+    read(id: string, resolveCwd: ResolveArchiveCwd): Promise<ArchivedMessage[]>;
+};
+
+// The relay caps UTF-8 frames at 6 MiB. A UTF-16 unit takes at most six
+// bytes after JSON escaping; keep each page well under the cap even for
+// control characters and leave room for the envelope. Never cut a pair.
+const ARCHIVE_PART = 32 * 1024;
+const ARCHIVE_PAGE = 12;
+function archivedPage(messages: ArchivedMessage[], offset: number) {
+    let skipped = 0;
+    const page: ArchivedMessage[] = [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const { role, text } = messages[i]!;
+        for (let end = text.length; end > 0;) {
+            if (page.length === ARCHIVE_PAGE) return { messages: page.reverse(), nextOffset: offset + page.length };
+            let start = Math.max(0, end - ARCHIVE_PART);
+            if (start > 0 && text.charCodeAt(start) >= 0xdc00 && text.charCodeAt(start) <= 0xdfff
+                && text.charCodeAt(start - 1) >= 0xd800 && text.charCodeAt(start - 1) <= 0xdbff) start--;
+            if (skipped < offset) skipped++;
+            else page.push({ role, text: text.slice(start, end) });
+            end = start;
+        }
+    }
+    return { messages: page.reverse(), nextOffset: null };
+}
 const statusPriority = (status: SharingStatus) => !status.enabled ? 0 : status.status === 'online' ? 3 : status.status === 'connecting' ? 2 : 1;
 const fail = (message: string, status = 403) => Object.assign(new Error(message), { status });
 const sid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{4,32}$/.test(value);
@@ -18,7 +54,7 @@ export class SharedConversations {
     private base = '';
     private statuses = new Map<string, { signal: AbortSignal; read: () => SharingStatus; resource?: string }>();
     private channels = new Map<string, Set<AbortController>>();
-    constructor(private file: string, private token: string | undefined) {
+    constructor(private file: string, private token: string | undefined, private archives?: ArchivedConversations) {
         try {
             if (fs.existsSync(file)) this.grants = JSON.parse(fs.readFileSync(file, 'utf8'));
             if (!this.grants || typeof this.grants !== 'object' || Array.isArray(this.grants)
@@ -109,7 +145,18 @@ export class SharedConversations {
             current(); return r;
         };
         const json = async (route: string, body?: any, method?: string) => { const r = await fetchLocal(route, body, method); const text = await r.text(); current(); if (!r.ok) throw fail(text.slice(0, 400), r.status); try { return JSON.parse(text); } catch { return { ok: true }; } };
-        const sessions = async () => (await json('/sessions')).filter((s: any) => s.kind === 'agent' && inside(s.cwd));
+        const scopedSessions = async () => (await json('/sessions') as SharedSession[]).filter(s => inside(s.cwd));
+        const sessions = async () => (await scopedSessions()).filter(ordinary);
+        // Reviewers share task receipts only, not their conversation or files.
+        const taskScope = async (projectId: string) => {
+            const project = (await json('/api/projects') as { id: string; sessionIds: string[] }[]).find(p => p.id === projectId);
+            const members = new Set(project?.sessionIds);
+            const scoped = (await scopedSessions()).filter(s => members.has(s.instanceId));
+            return {
+                agents: new Set(scoped.filter(ordinary).map(s => s.instanceId)),
+                reviewers: new Set(scoped.filter(reviewer).map(s => s.instanceId)),
+            };
+        };
         const session = async (value: unknown) => { if (!sid(value)) throw fail('会话无效'); const s = (await sessions()).find((s: any) => s.instanceId === value); current(); if (!s) throw fail('会话不在授权目录内'); return s; };
         const groups = async () => { const ids = new Set((await sessions()).map((s: any) => s.instanceId)); return (await json('/api/projects')).map((p: any) => ({ id:p.id, name:p.name, sessionIds: p.sessionIds.filter((s: string) => ids.has(s)), pinnedSessionIds: (p.pinnedSessionIds || []).filter((s: string) => ids.has(s)), activities: (p.activities || []).filter((a: any) => ids.has(a.sessionId)) })).filter((p: any) => p.sessionIds.length); };
         const request = async (route: string, body?: any, method = body === undefined ? 'GET' : 'POST') => {
@@ -123,12 +170,39 @@ export class SharedConversations {
             if (route === '/api/models' && method === 'GET') return json(route);
             if (route === '/api/projects' && method === 'GET') return groups();
             if (p === '/api/projects/tasks' && method === 'GET') {
-                const group = (await groups()).find((g: any) => g.id === u.searchParams.get('projectId')); if (!group) throw fail('项目未授权');
-                const all = (await json('/api/projects/tasks?projectId=' + encodeURIComponent(group.id))).filter((t: any) => group.sessionIds.includes(t.sourceId) && group.sessionIds.includes(t.recipientId));
-                const task = u.searchParams.get('taskId'); if (!task) return all;
-                if (!all.some((t: any) => t.id === task)) throw fail('任务未授权');
-                const result = await json(route); const latest = (await groups()).find((g: any) => g.id === group.id), selected = all.find((t: any) => t.id === task);
-                if (!latest?.sessionIds.includes(selected.sourceId) || !latest.sessionIds.includes(selected.recipientId)) throw fail('任务授权已变更'); return result;
+                const projectId = u.searchParams.get('projectId');
+                if (!projectId) throw fail('项目未授权');
+                const scope = await taskScope(projectId);
+                if (!scope.agents.size) throw fail('项目未授权');
+                const includeReviews = u.searchParams.get('reviewTasks') === '1';
+                const visible = (s: typeof scope, t: ProjectTaskRow) => s.agents.has(t.sourceId) &&
+                    (s.agents.has(t.recipientId) || (includeReviews && s.reviewers.has(t.recipientId) && (!t.dispatch || t.dispatch.projectId === projectId)));
+                const query = new URLSearchParams({ projectId });
+                const all = (await json('/api/projects/tasks?' + query) as ProjectTaskRow[]).filter(t => visible(scope, t));
+                const task = u.searchParams.get('taskId');
+                if (task === null) {
+                    const latest = await taskScope(projectId);
+                    return all.filter(t => visible(latest, t) && scope.reviewers.has(t.recipientId) === latest.reviewers.has(t.recipientId))
+                        .map(t => scope.reviewers.has(t.recipientId)
+                            ? { id: t.id, sourceId: t.sourceId, recipientId: t.recipientId, state: t.state, taskProfile: 'inline-review' }
+                            : t);
+                }
+                const selected = all.find(t => t.id === task);
+                if (!selected) throw fail('任务未授权');
+                const offset = Number(u.searchParams.get('offset') ?? 0);
+                if (!Number.isSafeInteger(offset) || offset < 0) throw fail('读取位置无效', 400);
+                const review = scope.reviewers.has(selected.recipientId);
+                query.set('taskId', task); query.set('offset', String(offset));
+                if (review && offset !== 0) throw fail('评审结果不支持分页', 400);
+                const result = review ? {
+                    taskProfile: 'inline-review', state: selected.state, terminal: taskTerminal(selected.state),
+                    ...(selected.state === 'completed' && selected.delivery ? {
+                        review: { summary: selected.delivery.summary, unresolved: selected.delivery.unresolved },
+                    } : {}),
+                } : await json('/api/projects/tasks?' + query);
+                const latest = await taskScope(projectId);
+                if (!visible(latest, selected) || latest.reviewers.has(selected.recipientId) !== review) throw fail('任务授权已变更');
+                return result;
             }
             if (['/api/plugin-conversations', '/api/plugin-resource-catalog'].includes(route) && method === 'GET') { const ids = new Set((await sessions()).map((s: any) => s.instanceId)); return (await json(route)).filter((e: any) => ids.has(e.sessionId)); }
             if (/^\/api\/plugin-resources\/[a-z0-9-]+\/[a-z0-9-]+$/.test(p) && ['GET','POST'].includes(method)) { await session(u.searchParams.get('remoteSession')); return json(route, body, method); }
@@ -151,8 +225,36 @@ export class SharedConversations {
             if (match[2] === '/submit' && (typeof body?.query !== 'string' || /^\s*[!/]/.test(body.query) || Object.keys(body).some(k => !['query','images','delivery'].includes(k)))) throw fail('仅允许普通对话消息');
             return json(route, body, method);
         };
+        // Dedicated methods, deliberately not entries in the generic local route allowlist.
+        const archives = this.archives;
+        const resolveArchiveCwd: ResolveArchiveCwd = cwd => {
+            current();
+            try {
+                if (!path.isAbsolute(cwd)) return null;
+                const real = fs.realpathSync(cwd);
+                if (!fs.statSync(real).isDirectory()) return null;
+                const authorized = grant.roots.some(root => {
+                    const relative = path.relative(root, real);
+                    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) return false;
+                    // Do not follow an approved root that has since become a symlink.
+                    try { return fs.realpathSync(root) === root && fs.statSync(root).isDirectory(); }
+                    catch { return false; }
+                });
+                return authorized ? real : null;
+            } catch { return null; }
+        };
         return Object.freeze({
             roots: [...grant.roots], close, request,
+            ...(archives && {
+                archivedSessions: () => { current(); return archives.list(resolveArchiveCwd); },
+                archivedHistory: async (id: string, offset: number) => {
+                    current();
+                    if (!sid(id) || !Number.isSafeInteger(offset) || offset < 0) throw fail('归档读取参数无效', 400);
+                    const messages = await archives.read(id, resolveArchiveCwd);
+                    current();
+                    return archivedPage(messages, offset);
+                },
+            }),
             openArtifact: async (id: string, requested: string) => { const s = await session(id); const opened = await openArtifact(s.cwd, requested); try { current(); return opened; } catch (e) { await opened.file.close(); throw e; } },
             image: async (id: string, imageId: string) => { await session(id); if (!new RegExp(`^${id}_img_[a-z0-9]+_[a-z0-9]+$`).test(imageId)) throw fail('图片不属于此对话'); return fetchLocal('/api/uploads/' + imageId); },
             events: async (id: string, recent: boolean, signal: AbortSignal) => {

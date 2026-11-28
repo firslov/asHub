@@ -74,6 +74,7 @@ document.addEventListener("ash:models-changed", invalidateProviderCatalog);
 
 const PROVIDER_LABELS = {
   deepseek: "DeepSeek",
+  gemini: "Google Gemini",
   zhipu: "Z.AI",
   openrouter: "OpenRouter",
   "zai-coding-plan": "Z.AI Coding Plan",

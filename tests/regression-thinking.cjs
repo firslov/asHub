@@ -386,6 +386,12 @@ test('model picker remains actionable before the first model is known and respec
   session.agentInfo = {model:'deepseek-flash',provider:'deepseek'};
   refresh(session);
   assert.equal(session.modelEl.textContent,'deepseek-flash@deepseek');
+  session.kind = 'antigravity';
+  opened = null;
+  refresh(session);
+  assert.equal(session.modelEl.textContent, 'new.antigravity');
+  click({ stopPropagation() {} });
+  assert.equal(opened, null);
   wrap.dataset.uiUsageModelShow='false';
   refresh(session);
   assert.equal(session.modelEl.hidden,true);
@@ -397,7 +403,8 @@ function pendingPickerFixture() {
   const toggle = source.slice(source.indexOf('const toggleModelDropdown'), source.indexOf('const selectModel ='));
   const chip = () => ({isConnected:true, getBoundingClientRect:()=>({left:0,top:300})});
   const session = {id:'owner',modelEl:chip()};
-  const dropdown = {hidden:true,style:{},querySelector:()=>null,contains:()=>false};
+  const backends = { replaceChildren(...children) { assert.equal(children.length, 0); } };
+  const dropdown = {hidden:true,style:{},querySelector:selector=>selector==='.model-backends' ? backends : null,contains:()=>false};
   const document = new EventTarget();
   const requests = [];
   let opened=0, errors=0;

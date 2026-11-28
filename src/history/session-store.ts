@@ -3,11 +3,13 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { summarizeMessage } from "./summarize.js";
+import { projectToolCalls } from "./tool-call-projection.js";
 import { messageEntries, renderMemory, validateCheckpointMemory, fallbackMemory, type ContextCheckpoint } from "./context-memory.js";
 
 export interface ToolCall {
   id?: string;
   function?: { name: string; arguments?: string };
+  googleThoughtSignature?: string;
 }
 
 export interface AgentMessage {
@@ -122,6 +124,8 @@ export interface HistoryWriterLifecycle {
 export interface SessionStoreOpts extends HistoryWriterLifecycle {
   create?: { cwd: string; sessionId: string };
   metaPath?: string;
+  /** Inspect saved records without repairing or modifying any files. */
+  readOnly?: boolean;
 }
 
 export class SessionStore {
@@ -173,7 +177,9 @@ export class SessionStore {
     this.onWritePending = opts?.onWritePending;
     this.shutdownSignal = opts?.shutdownSignal;
     this.meta = { createdAt: 0 };
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    this.sealed = opts?.readOnly === true;
+    if (this.sealed && opts?.create) throw new Error("Cannot create a read-only session store");
+    if (!this.sealed) fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
     if (opts?.create) {
       this.id = opts.create.sessionId;
@@ -285,8 +291,11 @@ export class SessionStore {
         timestamp: Date.now(),
         message: m,
       };
-      staged.push(e);
-      lines.push(JSON.stringify(e));
+      const line = JSON.stringify(e);
+      // The in-memory index must match the journal even if the kernel later
+      // mutates a message object (or one of its nested tool calls).
+      staged.push(JSON.parse(line) as MessageEntry);
+      lines.push(line);
       newIds.push(e.id);
       parent = e.id;
     }
@@ -377,6 +386,14 @@ export class SessionStore {
   }
 
   buildBranchWithIds(leafId: string = this.activeLeaf): { messages: AgentMessage[]; entryIds: (string | null)[] } {
+    const { messages, entryIds } = this.readBranchContext(leafId);
+    // The kernel owns the restored messages. It must not be able to mutate
+    // nested tool arguments, content parts or metadata in the journal index.
+    return { messages: JSON.parse(JSON.stringify(projectToolCalls(messages).messages)) as AgentMessage[], entryIds };
+  }
+
+  /** Unprojected comparison view. Callers must not mutate journal messages. */
+  readBranchContext(leafId: string = this.activeLeaf): { messages: AgentMessage[]; entryIds: (string | null)[] } {
     const branch = this.getBranch(leafId);
     let compactionIdx = -1;
     for (let i = branch.length - 1; i >= 0; i--) {
@@ -401,41 +418,8 @@ export class SessionStore {
     for (let i = startIdx; i < branch.length; i++) {
       const e = branch[i]!;
       if (e.type === "message") {
-        // Return copies, not the stored entry objects: the sanitize below and
-        // any downstream mutation (via replaceMessages into the kernel) must
-        // not leak into the persisted tree. The spread keeps meta (incl.
-        // meta.treeEntryId, which capture's entryId mapping relies on).
-        const copy: AgentMessage = { ...e.message };
-        if (copy.tool_calls) copy.tool_calls = [...copy.tool_calls];
-        messages.push(copy);
+        messages.push(e.message);
         entryIds.push(e.id);
-      }
-    }
-
-    // Sanitize: strip orphaned tool_calls from any assistant message whose
-    // tool-result messages are missing (e.g. session terminated mid-execution,
-    // or compaction evicted the tool results).  Operates on the copies above,
-    // so stored entries stay untouched.
-    // Build the answered-id set once — it is identical for every candidate.
-    const answeredIds = new Set<string>();
-    for (const t of messages) {
-      if (t.role === "tool" && t.tool_call_id) answeredIds.add(t.tool_call_id);
-    }
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]!;
-      if (m.role !== "assistant" || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0) continue;
-
-      const dangling = m.tool_calls.filter((tc) => !answeredIds.has(tc.id ?? ""));
-      if (dangling.length === 0) continue;
-
-      // Strip only the orphaned tool_calls, keep text content if any.
-      m.tool_calls = m.tool_calls.filter((tc) => answeredIds.has(tc.id ?? ""));
-      if (m.tool_calls.length === 0) {
-        delete m.tool_calls;
-        // DeepSeek (and other strict providers) reject assistant messages
-        // that have neither content nor tool_calls.  Add a placeholder so
-        // the rebuilt message list stays API-valid.
-        if (!m.content) m.content = "[interrupted]";
       }
     }
 
@@ -476,7 +460,9 @@ export class SessionStore {
       if (!tailOk) {
         try { JSON.parse(lines[lastIdx]!); tailOk = true; } catch { /* torn */ }
       }
-      if (!tailOk) {
+      if (!tailOk && this.sealed) {
+        raw = lines.slice(0, lastIdx).join("\n");
+      } else if (!tailOk) {
         let keepBytes = 0;
         for (let i = 0; i < lastIdx; i++) keepBytes += Buffer.byteLength(lines[i]!) + 1;
         try {
@@ -484,7 +470,7 @@ export class SessionStore {
           console.warn(`[session-store] truncated ${Buffer.byteLength(raw) - keepBytes} torn byte(s) from tail of ${this.entriesPath}`);
           raw = lines.slice(0, lastIdx).join("\n");
         } catch (err) { throw new Error(`Cannot repair history tail: ${String(err)}`); }
-      } else if (!raw.endsWith("\n")) {
+      } else if (!this.sealed && !raw.endsWith("\n")) {
         // A complete final line that lost its trailing newline (torn between
         // the entry and the "\n") parses fine, but the file is left without a
         // newline.  Restore it so the next append doesn't glue its first line

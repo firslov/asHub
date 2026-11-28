@@ -43,10 +43,14 @@ export function initSidebarViewPicker(onChange) {
     isOpen() ? close() : open();
   });
   trigger.addEventListener("keydown", ev => {
-    ev.stopPropagation();
     if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
-      ev.preventDefault(); open(ev.key === "ArrowUp");
-    } else if (ev.key === "Escape" && isOpen()) { ev.preventDefault(); close(true); }
+      ev.stopPropagation();
+      ev.preventDefault();
+      open(ev.key === "ArrowUp");
+    } else if (ev.key === "Escape") {
+      ev.stopPropagation();
+      if (isOpen()) { ev.preventDefault(); close(true); }
+    }
   });
   for (const option of options) option.addEventListener("click", () => {
     update(option.dataset.view); onChange(option.dataset.view); close(true);

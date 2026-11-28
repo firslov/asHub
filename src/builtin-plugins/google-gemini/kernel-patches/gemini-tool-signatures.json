@@ -1,0 +1,141 @@
+{
+  "files": [
+    {
+      "path": "src/agent/agent-loop.ts",
+      "hunks": [
+        {
+          "before": "        this.toolProtocol.recordAssistant(this.conversation, text, toolCalls, extras);",
+          "after": "        const signatures = new Map(toolCalls.flatMap(call =>\n          call.googleThoughtSignature ? [[call.id, call.googleThoughtSignature] as const] : []));\n        this.toolProtocol.recordAssistant(this.conversation, text, toolCalls,\n          signatures.size ? { ...extras, googleToolSignatures: signatures } : extras);"
+        },
+        {
+          "before": "    const stream = await raceAbort(() => this.llmClient.stream({",
+          "after": "    const isGeminiStream = this.llmClient.usesGeminiToolSignatures?.();\n    const stream = await raceAbort(() => this.llmClient.stream({"
+        },
+        {
+          "before": "          if (tc.function?.arguments) {",
+          "after": "          if (isGeminiStream) {\n            const signature = (tc as typeof tc & { extra_content?: { google?: { thought_signature?: unknown } } }).extra_content?.google?.thought_signature;\n            if (typeof signature === \"string\" && signature) pendingToolCalls[idx].googleThoughtSignature = signature;\n          }\n          if (tc.function?.arguments) {"
+        },
+        {
+          "before": "          const idx = tc.index;",
+          "after": "          let idx = tc.index;\n          // Gemini sends some complete tool calls without the streaming index.\n          if (isGeminiStream && !Number.isInteger(idx)) {\n            if (!tc.id) continue;\n            const existing = pendingToolCalls.findIndex(call => call?.id === tc.id);\n            idx = existing < 0 ? pendingToolCalls.length : existing;\n          }"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/live-view.ts",
+      "hunks": [
+        {
+          "before": "    if (hasToolCalls) {\n      base.tool_calls",
+          "after": "    const { googleToolSignatures, ...assistantExtras } = extras ?? {};\n    const signatures = googleToolSignatures as ReadonlyMap<string, string> | undefined;\n    if (hasToolCalls) {\n      base.tool_calls"
+        },
+        {
+          "before": "        function: tc.function,",
+          "after": "        function: tc.function,\n        ...(signatures?.has(tc.id) ? { googleThoughtSignature: signatures.get(tc.id) } : {}),"
+        },
+        {
+          "before": "    if (extras) Object.assign(base, extras);",
+          "after": "    Object.assign(base, assistantExtras);"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/llm-client.ts",
+      "hunks": [
+        {
+          "before": "  stream(opts: StreamOpts) {",
+          "after": "  // Google thought signatures are opaque and are only sent back to Google's endpoint.\n  usesGeminiToolSignatures(): boolean {\n    return this.config.baseURL?.replace(/\\/+$/, \"\") === \"https://generativelanguage.googleapis.com/v1beta/openai\";\n  }\n\n  private requestMessages(messages: ChatCompletionMessageParam[]) {\n    const echoSignatures = this.usesGeminiToolSignatures();\n    return messages.map(message => {\n      const clean = stripMeta(message);\n      if (clean.role !== \"assistant\" || !clean.tool_calls?.some(call => \"googleThoughtSignature\" in call)) return clean;\n      return {\n        ...clean,\n        tool_calls: clean.tool_calls.map(call => {\n          const { googleThoughtSignature, ...toolCall } = call as typeof call & { googleThoughtSignature?: string };\n          return echoSignatures && googleThoughtSignature\n            ? { ...toolCall, extra_content: { google: { thought_signature: googleThoughtSignature } } }\n            : toolCall;\n        }),\n      };\n    });\n  }\n\n  stream(opts: StreamOpts) {"
+        },
+        {
+          "before": "      messages: messages.map(stripMeta),\n      tools: tools?.length ? tools : undefined,",
+          "after": "      messages: this.requestMessages(messages),\n      tools: tools?.length ? tools : undefined,"
+        },
+        {
+          "before": "      messages: messages.map(stripMeta),\n      max_tokens: max_tokens ?? 1024,",
+          "after": "      messages: this.requestMessages(messages),\n      max_tokens: max_tokens ?? 1024,"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/agent-loop.js",
+      "hunks": [
+        {
+          "before": "                this.toolProtocol.recordAssistant(this.conversation, text, toolCalls, extras);",
+          "after": "                const signatures = new Map(toolCalls.flatMap(call => call.googleThoughtSignature ? [[call.id, call.googleThoughtSignature]] : []));\n                this.toolProtocol.recordAssistant(this.conversation, text, toolCalls, signatures.size ? { ...extras, googleToolSignatures: signatures } : extras);"
+        },
+        {
+          "before": "        const stream = await raceAbort(() => this.llmClient.stream({",
+          "after": "        const isGeminiStream = this.llmClient.usesGeminiToolSignatures?.();\n        const stream = await raceAbort(() => this.llmClient.stream({"
+        },
+        {
+          "before": "                        if (tc.function?.arguments) {",
+          "after": "                        if (isGeminiStream) {\n                            const signature = tc.extra_content?.google?.thought_signature;\n                            if (typeof signature === \"string\" && signature)\n                                pendingToolCalls[idx].googleThoughtSignature = signature;\n                        }\n                        if (tc.function?.arguments) {"
+        },
+        {
+          "before": "                        const idx = tc.index;",
+          "after": "                        let idx = tc.index;\n                        // Gemini sends some complete tool calls without the streaming index.\n                        if (isGeminiStream && !Number.isInteger(idx)) {\n                            if (!tc.id) continue;\n                            const existing = pendingToolCalls.findIndex(call => call?.id === tc.id);\n                            idx = existing < 0 ? pendingToolCalls.length : existing;\n                        }"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/live-view.js",
+      "hunks": [
+        {
+          "before": "        if (hasToolCalls) {\n            base.tool_calls",
+          "after": "        const { googleToolSignatures, ...assistantExtras } = extras ?? {};\n        const signatures = googleToolSignatures;\n        if (hasToolCalls) {\n            base.tool_calls"
+        },
+        {
+          "before": "                function: tc.function,",
+          "after": "                function: tc.function,\n                ...(signatures?.has(tc.id) ? { googleThoughtSignature: signatures.get(tc.id) } : {}),"
+        },
+        {
+          "before": "        if (extras)\n            Object.assign(base, extras);",
+          "after": "        Object.assign(base, assistantExtras);"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/llm-client.js",
+      "hunks": [
+        {
+          "before": "    stream(opts) {",
+          "after": "    // Google thought signatures are opaque and are only sent back to Google's endpoint.\n    usesGeminiToolSignatures() {\n        return this.config.baseURL?.replace(/\\/+$/, \"\") === \"https://generativelanguage.googleapis.com/v1beta/openai\";\n    }\n\n    requestMessages(messages) {\n        const echoSignatures = this.usesGeminiToolSignatures();\n        return messages.map(message => {\n            const clean = stripMeta(message);\n            if (clean.role !== \"assistant\" || !clean.tool_calls?.some(call => \"googleThoughtSignature\" in call)) return clean;\n            return {\n                ...clean,\n                tool_calls: clean.tool_calls.map(call => {\n                    const { googleThoughtSignature, ...toolCall } = call;\n                    return echoSignatures && googleThoughtSignature\n                        ? { ...toolCall, extra_content: { google: { thought_signature: googleThoughtSignature } } }\n                        : toolCall;\n                }),\n            };\n        });\n    }\n\n    stream(opts) {"
+        },
+        {
+          "before": "            messages: messages.map(stripMeta),\n            tools: tools?.length ? tools : undefined,",
+          "after": "            messages: this.requestMessages(messages),\n            tools: tools?.length ? tools : undefined,"
+        },
+        {
+          "before": "            messages: messages.map(stripMeta),\n            max_tokens: max_tokens ?? 1024,",
+          "after": "            messages: this.requestMessages(messages),\n            max_tokens: max_tokens ?? 1024,"
+        }
+      ]
+    },
+    {
+      "path": "src/agent/tool-protocol.ts",
+      "hunks": [
+        {
+          "before": "  argumentsJson: string;",
+          "after": "  argumentsJson: string;\n  googleThoughtSignature?: string;"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/tool-protocol.d.ts",
+      "hunks": [
+        {
+          "before": "    argumentsJson: string;",
+          "after": "    argumentsJson: string;\n    googleThoughtSignature?: string;"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/llm-client.d.ts",
+      "hunks": [
+        {
+          "before": "    stream(opts: StreamOpts)",
+          "after": "    usesGeminiToolSignatures(): boolean;\n    private requestMessages;\n    stream(opts: StreamOpts)"
+        }
+      ]
+    }
+  ]
+}

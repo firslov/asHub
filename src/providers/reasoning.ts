@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getSettings, REASONING_LEVELS, resolveProvider } from "agent-sh/settings";
+import { optionalProvider } from "../integrations.js";
 
 export interface ReasoningModel {
   id: string;
@@ -57,6 +58,14 @@ export function reasoningProfile(model: ReasoningModel): ReasoningProfile | null
   }
   if (shape === "deepseek" && /^(deepseek-flash|deepseek-v4-(?:pro|flash)(?:-vision-exp)?)$/.test(id)) {
     return make(["off", "low", "high", "max"], "thinking", "high");
+  }
+  const registered = optionalProvider(shape);
+  if (registered?.reasoningFormat) {
+    const capabilities = provider?.modelCapabilities?.get(model.id);
+    if (capabilities?.reasoning === false) return null;
+    const levels = model.reasoningLevels ?? capabilities?.reasoningLevels ?? provider?.reasoningLevels
+      ?? registered.models.find(entry => entry.id === id)?.reasoningLevels;
+    return levels?.length ? make([...levels], registered.reasoningFormat) : null;
   }
   if (shape === "zai-coding-plan") {
     if (/^glm-5\.3(?:-flash)?$/.test(id)) return make(["low", "high", "max"], "thinking", "max");

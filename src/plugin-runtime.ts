@@ -7,6 +7,10 @@ import type { AgentShellCore } from 'agent-sh';
 import { pluginDataDirectory } from './extensions/data-directory.js';
 import { pluginCatalog, readPluginSettings, type PluginStatus } from './plugins.js';
 type Context = ReturnType<AgentShellCore['extensionContext']>;
+type Tool = Parameters<NonNullable<Context['agent']>['registerTool']>[0];
+export type RequestDesktopApproval = (request: {
+  application: string; description: string; signal: AbortSignal; remember(): void;
+}) => Promise<boolean>;
 
 type Register = (...args: any[]) => () => void;
 const registrations = new WeakMap<Context, Map<string, Register>>();
@@ -343,11 +347,14 @@ export class PluginRuntime {
   private uninstalled = new Set<string>();
   private closed = false;
   readonly status: PluginStatus[] = [];
+  private desktopTools = new WeakSet<Tool['execute']>();
+  ownsDesktopTool(tool: Tool): boolean { return this.desktopTools.has(tool.execute); }
   constructor(private file: string, private timeout = 10_000,
     private bindBrowser?: (plugin: string) => ReturnType<NonNullable<import('./bridges/types.js').BridgeOpts['bindBrowserPages']>>,
     private defineOwned?: ScopedDefine,
     private imageResources?: import("./image-resources.js").ImageResourceAccess,
-    private pluginConversation?: (pluginId: string, entryKeys: readonly string[]) => boolean) {}
+    private pluginConversation?: (pluginId: string, entryKeys: readonly string[]) => boolean,
+    private requestDesktopApproval?: RequestDesktopApproval) {}
   async load(ctx: Context): Promise<string[]> {
     let entries, settings: Record<string, any>;
     try { entries = pluginCatalog(this.file).filter(p => p.enabled); settings = readPluginSettings(this.file); }
@@ -386,8 +393,21 @@ export class PluginRuntime {
           if (!pluginCatalog(this.file).some(p => p.id === plugin.id && p.enabled && p.sessionEnabled && !p.compatibilityError)) throw new Error('Plugin is disabled');
           return this.imageResources!.publish(path, signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal);
         }} : undefined;
+      const desktopControl = plugin.manifest?.id === 'ashub-desktop-control' && plugin.packageName === 'ashub-desktop-control'
+        && this.requestDesktopApproval && scope.ctx.agent
+        ? Object.freeze({
+          registerTool: (tool: Tool) => {
+            lifetime.signal.throwIfAborted();
+            scope.ctx.agent!.registerTool(tool);
+            this.desktopTools.add(tool.execute);
+          },
+          approve: (request: Parameters<RequestDesktopApproval>[0]) => this.requestDesktopApproval!({
+            ...request, signal: AbortSignal.any([request.signal, lifetime.signal]),
+          }),
+        }) : undefined;
       Object.defineProperty(scope.ctx, 'services', { value: Object.freeze({ dataDirectory: pluginDataDirectory(this.file, plugin.id),
-        ...(browserPages ? {browserPages} : {}), ...(imageResources ? {imageResources} : {}) }), enumerable: true });
+        ...(browserPages ? {browserPages} : {}), ...(imageResources ? {imageResources} : {}),
+        ...(desktopControl ? {desktopControl} : {}) }), enumerable: true });
       // Snapshot per kernel: new kernels see saved edits without resetting the
       // process-wide kernel settings cache or changing running conversations.
       scope.ctx.getExtensionSettings = (namespace, defaults) => {

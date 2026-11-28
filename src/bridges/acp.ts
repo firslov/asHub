@@ -94,26 +94,51 @@ function extendedOption(options: AcpPermissionOption[]) {
 
 const INIT_TIMEOUT_MS = 15_000;
 
-function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms — the child process is not speaking ACP`)), ms);
+    timer = setTimeout(() => reject(new Error(message)), ms);
   });
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
+
+export type AcpMcpServer =
+  | { type?: "stdio"; name: string; command: string; args: string[]; env: { name: string; value: string }[] }
+  | { type: "http" | "sse"; name: string; url: string; headers: { name: string; value: string }[] };
 
 export interface AcpBridgeExtra {
   command: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  prepareEnv?: (signal: AbortSignal) => Promise<NodeJS.ProcessEnv>;
+  mcpServers?: readonly AcpMcpServer[] | ((signal: AbortSignal) => Promise<readonly AcpMcpServer[]>);
+  promptFormat?: "text" | "attachment-envelope";
+  emitCancelledEvent?: boolean;
+  initializeTimeoutMessage?: string;
+  formatRpcError?: (error: NonNullable<JsonRpcMessage["error"]>) => string;
+  denyPermissions?: boolean;
+  /** No restored context, MCP servers, or forwarded stream events. */
+  freshTextTurns?: boolean;
+  /** @deprecated Compatibility for existing direct AcpBridge callers. */
+  antigravity?: boolean;
 }
+
+const legacyAntigravity: Partial<AcpBridgeExtra> = {
+  promptFormat: "text",
+  emitCancelledEvent: true,
+  initializeTimeoutMessage: "Antigravity session startup timed out. Check your Google sign-in and system proxy, then try again.",
+  formatRpcError: error => error.code === -32000 && /auth|sign.in|log.in/i.test(error.message)
+    ? "Sign in to Antigravity with your Google account in Terminal using agy acp --login, then try again."
+    : error.message,
+};
 
 export class AcpBridge extends EventEmitter implements Bridge {
   readonly readOnlyContext = true;
   readonly backendId = "acp";
   readonly supportsImages = false;
   private transportError: Error | null = null;
-  private child: ChildProcess;
+  private child?: ChildProcess;
+  private environmentPreparation?: AbortController;
   private buf = "";
   private nextId = 1;
   private pending = new Map<number | string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
@@ -123,26 +148,54 @@ export class AcpBridge extends EventEmitter implements Bridge {
   private initPromise: Promise<void>;
   private loading = false;
   private processing = false;
+  private config: Partial<AcpBridgeExtra>;
   private translator = new Translator();
+  private freshSessionIds = new Set<string>();
+  private readTurnText?: (text: string) => void;
 
   constructor(opts: BridgeOpts) {
     super();
     if (opts.restoreBackend && opts.restoreBackend !== this.backendId) throw new Error("This session belongs to another backend; restart with its original backend.");
     const extra = (opts.extra ?? {}) as Partial<AcpBridgeExtra>;
-    if (!extra.command) throw new Error("AcpBridge requires extra.command");
+    this.config = extra.antigravity === true ? { ...legacyAntigravity, ...extra } : extra;
+    const { command, args = [], env, prepareEnv, mcpServers, initializeTimeoutMessage } = this.config;
+    if (!command) throw new Error("AcpBridge requires extra.command");
 
+    const preparation = this.environmentPreparation = new AbortController();
+    const { signal } = preparation;
+    const start = async (environment?: NodeJS.ProcessEnv) => {
+      signal.throwIfAborted();
+      const servers = typeof mcpServers === "function" ? await mcpServers(signal) : mcpServers ?? [];
+      signal.throwIfAborted();
+      this.startProcess(command, args, opts.cwd ?? process.cwd(), environment);
+      return this.initialize(opts, servers, signal);
+    };
+    const initializing = prepareEnv ? Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return prepareEnv(signal);
+    }).then(start) : start(env);
+    this.initPromise = withTimeout(initializing, INIT_TIMEOUT_MS, initializeTimeoutMessage
+      ?? `ACP initialize/session/new timed out after ${INIT_TIMEOUT_MS}ms — the child process is not speaking ACP`)
+      .catch(err => {
+        preparation.abort(err);
+        // A child that never answers initialize must not outlive the bridge.
+        this.close();
+        throw err;
+      }).finally(() => { this.environmentPreparation = undefined; });
+  }
+
+  private startProcess(command: string, args: string[], cwd: string, environment?: NodeJS.ProcessEnv): void {
     // Windows .cmd shims need cmd.exe escaping; native executables take an argument vector.
     const launch: typeof spawn = process.platform === "win32" ? createRequire(import.meta.url)("cross-spawn") : spawn;
-    const env = new RuntimeEnvironment({ env: extra.env }).commandEnvironment();
-    this.child = launch(extra.command, extra.args ?? [], {
-      cwd: opts.cwd ?? process.cwd(),
-      env,
+    const child = this.child = launch(command, args, {
+      cwd,
+      env: new RuntimeEnvironment({ env: environment }).commandEnvironment(),
       stdio: ["pipe", "pipe", "inherit"],
     });
 
-    this.child.stdout!.setEncoding("utf-8");
-    this.child.stdout!.on("data", (chunk: string) => this.onChunk(chunk));
-    this.child.on("close", () => {
+    child.stdout!.setEncoding("utf-8");
+    child.stdout!.on("data", (chunk: string) => this.onChunk(chunk));
+    child.on("close", () => {
       this.transportError ??= new Error("ACP child closed");
       for (const p of this.pending.values()) p.reject(this.transportError);
       this.pending.clear();
@@ -150,26 +203,20 @@ export class AcpBridge extends EventEmitter implements Bridge {
       this.emit("closed");
     });
     const transportFailed = (err: NodeJS.ErrnoException) => this.failTransport(err.code === 'ENOENT'
-      ? Error(`ACP command not found: ${extra.command}. Install it, add its standard installation path, or configure an absolute path.`)
+      ? Error(`ACP command not found: ${command}. Install it, add its standard installation path, or configure an absolute path.`)
       : err);
-    this.child.on("error", transportFailed);
-    this.child.stdin?.on?.("error", transportFailed);
-    this.child.stdout?.on?.("error", transportFailed);
-
-    this.initPromise = withTimeout(this.initialize(opts), INIT_TIMEOUT_MS, "ACP initialize/session/new")
-      .catch((err) => {
-        // A child that never answers initialize is not an ACP server; don't
-        // leave it running after the hub gives up on the bridge.
-        try { this.child.kill(); } catch {}
-        throw err;
-      });
+    child.on("error", transportFailed);
+    child.stdin?.on?.("error", transportFailed);
+    child.stdout?.on?.("error", transportFailed);
   }
 
-  private async initialize(opts: BridgeOpts): Promise<void> {
+  private async initialize(opts: BridgeOpts, mcpServers: readonly AcpMcpServer[], signal: AbortSignal): Promise<void> {
     const init = await this.request("initialize", { protocolVersion: 1, clientCapabilities: {} }) as {
       protocolVersion: number; agentCapabilities?: { loadSession?: boolean };
     };
+    signal.throwIfAborted();
     if (init.protocolVersion !== 1) throw new Error(`Unsupported ACP protocol version: ${init.protocolVersion}`);
+    if (this.config.freshTextTurns) return;
     const cwd = opts.cwd ?? process.cwd();
     const oldId = opts.restoreState?.acpSessionId;
     if (opts.isRestored || opts.initialMessages?.length || oldId) {
@@ -178,11 +225,12 @@ export class AcpBridge extends EventEmitter implements Bridge {
       }
       this.loading = true;
       try {
-        await this.request("session/load", { sessionId: oldId, cwd, mcpServers: [] });
+        await this.request("session/load", { sessionId: oldId, cwd, mcpServers });
         this.sessionId = oldId;
       } finally { this.loading = false; }
     } else {
-      const result = await this.request("session/new", { cwd, mcpServers: [] }) as { sessionId: string };
+      const result = await this.request("session/new", { cwd, mcpServers }) as { sessionId: string };
+      if (typeof result?.sessionId !== "string" || !result.sessionId) throw new Error("ACP did not return a session ID");
       this.sessionId = result.sessionId;
     }
   }
@@ -192,26 +240,69 @@ export class AcpBridge extends EventEmitter implements Bridge {
 
   ready(): Promise<void> { return this.initPromise; }
 
-  async submit(text: string): Promise<{ stopReason: string }> {
+  submit(text: string): Promise<{ stopReason: string }> {
+    return this.submitPrompt(text);
+  }
+
+  protected async submitPrompt(text: string, signal?: AbortSignal): Promise<{ stopReason: string }> {
     await this.initPromise;
+    signal?.throwIfAborted();
     if (!this.sessionId) throw new Error("session not initialized");
     if (this.processing) throw new Error("ACP turn already in progress");
 
     // Reject unsupported attachments instead of silently sending only text.
     let query = text;
     let parsed: { query?: unknown; images?: unknown } | null = null;
-    try { parsed = JSON.parse(text); } catch { /* plain text */ }
+    if (this.config.promptFormat !== "text") {
+      try { parsed = JSON.parse(text); } catch { /* plain text */ }
+    }
     if (parsed && typeof parsed.query === "string" && Array.isArray(parsed.images)) {
       if (parsed.images.length) throw new Error("This ACP backend does not support image submissions");
       query = parsed.query;
     }
 
     this.processing = true;
-    try { return await this.request("session/prompt", {
-      sessionId: this.sessionId,
-      prompt: [{ type: "text", text: query }],
-    }) as { stopReason: string };
+    try {
+      const result = await this.request("session/prompt", {
+        sessionId: this.sessionId,
+        prompt: [{ type: "text", text: query }],
+      }) as { stopReason: string };
+      if (this.config.emitCancelledEvent && result?.stopReason === "cancelled") this.emit("event", { name: "agent:cancelled", payload: {} });
+      return result;
     } finally { this.processing = false; }
+  }
+
+  protected async submitFreshTextPrompt(cwd: string, text: string, signal: AbortSignal, maxChars: number, beforePrompt: () => void) {
+    await this.initPromise;
+    signal.throwIfAborted();
+    if (!this.config.freshTextTurns || this.processing) throw new Error("ACP isolated text turn unavailable");
+    this.processing = true;
+    let response = "", oversized = false;
+    try {
+      const opened = await withTimeout(this.request("session/new", { cwd, mcpServers: [] }), INIT_TIMEOUT_MS, "ACP review session startup timed out") as { sessionId?: string };
+      signal.throwIfAborted();
+      if (typeof opened?.sessionId !== "string" || !opened.sessionId || this.freshSessionIds.has(opened.sessionId)) {
+        throw new Error("ACP did not create a fresh review session");
+      }
+      this.sessionId = opened.sessionId;
+      this.freshSessionIds.add(opened.sessionId);
+      beforePrompt();
+      this.readTurnText = chunk => {
+        if (oversized || signal.aborted) return;
+        if (response.length + chunk.length > maxChars) { response = ""; oversized = true; }
+        else response += chunk;
+      };
+      const result = await this.request("session/prompt", {
+        sessionId: this.sessionId, prompt: [{ type: "text", text }],
+      }, () => { this.readTurnText = undefined; }) as { stopReason?: string };
+      signal.throwIfAborted();
+      if (oversized) throw new Error("Antigravity review response exceeded the size limit");
+      return { stopReason: result?.stopReason, text: response };
+    } finally {
+      this.readTurnText = undefined;
+      this.sessionId = null;
+      this.processing = false;
+    }
   }
 
   cancel(): void {
@@ -232,9 +323,10 @@ export class AcpBridge extends EventEmitter implements Bridge {
   }
 
   close(): void {
+    this.environmentPreparation?.abort(new Error("ACP bridge closed"));
     this.settlePermissions();
-    try { this.child.stdin?.end(); } catch {}
-    try { this.child.kill(); } catch {}
+    try { this.child?.stdin?.end(); } catch {}
+    try { this.child?.kill(); } catch {}
   }
 
   async snapshot(): Promise<ContextSnapshot> {
@@ -285,8 +377,11 @@ export class AcpBridge extends EventEmitter implements Bridge {
       const p = this.pending.get(msg.id);
       if (p) {
         this.pending.delete(msg.id);
-        if (msg.error) p.reject(new Error(msg.error.message));
-        else p.resolve(msg.result);
+        if (msg.error) {
+          let message = msg.error.message;
+          try { message = this.config.formatRpcError?.(msg.error) ?? message; } catch { /* keep the wire error */ }
+          p.reject(new Error(message));
+        } else p.resolve(msg.result);
       }
       return;
     }
@@ -297,7 +392,14 @@ export class AcpBridge extends EventEmitter implements Bridge {
     }
 
     if (msg.method === "session/update") {
-      const params = msg.params as { update?: Record<string, unknown> };
+      const params = msg.params as { sessionId?: string; update?: Record<string, unknown> };
+      if (this.config.freshTextTurns) {
+        const { update } = params ?? {};
+        const content = update?.content as { type?: string; text?: string } | undefined;
+        if (params?.sessionId === this.sessionId && update?.sessionUpdate === "agent_message_chunk" &&
+            content?.type === "text" && typeof content.text === "string") this.readTurnText?.(content.text);
+        return;
+      }
       if (params?.update) {
         for (const e of this.loading ? [] : this.translator.translateUpdate(params.update)) {
           this.emit("event", e);
@@ -309,6 +411,10 @@ export class AcpBridge extends EventEmitter implements Bridge {
   private handleRequest(msg: JsonRpcMessage): void {
     if (msg.method === "session/request_permission") {
       const requestId = msg.id!;
+      if (this.config.denyPermissions) {
+        this.send({ jsonrpc: "2.0", id: requestId, result: { outcome: { outcome: "cancelled" } } });
+        return;
+      }
       const params = (msg.params ?? {}) as AcpPermissionRequest;
       const options = (Array.isArray(params.options) ? params.options : []).filter(o => o && typeof o.optionId === "string" && typeof o.name === "string" && (o.kind === undefined || typeof o.kind === "string"));
       const kind = mapAcpKind(params.toolCall?.kind ?? params.kind);
@@ -381,11 +487,12 @@ export class AcpBridge extends EventEmitter implements Bridge {
     return pending.resolve(outcome === "approved" ? allowed?.optionId ?? null : pickRejectOption(pending.options), outcome === "approved");
   }
 
-  private request(method: string, params: unknown): Promise<unknown> {
+  private request(method: string, params: unknown, seal?: () => void): Promise<unknown> {
     if (this.transportError) return Promise.reject(this.transportError);
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      // Seal the stream synchronously; a single stdout chunk may contain later updates.
+      this.pending.set(id, seal ? { resolve: value => { seal(); resolve(value); }, reject: error => { seal(); reject(error); } } : { resolve, reject });
       this.send({ jsonrpc: "2.0", id, method, params });
     });
   }
@@ -407,8 +514,9 @@ export class AcpBridge extends EventEmitter implements Bridge {
   private send(msg: JsonRpcMessage, written?: (err?: Error | null) => void): void {
     if (this.transportError) { written?.(this.transportError); return; }
     try {
-      if (!this.child.stdin?.writable) throw new Error("ACP input closed");
-      this.child.stdin.write(JSON.stringify(msg) + "\n", written);
+      const input = this.child?.stdin;
+      if (!input?.writable) throw new Error("ACP input closed");
+      input.write(JSON.stringify(msg) + "\n", written);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       written?.(error); this.failTransport(error);

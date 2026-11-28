@@ -156,6 +156,103 @@ test("normal flow holds dependencies until reviewed and carries accepted evidenc
     /data.md 第 2 行/,
   );
 });
+test("inline review does not dispatch the plan, files or dependency evidence implicitly", async (t) => {
+  const f = fixture(t);
+  const [producer, review] = f.spec.steps;
+  const member = f.c.conversations.find(s => s.id === review.member);
+  member.projectTaskProfile = 'inline-review';
+  await assert.rejects(f.run('plan', f.spec), /仅审阅提供的文字/);
+  await assert.rejects(f.run('plan', { ...f.spec, steps: [{ ...producer, mode: 'inline-review' }] }), /未声明/);
+  await f.run('plan', { ...f.spec, steps: [producer, { ...review, mode: 'inline-review' }] });
+  const a = { work: 'paper', step: 'a' }, b = { work: 'paper', step: 'b' };
+  const prepared = await f.run('brief', a);
+  receipt(f, prepared);
+  f.tasks.set('task1', { sourceId: 'lead', recipientId: 'worker', state: 'completed', terminal: true,
+    delivery: { summary: 'done', unresolved: [], artifacts: [{ label: 'raw draft', path: '/fixture/private/draft.md' }] } });
+  await f.run('review', { ...a, attempt: prepared.attempt, taskId: 'task1', decision: 'accepted',
+    reason: 'Internal acceptance details', artifactIndexes: [1] });
+  const status = (await f.run('status', b)).step;
+  assert.equal(status.projectTaskProfile, 'inline-review');
+  assert.equal(status.mode, 'inline-review');
+  assert.equal((await f.run('brief', b)).state, 'review_material_required');
+  assert.deepEqual((await f.run('status', b)).history, []);
+  await assert.rejects(f.run('brief', { ...b, reviewMaterial: '\n' }), /reviewMaterial/);
+  await assert.rejects(f.run('brief', { ...b, reviewMaterial: 'x'.repeat(8001) }), /reviewMaterial/);
+  await assert.rejects(f.run('brief', { ...b, artifactSelection: [{ step: 'a', artifactIndexes: [1] }] }), /不接收产物引用/);
+  delete member.projectTaskProfile;
+  await assert.rejects(f.run('brief', { ...b, reviewMaterial: 'Text' }), /当前不可用/);
+  member.projectTaskProfile = 'inline-review';
+  const material = '请检查口径。\n摘录：样本 100，缺失 2。';
+  const ready = await f.run('brief', { ...b, reviewMaterial: material });
+  assert.deepEqual(ready.send, { id: review.member, requestKey: ready.attempt, message: material });
+  assert.equal((await f.run('brief', { ...b, reviewMaterial: 'changed' })).state, 'receipt_pending');
+  receipt(f, ready, 'review-task', review.member);
+  assert.equal((await f.run('status', b)).step.taskId, 'review-task');
+});
+
+test("structured acceptance of inline reviews does not append local criteria or rework evidence", async t => {
+  const f = fixture(t), base = { work: 'paper', step: 'a' };
+  const [step] = f.spec.steps;
+  f.c.conversations.find(s => s.id === step.member).projectTaskProfile = 'inline-review';
+  const criteria = [
+    { initialState: 'local draft', action: 'compare sample A', expected: 'A is explained' },
+    { initialState: 'local draft', action: 'compare sample B', expected: 'B is explained' },
+  ];
+  await f.run('plan', { ...f.spec, steps: [{ ...step, mode: 'inline-review', criteria }] });
+  assert.equal((await f.run('brief', base)).state, 'review_material_required');
+  const material = 'Review only these approved excerpts; report checks 1 and 2 as JSON.';
+  const first = await f.run('brief', { ...base, reviewMaterial: material });
+  assert.equal(first.send.message, material);
+  receipt(f, first);
+  const checks = criteria.map((_, i) => ({ criterion: i + 1, outcome: 'met', evidence: `excerpt line ${i + 1}` }));
+  const report = checks.map(check => ({ ...check, observation: 'Text confirmed' }));
+  const host = { sourceId: 'lead', recipientId: step.member, state: 'completed', terminal: true, revision: 7, deliverySubmitted: true,
+    delivery: { summary: JSON.stringify({ checks: [report[0]] }), artifacts: [], unresolved: [] } };
+  f.tasks.set('task1', host);
+  const review = { ...base, attempt: first.attempt, taskId: 'task1', taskRevision: 7, decision: 'accepted', checks, reason: 'Confirmed in local review' };
+  const status = await f.run('status', base);
+  assert.equal(status.report.state, 'incomplete');
+  assert.equal(status.report.checks[1].outcome, 'unverified');
+  await assert.rejects(f.run('review', review), /未验证/);
+  host.delivery.summary = JSON.stringify({ checks: [report[0], report[0]] });
+  assert.equal((await f.run('status', base)).report.state, 'invalid');
+  await assert.rejects(f.run('review', review), /未验证/);
+  await f.run('review', { ...review, decision: 'revise', reason: 'local-only finding' });
+  const rework = 'Review the newly approved fixture text only; submit both numbered checks.';
+  const second = await f.run('brief', { ...base, previousTaskId: 'task1', reviewMaterial: rework });
+  assert.equal(second.send.message, rework);
+  receipt(f, second, 'task2');
+  f.tasks.set('task2', { ...host, revision: 8, delivery: { ...host.delivery, summary: JSON.stringify({ checks: report }) } });
+  const nextReview = { ...review, attempt: second.attempt, taskId: 'task2' };
+  await assert.rejects(f.run('review', nextReview), /taskRevision/);
+  await f.run('review', { ...nextReview, taskRevision: 8 });
+  const detail = await f.run('status', base);
+  assert.equal(detail.step.state, 'accepted');
+  assert.equal(detail.history[0].review.reason, 'local-only finding');
+  assert.equal(detail.history[1].review.taskRevision, 8);
+});
+
+test("legacy plans acquire the current member profile and identical texts retain separate receipts", async (t) => {
+  const f = fixture(t);
+  const [one] = f.spec.steps;
+  const member = f.c.conversations.find(s => s.id === one.member);
+  await f.run('plan', { ...f.spec, steps: [one] });
+  member.projectTaskProfile = 'inline-review';
+  const another = { work: 'other', step: one.id };
+  await f.run('plan', { ...f.spec, work: 'other', steps: [{ ...one, mode: 'inline-review' }] });
+  const old = { work: 'paper', step: one.id };
+  assert.equal((await f.run('brief', old)).state, 'review_material_required');
+  const first = await f.run('brief', { ...old, reviewMaterial: 'same input' });
+  const second = await f.run('brief', { ...another, reviewMaterial: 'same input' });
+  assert.notEqual(first.send.requestKey, second.send.requestKey);
+  receipt(f, { send: { ...first.send, message: 'changed input' } }, 'wrong');
+  assert.equal((await f.run('status', old)).step.taskId, undefined);
+  receipt(f, first, 'first');
+  receipt(f, second, 'second');
+  assert.equal((await f.run('status', old)).step.taskId, 'first');
+  assert.equal((await f.run('status', another)).step.taskId, 'second');
+});
+
 test("multiple activations claim once; reopen lists plans and restores the exact unconfirmed brief", async (t) => {
   const f = fixture(t),
     peer = f.open(),
@@ -232,6 +329,25 @@ test("recovery verifies exact dispatch, rejects same-member receipts and restore
   await assert.rejects(reopened.run("link", { ...base, step: "b", attempt: b.attempt }), /本次派发不匹配/);
   assert.equal((await reopened.run("link", { work: "paper", step: "b", attempt: b.attempt })).state, "receipt_pending");
 });
+test("manually linked brief releases its in-memory send observer", async (t) => {
+  const f = fixture(t), [step] = f.spec.steps;
+  f.c.conversations.find(s => s.id === step.member).projectTaskProfile = 'inline-review';
+  await f.run('plan', { ...f.spec, steps: [{ ...step, mode: 'inline-review' }] });
+  const base = { work: f.spec.work, step: step.id };
+  const brief = await f.run('brief', { ...base, reviewMaterial: 'Example excerpt for review' });
+  f.tasks.set('confirmed-task', { sourceId: 'lead', recipientId: step.member, state: 'completed', terminal: true,
+    requestKey: brief.send.requestKey, message: brief.send.message });
+  assert.deepEqual(await f.run('link', { ...base, attempt: brief.attempt }), { taskId: 'confirmed-task' });
+  assert.equal((await f.run('status', base)).history[0].message, undefined);
+  // An exact idempotent retry is possible after receipt recovery, but the plugin
+  // should no longer need its persisted brief text in the send observer.
+  let observed = false;
+  f.bus.emit('agent:tool-started', { name: 'conversation_send', toolCallId: 'retry', rawInput: brief.send });
+  f.bus.emit('agent:tool-completed', { toolCallId: 'retry', exitCode: 0,
+    get rawOutput() { observed = true; return JSON.stringify({ taskId: 'confirmed-task', recipientId: step.member }); } });
+  assert.equal(observed, false, 'explicit link must release the observer for the resolved request key');
+});
+
 test("an old unbound attempt can only be recovered by proving its exact original brief on a supporting host", async (t) => {
   const f = fixture(t), old = f.open({ verifyDispatch: false });
   await old.run("plan", f.spec);

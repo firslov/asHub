@@ -143,21 +143,30 @@ function setTheme() {
 function toggleTheme() { storage.set('ashub-mobile-theme', document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); setTheme(); }
 setTheme(); $('theme').onclick = $('auth-theme').onclick = toggleTheme;
 if ($('selection-theme')) $('selection-theme').onclick = toggleTheme;
-function notice(message = '') {
+let noticeSource;
+function notice(message = '', source) {
+  noticeSource = message ? source : undefined;
   $('notice').textContent = message; $('notice').hidden = !message;
   if ($('selection-notice')) { $('selection-notice').textContent = message; $('selection-notice').hidden = !message; }
   syncWorkspaceView();
 }
-async function api(route, body, method = body === undefined ? 'GET' : 'POST') {
+async function api(route, body, method = body === undefined ? 'GET' : 'POST', signal = AbortSignal.timeout(30000)) {
   const authEpoch = authGeneration;
-  const r = await fetch(new URL('api/' + route, base), { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(30000), cache: 'no-store' });
+  const r = await fetch(new URL('api/' + route, base), { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal, cache: 'no-store' });
   if (r.ok) return r.json();
   // Gateway errors can arrive as HTML. Keep the HTTP status for recovery.
   const result = await r.json().catch(() => null);
-  if (r.status === 401 && user && authEpoch === authGeneration) signOut();
+  if (r.status === 401 && user && authEpoch === authGeneration && !signal.aborted) signOut();
   throw Object.assign(Error(result?.error || '请求失败'), { status: r.status });
 }
-const rpc = (op, args = {}, target = device) => api(`devices/${target}/rpc`, { op, args });
+const rpc = (op, args = {}, target = device, signal) => api(`devices/${target}/rpc`, { op, args }, 'POST', signal);
+const archiveHistory = globalThis.AsHubArchiveHistory?.create({
+  rpc, context: () => ({ device, key: JSON.stringify([user, authGeneration, device, generation]) }),
+  supported: () => !!user && !!device && capabilities.archivedHistory === true,
+  online: onlineDevice,
+  onOpen: () => { cancelSessionRestore(); menu(false); },
+  onClose: () => (session && mobileLayout.matches ? $('menu') : $('archive-open'))?.focus(),
+});
 function el(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
 let artifactDownload = null;
 function closeArtifactDownload() {
@@ -195,6 +204,7 @@ function closeSource({retainWait = false} = {}) {
   renderConnectionStatus();
 }
 function signOut() {
+  archiveHistory?.close();
   composerMedia?.cancel(); saveDraft(); pendingChecks.clear(); authGeneration++; generation++; globalThis.AsHubFilePreview?.close(); menu(false); closeSource(); clearInterval(poll); poll = null;
   user = ''; device = ''; session = ''; devices = []; sessions = []; groups = []; viewFilter = 'browse'; capabilities = {}; capabilitiesDevice = ''; catalogRequest++; taskView++; images = []; sending = false; pendingSend = null;
   resetPluginEntries(); renderPluginEntries();
@@ -225,6 +235,7 @@ function syncWorkspaceView() {
   $('menu').setAttribute('aria-expanded', String(open));
   $('sidebar').inert = matchMedia('(max-width:760px)').matches && !choosing && !open;
   const d = devices.find(d => d.id === device);
+  archiveHistory?.sync();
   $('devices').disabled = devices.length <= 1;
   $('sidebar').classList.toggle('single-device', devices.length === 1);
   if (!devices.length) {
@@ -278,13 +289,16 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) view
 viewportSize();
 $('menu').onclick = () => menu(true); $('shade').onclick = $('close-sidebar').onclick = () => menu(false);
 async function refreshDevices() {
-  if (!session) notice();
   const epoch = authGeneration, request = ++deviceRequest; let g = generation;
   // Polling, manual refresh and foreground recovery can overlap. Only the
   // latest request may change connectivity or surface a connection warning.
   const current = () => user && epoch === authGeneration && g === generation && request === deviceRequest;
-  const onFailure = error => { if (current()) throw error; };
-  const list = await api('devices').catch(onFailure); if (!current()) return; devices = list; deviceListReady = true;
+  const onFailure = error => { if (current()) notice(error.message, 'device-refresh'); };
+  const clearWarning = () => { if (current() && noticeSource === 'device-refresh') notice(); };
+  let list;
+  try { list = await api('devices'); } catch (e) { onFailure(e); return false; }
+  if (!current()) return false;
+  devices = list; deviceListReady = true;
   $('devices').replaceChildren(...devices.map(d => { const o = el('option', d.name + (d.online ? '' : ' · 离线')); o.value = d.id; return o; }));
   if (device && !devices.some(d => d.id === device)) { resetDevice(''); g = generation; }
   if (!device && devices.length) {
@@ -298,8 +312,12 @@ async function refreshDevices() {
   const d = devices.find(d => d.id === device);
   $('device-status').textContent = d ? (d.online ? '● 电脑在线' : '○ 电脑离线') : '尚未绑定电脑';
   $('new-chat').disabled = !d?.online; controls();
-  if (!d?.online) { catalogRequest++; closeSource(); controls(); return; }
-  await refreshSessions().catch(onFailure); if (current() && session && !source && !viewHidden()) resumeStream();
+  if (!d?.online) { catalogRequest++; closeSource(); controls(); clearWarning(); return true; }
+  try { await refreshSessions(); } catch (e) { onFailure(e); return false; }
+  if (!current()) return false;
+  clearWarning();
+  if (session && !source && !viewHidden()) resumeStream();
+  return true;
 }
 function sessionStatus(s) {
   if (s.waitingApproval) return ['approval', '需要确认'];
@@ -567,6 +585,7 @@ async function refreshSessions() {
     // already clears it when changing computers. Only success can remove it.
     if (result) {
       capabilities = result; capabilitiesDevice = d;
+      archiveHistory?.sync();
       if (!capabilities.projects) groups = [];
       if (!capabilities.pluginResources) resetPluginEntries();
     } else metadataFailed = true;
@@ -642,46 +661,69 @@ $('view-filter').onclick = () => {
   const choose = (label, value) => button(label + (value === viewFilter ? ' ✓' : ''), () => { if (did !== device) return; viewFilter = value; $('session-search').value = ''; renderSessions(); $('modal').close(); });
   modal('筛选对话', [choose('全部对话', 'browse'), choose('需要关注', 'attention'), choose('进行中', 'running'), choose('未读回复', 'unread'), choose('独立对话', 'all')]);
 };
+const taskStatusLabels = { queued: '排队中', running: '进行中', completed: '已完成', failed: '未完成', cancelled: '已停止', interrupted: '已中断' };
+const inlineReviewLabel = '只读评审';
 async function showTasks(project) {
   const g = generation, did = device;
   modal(project.name + ' · 协作任务', [el('p', '正在读取…')]); const ticket = taskView;
   const valid = () => g === generation && ticket === taskView && $('modal').open;
   try {
-    const tasks = await rpc('project-tasks', { projectId: project.id }, did); if (!valid()) return;
-    const labels = { queued: '排队中', running: '进行中', completed: '已完成', failed: '未完成', cancelled: '已停止', interrupted: '已中断' };
+    const tasks = await rpc('project-tasks', { projectId: project.id, includeReviews: true }, did); if (!valid()) return;
     const title = id => sessions.find(s => s.instanceId === id)?.title || '对话';
     modal(project.name + ' · 协作任务', [button('刷新', () => showTasks(project), 'text-button'), ...tasks.map(task => {
+      const review = task.taskProfile === 'inline-review';
       const b = button('', () => showTask(project, task), 'choice task-choice');
-      b.append(el('span', `${title(task.sourceId)} → ${title(task.recipientId)}`, 'task-route'), el('strong', task.message || '协作任务'), el('small', labels[task.state] || task.state)); return b;
-    }), ...(!tasks.length ? [el('p', '暂无双方都已共享的协作任务')] : [])]);
+      b.append(el('span', `${title(task.sourceId)} → ${review ? '评审员' : title(task.recipientId)}`, 'task-route'),
+        el('strong', review ? inlineReviewLabel : task.message || '协作任务'), el('small', taskStatusLabels[task.state] || task.state)); return b;
+    }), ...(!tasks.length ? [el('p', '暂无已共享的协作任务')] : [])]);
   } catch (e) { if (valid()) modal('无法读取协作任务', [el('p', e.message), button('重试', () => showTasks(project))]); }
 }
 async function showTask(project, task) {
-  const g = generation, did = device;
+  const g = generation, did = device, review = task.taskProfile === 'inline-review';
   const article = el('article', undefined, 'message reply task-output'), error = el('p', '', 'task-error');
-  const more = button('继续读取', () => load(), 'choice'); let offset = 0, text = '';
-  modal('协作结果', [button('返回任务列表', () => showTasks(project), 'text-button'), el('p', task.message), error, article, more]); const ticket = taskView;
+  const status = el('small', taskStatusLabels[task.state] || '', 'task-route'); status.setAttribute('role', 'status');
+  const more = el('button', review ? '刷新进度' : '继续读取', 'choice'); more.type = 'button'; more.onclick = load;
+  let offset = 0, text = '';
+  modal(review ? inlineReviewLabel : '协作结果', [button('返回任务列表', () => showTasks(project), 'text-button'),
+    ...(review ? [status, el('p', '仅查看最终评审结论；评审材料和授权由桌面端管理。', 'task-route')] : [el('p', task.message)]),
+    error, article, more]); const ticket = taskView;
   const valid = () => g === generation && ticket === taskView && $('modal').open;
   async function load() {
-    if (!valid()) return;
+    if (!valid() || more.disabled) return;
+    more.disabled = true;
     try {
-      const page = await rpc('project-tasks', { projectId: project.id, taskId: task.id, offset }, did);
+      const page = await rpc('project-tasks', { projectId: project.id, taskId: task.id, offset, ...(review ? { includeReviews: true } : {}) }, did);
       if (!valid()) return;
-      text += page.text; offset = page.nextOffset; error.textContent = page.error || '';
-      renderMarkdown(article, text || '暂时没有输出', task.recipientId, did);
-      // The current end of a running task is not the end of its eventual output.
-      more.hidden = !page.hasMore && page.terminal !== false;
-      more.textContent = page.hasMore ? '继续读取' : '刷新进度';
+      if (review) {
+        if (page.taskProfile !== 'inline-review') throw Error('评审结果已不可用，请返回任务列表刷新。');
+        status.textContent = taskStatusLabels[page.state] || '';
+        error.textContent = '';
+        const output = page.review;
+        article.replaceChildren(el('p', output?.summary || (page.terminal ? '暂无已提交的评审结论' : '等待评审结论'), 'review-summary'));
+        if (output?.unresolved?.length) {
+          const list = el('ul', undefined, 'review-unresolved');
+          list.append(...output.unresolved.map(item => el('li', item)));
+          article.append(el('strong', '未决事项'), list);
+        }
+        more.hidden = page.terminal;
+        more.textContent = '刷新进度';
+      } else {
+        text += page.text; offset = page.nextOffset; error.textContent = page.error || '';
+        renderMarkdown(article, text || '暂时没有输出', task.recipientId, did);
+        // The current end of a running task is not the end of its eventual output.
+        more.hidden = !page.hasMore && page.terminal !== false;
+        more.textContent = page.hasMore ? '继续读取' : '刷新进度';
+      }
     } catch (e) {
       if (!valid()) return;
       error.textContent = e.message; more.hidden = false; more.textContent = '重试读取';
-    }
+    } finally { more.disabled = false; }
   }
-  more.disabled = true;
-  try { await load(); } finally { more.disabled = false; }
+  await load();
 }
 $('project-tasks').onclick = () => { const p = groups.find(p => 'project:' + p.id === viewFilter); if (p) void showTasks(p); };
 function resetSession() {
+  archiveHistory?.close();
   composerMedia?.cancel();
   // Preserve the old draft before invalidating delayed sends, dialogs and stream callbacks.
   composerMedia?.cancel(); fullHistory = false; clearFrameQueue(); saveDraft(); closeSource(); generation++; globalThis.AsHubFilePreview?.close(); taskView++; session = ''; queuedMessages = []; images = []; sending = false; pendingSend = null;
@@ -1687,6 +1729,7 @@ if ($('sync-retry')) $('sync-retry').onclick = () => {
   saveDraft(); connectStream();
 };
 async function openSession(id) {
+  archiveHistory?.close();
   cancelSessionRestore();
   composerMedia?.cancel(); fullHistory = false; clearFrameQueue(); saveDraft(); closeSource(); generation++; globalThis.AsHubFilePreview?.close(); taskView++; $('modal').close(); session = id; queuedMessages = []; images = draftImages(); renderAttachments(); sending = false; pendingSend = null;
   $('query').value = storage.get(key('draft')) || ''; rememberSession(id); syncChatTitle(); notice(); menu(false); resetMessages(); connectStream();
@@ -1931,13 +1974,13 @@ function resumeRemoteView() {
     if (!ownsSyncWait(syncWait)) beginSync('reconnecting');
     else { syncPhase = 'reconnecting'; renderConnectionStatus(); }
   }
-  void refreshDevices().then(() => {
-    if (epoch !== authGeneration || g !== generation || viewHidden()) return;
+  void refreshDevices().then(refreshed => {
+    if (!refreshed || epoch !== authGeneration || g !== generation || viewHidden()) return;
     const id = storage.get(key('pending')); if (id) return checkPending(id, generation, key('pending'));
   }).catch(e => { if (epoch === authGeneration && g === generation && !viewHidden()) notice(e.message); });
 }
 document.addEventListener('visibilitychange', () => { if (viewHidden()) { saveDraft(); closeSource(); } else resumeRemoteView(); });
-window.addEventListener('pagehide', () => { pageSuspended = true; saveDraft(); closeSource(); });
+window.addEventListener('pagehide', () => { pageSuspended = true; archiveHistory?.close(); saveDraft(); closeSource(); });
 window.addEventListener('pageshow', e => { const resume = pageSuspended || e.persisted; pageSuspended = false; if (resume) resumeRemoteView(); });
 window.addEventListener('online', resumeRemoteView);
 const bootEpoch = authGeneration;

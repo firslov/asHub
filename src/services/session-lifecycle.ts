@@ -15,8 +15,8 @@ import { installLazySessionRestore } from "./session-lazy-restore.js";
 export class SessionLifecycle {
   constructor(private readonly adapters: SessionLifecycleAdapters) {}
   create(sessions: Map<string, Session>, options: SessionLifecycleOptions, cwd: string,
-    existing?: RestoredSession, kind: SessionKind = "agent", setup?: SessionSetup): Promise<Session> {
-    return initializeSession(this.adapters, sessions, options, cwd, existing, kind, setup);
+    existing?: RestoredSession, kind: SessionKind = "agent", setup?: SessionSetup, projectWorker?: true): Promise<Session> {
+    return initializeSession(this.adapters, sessions, options, cwd, existing, kind, setup, projectWorker);
   }
   restore(sessions: Map<string, Session>, options: SessionLifecycleOptions): Promise<void> {
     return restoreSavedSessions(this.adapters, sessions, options);
@@ -31,6 +31,7 @@ async function initializeSession(
   existing?: RestoredSession,
   spawnKind: SessionKind = "agent",
   setup?: SessionSetup,
+  worker?: true,
 ): Promise<Session> {
   const { directory: SESSIONS_DIR, metadataPath: sessionMetaPath, saveMetadata: saveSessionMeta, deleteFiles: deleteSessionFiles } = adapters.persistence;
   const { Store: SessionStore, createCapture, createCompactionStrategy, withContextLock, rebuildReplay, synthesizeBranchFrames } = adapters.history;
@@ -43,10 +44,12 @@ async function initializeSession(
   if (setup?.instanceId && (!/^[a-f0-9]{12}$/.test(setup.instanceId) || sessions.has(id) || fs.existsSync(sessionMetaPath(id)) || fs.existsSync(path.join(SESSIONS_DIR, `${id}.deleted`)))) throw Error("Reserved conversation ID already exists");
   while (!existing && (sessions.has(id) || fs.existsSync(sessionMetaPath(id)) || fs.existsSync(path.join(SESSIONS_DIR, `${id}.deleted`)))) id = randomBytes(3).toString("hex");
   const kind: SessionKind = existing?.kind ?? spawnKind;
+  const projectWorker = (existing ? existing.projectWorker === true : worker === true) ? true : undefined;
   const isAgent = kind === "agent";
+  const isChat = isAgent || kind === "antigravity";
   const isTerminalKind = kind === "terminal" || kind === "ash-terminal";
   const isRestored = !!existing;
-  const needsLazyRestore = isRestored && isAgent && existing!.replay.length === 0;
+  const needsLazyRestore = isRestored && isChat && existing!.replay.length === 0;
 
   let store: HistoryStore | undefined;
   let initialMessages: unknown[] | undefined;
@@ -93,8 +96,8 @@ async function initializeSession(
   let bridge: Bridge;
   try {
     if (typeof setup?.proxyEnabled === "boolean") writeNetworkPolicy(setup.proxyEnabled, id);
-    bridge = isRestored && isAgent ? null as unknown as Bridge
-      : opts.makeBridge({ sessionId: id, cwd, kind, initialMessages, compactionStrategy, historyAccess: isAgent ? createHistoryReader(() => session?.store ?? null) : undefined, ...setup, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id), imageResources: opts.imageResources?.(id), pluginConversation: (pluginId, keys) => opts.pluginConversation?.(id, pluginId, keys) === true });
+    bridge = isRestored && isChat ? null as unknown as Bridge
+      : opts.makeBridge({ sessionId: id, cwd, kind, initialMessages, compactionStrategy, historyAccess: isAgent ? createHistoryReader(() => session?.store ?? null) : undefined, ...setup, ...(projectWorker ? { projectWorker } : { conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id), imageResources: opts.imageResources?.(id), pluginConversation: (pluginId: string, keys: readonly string[]) => opts.pluginConversation?.(id, pluginId, keys) === true }) });
   } catch (error) {
     if (typeof setup?.proxyEnabled === "boolean") { try { writeNetworkPolicy(null, id); } catch {} }
     await store?.seal();
@@ -102,11 +105,12 @@ async function initializeSession(
     throw error;
   }
 
-  const defaultTitle = isTerminalKind ? `▷ ${path.basename(cwd) || cwd}` : "";
+  const defaultTitle = isTerminalKind ? `▷ ${path.basename(cwd) || cwd}` : kind === "antigravity" ? "Antigravity" : "";
   const session: Session = {
     id,
     title: existing?.title ?? defaultTitle,
     kind,
+    projectWorker,
     cwd,
     bridge,
     replay: existing?.replay ?? [],
@@ -115,6 +119,7 @@ async function initializeSession(
     sseClients: new Set(),
     model: existing?.model,
     provider: existing?.provider,
+    backendUnavailable: existing ? opts.backendUnavailable?.({ kind, provider: existing.provider, model: existing.model, projectWorker }) : undefined,
     startedAt: existing?.startedAt ?? Date.now(),
     firstTurnDone: !!(initialMessages?.length),
     firstQuery: existing?.firstQuery,
@@ -165,13 +170,21 @@ async function initializeSession(
     }
   }
 
-  if (isRestored && isAgent) installLazySessionRestore(sessions, opts, session, treePath, compactionStrategy, adapters);
+  if (isRestored && isChat) installLazySessionRestore(sessions, opts, session, treePath, compactionStrategy, adapters);
 
   try {
   if (bridge) {
-    if (!isRestored && isAgent) {
+    if (!isRestored && isChat) {
       bridge.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       bridge.onClose(() => {
+        if (kind === "antigravity" && sessions.get(id) === session && !session._closing && !session._closed) {
+          // ACP rejects the pending prompt before emitting close. Let submit
+          // settle the task; stopSession would record an unexpected exit as Stop.
+          if (session.projectWorker) stopIdleWatchdog(session);
+          session.bridge = null as unknown as Bridge;
+          installLazySessionRestore(sessions, opts, session, treePath, compactionStrategy, adapters);
+          return;
+        }
         try { rejectInit(new Error("backend closed during initialization")); session.collaboration?.stopSession(session.id); session._closed = true; stopIdleWatchdog(session); if (sessions.get(id) === session) sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); releaseClosedReplay(session); } catch (err) { console.error("[hub] bridge onClose error:", err); }
       });
       bridge.onError((err) => {
@@ -195,6 +208,9 @@ async function initializeSession(
     }
     await Promise.race([bridge.ready(), cancellation]);
     checkInitialization();
+    // Save the live ACP identity before a transport exit clears the bridge.
+    // Persisting metadata alone does not populate the in-memory restore input.
+    session.backendState = bridge.getRestoreState?.() ?? session.backendState;
     syncAutoApprove(bridge);
     if (existing && store && session.capture) {
       const { entryIds } = store.buildBranchWithIds();
@@ -288,7 +304,7 @@ async function restoreSavedSessions(adapters: SessionLifecycleAdapters, sessions
     if (archived.has(p.id)) continue; // archived — skip bridge creation
     try {
       await initializeSession(adapters, sessions, opts, p.cwd, {
-        id: p.id, title: p.title, kind: p.kind, replay: p.replay,
+        id: p.id, title: p.title, kind: p.kind, projectWorker: p.projectWorker, replay: p.replay,
         startedAt: p.startedAt, messages: p.messages,
         firstQuery: p.firstQuery, userTitle: p.userTitle,
         model: p.model, provider: p.provider,

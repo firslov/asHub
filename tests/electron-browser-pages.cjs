@@ -197,6 +197,21 @@ app
       await ok('project_management_create_project',{...proposal,requestKey:'project-accept-02'});
       assert.equal(projects.list()[0].name,'Review team');
       console.log('PASS project ZIP invokes real host operation with source-bound once-only consent');
+      const visibleTools = bridge => bridge.core.bus.emitPipe('agent:tools:visible', {
+        tools: bridge.extCtx.agent.getTools(),
+      }).tools.map(t => t.name);
+      assert(visibleTools(a).includes('browser_open'));
+      const beforeExternal = visits.length;
+      await a.execCommand('/browser-use', 'external');
+      assert(!visibleTools(a).includes('browser_open'));
+      assert(visibleTools(a).includes('project_management_create_project'), 'mode does not hide other plugins');
+      assert(visibleTools(b).includes('browser_open'), 'mode is conversation-scoped');
+      assert.match(a.core.handlers.call('instruction:browser-automation'), /External browser mode/);
+      assert((await call(a, 'browser_open', {url:host + '/docs'})).isError, 'a stale call must fail before any navigation');
+      assert.equal(visits.length, beforeExternal);
+      await a.execCommand('/browser-use', 'builtin');
+      assert(visibleTools(a).includes('browser_open'));
+      console.log('PASS installed browser ZIP: slash command selects external mode only in its AshBridge conversation');
       const item = (page, name) => {
         const e = page.items.find((row) => row.name === name && row.ref);
         assert(e, JSON.stringify(page));
@@ -980,6 +995,41 @@ app
       assert.equal(fs.readFileSync(downloaded.path,'utf8'),'installed result');
       console.log('PASS installed browser ZIP: real AshBridge write/upload/download tools, scoped approval, cwd binding and completed artifact');
 
+      // A lost renderer must release its approval without waiting for a user decision.
+      page = await ok('browser_open', { url: host + '/form' });
+      await until(() => !!guest());
+      const crashedGuest = guest(), crashedId = crashedGuest.id;
+      const beforeCrash = await crashedGuest.executeJavaScript('localStorage.submissions ?? null');
+      const crashedRef = item(page, '提交申请');
+      let crashResult, crashResolution;
+      const recordResolution = event => {
+        if (event.name === 'permission:resolved') crashResolution = event.payload;
+      };
+      a.on('event', recordResolution);
+      try {
+        decision = () => null;
+        count = events.length;
+        const interrupted = call(a, 'browser_act', { action: 'click', ref: crashedRef });
+        void interrupted.then(result => { crashResult = result; });
+        await until(() => events.length > count);
+        const requestId = events.at(-1).requestId;
+        const gone = require('node:events').once(crashedGuest, 'render-process-gone');
+        crashedGuest.forcefullyCrashRenderer();
+        await gone;
+        await until(() => !guest() && service.status('aaaaaa') === null);
+        await until(() => crashResult && crashResolution?.requestId === requestId).catch(() => {
+          throw Error('A crashed guest left its approval and browser operation pending');
+        });
+        assert.equal(crashResolution.outcome, 'denied');
+        assert(crashResult.isError, 'interrupted click must not report success');
+        decision = () => true;
+        page = await ok('browser_open', { url: host + '/form' });
+        await until(() => guest() && guest().id !== crashedId);
+        assert.equal(await guest().executeJavaScript('localStorage.submissions ?? null'), beforeCrash, 'reopen cannot replay the pending click');
+        const stale = await call(a, 'browser_act', { action: 'click', ref: crashedRef });
+        assert(stale.isError && /Expired element reference/i.test(stale.content), stale.content);
+      } finally { a.off('event', recordResolution); }
+      console.log('PASS crashed guest cancels pending approval, allows immediate reopen, never replays and expires old references');
 
       decision = () => true;
       await ok('browser_open', { url: host + '/form' });

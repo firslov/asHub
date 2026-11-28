@@ -5,9 +5,12 @@ import type { ProjectStore } from "../projects.js";
 import type { Session } from "./session-types.js";
 import type { SessionService, SessionSetup } from "./session-service.js";
 import { HOST_OPERATION_TYPES } from "./host-contract.js";
-import { projectWorkingDirectory } from "./project-service.js";
+import { isProjectConversation, projectWorkingDirectory } from "./project-service.js";
 import { selectSessionModel, selectSessionThinking } from "./session-configuration.js";
 import { readNetworkPolicy, writeNetworkPolicy } from "../network-policy.js";
+import type { ProjectWorkerBackend } from "../integrations.js";
+import type { SessionKind } from "../bridges/types.js";
+import { bindProjectWorkerGrant, projectWorkerGrant } from "./project-worker-policy.js";
 export interface HostServiceRuntime {
   sessions: Map<string, Session>;
   projects: ProjectStore;
@@ -24,6 +27,8 @@ export interface HostServiceRuntime {
   setSessionTitle(session: Session, title: string, user?: boolean): Promise<void>;
   saveSessionMeta(session: Session): Promise<void>;
   create(cwd: string, setup: SessionSetup): Promise<Session>;
+  projectSessionBackends?: readonly ProjectWorkerBackend[];
+  createProjectWorker?(cwd: string, kind: SessionKind): Promise<Session>;
   archive(id: string): Promise<void>;
   delete(id: string, approvedOperation?: boolean): Promise<void>;
 }
@@ -38,16 +43,23 @@ export function createHostAccess(sourceId: string, runtime: HostServiceRuntime):
     return s;
   };
   const busy = runtime.busy;
+  const workerBackends = runtime.createProjectWorker ? runtime.projectSessionBackends ?? [] : [];
   const describe = (session: Session, groups = projects.list(), network = readNetworkPolicy()) => runtime.describe(session, groups, network);
   const catalog = async (signal?: AbortSignal) => {
     signal?.throwIfAborted(); const s = source();
     const models = (await s.bridge.getModels?.())?.models ?? [];
     signal?.throwIfAborted(); source();
     const groups = projects.list(), network = readNetworkPolicy();
+    const group = groups.find(p => p.sessionIds.includes(sourceId));
     return { version: 1, operations: [...HOST_OPERATION_TYPES], currentId: sourceId,
-      currentProjectId: groups.find(p => p.sessionIds.includes(sourceId))?.id ?? null,
-      conversations: [...sessions.values()].filter(s => s.kind === 'agent' && !s._closed && !s._closing).map(s => describe(s, groups, network)),
-      projects: groups, models, network: { proxyEnabled: network.proxyEnabled }, host: runtime.version() };
+      currentProjectId: group?.id ?? null,
+      conversations: [...sessions.values()].filter(s => isProjectConversation(s) &&
+        (!s.projectWorker || group?.sessionIds.includes(s.id))).map(s => describe(s, groups, network)),
+      projects: groups, models,
+      projectSessionBackends: group ? workerBackends.map(backend => ({ id: backend.id, label: backend.label,
+        taskProfile: backend.taskProfile, authorization: backend.authorization,
+        authorized: !!projectWorkerGrant(projects, group.id, backend) })) : [],
+      network: { proxyEnabled: network.proxyEnabled }, host: runtime.version() };
   };
   const prepare = async (op: Operation, signal?: AbortSignal): Promise<PreparedOperation> => {
     signal?.throwIfAborted(); source();
@@ -182,7 +194,49 @@ export function createHostAccess(sourceId: string, runtime: HostServiceRuntime):
           } finally { target._hostOperation = false; target._onHostChange?.("operation-finished"); }
         } };
     }
+    if (op.type === 'conversation.createProjectWorker') {
+      if (Object.keys(b).some(key => !['title', 'projectId', 'backend'].includes(key))) throw new Error('Unsupported project worker parameter');
+      const title = text(b.title, 'conversation title', 100);
+      const projectId = text(b.projectId, 'project id', 100);
+      const backendId = text(b.backend, 'project backend id', 100);
+      const backend = workerBackends.find(entry => entry.id === backendId);
+      const create = runtime.createProjectWorker;
+      if (!backend || !create) throw new Error('Project worker backend unavailable');
+      const project = projects.list().find(p => p.id === projectId && p.sessionIds.includes(sourceId));
+      if (!project) throw new Error('Project worker must be created in the requesting conversation’s project');
+      const cwd = projectWorkingDirectory(project, undefined, expandHome), real = fs.realpathSync(cwd);
+      const validateGrant = bindProjectWorkerGrant(projects, projectId, backend);
+      const validate = () => {
+        signal?.throwIfAborted(); source();
+        if (deleting()) throw new Error('Project deletion in progress');
+        const current = projects.list().find(p => p.id === projectId);
+        if (!current?.sessionIds.includes(sourceId) || current.cwd !== project.cwd || current.name !== project.name) throw new Error('Project changed; submit a new plan');
+        validateGrant();
+        if (directory(cwd) !== cwd || fs.realpathSync(cwd) !== real) throw new Error('Directory changed');
+      };
+      validate();
+      return { preview: { title: '创建项目任务对话 / Create project worker', fields: fields({
+        '名称 / Name': title, '项目 / Project': `${project.name} (${projectId})`, '路径 / Directory': cwd,
+        '后端 / Backend': backend.label, ...(backend.taskProfile ? { '任务类型 / Task profile': backend.taskProfile } : {}),
+      }) }, validate, async execute() {
+        validate();
+        const created = await create(cwd, backend.kind);
+        try {
+          validate();
+          await setSessionTitle(created, title, true);
+          await saveSessionMeta(created);
+          validate();
+          projects.update({ action: 'members', id: projectId, add: [created.id] }, id => isProjectConversation(sessions.get(id)));
+          return { type: op.type, instanceId: created.id, title, projectId, cwd, kind: created.kind,
+            backend: backend.id, projectWorker: true, ...(backend.taskProfile ? { projectTaskProfile: backend.taskProfile } : {}) };
+        } catch (e) {
+          throw new Error(`Conversation ${created.id} was created but setup did not finish: ${String(e)}`);
+        }
+      } };
+    }
     if (op.type !== 'conversation.create') throw new Error(`Unsupported host operation: ${op.type}`);
+    if (Object.keys(b).some(key => !['title', 'projectId', 'cwd', 'provider', 'model', 'thinking', 'proxyEnabled', 'instructions'].includes(key)))
+      throw new Error('Unsupported conversation parameter');
     const title = text(b.title, 'conversation title', 100);
     const projectId = b.projectId === null || b.projectId === undefined ? null : text(b.projectId, 'project id', 100);
     const project = projectId ? projects.list().find(p => p.id === projectId) : undefined;

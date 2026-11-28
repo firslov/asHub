@@ -480,14 +480,6 @@ nav {
   }
 }
 
-/* ── Archive list ────────────────────────────────────────────────── */
-
-.archive-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-
 /* ── Windows frameless: reserve space for window controls ─────── */
 
 [data-platform="win32"] nav {

@@ -2,28 +2,24 @@ import { conversationEntries } from './extensions/entry-state.js';
 import { sessionAttention } from './project-status.js';
 import { directoryLabels } from './directory-labels.js';
 import { networkPolicy, saveNetworkPolicy } from "./network-settings.js";
-import { initSidebarSearch } from "./sidebar-search.js";
+import { initUnifiedSidebarSearch } from "./sidebar-unified-search.js";
 import { initSidebarViewPicker } from "./sidebar-view-picker.js";
-import { showProjects } from "./projects.js";
+import { createProject, showProjects, sidebarProjects, loadSidebarProjects, revealSidebarProject } from "./projects.js";
 import { escape } from "./utils.js";
 import { state, homeDir, headerTopic, headerCwd } from "./state.js";
-import { signal, effect } from "../vendor/signals-core.js";
-import { activeSessionId, switchTo, spaEnabled, sessions, openTabs, closeTab, setSessionKind } from "./session-manager.js";
-import { agents, getSession, setSessions, updateSession, pinnedIds, allSessions, bump } from "./store.js";
+import { signal, effect, untracked } from "../vendor/signals-core.js";
+import { activeSessionId, switchTo, spaEnabled, sessions, openTab, openTabs, closeTab, setSessionKind } from "./session-manager.js";
+import { getSession, setSessions, updateSession, pinnedIds, allSessions, bump } from "./store.js";
 import { t } from "./i18n.js";
 import { toast } from "./toast.js";
 
 const sessionList = document.getElementById("sessions");
-const workspaceList = document.getElementById("workspaces");
 const terminalList = document.getElementById("terminals");
-const VIEWS = new Set(["sessions", "workspaces", "terminals", "archive", "projects"]);
+const VIEWS = new Set(["sessions", "terminals", "projects"]);
 const sessionTopic = document.getElementById("session-topic");
 const sessionCwdMeta = document.getElementById("session-cwd-meta");
-const newBtn = document.getElementById("new-session");
-const newTerminalBtn = document.getElementById("new-terminal");
-const newSessionAction = document.getElementById("sidebar-action-sessions");
-const newTerminalAction = document.getElementById("sidebar-action-terminals");
-const sessionFilter = document.getElementById("session-filter");
+const createButton = document.getElementById("sidebar-create");
+const createLabels = { sessions: "new.session", projects: "projects.new", terminals: "new.terminal" };
 
 export const setSessionTopic = (title) => { headerTopic.value = title ?? ""; };
 export const setSessionCwd = (cwd) => { headerCwd.value = cwd ?? ""; };
@@ -51,28 +47,19 @@ if (sessionCwdMeta) {
 }
 
 const LS_SIDEBAR_VIEW = "ash.sidebar-view";
-const LS_WORKSPACE_COLLAPSED = "ash.workspace-collapsed";
 
 let sessionsHash = "";
-let workspacesHash = "";
 let terminalsHash = "";
 let fullHashCache = "";
 // Content-level hash of the last list pushed into the store (excludes
 // volatile timestamps). Gates store Map replacement so downstream
 // allSessions subscribers are not woken by turn-end lastModified bumps.
 let storeContentHash = "";
-// Last list fetched from /sessions — lets the filter re-render client-side.
+// Last list fetched from /sessions, reused when only local state changes.
 let lastSessionsList = null;
-// Sidebar filter text — applies to the sessions and archive views.
-let filterText = "";
-let filterDebounce = null;
 // Session currently being renamed inline — reconcile skips its row so a
 // background turn's refresh can't destroy the input mid-edit.
 let editingId = null;
-
-const filterQuery = () => filterText.trim().toLowerCase();
-const matchesFilter = (title, cwd) =>
-  ((title ?? "") + " " + (cwd ?? "")).toLowerCase().includes(filterQuery());
 
 export { setSessions } from "./store.js";
 
@@ -93,31 +80,12 @@ const initialView = (() => {
 })();
 export const sidebarView = signal(initialView);
 
-const collapsedWorkspaces = (() => {
-  try {
-    const raw = localStorage.getItem(LS_WORKSPACE_COLLAPSED);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    return new Set(Array.isArray(arr) ? arr : []);
-  } catch { return new Set(); }
-})();
-
-const persistCollapsed = () => {
-  try { localStorage.setItem(LS_WORKSPACE_COLLAPSED, JSON.stringify([...collapsedWorkspaces])); } catch {}
-};
-
 let sessionLabels = new Map();
 const shortenCwd = cwd => sessionLabels.get(cwd) ?? directoryLabels([cwd]).get(cwd) ?? '';
 
-// ── Unified sidebar item anatomy ─────────────────────────────────────
-// All four views share: [icon slot (.side-icon)] [title + meta (.side-body)]
-// [hover actions (.side-btn)]. Session items use an absolutely-positioned
-// status dot as their icon slot instead of an inline .side-icon.
-const ARCHIVE_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="5" rx="1.5"/><path d="M5 8v12h14V8M10 12h4"/></svg>`;
 const TERMINAL_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></svg>`;
-const WORKSPACE_ICON_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/></svg>`;
 
-/** Unified empty-state row for all four sidebar views. */
+/** Empty-state row shared by the conversation and terminal lists. */
 const sideEmpty = (iconHtml, text) => {
   const li = document.createElement("li");
   li.className = "side-empty";
@@ -505,7 +473,9 @@ const renderSessionItem = (s, isPinned = false) => {
   // (cwd / archive / pin over edit / proxy / close) overlaying the row's right edge.
   const actions = document.createElement("span");
   actions.className = "session-actions";
-  actions.append(cwdBtn, archiveBtn, pinBtn, editBtn, createNetworkButton(s.instanceId), close);
+  actions.append(cwdBtn, archiveBtn, pinBtn, editBtn);
+  if (s.kind !== "antigravity") actions.append(createNetworkButton(s.instanceId));
+  actions.append(close);
   li.appendChild(actions);
 
   sessionList.appendChild(li);
@@ -531,7 +501,9 @@ const renderSessionItem = (s, isPinned = false) => {
     li.dataset.isPinned = isPinned ? "1" : "0";
 
     const networkButton = li.querySelector(".session-proxy");
-    if (networkButton) updateNetworkButton(networkButton);
+    if (s.kind === "antigravity") networkButton?.remove();
+    else if (networkButton) updateNetworkButton(networkButton);
+    else li.querySelector(".session-actions")?.insertBefore(createNetworkButton(s.instanceId), li.querySelector(".session-close"));
     // Sync pin button state (only updated in renderSessionItem for new DOM)
     const pinBtn = li.querySelector(".session-pin-btn");
     if (pinBtn) {
@@ -560,8 +532,7 @@ let sessionsFetchSeq = 0;
 let sessionsRenderSeq = 0;
 const renderSessions = async (force = false, opts = null) => {
   try {
-    // fromCache re-renders from the last fetched list (filter typing) with
-    // no network request; fresh data still arrives via event-driven refreshes.
+    // Local attention and entry changes can reuse the latest fetched list.
     let list;
     if (opts?.fromCache && lastSessionsList) {
       list = lastSessionsList;
@@ -578,12 +549,10 @@ const renderSessions = async (force = false, opts = null) => {
     // content hash, so a change made in another window must force a rebuild.
     if (opts?.refreshPinned && await refreshPinned()) force = true;
     if (render !== sessionsRenderSeq) return;
-    // Include the filter query in the hash so typing/clearing the filter
-    // invalidates this early return even when the session list is unchanged.
-    const fullHash = JSON.stringify([filterQuery(), list.map((s) => [
+    const fullHash = JSON.stringify(list.map((s) => [
       s.instanceId, s.title, s.cwd, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt, s.kind ?? "agent", s.projectId,
       s.projectExternal, s.model, s.provider, s.thinkingLevel, s.waitingApproval, s.queuedCount, s.lastTurnError, s.lastTurnErrorAt, s.readOnlyContext, s.supportsCwdChange,
-    ])]);
+    ]));
     if (!force && fullHash === fullHashCache) return;
     const live = new Set(list.filter(s => s.lastTurnError).map(s => s.instanceId));
     for (const id of seenErrors.keys()) if (!live.has(id)) seenErrors.delete(id);
@@ -592,7 +561,7 @@ const renderSessions = async (force = false, opts = null) => {
     sessionLabels = directoryLabels(list.map(s => s.cwd));
 
     // Content-level gate for the store: replacing the Map wakes every
-    // allSessions subscriber (tab strip, workspace/terminal views), so only
+    // allSessions subscriber (tabs, project and terminal lists), so only
     // do it when UI-substantive fields change. lastModified bumps on every
     // turn end; those are synced into the cached objects in place instead.
     const contentHash = JSON.stringify(list.map((s) => [
@@ -615,43 +584,33 @@ const renderSessions = async (force = false, opts = null) => {
       await refreshPinned();
       if (render !== sessionsRenderSeq) return;
     } else {
-      // Sync volatile timestamps into the cached objects without a signal
-      // tick. Workspace/terminal views read lastModified live, so bump the
-      // store only while one of those views is active; the tab strip's own
-      // render guard absorbs the resulting Map replacement.
+      // Sync timestamps without waking unrelated subscribers. The terminal
+      // list and an open search need to see recency changes immediately.
       for (const s of list) {
         const cur = getSession(s.instanceId);
         if (cur) { cur.lastModified = s.lastModified; cur.startedAt = s.startedAt; }
       }
-      const v = sidebarView.peek();
-      if (v === "workspaces" || v === "terminals") bump();
+      if (sidebarView.peek() === "terminals" || findOpen) bump();
     }
 
     // Moving a focused rename input can blur/commit it. Reconcile after editing.
     if (editingId) {
       const editing = list.find(s => s.instanceId === editingId);
-      if (editing && !editing.projectId && matchesFilter(editing.title || t("untitled"), editing.cwd)) {
+      if (editing && !editing.projectId && !conversationEntries.peek().some(e => e.sessionId === editingId)) {
         fullHashCache = ""; // Replay deferred pin/language refreshes after the edit.
         return;
       }
-      editingId = null; // A removed/filtered row must not strand reconciliation.
+      editingId = null; // A row leaving this view must not strand reconciliation.
     }
     fullHashCache = fullHash;
-    const agentList = list.filter((s) => (s.kind ?? "agent") === "agent" && !s.projectId && !conversationEntries.peek().some(e=>e.sessionId===s.instanceId))
+    const entryIds = new Set(conversationEntries.peek().map(entry => entry.sessionId));
+    const agentList = list.filter(s => ["agent", "antigravity"].includes(s.kind ?? "agent") && !s.projectId && !entryIds.has(s.instanceId))
       .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
     const pinIds = pinnedIds.peek();
-
-    // Filter by title + cwd substring; the query is part of the hash so
-    // typing always invalidates the incremental-render cache.
-    const query = filterQuery();
-    const visibleList = query
-      ? agentList.filter((s) => matchesFilter(s.title || t("untitled"), s.cwd))
-      : agentList;
-
-    const hash = JSON.stringify([query, visibleList.map((s) => [
+    const hash = JSON.stringify(agentList.map(s => [
       s.instanceId, s.title, s.cwd, sessionLabels.get(s.cwd), s.isProcessing, s.hasUnread, attentionFor(s),
-      pinIds.has(s.instanceId), s.lastModified ?? s.startedAt,
-    ])]);
+      pinIds.has(s.instanceId), s.lastModified ?? s.startedAt, s.kind ?? "agent",
+    ]));
     if (hash === sessionsHash) return;
     const isFirstRender = sessionsHash === "";
     sessionsHash = hash;
@@ -664,46 +623,33 @@ const renderSessions = async (force = false, opts = null) => {
 
     // Build list in-place: update existing items, insert new ones, remove stale.
     // Avoids replaceChildren which causes a visible flash.
-    const newIds = new Set();
     const existingItems = new Map();
     for (const li of sessionList.querySelectorAll("li[data-session-id]")) {
       existingItems.set(li.dataset.sessionId, li);
     }
 
-    // Group items by pin-first then by time bucket. With an active filter
-    // the hits are shown flat, without group headers.
-    const buildOrder = [];
-    if (query) {
-      for (const s of visibleList) buildOrder.push({ kind: "item", session: s, pinned: pinIds.has(s.instanceId) });
-    } else {
-      const pinnedItems = [];
-      const restByBucket = new Map();
-      for (const s of visibleList) {
-        if (pinIds.has(s.instanceId)) {
-          pinnedItems.push(s);
-        } else {
-          const k = bucketKey(s.lastModified ?? s.startedAt);
-          if (!restByBucket.has(k)) restByBucket.set(k, []);
-          restByBucket.get(k).push(s);
-        }
-      }
-      if (pinnedItems.length > 0) {
-        buildOrder.push({ kind: "head", text: t("pinned") });
-        for (const s of pinnedItems) buildOrder.push({ kind: "item", session: s, pinned: true });
-      }
-      for (const k of BUCKET_ORDER) {
-        const items = restByBucket.get(k);
-        if (!items?.length) continue;
-        buildOrder.push({ kind: "head", text: t("bucket." + k), count: items.length });
-        for (const s of items) buildOrder.push({ kind: "item", session: s });
+    // Pinned items precede the time buckets.
+    const buildOrder = [], pinnedItems = [], restByBucket = new Map();
+    for (const s of agentList) {
+      if (pinIds.has(s.instanceId)) pinnedItems.push(s);
+      else {
+        const key = bucketKey(s.lastModified ?? s.startedAt);
+        if (!restByBucket.has(key)) restByBucket.set(key, []);
+        restByBucket.get(key).push(s);
       }
     }
-
+    if (pinnedItems.length) {
+      buildOrder.push({ kind: "head", text: t("pinned") });
+      for (const s of pinnedItems) buildOrder.push({ kind: "item", session: s, pinned: true });
+    }
+    for (const key of BUCKET_ORDER) {
+      const items = restByBucket.get(key);
+      if (!items?.length) continue;
+      buildOrder.push({ kind: "head", text: t("bucket." + key), count: items.length });
+      for (const s of items) buildOrder.push({ kind: "item", session: s });
+    }
     const newChildren = [];
-    // Unified empty state — no sessions at all, or no filter matches.
-    if (buildOrder.length === 0) {
-      newChildren.push(sideEmpty("◌", query ? t("filter.no.match") : t("sidebar.noConversations")));
-    }
+    if (!buildOrder.length) newChildren.push(sideEmpty("◌", t("sidebar.noConversations")));
     // Walk in order, updating or creating DOM nodes.
     // Reuse rows, then move only those whose sorted position changed.
     for (const entry of buildOrder) {
@@ -722,7 +668,6 @@ const renderSessions = async (force = false, opts = null) => {
         newChildren.push(head);
       } else {
         const s = entry.session;
-        newIds.add(s.instanceId);
         const existing = existingItems.get(s.instanceId);
         if (existing) {
           updateSessionItemInPlace(existing, s, !!entry.pinned);
@@ -818,133 +763,6 @@ const renderSessions = async (force = false, opts = null) => {
   }
 };
 
-const renderWorkspaces = () => {
-  if (!workspaceList) return;
-  const agentList = agents.value;
-  if (!agentList.length) {
-    if (workspacesHash === "empty") return;
-    workspacesHash = "empty";
-    workspaceList.replaceChildren(sideEmpty(WORKSPACE_ICON_SVG, t("no.workspaces")));
-    return;
-  }
-  const buckets = new Map();
-  for (const s of agentList) {
-    const key = s.cwd || "(no cwd)";
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key).push(s);
-  }
-  const groups = [...buckets.entries()].map(([cwd, items]) => {
-    items.sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0));
-    const lastModified = Math.max(...items.map((s) => s.lastModified ?? s.startedAt ?? 0));
-    return { cwd, items, lastModified };
-  });
-  groups.sort((a, b) => b.lastModified - a.lastModified);
-
-  const hash = JSON.stringify([filterQuery(), groups.map((g) => [
-    g.cwd, sessionLabels.get(g.cwd), g.items.map((s) => [s.instanceId, s.title, s.isProcessing, s.hasUnread, s.lastModified ?? s.startedAt]),
-  ])]);
-  if (hash === workspacesHash) return;
-  workspacesHash = hash;
-
-  workspaceList.innerHTML = "";
-  const query = filterQuery();
-  let anyRendered = false;
-  for (const g of groups) {
-    const visible = g.items.filter((s) => matchesFilter(s.title || t("untitled"), s.cwd));
-    if (!visible.length) continue;
-    const li = document.createElement("li");
-    li.className = "workspace-group";
-    li.dataset.cwd = g.cwd;
-    if (collapsedWorkspaces.has(g.cwd)) li.classList.add("collapsed");
-
-    const head = document.createElement("div");
-    head.className = "workspace-head";
-
-    const caret = document.createElement("span");
-    caret.className = "workspace-caret";
-    caret.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg>`;
-    head.appendChild(caret);
-
-    const pathSpan = document.createElement("span");
-    pathSpan.className = "workspace-path";
-    const display = shortenCwd(g.cwd);
-    pathSpan.textContent = display;
-    pathSpan.title = g.cwd;
-    head.appendChild(pathSpan);
-
-    const count = document.createElement("span");
-    count.className = "workspace-count";
-    count.textContent = String(visible.length);
-    head.appendChild(count);
-
-    const actions = document.createElement("span");
-    actions.className = "workspace-actions";
-    const newBtn = document.createElement("button");
-    newBtn.className = "workspace-action side-btn";
-    newBtn.title = t("workspace.new.here");
-    newBtn.textContent = "+";
-    newBtn.addEventListener("click", async (ev) => {
-      ev.stopPropagation();
-      const res = await fetch("/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd: g.cwd, kind: "agent" }),
-      });
-      if (!res.ok) return;
-      const sess = await res.json();
-      if (sess.instanceId) {
-        setSessionKind(sess.instanceId, "agent");
-        window.location.href = `/${sess.instanceId}/`;
-      }
-    });
-    actions.appendChild(newBtn);
-    head.appendChild(actions);
-
-    head.addEventListener("click", () => {
-      const isCollapsed = li.classList.toggle("collapsed");
-      if (isCollapsed) collapsedWorkspaces.add(g.cwd);
-      else collapsedWorkspaces.delete(g.cwd);
-      persistCollapsed();
-    });
-
-    li.appendChild(head);
-
-    const children = document.createElement("ul");
-    children.className = "workspace-children";
-    for (const s of visible) {
-      const child = document.createElement("li");
-      child.dataset.sessionId = s.instanceId;
-      if (s.instanceId === activeSessionId.peek()) child.classList.add("current");
-      if (s.isProcessing) child.classList.add("session-streaming");
-      else if (s.hasUnread) child.classList.add("session-unread");
-
-      const a = document.createElement("a");
-      a.href = `/${s.instanceId}/`;
-      a.addEventListener("click", (ev) => {
-        if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
-        if (spaEnabled()) {
-          ev.preventDefault();
-          switchTo(s.instanceId);
-        }
-      });
-      const hasTitle = s.title && s.title !== s.instanceId;
-      const titleText = hasTitle ? s.title : t("untitled");
-      a.innerHTML =
-        `<span class="workspace-child-kind side-icon" aria-hidden="true"></span>` +
-        sideBody(titleText, { ts: s.lastModified ?? s.startedAt });
-      child.appendChild(a);
-      children.appendChild(child);
-    }
-    li.appendChild(children);
-
-    workspaceList.appendChild(li);
-    anyRendered = true;
-  }
-  if (!anyRendered) {
-    workspaceList.replaceChildren(sideEmpty(WORKSPACE_ICON_SVG, query ? t("filter.no.match") : t("no.workspaces")));
-  }
-};
-
 const renderTerminals = () => {
   if (!terminalList) return;
   const items = allSessions.value
@@ -1019,124 +837,151 @@ const renderTerminals = () => {
   }
 };
 
-const updateViewPicker = initSidebarViewPicker(view => {
+function selectSidebarView(view) {
   if (!VIEWS.has(view)) return;
   sidebarView.value = view;
   try { localStorage.setItem(LS_SIDEBAR_VIEW, view); } catch {}
-});
+}
+const updateViewPicker = initSidebarViewPicker(selectSidebarView);
 
-// ── Archive view ──────────────────────────────────────────────────────
+const searchToggle = document.getElementById("sidebar-search-toggle");
+const sidebarContent = document.getElementById("sidebar-content");
+const findPanel = document.getElementById("sidebar-find");
+const findInput = document.getElementById("sidebar-find-input");
+const findResults = document.getElementById("sidebar-find-results");
+const findStatus = document.getElementById("sidebar-find-status");
+const findClose = document.getElementById("sidebar-find-close");
+const findEnabled = view => !!(searchToggle && sidebarContent && findPanel && findInput && findResults && findStatus)
+  && (view === "sessions" || view === "projects");
+let findOpen = false, findRequest = 0, findStatusKey = "";
 
-const archiveList = document.getElementById("archive");
+const unifiedSearch = findInput && findResults ? initUnifiedSidebarSearch({
+  input: findInput,
+  results: findResults,
+  onSelect: navigateSearchHit,
+  onDismiss: () => closeFind(true),
+}) : null;
 
-const renderArchive = async () => {
-  if (!archiveList) return;
-  try {
-    const res = await fetch("/api/sessions/archived");
-    if (!res.ok) return;
-    const items = await res.json();
-    // Visibility is owned by the sidebarView effect — never unhide here,
-    // or a langchange/restore outside the archive view would leak the
-    // archive list into the current view.
-    archiveList.innerHTML = "";
-    const query = filterQuery();
-    const visible = Array.isArray(items) && query
-      ? items.filter((item) => matchesFilter(item.title || t("untitled"), item.cwd))
-      : items;
-    if (!Array.isArray(visible) || visible.length === 0) {
-      archiveList.appendChild(sideEmpty(ARCHIVE_ICON_SVG, query ? t("filter.no.match") : t("archive.empty")));
+function setFindStatus(key = "") {
+  findStatusKey = key;
+  if (findStatus) { findStatus.hidden = !key; findStatus.textContent = key ? t(key) : ""; }
+}
+function syncFindToggle() {
+  if (!searchToggle) return;
+  searchToggle.dataset.active = String(findOpen);
+  searchToggle.setAttribute("aria-expanded", String(findOpen));
+}
+function closeFind(restoreFocus = false) {
+  if (!findOpen) return;
+  findOpen = false;
+  ++findRequest;
+  unifiedSearch.close();
+  findPanel.hidden = true;
+  findInput.value = "";
+  findResults.scrollTop = 0;
+  sidebarContent.inert = false;
+  setFindStatus();
+  syncFindToggle();
+  if (restoreFocus) searchToggle.focus();
+}
+function openFind() {
+  if (!findEnabled(sidebarView.peek()) || !unifiedSearch) return;
+  findOpen = true;
+  sidebarContent.inert = true;
+  findPanel.hidden = false;
+  syncFindToggle();
+  unifiedSearch.update(sidebarProjects.peek(), allSessions.peek());
+  unifiedSearch.open();
+  findInput.focus();
+  refreshFindProjects();
+}
+function refreshFindProjects() {
+  const request = ++findRequest;
+  if (!sidebarProjects.peek().length) setFindStatus("sidebar.find.loading");
+  void loadSidebarProjects().then(() => {
+    if (request === findRequest) setFindStatus();
+  }, () => {
+    if (request === findRequest) setFindStatus("sidebar.find.partial");
+  });
+}
+function navigateSearchHit(hit) {
+  if (!findOpen) return;
+  const session = hit.type === "session" ? getSession(hit.id) : null;
+  if (!session && hit.type === "session") return;
+  const projectId = hit.type === "project" ? hit.id : hit.projectId;
+  closeFind();
+  selectSidebarView(projectId ? "projects" : "sessions");
+  if (session) {
+    if (!spaEnabled()) { window.location.href = `/${session.instanceId}/`; return; }
+    switchTo(session.instanceId);
+    if (window.matchMedia?.("(max-width: 700px)").matches) {
+      // Reveal the owning row before hiding the mobile drawer; reopening it
+      // should show the selected conversation at its original location.
+      if (projectId) void revealSidebarProject(projectId, session.instanceId);
+      document.dispatchEvent(new Event("ash:sidebar-conversation-opened"));
       return;
     }
-    const archivedLabels = directoryLabels(visible.map(item => item.cwd));
-    for (const item of visible) {
-      const li = document.createElement("li");
-      li.dataset.sessionId = item.id;
-
-      const a = document.createElement("a");
-      a.href = `/${item.id}`;
-      a.innerHTML =
-        `<span class="archive-icon side-icon">${ARCHIVE_ICON_SVG}</span>` +
-        sideBody(item.title || t("untitled"), { cwd: item.cwd, location: archivedLabels.get(item.cwd), ts: item.startedAt });
-      li.appendChild(a);
-
-      const restoreBtn = document.createElement("button");
-      restoreBtn.className = "archive-restore side-btn";
-      restoreBtn.title = t("restore");
-      restoreBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`;
-      restoreBtn.addEventListener("click", async (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        try {
-          const r = await fetch("/api/sessions/unarchive", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: item.id }),
-          });
-          if (r.ok) {
-            renderArchive();
-            renderSessions();
-          }
-        } catch {}
-      });
-      li.appendChild(restoreBtn);
-
-      archiveList.appendChild(li);
-    }
-  } catch {}
-};
-
-const sidebarSearch = initSidebarSearch({
-  toggle: document.getElementById("sidebar-search-toggle"),
-  panel: document.getElementById("sidebar-search"),
-  input: sessionFilter,
-  close: document.getElementById("sidebar-search-close"),
-  onChange: updateFilter,
+  }
+  // The picker is a stable fallback if an item was removed or belongs to a
+  // plugin whose conversation is not a row in the Sessions view.
+  document.getElementById("sidebar-view-select")?.focus({ preventScroll: true });
+  if (projectId) { void revealSidebarProject(projectId, session?.instanceId ?? null); return; }
+  const row = sessionList?.querySelector(`li[data-session-id="${CSS.escape(session.instanceId)}"] a`);
+  row?.scrollIntoView({ block: "nearest" });
+  row?.focus({ preventScroll: true });
+}
+searchToggle?.addEventListener("click", () => {
+  if (!findEnabled(sidebarView.peek())) return;
+  if (findOpen) closeFind(true); else openFind();
+});
+findClose?.addEventListener("click", () => closeFind(true));
+for (const node of [findClose, searchToggle]) node?.addEventListener("keydown", ev => {
+  if (!findOpen || ev.key !== "Escape" || ev.isComposing) return;
+  ev.preventDefault(); ev.stopPropagation(); closeFind(true);
+});
+document.addEventListener("ash:sidebar-collapsed", () => closeFind());
+document.addEventListener("ash:host-state-changed", event => {
+  if (!findOpen) return;
+  const domains = event.detail?.domains;
+  if (!Array.isArray(domains) || domains.includes("projects")) refreshFindProjects();
+});
+effect(() => {
+  const groups = sidebarProjects.value, list = allSessions.value;
+  if (findOpen) unifiedSearch.update(groups, list);
 });
 
 effect(() => {
   const view = sidebarView.value;
-  showProjects(view === "projects");
+  closeFind();
+  untracked(() => showProjects(view === "projects"));
   if (sessionList) sessionList.hidden = view !== "sessions";
-  if (workspaceList) workspaceList.hidden = view !== "workspaces";
   if (terminalList) terminalList.hidden = view !== "terminals";
-  if (archiveList) archiveList.hidden = view !== "archive";
-  sidebarSearch.setAvailable(["sessions", "archive", "workspaces"].includes(view));
-  if (newSessionAction) newSessionAction.hidden = view !== "sessions";
-  if (newTerminalAction) newTerminalAction.hidden = view !== "terminals";
+  if (searchToggle) searchToggle.hidden = !findEnabled(view);
   updateViewPicker(view);
 });
 
-// Sidebar filter: substring match on title + cwd for sessions, workspaces
-// and archive. Debounced; the sessions view re-filters the last fetched
-// list client-side instead of re-fetching on every keystroke.
-function updateFilter(value) {
-  filterText = value;
-  if (filterDebounce) clearTimeout(filterDebounce);
-  filterDebounce = setTimeout(() => {
-    filterDebounce = null;
-    const v = sidebarView.peek();
-    if (v === "archive") renderArchive();
-    else if (v === "workspaces") renderWorkspaces();
-    else if (v === "sessions") renderSessions(false, { fromCache: true });
-  }, 150);
-}
+effect(() => {
+  if (!createButton) return;
+  const view = sidebarView.value;
+  const key = createLabels[view];
+  const label = t(key);
+  createButton.dataset.i18nTitle = key;
+  createButton.dataset.i18nAria = key;
+  createButton.title = label;
+  createButton.setAttribute("aria-label", label);
+});
 
 effect(() => {
-  conversationEntries.value;
-  const v = sidebarView.value;
-  if (v === "sessions") renderSessions(true);
-  else if (v === "workspaces") renderWorkspaces();
-  else if (v === "terminals") renderTerminals();
-  else if (v === "archive") renderArchive();
+  const view = sidebarView.value;
+  if (view === "sessions") { conversationEntries.value; renderSessions(true); }
+  else if (view === "terminals") renderTerminals();
 });
 
 effect(() => {
   const active = activeSessionId.value;
-  for (const root of [workspaceList, terminalList]) {
-    if (!root) continue;
-    for (const li of root.querySelectorAll("li[data-session-id]")) {
-      li.classList.toggle("current", li.dataset.sessionId === active);
-    }
+  if (!terminalList) return;
+  for (const li of terminalList.querySelectorAll("li[data-session-id]")) {
+    li.classList.toggle("current", li.dataset.sessionId === active);
   }
 });
 
@@ -1202,14 +1047,12 @@ window.addEventListener("pageshow", (ev) => {
 
 // Force re-render on language switch so bucket headers / tooltips update.
 document.addEventListener("langchange", () => {
+  if (findOpen && findStatusKey) setFindStatus(findStatusKey);
   fullHashCache = "";
   sessionsHash = "";
-  workspacesHash = "";
   terminalsHash = "";
   renderSessions();
-  renderWorkspaces();
   renderTerminals();
-  renderArchive();
 });
 
 // Inline update — a full re-render would clobber an in-progress title edit.
@@ -1241,68 +1084,85 @@ const getDefaultCwd = () => {
   return "~";
 };
 
-const doCreateSession = async (cwd, { navigate = true } = {}) => {
-  if (!cwd) return;
+let creating = false;
+const doCreateSession = async (cwd, { navigate = true, kind = undefined } = {}) => {
+  if (creating) return null;
+  creating = true;
+  if (createButton) createButton.disabled = true;
+  let sourceUrl = window.location.href;
+  let sourceId = activeSessionId.peek();
+  let canNavigate = navigate;
+  let overlapsBackendSwitch = false;
+  const tracking = navigate ? new AbortController() : null;
+  if (tracking) {
+    const observeBackendSwitch = () => {
+      overlapsBackendSwitch ||= [...sessions.values()].some(session => session._backendSwitchPending);
+    };
+    observeBackendSwitch();
+    document.addEventListener("ash:busy-change", observeBackendSwitch, { signal: tracking.signal });
+    document.addEventListener("ash:session-replaced", ({ detail: { from, to } }) => {
+      overlapsBackendSwitch = true;
+      // The event precedes the in-place URL and active ID update.
+      if (canNavigate && from === sourceId && activeSessionId.peek() === from && window.location.href === sourceUrl) {
+        sourceId = to;
+        sourceUrl = new URL(`/${to}/`, sourceUrl).href;
+      }
+    }, { signal: tracking.signal });
+  }
+  // An intervening tab switch also supersedes this request if the user
+  // returns to the original tab before the response arrives.
+  const stopWatching = navigate ? effect(() => {
+    if (activeSessionId.value !== sourceId) canNavigate = false;
+  }) : undefined;
   try {
     const res = await fetch("/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd }),
+      body: JSON.stringify({ cwd, kind }),
     });
     if (!res.ok) {
-      const text = await res.text();
+      const text = await res.text().catch(() => "");
       toast(t("session.new.failed"), { type: "error", detail: text || `HTTP ${res.status}` });
       return;
     }
     const sess = await res.json();
     if (typeof sess.instanceId !== "string" || !/^[0-9a-f]{4,32}$/i.test(sess.instanceId)) throw new Error("Invalid session response");
-    if (navigate) window.location.href = `/${sess.instanceId}/`;
+    if (kind) setSessionKind(sess.instanceId, kind);
+    if (canNavigate && window.location.href === sourceUrl) {
+      // Keep the replacement and its drafts in this renderer in either response order.
+      if (overlapsBackendSwitch) {
+        openTab(sess.instanceId);
+        document.dispatchEvent(new Event("ash:sidebar-conversation-opened"));
+      } else window.location.href = `/${sess.instanceId}/`;
+    } else if (navigate) queueRefresh();
     return sess.instanceId;
   } catch (e) {
     toast(t("session.new.failed"), { type: "error", detail: String(e?.message ?? e) });
+  } finally {
+    tracking?.abort();
+    stopWatching?.();
+    creating = false;
+    if (createButton) createButton.disabled = false;
   }
 };
 
-export const createSession = async (options = {}) => {
-  if (newBtn?.disabled) return null;
-  if (newBtn) newBtn.disabled = true;
-  try { return await doCreateSession(getDefaultCwd(), options); }
-  finally { if (newBtn) newBtn.disabled = false; }
-};
+export const createSession = (options = {}) => doCreateSession(getDefaultCwd(), options);
 
-newBtn?.addEventListener("click", () => createSession());
-
-newTerminalBtn?.addEventListener("click", async (ev) => {
-  if (newTerminalBtn.disabled) return;
-  const kind = (ev.metaKey || ev.ctrlKey) ? "ash-terminal" : "terminal";
+export const createTerminal = (useAgentShell = false) => {
+  const kind = useAgentShell ? "ash-terminal" : "terminal";
   // agent-sh Shell has no Windows backend — the session would be a dead terminal.
   if (kind === "ash-terminal" && document.documentElement.dataset.platform === "win32") {
     toast(t("terminal.not.supported.win"), { type: "error" });
     return;
   }
-  newTerminalBtn.disabled = true;
-  try {
-    const cwd = getSession(activeSessionId.peek())?.cwd ?? null;
-    const body = cwd ? { cwd, kind } : { kind };
-    const res = await fetch("/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      toast(t("session.new.failed"), { type: "error", detail: detail || `HTTP ${res.status}` });
-      return;
-    }
-    const sess = await res.json();
-    if (sess.instanceId) {
-      setSessionKind(sess.instanceId, kind);
-      window.location.href = `/${sess.instanceId}/`;
-    }
-  } catch (err) {
-    toast(t("session.new.failed"), { type: "error", detail: String(err?.message ?? err) });
-  } finally {
-    newTerminalBtn.disabled = false;
-  }
+  return doCreateSession(getSession(activeSessionId.peek())?.cwd, { kind });
+};
+
+createButton?.addEventListener("click", (ev) => {
+  closeFind();
+  const view = sidebarView.peek();
+  if (view === "projects") createProject();
+  else if (view === "terminals") void createTerminal(ev.metaKey || ev.ctrlKey);
+  else void createSession();
 });
 

@@ -7,8 +7,10 @@ import { writeNetworkPolicy } from "../network-policy.js";
 import { unicodeSlice } from "../unicode.js";
 import { selectSessionModel, selectSessionThinking } from "../services/session-configuration.js";
 import type { Session } from "../services/session-types.js";
-import type { ProjectService } from "../services/project-service.js";
+import { isProjectConversation, type ProjectService } from "../services/project-service.js";
+import type { SessionKind } from "../bridges/types.js";
 import type { CollaborationTasks } from "../collaboration.js";
+import type { ProjectWorkerBackend } from "../integrations.js";
 
 export interface ProjectHttpRuntime {
   sessions: Map<string, Session>;
@@ -17,7 +19,8 @@ export interface ProjectHttpRuntime {
   activities?(projectId: string): import('../services/plugin-activities.js').PluginActivity[];
   worktreesDirectory: string;
   readBody(req: http.IncomingMessage): Promise<string>;
-  create(cwd: string): Promise<Session>;
+  create(cwd: string, workerKind?: SessionKind): Promise<Session>;
+  sessionBackends?: readonly ProjectWorkerBackend[];
   saveSessionMetaDebounced(session: Session): void;
   setSessionTitle(session: Session, title: string, user?: boolean): Promise<void>;
 }
@@ -26,6 +29,11 @@ export interface ProjectHttpRuntime {
 export async function handleProjectRequest(req: http.IncomingMessage, res: http.ServerResponse, runtime: ProjectHttpRuntime): Promise<boolean> {
   const { sessions, projects, readBody, saveSessionMetaDebounced, setSessionTitle } = runtime;
   const url = req.url ?? "/";
+    if (req.method === "GET" && url === "/api/projects/session-backends") {
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ backends: (runtime.sessionBackends ?? []).map(({ id, label, taskProfile }) => ({ id, label, taskProfile })) }));
+      return true;
+    }
     if (req.method === "POST" && (url === "/api/projects/worktree" || url === "/api/projects/session")) {
       let workspace: Awaited<ReturnType<typeof createIsolatedWorkspace>> | undefined;
       let created: Session | undefined;
@@ -39,6 +47,11 @@ export async function handleProjectRequest(req: http.IncomingMessage, res: http.
         if (input.thinking !== undefined && (typeof input.thinking !== "string" || (!input.model && input.thinking !== "default")
           || (input.thinking !== "default" && !reasoningProfile({ id: input.model, provider: input.provider })?.levels.includes(input.thinking)))) throw new Error("Unsupported thinking level for this model");
         const legacy = url === "/api/projects/worktree";
+        const backend = input.backend === undefined ? undefined : runtime.sessionBackends?.find(b => b.id === input.backend);
+        if (input.backend !== undefined && (!backend || legacy)) throw new Error("Project worker backend unavailable");
+        if (backend && (input.isolated || input.model !== undefined || input.provider !== undefined || input.thinking !== undefined || input.proxyEnabled !== undefined)) {
+          throw new Error("Project worker does not accept checkout, model, thinking or VPN options");
+        }
         const projectRoot = projects.list().find(p => p.id === input.projectId)?.cwd;
         const check = () => {
           if (projects.isDeleting()) throw new Error("Project deletion in progress; retry shortly");
@@ -56,7 +69,7 @@ export async function handleProjectRequest(req: http.IncomingMessage, res: http.
         check();
         if (legacy || input.isolated) workspace = await createIsolatedWorkspace(directory, runtime.worktreesDirectory);
         check();
-        created = await runtime.create(workspace?.cwd ?? directory);
+        created = await runtime.create(workspace?.cwd ?? directory, backend?.kind);
         if (typeof input.proxyEnabled === "boolean") writeNetworkPolicy(input.proxyEnabled, created.id);
         if (input.model) {
           await selectSessionModel(created, input.model, input.provider, () => { check(); });
@@ -75,7 +88,7 @@ export async function handleProjectRequest(req: http.IncomingMessage, res: http.
         // Preserve any checkout/session created before a later failure; never
         // delete files that extensions or the user may already have touched.
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: String(e), ...(workspace ? { workspace } : {}), ...(created ? { instanceId: created.id, cwd: created.cwd } : {}) }));
+        res.end(JSON.stringify({ error: String(e), ...(workspace ? { workspace } : {}), ...(created ? { instanceId: created.id, cwd: created.cwd, kind: created.kind } : {}) }));
       }
       return true;
     }

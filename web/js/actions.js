@@ -61,6 +61,17 @@ const rewindFromBox = async (box) => {
   if (origin?.isConnected !== false) origin?.resync({ force: true });
 };
 
+function renderUserMessageTime(el, timestamp) {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return;
+  el.dateTime = date.toISOString();
+  el.textContent = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  el.title = date.toLocaleString([], {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
 export const createUserBox = (queryText, images, ts, turn) => {
   const box = document.createElement("div");
   box.className = "agent-box";
@@ -78,18 +89,15 @@ export const createUserBox = (queryText, images, ts, turn) => {
   }
   const timestamp = typeof ts === "number" ? ts : Date.now();
   box._ts = timestamp;
-  const dateStr = new Date(timestamp).toLocaleString([], {
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit",
-  });
   box.innerHTML = `
     <div class="agent-box-head">
       <span class="abh-l">&gt;</span>
       <span class="abh-r">${t("you")}</span>
     </div>
     ${imagesHtml}
-    <span class="msg-time">${dateStr}</span>
+    <time class="msg-time"></time>
     <div class="q-text">${escape(queryText)}</div>`;
+  renderUserMessageTime(box.querySelector(".msg-time"), timestamp);
   // turn === null (e.g. slash-command frames, contract G) → no rewind action
   if (turn !== null) {
     if (Number.isInteger(turn)) box.dataset.turn = String(turn);
@@ -120,11 +128,6 @@ export const createUserBox = (queryText, images, ts, turn) => {
 document.addEventListener("langchange", () => {
   document.querySelectorAll(".msg-time").forEach((el) => {
     const box = el.closest(".agent-box");
-    if (box?._ts) {
-      el.textContent = new Date(box._ts).toLocaleString([], {
-        year: "numeric", month: "2-digit", day: "2-digit",
-        hour: "2-digit", minute: "2-digit",
-      });
-    }
+    if (typeof box?._ts === "number") renderUserMessageTime(el, box._ts);
   });
 });

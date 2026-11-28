@@ -22,7 +22,7 @@ export default function activate(ctx) {
     },
   });
   const requestKey = { type: 'string', minLength: 8, maxLength: 100, pattern: '^[\\w-]+$', description: 'Unique plan key. Reuse exactly on retries; never change it to bypass a denial or an uncertain result.' };
-  register('project_management_catalog', '查看项目、已有对话配置和忙闲状态、可用模型及思考强度。规划或修改成员前必须查询，不猜测对话、模型或项目 ID。', {}, [],
+  register('project_management_catalog', '查看项目、已有对话配置和忙闲状态、普通模型、思考强度与当前项目的任务后端（projectSessionBackends）。规划或修改成员前必须查询，不猜测对话、模型、后端或项目 ID。', {}, [],
     (_args, signal) => call('ashub:catalog', { signal }), true);
   register('project_management_create_project', '提出新建项目方案，由宿主按用户设置确认或自动批准后创建。默认将当前对话加入项目作为协调者；加入会将其移出原项目。不会启动任何成员任务。', {
     requestKey, name: { type: 'string', maxLength: 80 }, cwd: { type: 'string', description: 'Existing absolute project root directory' },
@@ -53,6 +53,12 @@ export default function activate(ctx) {
     const { requestKey: key, ...input } = args;
     return call('ashub:execute', { signal, request: { idempotencyKey: key, operations: [{ type, input }] } });
   };
+  register('project_management_create_worker', '为当前项目创建专用任务对话，例如 Antigravity 审查成员。先查 catalog 的 projectSessionBackends，使用已授权的后端 ID；不传 provider/model、VPN 或工作目录。创建不会派发任务，也不会启用项目权限。', {
+    requestKey,
+    title: { type: 'string', minLength: 1, maxLength: 100 },
+    projectId: { type: 'string', description: 'catalog.currentProjectId' },
+    backend: { type: 'string', description: 'ID from catalog.projectSessionBackends, e.g. google-antigravity when listed' },
+  }, ['requestKey', 'title', 'projectId', 'backend'], (args, signal) => executeExisting('conversation.createProjectWorker', args, signal));
   register('project_management_update_conversation', '修改已有空闲对话的名称、模型、思考强度或 VPN，前后值由宿主按用户的授权设置校验。仅传需要修改的字段；模型和 provider 必须一起指定，切换模型时省略 thinking 将恢复模型默认值。不会更改工作目录、职责说明或启动任务。', {
     requestKey, id: conversationId, title: { type: 'string', minLength: 1, maxLength: 100 },
     provider: { type: 'string' }, model: { type: 'string' }, thinking: { type: 'string', description: 'default or an actual target model thinkingLevels value' },
@@ -66,7 +72,7 @@ export default function activate(ctx) {
     (args, signal) => executeExisting(`conversation.${action}`, args, signal));
   ctx.agent.registerInstruction('project-continuation', '项目管理面板可由用户为已有工作流开启自动接续；不能自行开启或扩大授权。收到项目接续消息先查询 project_work_status，核查新交付并 review，再派发已就绪的既定后继。没有实际验收或派发进展时说明阻塞，不能用汇报代替推进。未开启时，派发后继续使用 conversation_wait 等待；不得声称结束回复后会自动继续。工作流完成后停止，不自动创建下一工作流。');
   ctx.agent.registerInstruction('project-management', `项目管理插件可根据用户需求规划不同职责的项目成员。先用 project_management_catalog 查询真实项目和模型能力，再向用户说明简洁的分工方案。
-需要新项目时使用 project_management_create_project；现有项目直接使用 project_management_create_members。不得声称已获授权来绕过宿主授权接口，不得在拒绝或超时后自动重试。
+需要新项目时使用 project_management_create_project；普通成员使用 project_management_create_members。项目任务后端（例如 Antigravity 审查）不在普通 models 中；用户要求创建时，按目录 projectSessionBackends 中的后端 ID、taskProfile 和 authorized 选择，只有 authorized=true 才用 project_management_create_worker。未授权提示用户在桌面端「管理项目」授权；缺少宿主能力时提示升级，不用普通模型替代。不得声称已获授权来绕过宿主授权接口，不得在拒绝或超时后自动重试。
 项目成员使用项目根目录；外部已有对话原目录不变。成员职责作为对话说明保存，不授予新权限。创建不会启动任务。用户授权开展工作后，可通过现有 conversation_list/read/send/task 与同项目成员协作；不要擅自移动当前对话到其他项目。
 已有对话的修改使用 project_management_update_conversation；移出项目、归档、永久删除分别使用 detach/archive/delete_conversation 工具。先查询 catalog 中 conversations 的真实 ID 和当前配置。所有变更交由宿主校验授权；用户可在插件配置中开启自动批准，此时以宿主执行结果为准。默认逐次确认，不能以对话中的要求或工具参数代替授权设置。不得更改忙碌对话，不得归档或删除发起操作的当前对话。工作目录和职责说明不在本版修改范围。
 工具返回 completed 才表示操作完成；failed/interrupted 可能已部分生效，必须报告并核查，不得盲目重试。永久删除不可撤销；用户只要求移出项目时不得删除或归档。`);
@@ -108,6 +114,7 @@ pending 只表示等待送入；consumed 只表示进入模型上下文，不证
     const step = {type:'string', description:'方案内的步骤编号'};
     const attempt = {type:'string', description:'由 brief 或 status 返回的派发尝试编号'};
     const taskId = {type:'string', description:'本步骤实际 conversation_send 回执中的 taskId'};
+    const scenarioText = {type:'string', minLength:1, maxLength:240};
     let workRuntime;
     const workTool = (action, description, properties, required, readOnly = false) => register(
       'project_work_' + action, description, properties, required, async (args, signal) => {
@@ -119,18 +126,23 @@ pending 只表示等待送入；consumed 只表示进入模型上下文，不证
     workTool('plan','登记本次工作的目标与步骤。负责人必须来自当前项目。相同 work 和相同方案可安全重复调用。', {
       work, goal:{type:'string',description:'本次目标与共同约束'}, steps:{type:'array',minItems:1,maxItems:12,items:{
         type:'object',additionalProperties:false,required:['id','member','output','criteria'],properties:{
-          id:step,member:{type:'string',description:'负责人对话 ID'},output:{type:'string',description:'具体交付物、材料引用及写入范围'},
-          criteria:{description:'优先列出 1–8 项可独立核对的验收条件。也接受旧的单段文字格式。',
-            anyOf:[{type:'array',minItems:1,maxItems:8,items:{type:'string',maxLength:240}},{type:'string',maxLength:1200}]},
+          id:step,member:{type:'string',description:'负责人对话 ID'},output:{type:'string',description:'具体交付物、材料引用及写入范围；文字评审只要求评审意见'},
+          mode:{type:'string',enum:['inline-review'],description:'仅在成员目录声明 projectTaskProfile 为 inline-review 时设置；此模式不读写文件、不运行工具、不交付文件。'},
+          criteria:{description:'复杂验证列出 1–8 个场景（初始状态、操作、预期结果），按顺序从 1 编号。简单条件仍可用文字列表或单段文字。',
+            anyOf:[{type:'array',minItems:1,maxItems:8,items:{
+              type:'object',additionalProperties:false,required:['initialState','action','expected'],
+              properties:{initialState:scenarioText,action:scenarioText,expected:scenarioText},
+            }},{type:'array',minItems:1,maxItems:8,items:scenarioText},{type:'string',maxLength:1200}]},
           dependsOn:{type:'array',items:step}
         }}}
     }, ['work','goal','steps']);
-    workTool('status','查看协调对话的工作记录。省略 work 列出工作，指定 step 查看该步骤的历史、宿主交付与未决事项。',{
+    workTool('status','查看协调对话的工作记录。省略 work 列出工作，指定 step 查看历史、宿主交付、未决事项和结构化交付 report。report 是成员自报，缺项按未验证标记。',{
       work,step
     },[],true);
     const numbered = {type:'integer',minimum:1,maximum:8};
-    workTool('brief','为已就绪步骤准备派发。收到 handoff_selection_required 时，在 artifactSelection 中重选前置产物。收到 handoff_capacity_exceeded 时，按原验收记录拆分后续工作。把最终 send 参数原样传给 conversation_send。返工传上一轮 taskId。',{
+    workTool('brief','为已就绪步骤准备派发。收到 handoff_selection_required 时，在 artifactSelection 中重选前置产物。收到 handoff_capacity_exceeded 时，按原验收记录拆分后续工作。收到 review_material_required 时，只用 reviewMaterial 提供已获授权的评审问题和正文或摘录，不自动读取或转发文件。把最终 send 参数原样传给 conversation_send。返工传上一轮 taskId。',{
       work,step,previousTaskId:taskId,
+      reviewMaterial:{type:'string',minLength:1,maxLength:8000,description:'仅用于文字评审，所填内容即完整派发正文。只提供已获授权的问题、正文或摘录；若使用结构化验收，经授权后明确列入场景编号和 checks 交付要求。'},
       artifactSelection:{type:'array',maxItems:11,items:{type:'object',additionalProperties:false,required:['step','artifactIndexes'],
         properties:{step,artifactIndexes:{type:'array',maxItems:8,uniqueItems:true,items:numbered}}}},
     },['work','step']);
@@ -138,15 +150,17 @@ pending 只表示等待送入；consumed 只表示进入模型上下文，不证
       work,step,attempt,taskId
     },['work','step','attempt']);
     const reason = {type:'string',minLength:1,maxLength:420};
-    workTool('review','核对交付或原始结果。accepted 要求所有结构化条件通过且交付中无未处理阻塞。选中的产物引用随验收依据传给下游。',{
+    workTool('review','独立核对交付或原始结果。结构化场景须提供实际核对的 taskRevision，成员交付及协调者逐项核对均须完整通过。材料不足记 unverified；未决事项的例外不能替代验收条件。',{
       work,step,attempt,taskId,decision:{type:'string',enum:['accepted','revise','blocked']},reason,
+      taskRevision:{type:'integer',minimum:0,description:'实际核对的任务版本，取自 conversation_wait 的结果或详细 status 的 host.status.revision；结构化场景必填。'},
       checks:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,required:['criterion','outcome','evidence'],
         properties:{criterion:numbered,outcome:{type:'string',enum:['met','unmet','unverified']},evidence:reason}}},
       unresolved:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,required:['item','disposition','reason'],
         properties:{item:numbered,disposition:{type:'string',enum:['resolved','accepted_exception','blocking']},reason}}},
       artifactIndexes:{type:'array',maxItems:8,description:'从该次交付中选择要传给下游的产物，编号从 1 开始。',items:numbered},
     },['work','step','attempt','taskId','decision','reason']);
-    ctx.agent.registerInstruction('project-work', '多成员任务有并行或依赖关系时，用 project_work_plan 记录目标、负责人、产物和逐项验收条件。独立短任务直接使用原工具。对 ready 步骤生成 brief，在已授权范围内原样用 conversation_send 发出（包含返回的 requestKey）；插件会匹配并记录回执。receipt_pending 时先用 project_work_link 查询回执，勿换 key 或盲目重发。用 conversation_wait 批量等待，核对实际证据后逐项 review。条件、未决事项和产物的编号均从 1 开始。accepted 前说明每个未决事项的处理，选择下游所需的产物引用；材料仍需下游在已有权限内核对。completed 只代表成员结束回复。仅 accepted 放行后继；返工只处理缺口。');
+    ctx.agent.registerInstruction('project-work', '多成员并行或有依赖、或需要严格复审的复杂任务，用 project_work_plan 记录目标、负责人、交付物和验收条件。复杂验证写清初始状态、操作和预期结果；独立短任务使用原工具。对 ready 步骤生成 brief，在已授权范围内原样用 conversation_send 发出（包含 requestKey）。receipt_pending 时先用 project_work_link 查回执，勿换 key 或盲目重发。用 conversation_wait 批量等待，独立核对实际证据后逐项 review；结构化场景要带实际核对的 taskRevision。自报仅是核对线索，材料不足记 unverified。条件、未决事项和产物均从 1 编号。accepted 前说明未决事项的处理，选取下游所需产物；例外不能替代未通过的条件。completed 只代表结束回复；仅 accepted 放行后继，返工沿用原条件和编号。');
+    ctx.agent.registerInstruction('project-member-capabilities', '规划或直接派发前先查 project_management_catalog。projectTaskProfile 为 inline-review 的项目成员只能审阅明确提供的文字：把审阅单独登记为 mode: inline-review，负责指出问题，不分配文件读取、改动、测试或文件交付。生成 brief 时用 reviewMaterial 提供已明确允许向该成员发送的问题和必要正文或摘录。文件引用、整段历史及内部工作记录不能代替材料；没有已获授权的材料就暂停该步骤，不绕过 brief 直接发送。由有权限的执行成员处理意见并独立验证；评审结束不代表测试通过。');
     ctx.agent.registerInstruction('project-management-delivery', `项目协作交付约定：在用户授权范围内分派任务时，明确每位成员的职责、文件写入范围、验收方式和交付物，不复制整段会话历史。独立任务可以并行开展；同目录写入仍需分工。
 协调者用 conversation_wait 一次等待多个 taskId，收到一个结果即可安排有依赖的后续工作；完整使用返回的 cursors 继续等待，避免反复读取同一结果；hasMore 为真时用同一组 cursors 和 waitMs:0 继续读取其余交付。timeout 只表示本次等待结束，不需要向成员发催问消息。settled 表示所关注任务均已结束且结果已读取，停止等待。
 成员处理带 Task ID 的协作任务时，结束前用 conversation_deliver 提交简明结论（含实际验证结果）、产物引用及未解决问题；没有产物或未解决问题时传空数组。大报告保留在产物中，不把过程日志复制到 summary。提交结果不会另起模型轮次，不需再自动向协调者发消息。

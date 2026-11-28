@@ -85,17 +85,18 @@ await check('Z04 dedicated conversation stays out of the standalone list until i
 await check('Z04 cache-only render does not discard pending network refresh',async()=>{
  const x=sidebarEnv();x.u.e.context.lastSessionsList=[{instanceId:'aaaaaa',title:'cached',cwd:'/tmp'}];const pending=x.render(true);await x.render(true,{fromCache:true});x.reads[0](sessionResponse('fresh'));await pending;assert(x.stored.at(-1)[0].title==='fresh'&&x.rendered.at(-1)==='fresh','filter render suppressed fresh list');
 });
-await check('Z04 filtered row updates its directory label when a hidden sibling shares the leaf',async()=>{
+await check('Z04 standalone row updates its directory label when a project session shares the leaf',async()=>{
  const x=sidebarEnv(), labels=[];
  const ctx=x.u.e.context;
- ctx.filterQuery=()=> 'visible';ctx.matchesFilter=title=>title==='visible';
- ctx.renderSessionItem=s=>{labels.push(ctx.sessionLabels.get(s.cwd));return new El()};
+ ctx.renderSessionItem=s=>{labels.push([s.instanceId,ctx.sessionLabels.get(s.cwd)]);return new El()};
  const a={instanceId:'aaaaaa',title:'visible',cwd:'/course/notes'};
- const b={instanceId:'bbbbbb',title:'other',cwd:'/review/notes'};
+ const b={instanceId:'bbbbbb',title:'other',cwd:'/review/notes',projectId:'project'};
+ // The new unified search is a separate view. Project members still belong
+ // to the full directory catalog but not to the standalone Sessions list.
  for(const list of [[a],[a,b],[a]]){
    const rendering=x.render(true);x.reads.at(-1)({ok:true,json:async()=>list});await rendering;
  }
- assert(labels.join('|')==='notes|course/notes|notes','filtered directory label is stale');
+ assert(JSON.stringify(labels)===JSON.stringify([['aaaaaa','notes'],['aaaaaa','course/notes'],['aaaaaa','notes']]),'standalone row directory label is stale');
 });
 await check('Z04 render delayed by pinned fetch cannot replace newer DOM',async()=>{
  const x=sidebarEnv();let release,started;const ready=new Promise(r=>started=r);let calls=0;x.u.e.context.refreshPinned=async()=>{if(++calls===1){started();await new Promise(r=>release=r)}return false};const old=x.render(true);x.reads[0](sessionResponse('old'));await ready;const next=x.render(true);x.reads[1](sessionResponse('fresh'));await next;release();await old;assert(x.stored.at(-1)[0].title==='fresh'&&x.rendered.join()==='fresh','older render overwrote newer DOM');

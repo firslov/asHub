@@ -17,7 +17,7 @@ const cta = document.getElementById("no-session-cta");
 try { sessionStorage.removeItem("ash.pending-query"); } catch {}
 
 cta?.addEventListener("click", () => {
-  document.getElementById("new-session")?.click();
+  void createSession();
 });
 
 // Localized template query: prefer data-query-{lang}, fall back to data-query.
@@ -67,9 +67,10 @@ effect(() => {
 
 // ── First-run API key onboarding ─────────────────────────────────────
 const templatesEl = panel?.querySelector(".stream-empty-templates");
-const templateButtons = templatesEl
-  ? [...templatesEl.querySelectorAll(".stream-empty-prompt.template")]
-  : [];
+const setup = document.getElementById("welcome-setup");
+const select = document.getElementById("welcome-provider");
+const keyInput = document.getElementById("welcome-api-key");
+const saveBtn = setup?.querySelector('button[type="submit"]');
 
 // Prefer the backend-reported flag (covers env vars and keys files);
 // fall back to scanning settings.json apiKeys for older backends.
@@ -82,117 +83,40 @@ const hasAnyApiKey = (cfg) => {
   );
 };
 
-const setTemplatesEnabled = (on) => {
-  templateButtons.forEach((btn) => {
-    btn.disabled = !on;
-    btn.style.opacity = on ? "" : "0.5";
-    btn.style.cursor = on ? "" : "not-allowed";
-    btn.title = on ? "" : t("onboarding.need.key");
-  });
-};
-
-let onboardingEl = null;
 let onboardingCheckSeq = 0;
-let onboardingTexts = null;
-document.addEventListener("langchange", () => {
-  if (!onboardingEl) return;
-  onboardingTexts?.();
-  setTemplatesEnabled(false);
-});
-
-const removeOnboarding = () => {
+const finishOnboarding = (restoreFocus = false) => {
   ++onboardingCheckSeq;
-  onboardingTexts = null;
-  onboardingEl?.remove();
-  onboardingEl = null;
-  if (templatesEl) templatesEl.hidden = false;
-  setTemplatesEnabled(true);
+  const hadFocus = !setup.hidden && setup.contains(document.activeElement);
+  if (!setup.hidden) setup.reset();
+  setup.hidden = true;
+  templatesEl.hidden = false;
+  if (!panel.hidden && (hadFocus || (restoreFocus && document.activeElement === document.body))) {
+    cta.focus();
+  }
 };
 
-const renderOnboarding = async (request) => {
-  if (!templatesEl || onboardingEl) return;
-  const catalog = await loadProviderCatalog();
-  if (request !== onboardingCheckSeq || onboardingEl) return;
-  const ids = (catalog?.providers ?? []).map((p) => p.name);
-  const providerIds = ids.length ? ids : ["deepseek", "zhipu", "openrouter"];
-
-  const wrap = document.createElement("div");
-  wrap.style.cssText =
-    "display:flex;flex-direction:column;gap:0.7rem;width:min(340px,100%);text-align:left;";
-
-  const title = document.createElement("div");
-  title.style.cssText = "font-weight:600;color:var(--text);";
-
-  const subtitle = document.createElement("span");
-  subtitle.className = "config-hint";
-
-  const providerField = document.createElement("div");
-  providerField.className = "config-field";
-  const providerLabelEl = document.createElement("label");
-  providerLabelEl.className = "config-label";
-  const selectWrap = document.createElement("div");
-  selectWrap.className = "config-select-wrap";
-  const select = document.createElement("select");
-  select.className = "config-select";
-  select.replaceChildren(...providerIds.map(id => {
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = providerLabel(id);
-    return option;
-  }));
-  selectWrap.appendChild(select);
-  providerField.append(providerLabelEl, selectWrap);
-
-  const keyField = document.createElement("div");
-  keyField.className = "config-field";
-  const keyLabelEl = document.createElement("label");
-  keyLabelEl.className = "config-label";
-  const keyInput = document.createElement("input");
-  keyInput.className = "config-input";
-  keyInput.type = "password";
-  keyInput.placeholder = "sk-...";
-  keyInput.autocomplete = "off";
-  keyInput.spellcheck = false;
-  keyField.append(keyLabelEl, keyInput);
-
-  const saveBtn = document.createElement("button");
-  saveBtn.type = "button";
-  saveBtn.className = "bar-btn config-btn-save";
-  saveBtn.style.alignSelf = "flex-start";
-
-  wrap.append(title, subtitle, providerField, keyField, saveBtn);
-  templatesEl.hidden = true;
-  templatesEl.after(wrap);
-  onboardingEl = wrap;
-
-  const applyTexts = () => {
-    title.textContent = t("onboarding.title");
-    subtitle.textContent = t("onboarding.subtitle");
-    providerLabelEl.textContent = t("provider");
-    keyLabelEl.textContent = t("api.key");
-    saveBtn.textContent = t("onboarding.save");
-  };
-  onboardingTexts = applyTexts;
-  applyTexts();
-
-  saveBtn.addEventListener("click", async () => {
-    const apiKey = keyInput.value.trim();
-    if (!apiKey) {
-      toast(t("onboarding.key.required"), { type: "error" });
-      keyInput.focus();
-      return;
-    }
-    saveBtn.disabled = true;
-    const ok = await saveProviderApiKey(select.value, apiKey);
+setup?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (setup.hidden || saveBtn.disabled || !select.value) return;
+  const apiKey = keyInput.value.trim();
+  if (!apiKey) {
+    toast(t("onboarding.key.required"), { type: "error" });
+    keyInput.focus();
+    return;
+  }
+  const restoreFocus = setup.contains(document.activeElement);
+  saveBtn.disabled = true;
+  try {
+    if (await saveProviderApiKey(select.value, apiKey)) finishOnboarding(restoreFocus);
+  } finally {
     saveBtn.disabled = false;
-    if (ok) removeOnboarding();
-  });
-};
+  }
+});
 
 // Show the onboarding only when no provider has an API key configured.
 // Any /api/config failure is silent — the landing page stays as-is.
 const checkFirstRun = async () => {
-  if (!templatesEl) return;
+  if (!templatesEl || !setup || !select) return;
   const request = ++onboardingCheckSeq;
   let cfg;
   try {
@@ -203,9 +127,15 @@ const checkFirstRun = async () => {
     return;
   }
   if (request !== onboardingCheckSeq) return;
-  if (hasAnyApiKey(cfg)) { removeOnboarding(); return; }
-  setTemplatesEnabled(false);
-  await renderOnboarding(request);
+  if (hasAnyApiKey(cfg)) { finishOnboarding(); return; }
+  templatesEl.hidden = true;
+  if (!setup.hidden) return;
+  const catalog = await loadProviderCatalog();
+  if (request !== onboardingCheckSeq) return;
+  const ids = (catalog?.providers ?? []).map((p) => p.name);
+  const providerIds = ids.length ? ids : ["deepseek", "zhipu", "openrouter"];
+  select.replaceChildren(...providerIds.map(id => new Option(providerLabel(id), id)));
+  setup.hidden = false;
 };
 document.addEventListener("ash:models-changed", checkFirstRun);
 checkFirstRun();

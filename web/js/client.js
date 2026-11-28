@@ -35,7 +35,7 @@ import "./links.js";
 import "./version.js";
 import "./updater.js";
 import "./browser-pane.js";
-import "./sidebar.js";
+import { createTerminal } from "./sidebar.js";
 import "./extensions/conversation-entries.js";
 import "./tabs.js";
 import "./sse.js";
@@ -58,6 +58,7 @@ initializeFeatureUI();
 initializeHostSync();
 registerPanel("ctx",       { toggleBtnId: "ctx-toggle",       panelId: "ctx-panel",        load: () => import("./context-panel.js") });
 registerPanel("files",     { toggleBtnId: "files-toggle",     panelId: "files-panel",      load: () => import("./files-panel.js") });
+registerPanel("archive",   { toggleBtnId: "archive-toggle",   panelId: "archive-panel",    load: () => import("./archive-panel.js") });
 registerPanel("tree",      { toggleBtnId: "tree-toggle",      panelId: "tree-panel",       load: () => import("./tree-panel.js") });
 registerPanel("subagent",  { toggleBtnId: "sa-toggle",        panelId: "subagent-panel",   load: () => import("./subagent-panel.js") });
 import "./session-view.js";
@@ -111,8 +112,8 @@ document.addEventListener("keydown", (ev) => {
   }
   if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey) {
     const k = ev.key.toLowerCase();
-    if (k === "n") { ev.preventDefault(); document.getElementById("new-session")?.click(); return; }
-    if (k === "t") { ev.preventDefault(); document.getElementById("new-terminal")?.click(); return; }
+    if (k === "n") { ev.preventDefault(); document.getElementById("sidebar-create")?.click(); return; }
+    if (k === "t") { ev.preventDefault(); void createTerminal(); return; }
     if (k === "w") {
       const id = activeSessionId.value;
       if (id) { ev.preventDefault(); closeTab(id); }

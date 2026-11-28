@@ -17,7 +17,7 @@ export default async function activate(ctx: any): Promise<void> {
   isolateDesktopTools(ctx, isDesktopControlTool);
   registerDesktopBridge(ctx, service);
   const report = (message: string, error = false) => { if (!disposed) ctx.bus.emit(error ? 'ui:error' : 'ui:info', { message }); };
-  ctx.registerCommand('/desktop', 'Desktop control: install, status, apps, enable, disable, allow, stop', async (input = '') => {
+  ctx.registerCommand('/desktop', 'Desktop control: install, status, apps, enable, disable, allow, revoke, stop', async (input = '') => {
     try {
       const [command = 'status', ...args] = String(input).trim().split(/\s+/).filter(Boolean);
       if (command === 'install') {
@@ -28,6 +28,12 @@ export default async function activate(ctx: any): Promise<void> {
         report('桌面控制组件已安装并通过健康检查。请授予辅助功能权限；截图还需要屏幕录制权限，然后运行 /desktop apps');
       } else if (command === 'stop') {
         await service.stop(); report('所有桌面任务及待审批请求已停止');
+      } else if (command === 'revoke') {
+        if (args.length !== 1) throw Error('用法：/desktop revoke <Bundle ID | all>');
+        const old = readDesktopSettings(file);
+        const approvedApps = args[0] === 'all' ? [] : (old.approvedApps ?? []).filter(id => id !== args[0]);
+        await service.save({ ...old, approvedApps }, settingsRevision(old));
+        report('已撤销所选应用的全局桌面授权并停止现有桌面任务。');
       } else if (command === 'enable' || command === 'disable' || command === 'allow') {
         const old = readDesktopSettings(file); const next = { ...old };
         if (command === 'allow') {
@@ -41,7 +47,7 @@ export default async function activate(ctx: any): Promise<void> {
         report(JSON.stringify(state, null, 2));
       } else if (command === 'status') {
         report(JSON.stringify(await service.status(), null, 2));
-      } else throw Error('用法：/desktop install | status | apps | allow <Bundle IDs> | enable | disable | stop');
+      } else throw Error('用法：/desktop install | status | apps | allow <Bundle IDs> | revoke <Bundle ID | all> | enable | disable | stop');
     } catch (e) { report(e instanceof Error ? e.message : String(e), true); }
   });
 }

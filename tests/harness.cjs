@@ -39,8 +39,11 @@ function env(extra={}) {
    if(id==='agent-sh/auth')return auth;
    if(id==='agent-sh/skills')return {invalidateGlobalSkillsCache(){}};
    if(id.startsWith('agent-sh'))return {};
-   if(id.startsWith('file:'))return load(fileURLToPath(id));
-   if(id.startsWith('.')) {let f=path.resolve(path.dirname(file),id); if(!fs.existsSync(f))f=f.replace(/\.js$/,'.ts');return load(f);}
+   if(id.startsWith('file:')||id.startsWith('.')) {
+    let f=id.startsWith('file:')?fileURLToPath(id):path.resolve(path.dirname(file),id);
+    if(!fs.existsSync(f))f=f.replace(/\.js$/,'.ts'); // Dynamic ESM entries also use runtime .js paths.
+    return load(f);
+   }
    return require(id);
   };
   vm.runInContext('(function(require,module,exports,__filename,__dirname){'+js+'\n})',context,{filename:file})(req,module,module.exports,file,path.dirname(file));

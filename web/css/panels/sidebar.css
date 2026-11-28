@@ -1,10 +1,9 @@
 /* ────────────────────────────────────────────────────────────────────
-   panels/sidebar.css — left sidebar (Sessions / Workspaces / Archive /
-   Terminals), aligned with the panel design system in panels.css.
+   panels/sidebar.css — left sidebar (Sessions / Terminals), aligned with the panel design system in panels.css.
 
    Type ramp and interaction language follow the panels.css discipline:
    item titles sans --fs-sm, meta sans --fs-xs --text-faint, group
-   labels sans with quiet counts, matching the Projects view, hover --bg3,
+   labels sans with quiet counts, hover --bg3,
    current item --accent-soft + --accent-dim (mirrors .p-row.selected).
    Legacy rules for these views were removed from live.css.
    ──────────────────────────────────────────────────────────────────── */
@@ -21,72 +20,9 @@
   box-sizing: border-box;
 }
 
-/* ── "New" action rows (top of sessions / terminals views) ────────── */
-.sidebar-action {
-  flex-shrink: 0;
-  padding: var(--space-2) var(--space-3) 0;
-}
-
-.sidebar-new-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  width: 100%;
-  height: 28px;
-  padding: 0 var(--space-3);
-  background: transparent;
-  border: 1px dashed var(--border-mid);
-  border-radius: var(--radius-sm);
-  color: var(--text-dim);
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-out-expo),
-    background var(--dur-fast) var(--ease-out-expo),
-    border-color var(--dur-fast) var(--ease-out-expo);
-}
-.sidebar-new-btn svg { flex-shrink: 0; }
-.sidebar-new-btn:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 2px; }
-.sidebar-new-btn:hover {
-  color: var(--accent-dim);
-  background: var(--accent-glow);
-  border-color: var(--accent-border);
-  border-style: solid;
-}
-.sidebar-new-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-  pointer-events: none;
-}
-
-/* ── Filter input (aligns with .p-input) ──────────────────────────── */
-.sidebar-filter {
-  flex-shrink: 0;
-  height: 28px;
-  margin: var(--space-2) var(--space-3) var(--space-2);
-  padding: 0 var(--space-2);
-  background: var(--bg);
-  border: 1px solid var(--border-mid);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: inherit;
-  font-size: var(--fs-md);
-  transition: border-color var(--dur-fast) var(--ease-out-expo),
-    box-shadow var(--dur-fast) var(--ease-out-expo);
-}
-.sidebar-filter:focus {
-  outline: none;
-  border-color: var(--accent-border);
-  box-shadow: 0 0 0 3px var(--accent-glow);
-}
-.sidebar-filter::placeholder { color: var(--text-faint); }
-
 /* ── List shells ──────────────────────────────────────────────────── */
 .session-list,
-.workspace-list,
-.terminal-list,
-.archive-list {
+.terminal-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -100,34 +36,27 @@
   color: var(--text);
 }
 .session-list { contain: layout style paint; }
-.archive-list[hidden] { display: none; }
 
 /* ── Items: unified anatomy ─────────────────────────────────────────
-   All four views share: [icon slot (.side-icon)] [title + meta
+   Session and terminal rows share: [icon slot (.side-icon)] [title + meta
    (.side-body)] [hover actions (.side-btn / .session-actions)].
    Session items carry an absolutely-positioned status dot
    (.session-status) in their left gutter instead of an inline icon. */
 .session-list li,
-.terminal-list li,
-.workspace-children li,
-.archive-list li {
+.terminal-list li {
   position: relative;
   display: flex;
   align-items: center;
   transition: background var(--dur-fast) var(--ease-out-expo);
 }
 .session-list li:hover,
-.terminal-list li:hover,
-.workspace-children li:hover,
-.archive-list li:hover { background: var(--bg3); }
+.terminal-list li:hover { background: var(--bg3); }
 /* Current item: accent-soft wash (mirrors .p-row.selected, which also
    wins over hover). No left border, no layout shift. */
 .session-list li.current,
 .terminal-list li.current,
-.workspace-children li.current,
 .session-list li.current:hover,
-.terminal-list li.current:hover,
-.workspace-children li.current:hover { background: var(--accent-soft); }
+.terminal-list li.current:hover { background: var(--accent-soft); }
 
 .session-list li a {
   flex: 1;
@@ -145,9 +74,7 @@
 .session-list li:hover a,
 .session-list li:focus-within a { padding-right: 5.5rem; }
 
-.terminal-list li a,
-.workspace-children li a,
-.archive-list li a {
+.terminal-list li a {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -170,8 +97,6 @@
 }
 .side-icon svg { width: 12px; height: 12px; }
 .terminal-kind { color: var(--text-faint); }
-.workspace-child-kind { width: 4px; height: 4px; border-radius: 50%; background: currentColor; color: var(--border-mid); }
-.archive-icon { color: var(--text-faint); }
 
 /* Title + meta column. */
 .side-body {
@@ -206,12 +131,9 @@
 }
 .session-title { display: block; }
 .session-list li:hover .session-title,
-.terminal-list li:hover .side-title,
-.workspace-children li:hover .side-title,
-.archive-list li:hover .side-title { color: var(--text); }
+.terminal-list li:hover .side-title { color: var(--text); }
 .session-list li.current .session-title,
-.terminal-list li.current .side-title,
-.workspace-children li.current .side-title { color: var(--accent-dim); }
+.terminal-list li.current .side-title { color: var(--accent-dim); }
 
 /* Meta rows: sans fs-xs text-faint, tabular numerals for times. */
 .session-meta,
@@ -277,11 +199,7 @@
     background var(--dur-fast) var(--ease-out-expo);
 }
 .terminal-list li:hover .side-btn,
-.terminal-list li:focus-within .side-btn,
-.archive-list li:hover .side-btn,
-.archive-list li:focus-within .side-btn,
-.workspace-head:hover .side-btn,
-.workspace-head:focus-within .side-btn { opacity: 1; pointer-events: auto; }
+.terminal-list li:focus-within .side-btn { opacity: 1; pointer-events: auto; }
 .side-btn:hover { background: var(--bg3); color: var(--text); }
 .side-btn svg { width: 13px; height: 13px; }
 .terminal-close:hover { background: var(--error-bg); color: var(--error); }
@@ -354,9 +272,8 @@
   to   { opacity: 1; }
 }
 
-/* ── Group heads (time buckets + workspace groups) — .p-section spec ─ */
-.session-group-head,
-.workspace-head {
+/* ── Time bucket heads — .p-section spec ─ */
+.session-group-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -371,20 +288,8 @@
 .session-group-head { pointer-events: none; }
 .session-group-head:first-child { padding-top: var(--space-1); }
 .session-list li.session-group-head:hover { background: transparent; }
-.workspace-head {
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  color: var(--text);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out-expo);
-}
-.workspace-head:hover { background: var(--bg3); }
-
 /* Quiet counts, matching project group headers. */
-.bucket-count,
-.workspace-count {
+.bucket-count {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
@@ -398,38 +303,6 @@
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
-
-.workspace-group { margin: var(--space-1) 0 var(--space-2); }
-.workspace-caret {
-  flex-shrink: 0;
-  width: 12px;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-  transition: transform var(--dur-normal) var(--ease-out-expo);
-}
-.workspace-group.collapsed .workspace-caret { transform: rotate(-90deg); }
-.workspace-path {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.workspace-actions { display: flex; }
-.workspace-actions .side-btn { margin-right: 0; }
-
-/* Child rows share project chat indentation without another visual rail. */
-.workspace-children {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.workspace-group.collapsed .workspace-children { display: none; }
-.workspace-children li a { padding-left: 24px; gap: 9px; }
 
 /* ── Empty state (aligns with .p-empty) ───────────────────────────── */
 .side-empty {
@@ -446,9 +319,7 @@
   user-select: none;
 }
 .session-list li.side-empty:hover,
-.terminal-list li.side-empty:hover,
-.workspace-list li.side-empty:hover,
-.archive-list li.side-empty:hover { background: transparent; }
+.terminal-list li.side-empty:hover { background: transparent; }
 .side-empty-icon {
   opacity: 0.5;
   line-height: 1;
@@ -598,9 +469,7 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 .session-list:not([hidden]),
-.workspace-list:not([hidden]),
-.terminal-list:not([hidden]),
-.archive-list:not([hidden]) {
+.terminal-list:not([hidden]) {
   animation: side-view-in var(--dur-quick) var(--ease-out-expo);
 }
 
@@ -629,9 +498,7 @@
 }
 @supports (animation-timeline: scroll(self block)) {
   .session-list:not([hidden]),
-  .workspace-list:not([hidden]),
-  .terminal-list:not([hidden]),
-  .archive-list:not([hidden]) {
+  .terminal-list:not([hidden]) {
     animation: side-view-in var(--dur-quick) var(--ease-out-expo),
       side-scroll-mask linear;
     animation-timeline: auto, scroll(self block);
@@ -641,9 +508,7 @@
    animation (duration is ignored there) — disable the mask explicitly. */
 @media (prefers-reduced-motion: reduce) {
   .session-list,
-  .workspace-list,
-  .terminal-list,
-  .archive-list {
+  .terminal-list {
     animation: none !important;
     mask-image: none !important;
   }
@@ -655,16 +520,6 @@
    the :first-child rule still wins for the first head). */
 .session-group-head { padding-top: var(--space-3); }
 .session-group-head:first-child { padding-top: var(--space-1); }
-
-/* Workspace dots preserve the same running / unread states as sessions. */
-.workspace-children li.session-streaming .workspace-child-kind {
-  color: var(--cyan);
-  opacity: 1;
-}
-.workspace-children li.session-unread .workspace-child-kind {
-  color: var(--warning);
-  opacity: 1;
-}
 
 /* ── Pin button: pinned state ─────────────────────────────────────── */
 /* JS toggles .pinned on .session-pin-btn; until now unstyled. The
@@ -694,14 +549,9 @@
 .app.sidebar-resizing .sidebar-resize::after { opacity: 1; }
 
 /* ── Narrow widths (container-driven; floor is 145px) ─────────────── */
-/* Below 200px the New button text clips — drop to icon-only, keep the
-   accessible title tooltip. */
-@container (max-width: 200px) {
-  .sidebar-new-btn span { display: none; }
-}
 /* Below 185px the meta row can't fit cwd + time: keep the time (more
    scannable), hide the path. Tighten the session row's left gutter and
-   the head/filter side padding to give titles a few more pixels. */
+   the head side padding to give titles a few more pixels. */
 @container (max-width: 185px) {
   .session-cwd,
   .side-cwd { display: none; }
@@ -710,26 +560,20 @@
   .session-list li.current.session-streaming .session-status,
   .session-list li.current.session-unread .session-status { left: 0.4rem; }
   .sidebar-head { padding: 0 var(--space-2); }
-  .sidebar-filter { margin-left: var(--space-2); margin-right: var(--space-2); }
-  .sidebar-action { padding-left: var(--space-2); padding-right: var(--space-2); }
 }
 
 /* Navigation has its own quiet surface; labels make every destination explicit. */
 .sidebar { background: var(--bg2); }
 .sidebar-head { height: auto; min-height: 56px; gap: 4px; padding: 8px 12px; border: 0; }
-.sidebar-action { padding: 2px 12px 8px; }
-.sidebar .projects-head { padding-bottom: 8px; }
-.sidebar-new-btn { height: 38px; border: 1px solid var(--border-mid); background: var(--bg-elevated); border-radius: var(--radius-sm); font-size: var(--fs-sm); font-weight: 500; color: var(--text); }
 
-.session-list, .workspace-list, .terminal-list, .archive-list { padding: 0 12px 16px; }
-.session-list li, .terminal-list li, .workspace-children li, .archive-list li { border-radius: var(--radius-sm); margin-bottom: 0; }
-.session-list li.current, .terminal-list li.current, .workspace-children li.current,
-.session-list li.current:hover, .terminal-list li.current:hover, .workspace-children li.current:hover { background: var(--accent-soft); }
+.session-list, .terminal-list { padding: 0 12px 16px; }
+.session-list li, .terminal-list li { border-radius: var(--radius-sm); margin-bottom: 0; }
+.session-list li.current, .terminal-list li.current,
+.session-list li.current:hover, .terminal-list li.current:hover { background: var(--accent-soft); }
 .session-list li a { padding: 9px 10px 9px 24px; }
-.terminal-list li a, .workspace-children li a, .archive-list li a { padding-top: 9px; padding-bottom: 9px; }
+.terminal-list li a { padding-top: 9px; padding-bottom: 9px; }
 .terminal-list { margin-top: 0; }
 .session-list li.current a { color: var(--text); }
-.sidebar-new-btn span { display: inline; }
 .session-list li:focus-within .session-actions { opacity: 1; pointer-events: auto; }
 
 /* View switcher uses the same warm surfaces and restrained accent as panels.
@@ -743,10 +587,10 @@
   font: inherit; font-size: var(--fs-md); font-weight: 500; text-align: left;
   cursor: pointer; transition: background var(--dur-fast) var(--ease-out-expo), color var(--dur-fast) var(--ease-out-expo);
 }
-.sidebar-view-select:hover { background: var(--bg3); border-color: var(--border-mid); }
-.sidebar-view-select[aria-expanded="true"] { background: var(--bg3); }
-.sidebar-view-current-icon { display: flex; color: var(--text-dim); }
-.sidebar-view-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-view-select:hover, .sidebar-view-select[aria-expanded="true"] { background: var(--bg3); }
+.sidebar-view-select[aria-expanded="true"] .sidebar-view-current-icon { color: var(--accent-dim); }
+.sidebar-view-current-icon { display: grid; flex: none; place-items: center; width: 16px; color: var(--text-dim); }
+.sidebar-view-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-view-chevron { flex-shrink: 0; width: 14px; color: var(--text-faint); transition: transform var(--dur-fast); }
 .sidebar-view-select[aria-expanded="true"] .sidebar-view-chevron { transform: rotate(180deg); }
 .sidebar-view-select:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 2px; }
@@ -786,9 +630,10 @@
   padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent;
   color: var(--text-dim); cursor: pointer;
 }
-.sidebar-icon-btn:hover { background: var(--bg3); color: var(--text); }
+.sidebar-icon-btn:hover:not(:disabled) { background: var(--bg3); color: var(--text); }
+.sidebar-icon-btn:disabled { opacity: .5; cursor: wait; }
 .sidebar-icon-btn:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 2px; }
-.sidebar-icon-btn[data-active="true"] { color: var(--accent-dim); background: var(--accent-soft); }
+.sidebar-icon-btn[data-active="true"], .sidebar-icon-btn[aria-expanded="true"] { color: var(--accent-dim); background: var(--accent-soft); }
 .sidebar-search {
   display: flex; align-items: center; gap: 8px; flex: none; min-width: 0;
   margin: 0 12px 8px; padding: 2px 4px 2px 10px; border: 1px solid var(--border);
@@ -800,24 +645,83 @@
 .sidebar-search .sidebar-filter {
   flex: 1; min-width: 0; width: 0; height: 32px; margin: 0; padding: 0;
   border: 0; border-radius: 0; outline: none; box-shadow: none;
-  background: transparent; font-size: var(--fs-sm);
+  background: transparent; color: var(--text); font-family: inherit; font-size: var(--fs-sm);
 }
+.sidebar-filter::placeholder { color: var(--text-faint); }
 @media (pointer: coarse) {
   .sidebar-head .sidebar-icon-btn, .sidebar-search .sidebar-icon-btn { width: 40px; height: 40px; }
   .sidebar-search .sidebar-filter { height: 40px; }
 }
 
-/* Persistent plugin conversation entries share sidebar density and focus treatment. */
-.conversation-entries{flex:none;margin:0 12px 8px;display:grid;gap:4px}
-.conversation-entries[hidden]{display:none}
-.conversation-entry{display:flex;align-items:center;min-width:0;border-radius:var(--radius-sm);color:var(--text-dim);background:transparent}
-.conversation-entry:hover{background:var(--bg3)}
-.conversation-entry[data-active="true"]{background:var(--accent-soft);color:var(--accent-dim)}
-.conversation-entry button{font:inherit;font-size:var(--fs-sm);font-weight:500;line-height:1.5;color:inherit;background:none;border:0;cursor:pointer;min-height:38px;border-radius:var(--radius-sm)}
-.conversation-entry-open{flex:1;min-width:0;padding:8px 12px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.conversation-entry button:focus-visible{outline:2px solid var(--accent-dim);outline-offset:-2px}
-@media (pointer:coarse){
-  .conversation-entry button{min-height:44px}
+/* Find sits above the current list instead of resizing it. Dismissing it
+   reveals the same scroll container at the same position. */
+.sidebar-body, .sidebar-content {
+  display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0;
+}
+.sidebar-body { position: relative; }
+.sidebar-find {
+  position: absolute; inset: 0; z-index: 1;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  background: var(--bg2);
+}
+.sidebar-find[hidden] { display: none; }
+.sidebar-find-status, .sidebar-search-message, .sidebar-search-empty, .sidebar-search-hint {
+  margin: 0; padding: 6px 12px; color: var(--text-dim);
+  font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere;
+}
+.sidebar-find-status { padding-inline: 16px; }
+.sidebar-find-results {
+  min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain;
+  padding: 0 12px 16px; color: var(--text);
+}
+.sidebar-search-group { margin: 0 0 8px; padding: 0; }
+.sidebar-search-group-label {
+  margin: 0; padding: 6px 8px 3px; color: var(--text-dim);
+  font-size: var(--fs-xs); font-weight: 500;
+}
+.sidebar-search-option {
+  display: grid; gap: 2px; width: 100%; min-width: 0; min-height: 32px;
+  box-sizing: border-box; padding: 6px 8px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text); font: inherit; font-size: var(--fs-sm);
+  text-align: start; cursor: pointer;
+}
+.sidebar-search-option:hover { background: var(--bg3); }
+.sidebar-search-option[aria-selected="true"] { background: var(--accent-soft); }
+.sidebar-search-title, .sidebar-search-context { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-search-context { color: var(--text-dim); font-size: var(--fs-xs); }
+@media (pointer: coarse) { .sidebar-search-option { min-height: 42px; } }
+
+/* Dedicated conversations stay above the switchable sidebar views. */
+.conversation-entries { flex: none; margin: 8px 12px 0; display: grid; gap: 4px; }
+.conversation-entries[hidden] { display: none; }
+.conversation-entry {
+  display: flex; align-items: center; min-width: 0;
+  border: 1px solid var(--border-light); border-radius: var(--radius-md);
+  color: var(--text); background: var(--bg-elevated);
+}
+.conversation-entry:hover { border-color: var(--border-mid); }
+.conversation-entry[data-active="true"] {
+  color: var(--accent-dim); background: var(--accent-soft); border-color: var(--accent-border);
+}
+.conversation-entry button {
+  font: inherit; font-size: var(--fs-sm); font-weight: 500; line-height: 1.5;
+  color: inherit; background: none; border: 0; cursor: pointer;
+  min-height: 40px; border-radius: var(--radius-sm);
+}
+.conversation-entry-open {
+  display: flex; align-items: center; flex: 1; gap: 8px; min-width: 0;
+  padding: 5px 8px; text-align: start;
+}
+.conversation-entry-mark {
+  display: grid; place-items: center; flex: none; width: 26px; height: 26px;
+  border-radius: var(--radius-sm); color: var(--accent-dim); background: var(--accent-soft);
+}
+.conversation-entry[data-active="true"] .conversation-entry-mark { background: var(--bg-elevated); }
+.conversation-entry-icon { width: 16px; height: 16px; }
+.conversation-entry-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-entry button:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: -2px; }
+@media (pointer: coarse) {
+  .conversation-entry button { min-height: 44px; }
 }
 
 /* The first-use resource lives in the reading canvas, not in a settings drawer. */

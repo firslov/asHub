@@ -115,7 +115,8 @@ function render(plugins, restorable = []) {
     if (plugin.builtin) {
       item.dataset.builtin = 'true';
       head.append(node('span', 'plugin-badge', t(plugin.required ? 'plugins.required' : 'plugins.builtin')));
-    } else head.append(toggle);
+    }
+    if (!plugin.builtin || plugin.optional) head.append(toggle);
     const source = node('div', 'plugin-description', plugin.builtin ? t(plugin.description) : plugin.description);
     const sessions = plugin.sessions || [];
     // The dedicated entry already identifies where a scoped plugin runs.
@@ -136,6 +137,7 @@ function render(plugins, restorable = []) {
         ? [...counts].map(([state, count]) => `${t(`plugins.${state}`)} ${count}`).join(' · ')
         : t('plugins.bundledHint');
       if (plugin.enabled === false) summary.textContent = `${t('plugins.disabled')} · ${summary.textContent}`;
+      if (plugin.restartRequired) summary.textContent = `${t('plugins.restartRequired')} · ${summary.textContent}`;
     }
     if (plugin.compatibilityError) summary.textContent = plugin.compatibilityError;
     if (plugin.bundled) {

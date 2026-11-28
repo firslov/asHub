@@ -4,6 +4,11 @@ import { ProjectStore, type Project } from '../projects.js';
 import type { HostEvents, HostVersion } from './host-events.js';
 import type { Session } from './session-types.js';
 
+export function isProjectConversation(session: Session | undefined): session is Session {
+  return !!session && !session._closed && !session._closing &&
+    (session.kind === 'agent' || (session.kind === 'antigravity' && session.projectWorker === true));
+}
+
 interface ProjectRuntime {
   sessions: Map<string, Session>;
   events: HostEvents;
@@ -31,6 +36,12 @@ export class ProjectService extends ProjectStore {
     this.versions.set(result, this.runtime.events.version());
     return result;
   }
+  override setAntigravityReview(id: string, enabled: boolean): boolean {
+    this.assertAvailable();
+    const result = super.setAntigravityReview(id, enabled);
+    this.runtime.events.publish('projects');
+    return result;
+  }
   assertAvailable(): void {
     if (this.deleting) throw new Error('Project deletion in progress; retry shortly');
   }
@@ -54,9 +65,7 @@ export class ProjectService extends ProjectStore {
         return { projects: this.update(input, () => false), deletedSessionIds: project.sessionIds };
       } finally { this.deleting = false; }
     }
-    return this.update(input, id => {
-      const s = sessions.get(id); return !!s && s.kind === 'agent' && !s._closed && !s._closing;
-    });
+    return this.update(input, id => isProjectConversation(sessions.get(id)));
   }
   /** Common invariant for project conversation creation from UI and plugins. */
   directory(projectId: string, requested?: unknown): string {

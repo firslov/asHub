@@ -364,6 +364,23 @@ export class DevicePublisher {
             .filter((p) => p.sessionIds.length);
     }
     async projectTasks(args, epoch) {
+        // The scoped host has separate task and conversation visibility rules.
+        // Keep the legacy fallback limited to the original agent-only scope.
+        if (this.opts.access) {
+            if (typeof args?.projectId !== 'string' || !args.projectId) throw error('项目无效');
+            const query = new URLSearchParams({ projectId: args.projectId });
+            if (args.includeReviews === true) query.set('reviewTasks', '1');
+            if (args.taskId !== undefined) {
+                if (typeof args.taskId !== 'string' || !args.taskId) throw error('协作任务无效');
+                const offset = args.offset ?? 0;
+                if (!Number.isSafeInteger(offset) || offset < 0) throw error('读取位置无效');
+                query.set('taskId', args.taskId);
+                query.set('offset', String(offset));
+            }
+            const result = await this.local('/api/projects/tasks?' + query);
+            this.current(epoch);
+            return result;
+        }
         const group = (await this.groups(epoch)).find((p) => p.id === args.projectId);
         if (!group)
             throw error('项目未共享或已不存在', 403);
@@ -440,8 +457,21 @@ export class DevicePublisher {
         if (!this.config || this.config.enabled === false || this.stopped)
             throw error('移动访问已关闭', 403);
         const epoch = this.generation;
+        const access = this.access;
+        const archivedHistory = !!(this.opts.access && typeof access?.archivedSessions === 'function' && typeof access?.archivedHistory === 'function');
         if (op === 'capabilities')
-            return { composerInputs: true, projects: true, tasks: true, artifacts: true, imageResources: true, thinking: true, queue: true, steering: true, queueActions: true, sessionNetwork: true, sessionDelete: true, pluginResources: true };
+            return { composerInputs: true, projects: true, tasks: true, artifacts: true, imageResources: true, thinking: true, queue: true, steering: true, queueActions: true, sessionNetwork: true, sessionDelete: true, pluginResources: true, archivedHistory };
+        if (op === 'archived-sessions' || op === 'archived-history') {
+            if (!archivedHistory) throw error('该设备不支持读取归档历史', 403);
+            if (!args || typeof args !== 'object' || Array.isArray(args)) throw error('归档读取参数无效');
+            const list = op === 'archived-sessions';
+            if (Object.keys(args).some(k => list || (k !== 'session' && k !== 'offset'))) throw error('归档读取参数无效');
+            const data = list ? await access.archivedSessions() : await access.archivedHistory(args.session, args.offset === undefined ? 0 : args.offset);
+            this.current(epoch);
+            // No silent catalog truncation or socket close on oversized results.
+            if (Buffer.byteLength(JSON.stringify(data)) > LIMIT - 1024) throw error('归档结果过大，暂时无法读取', 413);
+            return data;
+        }
         if (op === 'composer-input') {
             const session = await this.session(args.session); this.current(epoch);
             let route = `/${session.instanceId}/composer-inputs`;

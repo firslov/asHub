@@ -10,7 +10,7 @@ function setup(extra={}){
  return {e,groups,compact,session,addGroup,addThought,document,raf,lang:()=>{language='zh';document.dispatchEvent({type:'langchange'});}};
 }
 function thinkingView(){
- const x=setup({modules:{'./sse.js':{},'./session-manager.js':{resyncSession(){},unsubscribeSession(){},unregisterSession(){}},'./state.js':{STATE_DEFAULTS:{replaying:false}},'./i18n.js':{t:x=>x,lang:{value:'en'},scanI18n(){}}},globals:{HTMLElement:Node,customElements:{define(){}}}});
+ const x=setup({modules:{'./sse.js':{},'./session-manager.js':{resyncSession(){},unsubscribeSession(){},unregisterSession(){},sessionProjectWorker:()=>false},'./state.js':{STATE_DEFAULTS:{replaying:false}},'./i18n.js':{t:x=>x,lang:{value:'en'},scanI18n(){}}},globals:{HTMLElement:Node,customElements:{define(){}}}});
  x.document.getElementById=()=>({content:{cloneNode(){const shell=new Node(),stream=new Node();stream.className='session-stream';shell.append(stream);return shell;}}});
  const {SessionView}=x.e.load('web/js/session-view.js','export {SessionView};');
  const view=new SessionView();view.id='test';view.initStreamShell();view.enterReplayMode=()=>{view.state.replaying=true;};x.document.append(view);

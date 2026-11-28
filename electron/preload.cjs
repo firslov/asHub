@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onBrowserChanged: cb => onChannel('desktop:browser-changed', cb),
   fileAction: (request) => ipcRenderer.invoke("desktop:file", request),
   pickDirectory: () => ipcRenderer.invoke("pick-directory"),
+  antigravityReviewPolicy: (id, enabled) => ipcRenderer.invoke('desktop:antigravity-review-policy', id, enabled),
   checkForUpdate: () => ipcRenderer.invoke("check-for-update"),
   startUpdateDownload: () => ipcRenderer.invoke("start-update-download"),
   quitAndInstall: () => ipcRenderer.invoke("quit-and-install"),

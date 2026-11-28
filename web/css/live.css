@@ -1236,6 +1236,7 @@ terminal-view .xterm-viewport { background-color: transparent !important; }
 /* single panel open */
 .app.ctx-open .live-wrap .terminal,
 .app.files-open .live-wrap .terminal,
+.app.archive-open .live-wrap .terminal,
 .app.tree-open .live-wrap .terminal,
 .app.sa-open .live-wrap .terminal {
   margin-right: calc(var(--space-3) + var(--drawer-w));

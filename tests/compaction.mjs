@@ -54,6 +54,127 @@ test('safe boundaries never split interleaved parallel tool batches',()=>{
   assert.deepEqual(safeCutPoints([{role:'user'}, {role:'assistant',tool_calls:[{}]}, {role:'assistant'}]),[1]);
 });
 
+const missingCall = (id = 'missing') => ({id,type:'function',function:{name:'fixture',arguments:'{}'}});
+
+test('completed legacy cancellation compacts without restart and preserves raw evidence',async t=>{
+  for (const partial of [false,true]) {
+    const pending = {role:'assistant',content:partial?'Keep this assistant text':null,
+      tool_calls:partial?[missingCall('finished'),missingCall()]:[missingCall()]};
+    const f=await fixture(t,[{role:'user',content:'Original user input'},pending,
+      ...(partial?[{role:'tool',tool_call_id:'finished',content:'real result'}]:[]),...history()]);
+    f.helpers.toolCallsSettled=()=>true;
+    assert(await f.run());
+    const raw=f.store.getHistoryEntries().map(e=>e.message);
+    assert.deepEqual(raw[1],pending);
+    if(partial)assert.equal(raw[2].content,'real result');
+    assert.deepEqual(new SessionStore(f.file).buildMessages(),f.bridge.messages);
+  }
+});
+
+test('restart and compaction keep reused tool IDs scoped to the assistant batch that produced the result',async t=>{
+  const oldCall={role:'assistant',tool_calls:[missingCall('inline_1')]};
+  const newCall={role:'assistant',tool_calls:[missingCall('inline_1'),missingCall('inline_2')]};
+  const results=[{role:'tool',tool_call_id:'inline_1',content:'result from the new batch only'},
+    {role:'user',content:'steer between parallel results'},
+    {role:'tool',tool_call_id:'inline_2',content:'real parallel result'}];
+  const f=await fixture(t,[{role:'user',content:'Earlier interrupted turn'},oldCall,...history(),
+    {role:'user',content:'New turn after restart'},newCall,...results]);
+  const restarted=new SessionStore(f.file);
+  const projected=restarted.buildMessages();
+  assert.equal(projected[1].content,'[interrupted]');
+  assert.equal(projected[1].tool_calls,undefined,'a later receipt must not revive a prior unexecuted tool call');
+  assert.deepEqual(projected.slice(-4),[newCall,...results],'preserve the complete new batch, including interleaved steer');
+  assert.deepEqual(restarted.getHistoryEntries()[1].message,oldCall,'retain raw evidence for the interrupted turn');
+  f.helpers.toolCallsSettled=()=>true;
+  assert(await f.run(),'same reused IDs must not block live compaction');
+  assert.deepEqual(new SessionStore(f.file).buildMessages(),f.bridge.messages);
+  assert.deepEqual(f.bridge.messages.slice(-4),[newCall,...results]);
+});
+
+test('retained partial batch keeps its genuine result and capture mapping',async t=>{
+  const pending={role:'assistant',content:'Partial batch',tool_calls:[missingCall('finished'),missingCall()]};
+  const f=await fixture(t,[...history(),{role:'user',content:'Latest task'},pending,
+    {role:'tool',tool_call_id:'finished',content:'real result'}]);
+  f.helpers.toolCallsSettled=()=>true;
+  const callIndex=f.bridge.messages.length-2,id=f.capture.getEntryIdAt(callIndex);
+  f.bridge.messages[callIndex]={...pending,meta:{treeEntryId:id}};
+  assert(await f.run());
+  const saved=f.bridge.messages.at(-2);
+  assert.deepEqual(saved.tool_calls,[missingCall('finished')]);
+  assert.equal(saved.content,'Partial batch');
+  assert.equal(f.bridge.messages.at(-1).content,'real result');
+  assert.equal(f.capture.getEntryIdAt(f.bridge.messages.length-2),id);
+  saved.tool_calls[0].function.arguments='{"changed":true}';
+  assert.deepEqual(f.store.getEntry(id).message,pending,'restored nested data cannot change the durable index');
+  assert.equal(await f.run(),null,'a nested mutation on a projected message is a genuine mismatch');
+});
+
+test('explicit bridge target wins over the kernel default sentinel',async t=>{
+  const f=await fixture(t),events=[];f.helpers.diagnostic=e=>events.push(e);
+  assert(await f.run({target:0,strategy:{kind:'two-tier-pin',target:8000}}));
+  assert.equal(events.at(-1).target,8000);
+});
+
+test('active or ambiguous calls are not projected, and repeated automatic skips are quiet',async t=>{
+  const f=await fixture(t,[...history(8),{role:'assistant',content:null,tool_calls:[missingCall()]}]);
+  let settled=false;
+  f.helpers.toolCallsSettled=()=>settled;
+  const diagnostics=[];f.helpers.diagnostic=e=>diagnostics.push(e);
+  assert.equal(await f.run(),null);
+  assert.equal(await f.run(),null);
+  assert.equal(diagnostics.length,1);
+  assert.equal(await f.run({target:7000,force:true}),null);
+  assert.equal(diagnostics.length,2,'manual compact checks again');
+  settled=true;
+  assert(await f.run(),'a fresh safe boundary can recover the same live messages');
+  for(const calls of [[{}],[missingCall(),missingCall()]]) {
+    const ambiguous=await fixture(t,[...history(8),{role:'assistant',tool_calls:calls}]);
+    ambiguous.helpers.toolCallsSettled=()=>true;
+    assert.equal(await ambiguous.run(),null);
+  }
+});
+
+test('projection cannot mask a different raw call or incorrect capture entry IDs',async t=>{
+  for (const change of ['call','ids','nested']) {
+    const f=await fixture(t,[{role:'user',content:'Original'},{role:'assistant',tool_calls:[missingCall()]},...history()]);
+    f.helpers.toolCallsSettled=()=>true;
+    if(change==='ids'){
+      const ids=f.bridge.messages.map((_,i)=>f.capture.getEntryIdAt(i));
+      [ids[0],ids[1]]=[ids[1],ids[0]];f.capture.resetTo(ids);
+    }else if(change==='nested')f.bridge.messages[1].tool_calls[0].meta={changed:true};
+    else f.bridge.messages[1].tool_calls[0].function.arguments='{"changed":true}';
+    assert.equal(await f.run(),null);
+    assert.equal(f.projections.length,0);
+    assert.equal(new SessionStore(f.file).getHistoryEntries()[1].message.tool_calls[0].function.arguments,'{}');
+  }
+});
+
+test('late real result invalidates a projected checkpoint and is kept on retry',async t=>{
+  const f=await fixture(t,[...history(),{role:'assistant',tool_calls:[missingCall()]}]);
+  f.helpers.toolCallsSettled=()=>true;
+  const gate=deferred(),entered=deferred();
+  f.helpers.summarize=async input=>{entered.resolve();await gate.promise;return goodSummary(input)};
+  const leaf=f.store.getActiveLeaf(),running=f.run();await entered.promise;
+  f.bridge.messages.push({role:'tool',tool_call_id:'missing',content:'late actual result'});
+  gate.resolve();assert.equal(await running,null);
+  assert.equal(f.store.getActiveLeaf(),leaf);assert.equal(f.projections.length,0);
+  await f.capture.flush();assert(await f.run());
+  assert.equal(f.bridge.messages.at(-1).content,'late actual result');
+  assert.equal(f.bridge.messages.at(-2).tool_calls[0].id,'missing');
+});
+
+test('new active tool batch during checkpoint I/O prevents replacement even before messages change',async t=>{
+  const f=await fixture(t,[...history(),{role:'assistant',tool_calls:[missingCall()]}]);
+  let settled=true;
+  f.helpers.toolCallsSettled=()=>settled;
+  const append=f.store.appendCompaction.bind(f.store),leaf=f.store.getActiveLeaf();
+  f.store.appendCompaction=async (...args)=>{const id=await append(...args);settled=false;return id;};
+  assert.equal(await f.run(),null);
+  assert.equal(f.store.getActiveLeaf(),leaf);
+  assert.equal(f.projections.length,0);
+  assert.equal(f.bridge.messages.at(-1).tool_calls[0].id,'missing');
+});
+
 test('fallback preserves entire user instructions, later corrections and original evidence',async t=>{
   const f=await fixture(t);f.bridge.messages.push({role:'user',content:'现在暂停实现，只分析，不要继续自动执行'},{role:'assistant',content:'analysis '.repeat(2000)});
   const before=JSON.stringify(f.bridge.messages), result=await f.run();
@@ -157,12 +278,17 @@ test('rewind removes future memory and history reader cannot cross branch bounda
 });
 
 test('history search and pagination return bounded original text and tool arguments',async t=>{
-  const f=await fixture(t);const ids=await f.store.appendMessages([{role:'assistant',content:'hello 🟡 world',tool_calls:[{id:'c',function:{name:'bash',arguments:'{"command":"echo source"}'}}]}]);
+  const f=await fixture(t);const ids=await f.store.appendMessages([{role:'assistant',content:'hello 🟡 world',tool_calls:[{
+    id:'c',function:{name:'bash',arguments:'{"command":"echo source"}'},
+    googleThoughtSignature:'opaque-signature',
+  }]}]);
   const reader=createHistoryReader(()=>f.store),tool=historyTool(reader);
   assert.equal(reader({query:'验证完成',limit:1}).entries.length,1);
   assert.equal(reader({query:'echo source',limit:1}).entries[0].id,ids[0]);
   const one=reader({id:ids[0],limit:7}),two=reader({id:ids[0],offset:one.nextOffset,limit:12000});
   assert((one.text+two.text).includes('hello 🟡 world'));assert(two.text.includes('echo source'));
+  assert(!two.text.includes('opaque-signature'));
+  assert.equal(reader({query:'opaque-signature'}).total,0);
   assert.throws(()=>reader({offset:-1}));assert.throws(()=>reader({limit:100}));
   assert.equal((await tool.execute({id:ids[0]},undefined,{})).isError,false);
 });

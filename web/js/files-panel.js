@@ -118,8 +118,8 @@ const makeEntryEl = (f, basePath) => {
 };
 
 // Fetch subdirectory contents from the server
-const fetchSubdir = async (subdirPath) => {
-  const resp = await fetch(`/${currentSessionId()}/files?subdir=${encodeURIComponent(subdirPath)}`);
+const fetchSubdir = async (sid, subdirPath, signal) => {
+  const resp = await fetch(`/${sid}/files?subdir=${encodeURIComponent(subdirPath)}`, { signal });
   if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
   return resp.json();
 };
@@ -127,8 +127,12 @@ const fetchSubdir = async (subdirPath) => {
 // Toggle expand/collapse for a folder entry
 const toggleDir = async (entryEl) => {
   const origin = expandedDirs();
+  const sid = currentSessionId();
+  const signal = fetchAbort?.signal;
   const dirPath = entryEl.dataset.path;
-  if (!dirPath) return;
+  if (!dirPath || !sid || !signal || signal.aborted || filesPanel.hidden) return;
+  const ownsEntry = () => !signal.aborted && !filesPanel.hidden &&
+    currentSessionId() === sid && expandedDirs() === origin && entryEl.isConnected;
 
   const chevron = entryEl.querySelector(".files-row-chevron");
 
@@ -158,8 +162,8 @@ const toggleDir = async (entryEl) => {
   if (chevron) chevron.classList.add("loading");
 
   try {
-    const data = await fetchSubdir(dirPath);
-    if (expandedDirs() !== origin || !entryEl.isConnected) return;
+    const data = await fetchSubdir(sid, dirPath, signal);
+    if (!ownsEntry()) return;
     entryEl.classList.remove("loading");
     if (chevron) chevron.classList.remove("loading");
 
@@ -183,7 +187,7 @@ const toggleDir = async (entryEl) => {
     entryEl.classList.add("expanded");
     if (chevron) chevron.classList.add("expanded");
   } catch {
-    if (entryEl.isConnected && origin === expandedDirs()) toast(t("files.failed"), { type: "error" });
+    if (ownsEntry()) toast(t("files.failed"), { type: "error" });
   } finally {
     entryEl.classList.remove("loading");
     if (chevron) chevron.classList.remove("loading");
@@ -227,9 +231,10 @@ let fetchSeq = 0;
 let fetchAbort = null;
 
 const fetchFiles = async () => {
-  if (!filesBody || !filesCwd || !filesEmpty) return;
+  if (!filesBody || !filesCwd || !filesEmpty || filesPanel.hidden) return;
   const sid = currentSessionId();
   fetchAbort?.abort();
+  fetchAbort = null;
   const mySeq = ++fetchSeq;
   filesCwd.textContent = "";
   filesCwd.title = "";
@@ -261,11 +266,16 @@ const setFilesOpen = (on) => {
   if (on) {
     filesPanel.removeAttribute("hidden"); app.classList.add("files-open"); fetchFiles(); filesToggle?.classList.add("active");
   }
-  else { filesPanel.setAttribute("hidden", ""); app.classList.remove("files-open"); filesToggle?.classList.remove("active"); }
+  else {
+    ++fetchSeq;
+    fetchAbort?.abort();
+    fetchAbort = null;
+    filesPanel.setAttribute("hidden", ""); app.classList.remove("files-open"); filesToggle?.classList.remove("active");
+  }
   try { localStorage.setItem(LS_FILES, on ? "1" : "0"); } catch {}
 };
 
-filesClose?.addEventListener("click", () => setFilesOpen(false));
+filesClose?.addEventListener("click", () => { setFilesOpen(false); filesToggle?.focus(); });
 filesRefresh?.addEventListener("click", () => fetchFiles());
 
 export { setFilesOpen };

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { updateSettingsFile } from './settings-store.js';
 import { settingsValidationError } from './config-validation.js';
+import { integrationPluginCatalog } from './integrations.js';
 import { readPluginManifest, pluginCompatibility, packageMetadataCompatibility, validatePluginNamespace, validatePluginConfig, PLUGIN_ENTRY_FILES, type NormalizedPluginManifest, type PluginCompatibility, type PluginHostEnvironment } from './extensions/manifest.js';
 export { validatePluginNamespace, PLUGIN_ENTRY_FILES } from './extensions/manifest.js';
 
@@ -42,6 +43,7 @@ const builtinProviders = [
 export interface BuiltinPluginEntry {
   id: string; name: string; source: string; enabled: boolean; builtin: true;
   required?: boolean; providerId?: string; configNamespace?: string; description: string;
+  optional?: boolean; restartRequired?: boolean;
   extensionName?: string;
 }
 export function builtinPluginCatalog(file: string): BuiltinPluginEntry[] {
@@ -53,6 +55,7 @@ export function builtinPluginCatalog(file: string): BuiltinPluginEntry[] {
       id: `builtin:provider:${providerId}`, name, source: 'agent-sh', builtin: true, enabled: true,
       providerId, configNamespace: `providers.${providerId}`, description: 'plugins.descProvider',
     })),
+    ...integrationPluginCatalog(file),
     { id: 'builtin:codex-provider', name: 'Codex', source: 'agent-sh', builtin: true,
       enabled: !disabled.includes('codex-provider'), extensionName: 'codex-provider',
       configNamespace: 'codex-provider', description: 'plugins.descCodex' },
@@ -290,6 +293,34 @@ function configTarget(data: Record<string, any>, id: string, namespace: string) 
   return { parent: data, key: namespace };
 }
 const configObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+
+function desktopAppList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= 100 && value.every(id => typeof id === 'string'
+    && id.length <= 200 && /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(id));
+}
+
+function desktopGrantScope(config: Record<string, unknown>): string[] {
+  // Match the extension's effective scope; a malformed scope cannot carry consent.
+  return config.enabled === true && desktopAppList(config.allowedApps)
+    && (config.captureBackend === undefined || config.captureBackend === 'legacy' || config.captureBackend === 'screencapturekit')
+    && Object.keys(config).every(key => ['enabled', 'allowedApps', 'approvedApps', 'captureBackend'].includes(key))
+    ? config.allowedApps : [];
+}
+
+function saveDesktopGrantScope(config: Record<string, unknown>, previous: unknown): Record<string, unknown> {
+  const { approvedApps, ...next } = config;
+  // The editor can remove grants, but only explicit desktop approval can add
+  // one. An omitted list leaves existing consent subject to the new scope.
+  if (configObject(previous) && desktopAppList(previous.approvedApps)) {
+    const oldScope = new Set(desktopGrantScope(previous));
+    const newScope = new Set(desktopGrantScope(next));
+    const requested = new Set(approvedApps === undefined ? previous.approvedApps : desktopAppList(approvedApps) ? approvedApps : []);
+    const retained = [...new Set(previous.approvedApps)].filter(id => oldScope.has(id) && newScope.has(id) && requested.has(id));
+    if (retained.length) next.approvedApps = retained;
+  }
+  return next;
+}
+
 function validateCodexConfig(config: Record<string, unknown>): void {
   for (const [key, max] of [["maxRetries", 6], ["headersTimeoutRetries", 1]] as const) {
     if (Object.hasOwn(config, key) && !(typeof config[key] === 'number' && Number.isInteger(config[key])
@@ -330,13 +361,15 @@ export function savePluginConfig(file: string, id: string, namespace: unknown, c
     if (error) throw new Error(error);
   }
   if (typeof revision !== 'string') throw new Error('Load the plugin configuration before saving');
+  let savedConfig = config;
   updateSettingsFile(file, data => {
     const { parent, key } = configTarget(data, id, namespace);
     const previous = Object.hasOwn(parent, key) ? parent[key] : undefined;
     if (configRevision(previous) !== revision) throw new PluginConfigConflict('Configuration changed elsewhere; reload it before saving');
-    parent[key] = config;
+    savedConfig = namespace === 'desktop-control' ? saveDesktopGrantScope(config, previous) : config;
+    parent[key] = savedConfig;
     if (id.startsWith('builtin:provider:')) data.providers = parent;
     return data;
   });
-  return { namespace, config, revision: configRevision(config) };
+  return { namespace, config: savedConfig, revision: configRevision(savedConfig) };
 }

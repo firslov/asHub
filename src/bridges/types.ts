@@ -16,7 +16,7 @@ export interface BusEvent {
   payload: unknown;
 }
 
-export type SessionKind = "agent" | "terminal" | "ash-terminal";
+export type SessionKind = "agent" | "antigravity" | "terminal" | "ash-terminal";
 
 export interface BackgroundModelSelection { provider: string; model: string }
 export interface BackgroundModelEndpoint { identity: string; origin: string }
@@ -33,7 +33,17 @@ export interface ConversationAccess {
   dispatchReceipt?(input: { taskId?: string; requestKey?: string }, signal?: AbortSignal): unknown;
 }
 
+export interface CollaborationTurn {
+  readonly signal: AbortSignal;
+  read(): { id: string; message: string };
+  /** Fail closed if consent captured at dispatch no longer covers the next external send. */
+  assertExternalSendAllowed(): void;
+  deliver(value: import('../collaboration.js').TaskDelivery): Promise<unknown>;
+  blocked(requestKey: string, message: { question: string; evidence: string; recommendation: string }): Promise<unknown>;
+}
+
 export interface BridgeOpts {
+  projectWorker?: boolean;
   /** Hub-owned identity, stable across lazy restore and application restarts. */
   sessionId?: string;
   conversationAccess?: ConversationAccess;
@@ -70,6 +80,8 @@ export type CompactionStrategyHook = (
     getMessages(): unknown[];
     replaceMessages(msgs: unknown[]): void;
     estimatePromptTokens(): number;
+    /** True only at a boundary with no unresolved live tool execution. */
+    toolCallsSettled?(): boolean;
     failClosed?(): void;
     diagnostic?(event: import("../history/compaction-diagnostics.js").CompactionDiagnostic): void;
     contextWindow?(): number;
@@ -120,6 +132,7 @@ export interface Bridge {
 
   /** Submit a prompt; resolves at end of turn. */
   submit(text: string, queueId?: string, delivery?: "queue" | "steer"): Promise<{ stopReason: string }>;
+  submitTask?(turn: CollaborationTurn): Promise<{ stopReason: string }>;
 
   /** Strict current-turn steering: never starts or queues a new turn. */
   steer?(text: string, queueId: string): boolean;

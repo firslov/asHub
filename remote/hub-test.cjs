@@ -2,14 +2,25 @@ const { env, Bridge, assert, path, root, fs } = require('../tests/harness.cjs');
 const { once } = require('node:events');
 (async () => {
   const { createGateway } = await import('./server.mjs');
-  const e = env({ globals: { fetch, WebSocket, setTimeout, clearTimeout, setInterval, clearInterval,Response,ReadableStream } });
+  let holdArchiveRead;
+  const hostFs = { ...fs, promises: { ...fs.promises, async readFile(file, ...args) {
+    const bytes = await fs.promises.readFile(file, ...args);
+    if (holdArchiveRead?.file === file) {
+      const hold = holdArchiveRead;
+      holdArchiveRead = undefined;
+      hold.entered.resolve();
+      await hold.release.promise;
+    }
+    return bytes;
+  } } };
+  const e = env({ modules: { 'node:fs': hostFs }, globals: { fetch, WebSocket, setTimeout, clearTimeout, setInterval, clearInterval,Response,ReadableStream } });
   const gateway = createGateway({ database: path.join(e.dir, 'gateway.sqlite'), publicUrl: 'http://127.0.0.1/mobile/', testing: true });
   gateway.server.listen(0, '127.0.0.1'); await once(gateway.server, 'listening');
   const remote = `http://127.0.0.1:${gateway.server.address().port}/mobile/`;
   e.context.process.env.NODE_ENV = 'test'; e.context.process.env.ASHUB_REMOTE_URL = remote; e.context.process.env.ASHUB_TOKEN = 'test-local-token';
-  let saved, received = 0, bridge, decision;
+  let saved, received = 0, startedBridges = 0, bridge, decision;
   class TestBridge extends Bridge {
-    constructor(opts) { super(opts); bridge = this; this.level = 'high'; }
+    constructor(opts) { super(opts); startedBridges++; bridge = this; this.level = 'high'; }
     getThinking() { return {model:'deepseek-v4-flash',provider:'deepseek',level:this.level,levels:['off','low','high','max'],supported:true}; }
     setThinking(level) { this.level = level; this.emit('event', {name:'agent:info',payload:{thinkingLevel:level}}); }
     decidePermission(requestId, outcome, sessionWide) { decision = { requestId, outcome, sessionWide }; }
@@ -148,6 +159,96 @@ const { once } = require('node:events');
         assert(decision.outcome === 'denied','mobile can decline the pending grant');
       }
     }
+    await reader.cancel(); reader = undefined;
+    const rpcReply = (op, args, auth = cookie) => fetch(remote + `api/devices/${device}/rpc`, {
+      method: 'POST', headers: { Origin: 'http://127.0.0.1', Cookie: auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op, args }),
+    });
+    const sessionsDir = path.join(e.dir, 'hub-sessions');
+    const archivedFile = path.join(sessionsDir, 'archived.json');
+    const allowedCwd = fs.mkdtempSync(path.join(e.dir, 'shared-archive-'));
+    const outsideCwd = fs.mkdtempSync(path.join(path.dirname(e.dir), 'not-shared-'));
+    const symlinkCwd = path.join(e.dir, 'archive-symlink');
+    fs.symlinkSync(outsideCwd, symlinkCwd, 'dir');
+    const archives = { aaaa10: 110, aaaa11: 111, aaaa12: 112, aaaa13: 113, aaaa14: 114, aaaa15: 115, aaaa16: 116, aaaa17: 117, [sid]: 118 };
+    const saveIndex = () => fs.writeFileSync(archivedFile, JSON.stringify(archives));
+    const meta = (id, cwd, kind = 'agent') => fs.writeFileSync(path.join(sessionsDir, `${id}.meta.json`), JSON.stringify({ id, cwd, kind, title: `Fixture ${id}`, startedAt: 100 }));
+    const frame = (name, payload) => 'data: ' + JSON.stringify({ meta: { name }, payload }) + '\n\n';
+    const longText = '🎉\\\u0000\n'.repeat(800000) + '尾';
+    const archivePath = path.join(sessionsDir, 'aaaa10.replay.jsonl');
+    const archiveText = frame('agent:query', { query: 'Oldest archived question' }) + frame('agent:response-segment', { text: longText })
+      + frame('agent:query', { query: '/fixture', command: true }) + frame('agent:query', { query: 'Newest archived question' });
+    saveIndex();
+    meta('aaaa10', allowedCwd); meta('aaaa11', allowedCwd);
+    meta('aaaa12', outsideCwd); meta('aaaa13', allowedCwd, 'terminal');
+    meta('aaaa14', allowedCwd); meta('aaaa15', symlinkCwd); meta('aaaa16', allowedCwd); meta('aaaa17', allowedCwd);
+    fs.writeFileSync(path.join(sessionsDir, 'aaaa14.deleted'), '1');
+    fs.mkdirSync(path.join(sessionsDir, 'aaaa17.replay.jsonl'));
+    fs.writeFileSync(archivePath, archiveText);
+    for (const id of ['aaaa12', 'aaaa13', 'aaaa14', 'aaaa15', 'aaaa16']) fs.writeFileSync(path.join(sessionsDir, `${id}.replay.jsonl`), frame('agent:query', { query: `Private ${id}` }));
+    const initialBridgeCount = startedBridges;
+    assert((await rpc('capabilities')).archivedHistory === true, 'new scoped Hub advertises archivedHistory');
+    const catalog = await rpc('archived-sessions');
+    assert(catalog.map(entry => entry.id).sort().join(',') === 'aaaa10,aaaa11,aaaa16,aaaa17', 'catalog includes only still-archived shared agent metadata');
+    assert(catalog.find(entry => entry.id === 'aaaa10').cwd === allowedCwd && catalog.find(entry => entry.id === 'aaaa10').title === 'Fixture aaaa10', 'archive catalog shape');
+    const empty = await rpc('archived-history', { session: 'aaaa11' });
+    assert(empty.messages.length === 0 && empty.nextOffset === null, 'empty archive is valid');
+    const unavailable = await rpcReply('archived-history', { session: 'aaaa17' });
+    assert(unavailable.status === 500, 'read failure is retryable, not an empty success');
+    fs.rmdirSync(path.join(sessionsDir, 'aaaa17.replay.jsonl'));
+    assert((await rpc('archived-history', { session: 'aaaa17' })).messages.length === 0, 'a failed read can be retried without reconnecting');
+    let offset, all = [], pages = 0;
+    do {
+      const page = await rpc('archived-history', { session: 'aaaa10', ...(offset === undefined ? {} : { offset }) });
+      if (++pages === 1) assert(page.messages.at(-1).text === 'Newest archived question', 'offset 0 loads the latest page in chronology');
+      assert(Buffer.byteLength(JSON.stringify(page)) < 6 * 1024 * 1024, 'escaped Unicode page fits the relay');
+      assert(page.messages.every(message => message.text.isWellFormed()), 'archive chunks preserve Unicode pairs');
+      all = [...page.messages, ...all];
+      assert(page.nextOffset === null || page.nextOffset > (offset ?? 0), 'page cursor advances');
+      offset = page.nextOffset;
+    } while (offset !== null && pages < 30);
+    assert(offset === null && pages > 1 && all[0].text === 'Oldest archived question' && all.at(-1).text === 'Newest archived question', 'prepend yields exactly chronological archive');
+    assert(all.slice(1, -1).every(row => row.role === 'assistant') && all.slice(1, -1).map(row => row.text).join('') === longText, 'oversized archived output round trips without losing any text');
+    assert(startedBridges === initialBridgeCount && fs.readFileSync(archivePath, 'utf8') === archiveText && JSON.parse(fs.readFileSync(archivedFile)).aaaa10 === 110, 'archive reads do not start the bridge, restore or write history');
+    for (const session of ['aaaa12', 'aaaa13', 'aaaa14', 'aaaa15', sid]) {
+      const denied = await rpcReply('archived-history', { session });
+      assert(denied.status === 404 && !(await denied.text()).includes('Private'), 'direct reads cannot expose ineligible archives');
+    }
+    assert((await rpcReply('archived-history', { session: 'aaaa10', offset: -1 })).status === 400, 'invalid offset rejected');
+    for (const op of ['archive', 'unarchive']) assert((await rpcReply(op, { session: 'aaaa10' })).status === 403, 'no archive write RPC');
+    assert((await rpcReply('archived-sessions', {}, other.cookie)).status === 404, 'another account cannot read the catalog');
+    assert((await rpcReply('archived-history', { session: 'aaaa10' }, other.cookie)).status === 404, 'another account cannot read archived text');
+    const whileReading = async (change, auth = cookie, status = 404) => {
+      const hold = { file: path.join(sessionsDir, 'aaaa16.replay.jsonl'), entered: Promise.withResolvers(), release: Promise.withResolvers() };
+      holdArchiveRead = hold;
+      const pending = rpcReply('archived-history', { session: 'aaaa16' }, auth);
+      await Promise.race([hold.entered.promise, pending.then(response => { throw Error(`archive read not held: ${response.status}`); })]);
+      try { await change(); } finally { hold.release.resolve(); }
+      const result = await pending;
+      assert(result.status === status && !(await result.text()).includes('Private'), 'recheck authorization and archive state after awaited read');
+    };
+    const { cookie: logoutCookie } = await call('api/login', { username: body.username, password: body.password });
+    await whileReading(() => call('api/logout', {}, logoutCookie), logoutCookie, 401);
+    await whileReading(() => { fs.rmdirSync(allowedCwd); fs.symlinkSync(outsideCwd, allowedCwd, 'dir'); });
+    assert((await rpc('archived-sessions')).length === 0, 'invalidated real directory removes all titles');
+    fs.unlinkSync(allowedCwd); fs.mkdirSync(allowedCwd);
+    await whileReading(async () => {
+      const restored = await fetch(local + '/api/sessions/unarchive', { method: 'POST', headers, body: JSON.stringify({ id: 'aaaa16' }) });
+      assert(restored.ok, 'test fixture restores via the local desktop operation');
+    });
+    assert(!(await rpc('archived-sessions')).some(row => row.id === 'aaaa16'), 'locally restored archive no longer exposes a title');
+    delete archives.aaaa16; delete archives[sid]; saveIndex();
+    assert((await rpc('sessions')).some(row => row.instanceId === sid), 'normal active-session RPC continues to work');
+
+    const { DevicePublisher } = await import('../examples/extensions/multi-machine/publisher.mjs');
+    for (const scoped of [false, true]) {
+      const publisher = new DevicePublisher({ dataDir: e.dir, ...(scoped && { access: () => publisher.access }) });
+      publisher.config = { roots: [fs.realpathSync(e.dir)] };
+      publisher.access = scoped ? { request: async route => route === '/sessions' ? [{ kind: 'agent', cwd: e.dir }] : [] } : null;
+      assert((await publisher.execute('capabilities', {})).archivedHistory === false, 'unscoped legacy adapter or older Hub does not advertise archive reads');
+      await require('node:assert/strict').rejects(publisher.execute('archived-history', { session: 'aaaa10' }), { status: 403 });
+      if (scoped) assert((await publisher.execute('sessions', {})).length === 1, 'older scoped Hub retains existing conversations');
+    }
     await resource('disable-sharing'); assert([...vault.values()].some(v=>v&&JSON.parse(v).enabled===false),'local disable persists disabled identity');
     await wait(async () => !(await call('api/devices', undefined, cookie)).data[0].online);
     const rebind = async (name, roots = body.roots) => {
@@ -158,6 +259,7 @@ const { once } = require('node:events');
     await rebind('Re-enabled');
     const narrow = path.join(e.dir, 'narrow'); fs.mkdirSync(narrow);
     await rebind('Narrowed', [narrow]); assert((await rpc('sessions')).length === 0, 'updated roots take effect');
+    assert((await rpc('archived-sessions')).length === 0 && (await rpcReply('archived-history', { session: 'aaaa10' })).status === 404, 'updated sharing grant removes archive titles and text');
     assert((await fetch(download,{headers:{Cookie:cookie}})).status===403,'removed sharing blocks downloads');
     assert((await rpc('project-groups')).length===0,'removed sharing hides project groups');
     await rebind('Updated'); assert((await rpc('sessions')).some(s => s.instanceId === sid), 'restored roots share original sessions');
@@ -170,6 +272,7 @@ const { once } = require('node:events');
     assert((await rpc('session-delete',deleteArgs)).state==='done','lost deletion reply remains retryable after removal');
     assert(fs.existsSync(path.join(e.dir,filename)),'deletion preserves work directory files');
     }
+    console.log(`PASS archived history: ${pages} pages for ${Buffer.byteLength(longText)} UTF-8 output bytes, no bridge start; scoped reads, retry, read-only, account/real-path/index rechecks and legacy fallback verified`);
     console.log('Session controls: '+(sessionControls?'new desktop verified':'released desktop fallback verified'));
     console.log('PASS actual Hub: local authentication, bind, create, shared projects, bounded file downloads and account isolation, streaming, image round trip, one-time approvals, disconnect, re-enable, stable identity, per-session VPN, confirmed/idempotent deletion');
   } finally { await reader?.cancel(); await hub.shutdown(); await gateway.close(); }

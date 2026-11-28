@@ -29,6 +29,34 @@ The workflows enforce these dependencies internally. Repository branch-protectio
 settings can additionally require `Core checks` and `Kernel compatibility`; those
 settings are not changed by this code.
 
+### Build without optional integrations
+
+A normal `npm run build` includes every built-in integration present under
+`src/builtin-plugins/`. To produce an unpacked Electron build without specific
+integrations, set `ASHUB_EXCLUDE_INTEGRATIONS` to their comma-separated directory
+names before invoking the build and pack command. For example, on macOS/Linux:
+
+```sh
+ASHUB_EXCLUDE_INTEGRATIONS=google-gemini,google-antigravity npm run build
+ASHUB_EXCLUDE_INTEGRATIONS=google-gemini,google-antigravity npm run electron:pack -- --publish never
+```
+
+In Windows PowerShell, set `$env:ASHUB_EXCLUDE_INTEGRATIONS = 'google-gemini,google-antigravity'`
+before the same npm commands, and remove it afterwards. The platform installer
+commands (`electron:dist:mac`, `electron:dist:win`) also use this selection; pass
+`-- --publish never` for local packaging. Use `npm run test:integration-build`
+to exercise the build and patch toggles.
+
+Integrations can also be omitted from the source checkout entirely. Integration
+runtime assets belong under the integration's `assets/` directory; the build
+copies only enabled integrations' assets into `dist/builtin-plugins/`. Kernel
+patch descriptions belong in `kernel-patches/*.json` and are build inputs only.
+The patch runner keeps local rollback data in `node_modules` so a subsequent
+build can undo the optional changes, including after the source directory is
+removed. For a `node_modules` from before rollback tracking was introduced,
+run a build with the patch descriptions still present at least once, or start
+with `npm ci` before packaging a checkout without them.
+
 ## Remote website
 
 Prepare the latest remote sources in `remote/` alongside the application checkout.

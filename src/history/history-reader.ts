@@ -8,7 +8,8 @@ type HistoryImage = { type: "image"; data: string; mimeType: string };
 export type HistoryAccess = (query: HistoryQuery) => unknown;
 
 function historyText(message: AgentMessage): string {
-  return sourceText(message) + (message.tool_calls?.length ? `\nTool calls:\n${JSON.stringify(message.tool_calls)}` : "");
+  const calls = message.tool_calls?.map(({ googleThoughtSignature, ...call }) => call);
+  return sourceText(message) + (calls?.length ? `\nTool calls:\n${JSON.stringify(calls)}` : "");
 }
 
 export function createHistoryReader(getStore: () => SessionStore | null): HistoryAccess {

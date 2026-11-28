@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import type { Project, ProjectStore } from '../projects.js';
 import { readNetworkPolicy, writeNetworkPolicy } from '../network-policy.js';
 import type { Session } from './session-types.js';
+import type { ProjectTaskProfile } from '../integrations.js';
 import { HostEvents } from './host-events.js';
 
 export interface SessionSetup { instanceId?: string; instructions?: string; model?: string; provider?: string; proxyEnabled?: boolean | null }
@@ -9,6 +10,7 @@ interface SessionServiceOptions {
   events?: HostEvents;
   busy(session: Session): boolean;
   thinking(session: Session): unknown;
+  projectTaskProfile?(kind: Session['kind']): ProjectTaskProfile | undefined;
   writeNetworkPolicy?: typeof writeNetworkPolicy;
 }
 
@@ -52,9 +54,15 @@ export class SessionService {
     this.events.publish('network', args[1]);
     return policy;
   };
+  private describeProjectWorker(s: Session) {
+    if (!s.projectWorker) return {};
+    const profile = this.options.projectTaskProfile?.(s.kind);
+    return { projectWorker: true as const, ...(profile ? { projectTaskProfile: profile } : {}) };
+  }
   readonly describe = (s: Session, groups: Project[] = [], network = readNetworkPolicy()) => ({
     id: s.id, title: s.title, cwd: s.cwd, provider: s.provider, model: s.model,
     thinking: this.options.thinking(s), proxyEnabled: network.sessions[s.id] ?? null,
+    ...this.describeProjectWorker(s),
     projectId: groups.find(p => p.sessionIds.includes(s.id))?.id ?? null,
     busy: this.options.busy(s) || !!s._hostOperation,
   });
@@ -66,9 +74,12 @@ export class SessionService {
       .sort((a, b) => (b.lastModified ?? b.startedAt ?? 0) - (a.lastModified ?? a.startedAt ?? 0))
       .map(s => ({ instanceId: s.id, projectId: membership.get(s.id) ?? null,
         projectExternal: !!directories.get(membership.get(s.id) ?? '') && path.relative(directories.get(membership.get(s.id) ?? '')!, s.cwd) !== '',
-        title: s.title, kind: s.kind, model: s.model, provider: s.provider,
+        title: s.title, kind: s.kind, model: s.model, provider: s.provider, hasCustomTitle: !!s.userTitle,
+        ...this.describeProjectWorker(s),
+        hasHistory: !!(s.firstQuery || s.firstTurnDone || (s.store && s.store.getActiveLeaf() !== s.store.getRootId())),
         thinkingLevel: this.options.thinking(s), cwd: s.cwd,
-        readOnlyContext: s.bridge?.readOnlyContext ?? (s.backendId === 'ash' ? false : !!s.backendState),
+        ...(s.backendUnavailable ? { backendUnavailable: s.backendUnavailable } : {}),
+        readOnlyContext: !!s.backendUnavailable || (s.bridge?.readOnlyContext ?? (s.backendId === 'ash' ? false : !!s.backendState)),
         supportsCwdChange: !!s.bridge?.supportsCwdChange, startedAt: s.startedAt,
         lastModified: s.lastModified, isProcessing: s.isProcessing, hasUnread: s.hasUnread,
         waitingApproval: [...(s.pendingPermissions?.values() ?? [])].some(p => p.expiresAt > Date.now()),

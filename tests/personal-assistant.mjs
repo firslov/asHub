@@ -31,7 +31,9 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
   const job = installer.confirm(preview.token);
   for (let i = 0; i < 300 && installer.status(job.id).state === 'running'; i++) await new Promise(r => setTimeout(r, 10));
   assert.equal(installer.status(job.id).state, 'succeeded', installer.status(job.id).error);
-  const entry = pluginCatalog(file)[0], resources = new Map(), snapshot = { sessions: [
+  const entry = pluginCatalog(file).find(plugin => plugin.manifest?.id === pkg.name);
+  assert(entry?.includedApp && !entry.bundled && !entry.enabled, 'ZIP replacement preserves opt-in for the bundled assistant');
+  const resources = new Map(), snapshot = { sessions: [
     { instanceId: 'a', title: '我的助手', cwd: home, kind: 'agent', projectId: null },
     { instanceId: 'b', title: '普通对话', cwd: home, kind: 'agent', projectId: null },
   ], projects: [] };
@@ -46,7 +48,11 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
     }) }),
   });
   t.after(() => registry.close()); await registry.start();
-  assert.equal(registry.snapshot().features[0].state, 'active');
+  const feature = () => registry.snapshot().features.find(item => item.pluginId === entry.id);
+  assert.equal(feature()?.state, 'inactive');
+  assert.equal(resources.size, 0, 'installing the replacement must not activate it');
+  await registry.setPluginEnabled(entry.id, true);
+  assert.equal(feature()?.state, 'active');
   const make = async id => {
     const core = createCore({ apiKey: 'offline-test-only', baseURL: 'http://127.0.0.1:1/v1', model: 'test-model' }), ctx = core.extensionContext({ quit() {} });
     preparePluginRegistrations(ctx); activateAgent(ctx); preparePluginRegistrations(ctx);
@@ -92,7 +98,7 @@ test('ZIP install, two real session kernels, host UI confirmation, pause and res
   assert.match(recalled[0].content, /幻灯片使用蓝色/, 'real kernel envelope must not crowd out the user query');
   assert(recalled[0].content.endsWith(wrapped[0].content));
   assert(fs.existsSync(path.join(pluginDataDirectory(file, entry.id), 'memory.sqlite')));
-  const featureId = registry.snapshot().features[0].id;
+  const featureId = feature().id;
   await registry.setEnabled(featureId, false);
   assert(!visible(a).some(name => name.startsWith('assistant_memory_')));
   assert.equal(instruction(a), '');

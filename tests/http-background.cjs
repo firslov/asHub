@@ -19,7 +19,9 @@ for(const memory of [true,false])test(`real HTTP host creates one dedicated conv
  fs.writeFileSync(path.join(unrelated,'package.json'),JSON.stringify({name:'unrelated-plugin',version:'1.0.0',type:'module'}));
  fs.writeFileSync(path.join(unrelated,'ashub-plugin.json'),JSON.stringify({schemaVersion:2,id:'unrelated-plugin',entries:{application:'app.mjs'}}));
  fs.writeFileSync(path.join(unrelated,'app.mjs'),'export function activate() {}');
- const pluginId=e.load('src/plugins.ts').pluginCatalog(path.join(e.dir,'settings.json')).find(p=>p.manifest?.id==='ashub-personal-assistant').id;
+ const settings=path.join(e.dir,'settings.json');
+ const pluginId=catalog.pluginCatalog(settings).find(p=>p.manifest?.id==='ashub-personal-assistant').id;
+ catalog.setPluginEnabled(settings,pluginId,true);
  const loaded=[];let inference=0;
  const projectFile=path.join(e.dir,'hub-sessions','projects.json');
  fs.mkdirSync(path.dirname(projectFile),{recursive:true});

@@ -27,7 +27,10 @@ function plan(root, argv) {
     // The harness loads the source from ASHUB_TEST_ROOT; the gateway and web
     // files still come from this candidate checkout. No production accounts,
     // existing conversations or real model endpoints are used.
-    { name: `Released desktop ${baseVersion} integration`, args: ['remote/hub-test.cjs'], env: { ASHUB_TEST_ROOT: baseline } },
+    { name: `Released desktop ${baseVersion} integration`, args: ['remote/hub-test.cjs'], env: {
+      ASHUB_TEST_ROOT: baseline,
+      ASHUB_TEST_LEGACY_ARCHIVES: baseVersion === '0.21.9' ? '1' : '0',
+    } },
   ];
   if (values.ui) {
     steps.push({ name: 'Desktop and remote queue interactions', electron: true, args: ['tests/electron-queue-actions.cjs', '--require-remote'] });

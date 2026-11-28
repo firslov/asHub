@@ -19,7 +19,7 @@ const { once } = require('node:events');
     let r = await fetch(base + '/api/plugins', { headers }); let data = await r.json();
     assert.equal(data.plugins.filter(p => !p.builtin && !p.bundled).length, 1); assert(data.plugins.some(p => p.builtin && p.name === 'OpenAI')); assert.equal(data.plugins[0].sessions.length, 0);
     const included=data.plugins.filter(p=>p.includedApp);
-    const expected=['ashub-browser-automation','ashub-image-display','ashub-kimi-coding-plan','ashub-multi-machine','ashub-project-management','ashub-scheduled-tasks','ashub-voice-input'];
+    const expected=['ashub-browser-automation','ashub-image-display','ashub-kimi-coding-plan','ashub-multi-machine','ashub-personal-assistant','ashub-project-management','ashub-scheduled-tasks','ashub-voice-input'];
     if (process.platform === 'darwin') expected.push('ashub-desktop-control');
     assert.deepEqual(included.map(p=>p.manifest.id).sort(), expected.sort());
     assert(included.every(p=>p.bundled && !p.enabled && !p.autoApprove));

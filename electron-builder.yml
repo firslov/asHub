@@ -12,6 +12,7 @@ files:
   - examples/extensions/multi-machine/{*.mjs,ashub-plugin.json,package.json}
   - examples/extensions/scheduled-tasks/{*.mjs,ashub-plugin.json,package.json,README.md}
   - examples/extensions/voice-input/{*.mjs,ashub-plugin.json,package.json,README.md}
+  - examples/extensions/personal-assistant/{*.mjs,ashub-plugin.json,package.json,README.md}
   - node_modules/**/*
   - '!node_modules/.ashub-integration-kernel.json'
   - '!node_modules/.ashub-integration-kernel.json.*.tmp'

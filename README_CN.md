@@ -20,7 +20,7 @@ asHub 是基于 [agent-sh](https://github.com/guanyilun/agent-sh) 的开源桌�
 **[v0.21.9](https://github.com/firslov/asHub/releases/tag/v0.21.9)** 将 agent-sh 内核升级至 0.17.0，并改进长任务、个人助手记忆和设备互联。
 
 - **子代理：**实时界面和历史记录区分取消、部分完成和成功。遇到可重试的断流时，只重试当前模型请求，保留已完成的工具结果。同一会话中，成功或部分完成且仍有续跑记录的子代理，可沿用原任务、工具结果和原有权限继续。
-- **个人助手：**授权原文可以和已有记忆一起检索，可为后台整理单独选择模型，也可试用带原文出处的项目决策概览。插件需单独安装。
+- **个人助手：**授权原文可以和已有记忆一起检索，可为后台整理单独选择模型，也可试用带原文出处的项目决策概览。从 asHub 0.21.10 起随发行版提供，可在「插件」中启用。
 - **设备互联：**可查看当前执行设备、返回设备列表；同步过久时，可以重新同步当前对话，保留草稿，不会自动重发消息。
 
 | 能力 | 使用体验 |
@@ -113,9 +113,8 @@ chmod +x ./asHub-*.AppImage
 
 | 提供方式 | 插件 |
 | --- | --- |
-| 随 macOS、Windows、Linux 版提供 | [Kimi Coding Plan](examples/extensions/kimi-coding-plan)、[项目管理](examples/extensions/project-management)、[会话浏览器](examples/extensions/browser-automation)、[图文展示](examples/extensions/image-display)、[设备互联](examples/extensions/multi-machine)、[定时任务](examples/extensions/scheduled-tasks)、[语音输入](examples/extensions/voice-input) |
+| 随 macOS、Windows、Linux 版提供 | [Kimi Coding Plan](examples/extensions/kimi-coding-plan)、[项目管理](examples/extensions/project-management)、[会话浏览器](examples/extensions/browser-automation)、[图文展示](examples/extensions/image-display)、[设备互联](examples/extensions/multi-machine)、[定时任务](examples/extensions/scheduled-tasks)、[语音输入](examples/extensions/voice-input)、[个人助手](examples/extensions/personal-assistant) |
 | 仅随 macOS 版提供 | [桌面控制](examples/extensions/desktop-control) |
-| 单独安装 | [个人助手](examples/extensions/personal-assistant) |
 
 [微信机器人](examples/extensions/wechat-bot)是单独的 agent-sh 扩展示例，按它自己的说明安装。
 

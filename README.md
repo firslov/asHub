@@ -20,7 +20,7 @@ Available for **macOS (Apple Silicon / Intel), Windows x64 and Linux x64**. The 
 **[v0.21.9](https://github.com/firslov/asHub/releases/tag/v0.21.9)** updates the agent-sh kernel to 0.17.0 and improves long-running tasks, Personal Assistant memory, and device interconnect.
 
 - **Subagents:** cancelled, partial, and completed runs are distinct in live views and history. Transient stream failures retry the current model request and keep completed tool results. In the same conversation, you can continue completed or partial runs whose history is still available, reusing the original task and tool results within the original permissions.
-- **Personal Assistant:** search authorized conversation excerpts alongside saved memories, choose a separate model for background organization, and optionally build project decision overviews that point back to their evidence. The plugin is installed separately.
+- **Personal Assistant:** search authorized conversation excerpts alongside saved memories, choose a separate model for background organization, and optionally build project decision overviews that point back to their evidence. The plugin is included starting with asHub 0.21.10 and can be enabled in Plugins.
 - **Device interconnect:** see which computer is running the task, return to the device list, and resync a slow conversation without losing the draft or automatically resending a message.
 
 | Capability | Experience |
@@ -113,9 +113,8 @@ You can disable **Google Gemini** and **Google Antigravity** independently under
 
 | Availability | Plugins |
 | --- | --- |
-| Included on macOS, Windows, and Linux | [Kimi Coding Plan](examples/extensions/kimi-coding-plan), [Project Management](examples/extensions/project-management), [Conversation Browser](examples/extensions/browser-automation), [Image Display](examples/extensions/image-display), [Device Interconnect](examples/extensions/multi-machine), [Scheduled Tasks](examples/extensions/scheduled-tasks), [Voice Input](examples/extensions/voice-input) |
+| Included on macOS, Windows, and Linux | [Kimi Coding Plan](examples/extensions/kimi-coding-plan), [Project Management](examples/extensions/project-management), [Conversation Browser](examples/extensions/browser-automation), [Image Display](examples/extensions/image-display), [Device Interconnect](examples/extensions/multi-machine), [Scheduled Tasks](examples/extensions/scheduled-tasks), [Voice Input](examples/extensions/voice-input), [Personal Assistant](examples/extensions/personal-assistant) |
 | Included on macOS only | [Desktop Control](examples/extensions/desktop-control) |
-| Install separately | [Personal Assistant](examples/extensions/personal-assistant) |
 
 The [WeChat Bot example](examples/extensions/wechat-bot) is a separate agent-sh extension and has its own setup instructions.
 

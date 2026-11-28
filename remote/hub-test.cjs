@@ -164,6 +164,16 @@ const { once } = require('node:events');
       method: 'POST', headers: { Origin: 'http://127.0.0.1', Cookie: auth, 'Content-Type': 'application/json' },
       body: JSON.stringify({ op, args }),
     });
+    const expectedArchiveSupport = process.env.ASHUB_TEST_LEGACY_ARCHIVES !== '1';
+    assert(((await rpc('capabilities')).archivedHistory === true) === expectedArchiveSupport, 'desktop advertises only its supported archive capability');
+    if (!expectedArchiveSupport) {
+      for (const [op, args] of [['archived-sessions', {}], ['archived-history', { session: sid }]]) {
+        const reply = await rpcReply(op, args);
+        const detail = await reply.text();
+        assert(!reply.ok && [400, 403, 404].includes(reply.status) && !detail.includes(sid), `released desktop declines ${op}: ${reply.status} ${detail}`);
+      }
+    }
+    if (expectedArchiveSupport) {
     const sessionsDir = path.join(e.dir, 'hub-sessions');
     const archivedFile = path.join(sessionsDir, 'archived.json');
     const allowedCwd = fs.mkdtempSync(path.join(e.dir, 'shared-archive-'));
@@ -187,7 +197,6 @@ const { once } = require('node:events');
     fs.writeFileSync(archivePath, archiveText);
     for (const id of ['aaaa12', 'aaaa13', 'aaaa14', 'aaaa15', 'aaaa16']) fs.writeFileSync(path.join(sessionsDir, `${id}.replay.jsonl`), frame('agent:query', { query: `Private ${id}` }));
     const initialBridgeCount = startedBridges;
-    assert((await rpc('capabilities')).archivedHistory === true, 'new scoped Hub advertises archivedHistory');
     const catalog = await rpc('archived-sessions');
     assert(catalog.map(entry => entry.id).sort().join(',') === 'aaaa10,aaaa11,aaaa16,aaaa17', 'catalog includes only still-archived shared agent metadata');
     assert(catalog.find(entry => entry.id === 'aaaa10').cwd === allowedCwd && catalog.find(entry => entry.id === 'aaaa10').title === 'Fixture aaaa10', 'archive catalog shape');
@@ -238,6 +247,8 @@ const { once } = require('node:events');
     });
     assert(!(await rpc('archived-sessions')).some(row => row.id === 'aaaa16'), 'locally restored archive no longer exposes a title');
     delete archives.aaaa16; delete archives[sid]; saveIndex();
+    console.log(`PASS archived history: ${pages} pages for ${Buffer.byteLength(longText)} UTF-8 output bytes; no bridge start, scoped read-only access and retry verified`);
+    }
     assert((await rpc('sessions')).some(row => row.instanceId === sid), 'normal active-session RPC continues to work');
 
     const { DevicePublisher } = await import('../examples/extensions/multi-machine/publisher.mjs');
@@ -259,7 +270,7 @@ const { once } = require('node:events');
     await rebind('Re-enabled');
     const narrow = path.join(e.dir, 'narrow'); fs.mkdirSync(narrow);
     await rebind('Narrowed', [narrow]); assert((await rpc('sessions')).length === 0, 'updated roots take effect');
-    assert((await rpc('archived-sessions')).length === 0 && (await rpcReply('archived-history', { session: 'aaaa10' })).status === 404, 'updated sharing grant removes archive titles and text');
+    if (expectedArchiveSupport) assert((await rpc('archived-sessions')).length === 0 && (await rpcReply('archived-history', { session: 'aaaa10' })).status === 404, 'updated sharing grant removes archive titles and text');
     assert((await fetch(download,{headers:{Cookie:cookie}})).status===403,'removed sharing blocks downloads');
     assert((await rpc('project-groups')).length===0,'removed sharing hides project groups');
     await rebind('Updated'); assert((await rpc('sessions')).some(s => s.instanceId === sid), 'restored roots share original sessions');
@@ -272,7 +283,7 @@ const { once } = require('node:events');
     assert((await rpc('session-delete',deleteArgs)).state==='done','lost deletion reply remains retryable after removal');
     assert(fs.existsSync(path.join(e.dir,filename)),'deletion preserves work directory files');
     }
-    console.log(`PASS archived history: ${pages} pages for ${Buffer.byteLength(longText)} UTF-8 output bytes, no bridge start; scoped reads, retry, read-only, account/real-path/index rechecks and legacy fallback verified`);
+    if (!expectedArchiveSupport) console.log('PASS v0.21.9 archive compatibility: no archive capability, both archive reads declined, active sessions still work');
     console.log('Session controls: '+(sessionControls?'new desktop verified':'released desktop fallback verified'));
     console.log('PASS actual Hub: local authentication, bind, create, shared projects, bounded file downloads and account isolation, streaming, image round trip, one-time approvals, disconnect, re-enable, stable identity, per-session VPN, confirmed/idempotent deletion');
   } finally { await reader?.cancel(); await hub.shutdown(); await gateway.close(); }

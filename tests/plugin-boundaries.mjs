@@ -87,13 +87,13 @@ function fixture(t) {
   return { dir, file, boot, shutdown, install, installer, catalog, sessions, resources, counts: () => ({ bound, calls, historyReads }) };
 }
 
-test('a fresh profile and repeated Hub startup never install, activate or allocate assistant storage', async t => {
+test('a fresh profile sees the bundled assistant without activation or allocation of storage', async t => {
   const f = fixture(t);
   for (let n = 0; n < 2; n++) {
-    assert.equal(f.catalog(), undefined);
+    assert(f.catalog()?.bundled && !f.catalog().enabled);
     const { registry, entries } = await f.boot();
     assert.equal(entries.list().length, 0);
-    assert(!registry.snapshot().features.some(feature => feature.name === '个人助手'));
+    assert.equal(registry.snapshot().features.find(feature => feature.name === '个人助手')?.state, 'inactive');
     assert.equal(f.sessions.size, 0);
     assert(!fs.existsSync(path.join(f.dir, 'extensions', packageId)));
     assert(!fs.existsSync(path.join(f.dir, 'hub-sessions/plugin-data')));
@@ -106,7 +106,8 @@ test('explicit ZIP installation owns entry lifecycle; disable, upgrade, uninstal
   const f = fixture(t);
   let hub = await f.boot();
   const installed = await f.install(), id = installed.id, data = pluginDataDirectory(f.file, id);
-  assert.equal(installed.enabled, true);
+  assert(installed.includedApp && !installed.bundled && !installed.enabled);
+  await hub.registry.setPluginEnabled(id, true);
   assert.equal(hub.entries.list().length, 1);
   assert.equal(hub.entries.list()[0].sessionId, null, 'installation alone cannot create a conversation');
   const { current } = await import(pathToFileURL(path.join(installed.packageRoot, 'shared.mjs')).href);
@@ -154,13 +155,15 @@ test('explicit ZIP installation owns entry lifecycle; disable, upgrade, uninstal
 
   const restored = await f.install();
   assert.equal(restored.id, id); assert.equal(pluginDataDirectory(f.file, restored.id), data);
+  assert.equal(restored.enabled, false, 'reinstall preserves explicit opt-in');
+  await hub.registry.setPluginEnabled(id, true);
   assert.equal(hub.entries.list()[0].sessionId, session);
   assert.equal(current(data).store.get(record.id).content, record.content);
   assert.equal(f.sessions.size, 1, 'explicit reinstall reuses the original conversation');
   assert.equal(f.counts().calls, 0); assert.equal(f.counts().historyReads, 0);
 });
 
-test('release file selection excludes the standalone assistant on every desktop platform', () => {
+test('release bundles the assistant runtime without test fixtures on every desktop platform', () => {
   const config = yaml.load(fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json')));
   for (const platform of ['mac', 'win', 'linux']) {
@@ -172,7 +175,11 @@ test('release file selection excludes the standalone assistant on every desktop 
       return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)
         && matcher.createFilter()(file, fs.statSync(file));
     });
-    for (const name of ['package.json', ...pkg.files]) assert(!included(path.join(source, name)), `${platform} bundles personal-assistant/${name}`);
+    for (const name of ['package.json', ...pkg.files]) assert(included(path.join(source, name)), `${platform} must include personal-assistant/${name}`);
+    for (const name of fs.readdirSync(path.join(source, 'tests'))) {
+      const file = path.join(source, 'tests', name);
+      if (fs.statSync(file).isFile()) assert(!included(file), `${platform} must not bundle assistant test ${name}`);
+    }
     assert(included(path.join(root, 'examples/extensions/image-display/ashub-plugin.json')), `${platform}: positive control must select a bundled extension`);
   }
 });

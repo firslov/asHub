@@ -79,6 +79,8 @@ test('bundled plugin files are selected only on their supported platforms', () =
   const common = [
     'scheduled-tasks/app.mjs', 'scheduled-tasks/schedule.mjs', 'scheduled-tasks/ashub-plugin.json', 'scheduled-tasks/package.json',
     'voice-input/app.mjs', 'voice-input/ashub-plugin.json', 'voice-input/package.json',
+    'personal-assistant/package.json',
+    ...require('../examples/extensions/personal-assistant/package.json').files.map(file => `personal-assistant/${file}`),
   ];
   const macOnly = [
     'desktop-control/index.js', 'desktop-control/ashub-plugin.json', 'desktop-control/package.json',

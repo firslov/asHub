@@ -14,7 +14,7 @@ export const BUNDLED_REMOVED = 'ashub.plugins.bundledRemoved';
 const bundledRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../examples/extensions');
 const bundledApps = new Map([
   'kimi-coding-plan', 'project-management', 'browser-automation', 'image-display', 'multi-machine',
-  'scheduled-tasks', 'voice-input', 'desktop-control',
+  'scheduled-tasks', 'voice-input', 'personal-assistant', 'desktop-control',
 ].map(name => ['ashub-' + name, name]));
 function supportsBundledPlatform(manifest: NormalizedPluginManifest, platform: string, packageOs: unknown): boolean {
   return (!manifest.platforms || manifest.platforms.includes(platform)) && packageMetadataCompatibility({ platform, packageOs }).compatible;

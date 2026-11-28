@@ -93,6 +93,10 @@ app.whenReady().then(async () => {
   }
   console.log('PASS remote user messages: right-aligned adaptive bubbles and bounded attachments at 320/390/1040px');
   win.setContentSize(390,844);
+  // setContentSize updates the native window before Chromium applies the
+  // responsive breakpoints. Test the phone layout, not the previous width.
+  for (let i = 0; i < 50 && await run('innerWidth') !== 390; i++) await wait(20);
+  assert.equal(await run('innerWidth'), 390);
   // Opening the software keyboard can shrink the visual viewport without
   // changing CSS media-query height (notably on iOS).
   await run(`(() => {

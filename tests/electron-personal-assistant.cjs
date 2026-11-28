@@ -26,6 +26,10 @@ app.whenReady().then(async () => {
     const job = await call('/api/plugins/install?action=confirm', { token: preview.token }); let result;
     for (let i = 0; i < 150; i++) { result = await call('/api/plugins/install?id=' + job.id); if (result.state !== 'running') break; await new Promise(r => setTimeout(r, 20)); }
     assert.equal(result.state, 'succeeded', JSON.stringify(result));
+    const manual = (await call('/api/plugins')).plugins.find(p => p.manifest?.id === pkg.name);
+    assert(manual?.includedApp && !manual.bundled && !manual.enabled, 'a manual update must preserve bundled opt-in');
+    const enabled = await fetch(base + '/api/plugins', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: manual.id, enabled: true }) });
+    assert.equal(enabled.status, 200, await enabled.text());
     const id = (await call('/sessions', { cwd: e.dir, kind: 'agent', title: '个人助理', model:'tiny', provider:'mock' })).instanceId;
     bridge.emit('event', { name:'agent:info', payload:{model:'tiny',provider:'mock'} });
     let feature;

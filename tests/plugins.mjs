@@ -55,7 +55,11 @@ test('included apps are opt-in, retain settings, and give precedence to a manual
   const f=fixture();
   const catalog=()=>pluginCatalog(f.file);
   const bundled=catalog().filter(p=>p.bundled);
-  assert.equal(bundled.length, process.platform === 'darwin' ? 8 : 7);
+  assert.equal(bundled.length, process.platform === 'darwin' ? 9 : 8);
+  const assistant=bundled.find(p=>p.manifest.id==='ashub-personal-assistant');
+  assert(assistant?.compatibility?.compatible && !assistant.enabled);
+  assert.equal(assistant.version, JSON.parse(fs.readFileSync(path.join(assistant.packageRoot,'package.json'),'utf8')).version);
+  assert.equal(typeof (await import(pathToFileURL(assistant.applicationSpecifier).href)).default,'function');
   for(const plugin of bundled) {
     assert(!plugin.enabled && plugin.includedApp);
     assert(fs.existsSync(plugin.sessionSpecifier || plugin.applicationSpecifier));

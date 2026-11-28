@@ -55,7 +55,7 @@ test('configured relative Windows extension path resolves independently from npm
  assert.equal(subpath.sessionSpecifier,'@scope/example/entry');
 });
 
-test('ACP on Windows uses an argv-aware launcher for shims and paths containing spaces',()=>{
+test('ACP on Windows uses an argv-aware launcher for shims and paths containing spaces',async()=>{
  const command='C:\\Program Files\\测试\\agent.cmd', args=['--label','A & B',''];
  let invocation;const sentinel=Error('fixture stopped before spawn');
  const e=env({globals:{process:{...process,platform:'win32'}},modules:{
@@ -63,12 +63,12 @@ test('ACP on Windows uses an argv-aware launcher for shims and paths containing 
   'node:child_process':{spawn(){throw Error('raw shell launch');}}
  }});
  const {AcpBridge}=e.load('src/bridges/acp.ts');
- assert.throws(()=>new AcpBridge({cwd:e.dir,extra:{command,args}}),err=>err===sentinel);
+ await assert.rejects(new AcpBridge({cwd:e.dir,extra:{command,args}}).ready(),err=>err===sentinel);
  assert.equal(invocation[0],command);assert.deepEqual(invocation[1],args);
  assert(!invocation[2].shell);assert.equal(invocation[2].cwd,e.dir);
 });
 
-test('ACP resolves a command using its configured child PATH',()=>{
+test('ACP resolves a command using its configured child PATH',async()=>{
  const fs=require('node:fs'),path=require('node:path');
  const sentinel=Error('fixture stopped before spawn');
  let launched;
@@ -82,7 +82,7 @@ test('ACP resolves a command using its configured child PATH',()=>{
  }
  e.context.process.env.PATH=outer;
  const {AcpBridge}=e.load('src/bridges/acp.ts');
- assert.throws(()=>new AcpBridge({cwd:e.dir,extra:{command:name,env:{PATH:child}}}),err=>err===sentinel);
+ await assert.rejects(new AcpBridge({cwd:e.dir,extra:{command:name,env:{PATH:child}}}).ready(),err=>err===sentinel);
  assert.equal(launched.file,name);
  assert.equal(launched.env.PATH.split(path.delimiter)[0],child);
  assert(!launched.env.PATH.split(path.delimiter).includes(outer));

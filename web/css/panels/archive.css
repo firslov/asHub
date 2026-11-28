@@ -1,0 +1,41 @@
+/* Archive uses the same drawer, input and button primitives as Files. */
+#archive-panel .p-title { overflow: hidden; text-overflow: ellipsis; }
+.archive-search { flex: none; padding: 12px 16px 4px; }
+.archive-search .p-input { width: 100%; }
+#archive-body { overscroll-behavior: contain; }
+#archive-list { list-style: none; }
+.archive-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+}
+.archive-row:hover, .archive-row:focus-within { background: var(--bg3); }
+.archive-history { display: grid; min-width: 0; gap: 3px; padding: 3px 4px; color: var(--text); font: inherit; text-align: start; background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer; }
+.archive-history:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.archive-title, .archive-cwd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archive-title { font-size: var(--fs-md); }
+.archive-meta { display: flex; min-width: 0; gap: 8px; font-size: var(--fs-xs); color: var(--text-dim); }
+.archive-date { flex: none; font-variant-numeric: tabular-nums; }
+.archive-restore[aria-disabled="true"] { opacity: .55; cursor: wait; }
+.archive-row-error { grid-column: 1 / -1; padding-inline: 4px; color: var(--error); font-size: var(--fs-xs); }
+#archive-preview { overscroll-behavior: contain; overflow-wrap: anywhere; }
+#archive-preview-title { margin: 0; font-size: var(--fs-md); }
+.archive-preview-note { margin: 4px 0 14px; color: var(--text-dim); font-size: var(--fs-xs); }
+.archive-thread { display: grid; gap: 10px; }
+.archive-earlier { margin-bottom: 10px; }
+.archive-message { min-width: 0; padding: 10px; border-radius: var(--radius-sm); background: var(--bg3); }
+.archive-message-role { margin: 0 0 5px; color: var(--text-dim); font-size: var(--fs-xs); }
+.archive-message-content { white-space: pre-wrap; }
+.archive-markdown { white-space: normal; }
+.archive-markdown > :first-child { margin-top: 0; }
+.archive-markdown > :last-child { margin-bottom: 0; }
+.archive-markdown ul, .archive-markdown ol { padding-inline-start: 1.35em; }
+.archive-markdown pre, .archive-markdown table { overflow: auto; max-width: 100%; }
+.archive-markdown table { display: block; }
+@media (max-width: 420px) {
+  .archive-search { padding-inline: 12px; }
+  .archive-meta { flex-wrap: wrap; gap: 2px 6px; }
+}

@@ -351,6 +351,10 @@
   border-color: var(--accent-border);
   color: var(--accent-dim);
 }
+.usage-strip .usage-model-balance:disabled {
+  cursor: default;
+  pointer-events: none;
+}
 
 /* Balance / location chips: quiet hover only. */
 .usage-strip .usage-balance:hover {
@@ -544,6 +548,14 @@
 }
 .model-option[hidden] { display: none; }
 .model-option:hover { background: var(--bg3); color: var(--text); }
+.model-option.model-antigravity {
+  margin-bottom: 6px;
+  border: 1px solid var(--border-light);
+  font-family: var(--font-sans);
+  white-space: normal;
+}
+.model-antigravity span, .model-antigravity small { display: block; }
+.model-antigravity small { margin-top: 2px; color: var(--text-muted); font-size: var(--fs-xs); }
 
 .model-option.selected,
 .model-option.current {

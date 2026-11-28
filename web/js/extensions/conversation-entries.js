@@ -5,9 +5,8 @@ import { features } from './feature-state.js';
 import { lang } from '../i18n.js';
 import { mountResource } from './resource-view.js';
 import { closeOtherPanels } from '../panel-manager.js';
-const host=document.createElement('nav');host.className='conversation-entries';host.hidden=true;
-host.setAttribute('aria-label','Plugin conversations');
-document.querySelector('.sidebar-head')?.after(host);
+const host = document.getElementById('sidebar-conversations');
+const entryIcon = '<svg class="conversation-entry-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3.5 10.9 9 16.5 11l-5.6 2L9 18.5 7.1 13 1.5 11l5.6-2L9 3.5ZM18.5 4v5M16 6.5h5M18.5 15v6M15.5 18h6"/></svg>';
 let entries=[],epoch=0,signature='',welcome=null,resourceDialog=null;
 let latestRefresh;
 let controls=[];
@@ -64,13 +63,24 @@ function openPanel(entry){
 }
 
 function render(){
+  if (!host) return;
   for(const row of host.children){const active=!!row.dataset.sessionId&&row.dataset.sessionId===activeSessionId.value;row.dataset.active=String(active);const b=row.querySelector('.conversation-entry-open');if(active)b?.setAttribute('aria-current','page');else b?.removeAttribute('aria-current');}
   const key=JSON.stringify([entries,lang.value]);if(key===signature)return;signature=key;
   for(const dispose of controls)dispose();controls=[];
   host.replaceChildren();host.hidden=!entries.length;
   for(const e of entries){
     const row=document.createElement('div');row.className='conversation-entry';row.dataset.active=String(!!e.sessionId&&e.sessionId===activeSessionId.value);row.dataset.sessionId=e.sessionId||'';
-    const button=document.createElement('button');button.type='button';button.className='conversation-entry-open';button.textContent=e.label;button.title=e.sessionId?text('打开专属对话','Open conversation'):text('设置专属对话','Set up conversation');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'conversation-entry-open';
+    button.title = e.label;
+    const icon = document.createElement('span');
+    icon.className = 'conversation-entry-mark';
+    icon.innerHTML = entryIcon;
+    const label = document.createElement('span');
+    label.className = 'conversation-entry-label';
+    label.textContent = e.label;
+    button.append(icon, label);
     if(row.dataset.active==='true')button.setAttribute('aria-current','page');
     button.onclick=()=>{if(e.sessionId){closeWelcome();openTab(e.sessionId);}else openWelcome(e);};
     const control=document.createElement('div');control.className='conversation-entry-control';

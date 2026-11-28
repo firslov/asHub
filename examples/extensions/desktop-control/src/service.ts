@@ -52,6 +52,24 @@ export class DesktopService {
     if (!config.enabled) throw Error('Desktop control is disabled; configure the plugin or run /desktop enable');
     if (!config.allowedApps.includes(bundle)) throw Error('This app is not allowed. Add its Bundle ID in the plugin configuration or use /desktop allow.');
   }
+  desktopApproval(bundle: string): { approved: boolean; remember(): void } {
+    const settings = readDesktopSettings(this.file);
+    const signal = this.cancellationSignal;
+    if (!settings.enabled || !settings.allowedApps.includes(bundle)) throw Error('Desktop access is no longer allowed for this app');
+    return { approved: settings.approvedApps?.includes(bundle) === true, remember: () => {
+      const current = readDesktopSettings(this.file);
+      const revision = settingsRevision(current);
+      // A configuration change cancels old requests. A concurrent grant made
+      // by this service updates the revision without cancelling other requests.
+      if (signal.aborted || !current.enabled || !current.allowedApps.includes(bundle) || this.configuration !== revision) {
+        throw Error('Desktop configuration changed before approval');
+      }
+      if (current.approvedApps?.includes(bundle)) return;
+      const saved = writeDesktopSettings(this.file, { ...current, approvedApps: [...(current.approvedApps ?? []), bundle] }, revision);
+      // Adding consent must not cancel the request whose card just saved it.
+      this.configuration = settingsRevision(saved);
+    } };
+  }
   private async rpc(name: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<McpResult> {
     const driver = this.client();
     try { return await driver.call(name, args, signal); }

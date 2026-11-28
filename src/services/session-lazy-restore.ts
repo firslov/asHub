@@ -1,3 +1,4 @@
+import { BackendUnavailable } from '../integrations.js';
 import { committedReplay } from '../history/replay-writer.js';
 import { recoverSubagentReplay } from '../history/replay-frame.js';
 import { createHistoryReader } from "../history/history-reader.js";
@@ -82,7 +83,7 @@ export function installLazySessionRestore(
           if (session._closing || session._closed) throw new Error("session closing");
 
           // Load / create SessionStore
-          if (!session.store) {
+          if (!session.store && session.kind !== "antigravity") {
             const historyOptions = { metaPath: sessionMetaPath(id), ...session._historyWriterLifecycle };
             try {
               if (fs.existsSync(treePath)) {
@@ -200,9 +201,10 @@ export function installLazySessionRestore(
       }
 
       checkRestore();
+      if (session.backendUnavailable) throw new BackendUnavailable(session.backendUnavailable);
       const storeRef = session.store;
       const msgs = storeRef ? storeRef.buildMessages() : undefined;
-      const b = opts.makeBridge({ sessionId: id, conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id), imageResources: opts.imageResources?.(id), pluginConversation: (pluginId, keys) => opts.pluginConversation?.(id, pluginId, keys) === true, cwd: session.cwd, kind: session.kind, initialMessages: msgs, model: session.model, provider: session.provider, compactionStrategy, historyAccess: createHistoryReader(() => session.store ?? null), isRestored: true, restoreState: session.backendState, restoreBackend: session.backendId });
+      const b = opts.makeBridge({ sessionId: id, ...(session.projectWorker ? { projectWorker: true } : { conversationAccess: opts.conversationAccess?.(id), hostAccess: opts.hostAccess?.(id), imageResources: opts.imageResources?.(id), pluginConversation: (pluginId: string, keys: readonly string[]) => opts.pluginConversation?.(id, pluginId, keys) === true }), cwd: session.cwd, kind: session.kind, initialMessages: msgs, model: session.model, provider: session.provider, compactionStrategy, historyAccess: createHistoryReader(() => session.store ?? null), isRestored: true, restoreState: session.backendState, restoreBackend: session.backendId });
       if (session.backendId && b.backendId && session.backendId !== b.backendId) {
         b.close();
         throw new Error("This session belongs to another backend; restart with its original backend.");
@@ -211,6 +213,14 @@ export function installLazySessionRestore(
       session.firstTurnDone = !!(msgs?.length);
       b.onEvent((e) => { try { routeEvent(session, e); } catch (err) { console.error("[hub] routeEvent error:", err); } });
       b.onClose(() => {
+        if (session.kind === "antigravity" && session.bridge === b && !session._restorePromise
+          && !session._closing && !session._closed) {
+          // The pending ACP prompt rejection owns task settlement here.
+          if (session.projectWorker) stopIdleWatchdog(session);
+          session.bridge = null as unknown as Bridge;
+          installLazySessionRestore(sessions, opts, session, treePath, compactionStrategy, adapters);
+          return;
+        }
         try { if (session.bridge !== b) return; if (session._restorePromise) { cancelRestore(); return; } session.collaboration?.stopSession(session.id); session._closed = true; stopIdleWatchdog(session); if (sessions.get(id) === session) sessions.delete(id); for (const r of session.sseClients) { try { r.end(); } catch {} } session.sseClients.clear(); releaseClosedReplay(session); } catch (err) { console.error("[hub] bridge onClose error:", err); }
       });
       b.onError((err) => {
@@ -241,7 +251,7 @@ export function installLazySessionRestore(
     // of returning a permanently-rejected promise; still propagate the
     // error to this caller so the route can answer with a 500.
     session._restorePromise = restoreTask.catch((err) => {
-      console.error(`[hub] bridge restore failed for ${id}:`, err);
+      if (!(err instanceof BackendUnavailable)) console.error(`[hub] bridge restore failed for ${id}:`, err);
       const failed = session.bridge;
       session.bridge = null as unknown as Bridge;
       session.capture = undefined;

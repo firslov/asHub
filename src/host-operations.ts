@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 export interface ApprovalItem { title: string; fields: Array<{ label: string; value: string }> }
-export interface ApprovalPreview { manualOnly?: boolean; title: string; items: ApprovalItem[]; scope?: 'once' | 'site' | 'daily7';
+export interface ApprovalPreview { manualOnly?: boolean; title: string; description?: string; items: ApprovalItem[]; scope?: 'once' | 'site' | 'daily7';
   browser?: { action: 'open' | 'click' | 'fill' | 'write' | 'upload' | 'download'; origin: string }; sourceName?: string }
 export type Approve = (preview: ApprovalPreview, signal?: AbortSignal) => Promise<boolean>;
 export interface HostAccess {
@@ -88,16 +88,21 @@ export class HostOperations {
 
 /** Explicit approvals are intentionally separate from file-tool auto-approval. */
 export class ExplicitApprovals {
-  private pending = new Map<string, (allowed: boolean) => void>();
+  private pending = new Map<string, (allowed: boolean, extended?: boolean) => void>();
   constructor(private emit: (name: string, payload: unknown) => void, private timeoutMs = 300_000) {}
-  request(preview: ApprovalPreview, signal?: AbortSignal): Promise<boolean> {
+  request(preview: ApprovalPreview, signal?: AbortSignal, desktop?: { application: string; remember(): void }): Promise<boolean> {
     if (signal?.aborted) return Promise.resolve(false);
     const requestId = randomUUID(), expiresAt = Date.now() + this.timeoutMs;
     return new Promise(resolve => {
-      const finish = (allowed: boolean) => {
+      const finish = (allowed: boolean, extended?: boolean) => {
         if (!this.pending.delete(requestId)) return;
         clearTimeout(timer); signal?.removeEventListener('abort', abort);
         allowed = allowed && Date.now() < expiresAt && !signal?.aborted;
+        if (allowed && extended && desktop) {
+          // Persist before authorizing the first operation. An unsuccessful save
+          // must not silently become a one-time approval.
+          try { desktop.remember(); } catch { allowed = false; }
+        }
         this.emit('permission:resolved', { requestId, outcome: allowed ? 'approved' : 'denied' });
         resolve(allowed);
       };
@@ -106,13 +111,14 @@ export class ExplicitApprovals {
       this.pending.set(requestId, finish);
       signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) { abort(); return; }
-      this.emit('permission:request', { ...preview, kind: 'operation', requestId, expiresAt, durationMs: this.timeoutMs, explicit: true });
+      this.emit('permission:request', { ...preview, kind: 'operation', requestId, expiresAt, durationMs: this.timeoutMs, explicit: true,
+        ...(desktop ? { desktopApplication: desktop.application } : {}) });
     });
   }
-  decide(id: string, outcome: string): boolean {
+  decide(id: string, outcome: string, extended?: boolean): boolean {
     const finish = this.pending.get(id);
     if (!finish) return false;
-    finish(outcome === 'approved'); return true;
+    finish(outcome === 'approved', extended); return true;
   }
   cancel() { for (const finish of this.pending.values()) finish(false); }
 }

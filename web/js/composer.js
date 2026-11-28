@@ -8,13 +8,17 @@ import { attachAutocomplete } from "./autocomplete.js";
 import { attachAtMentionAutocomplete } from "./at-mention.js";
 import { closeOtherPanels } from "./panel-manager.js";
 import { loadFeature, featureEnabled, features } from './extensions/feature-state.js';
-import { activeSession } from "./session-manager.js";
+import { activeSession, sessions } from "./session-manager.js";
 import { toast } from "./toast.js";
 import { t } from "./i18n.js";
 import { effect } from "../vendor/signals-core.js";
 
 const form = document.getElementById("form");
 const input = document.getElementById("query");
+const shortcuts = document.querySelector("#composer-help [data-i18n='composer.shortcuts']");
+const keyboardHelp = document.querySelector('#composer-help .composer-keyboard');
+const backendNotice = document.getElementById("backend-unavailable-notice");
+const canCompose = session => !!session && !session.projectWorker && !session.projectWorkerPending && !session.backendUnavailable;
 const sendBtn = document.getElementById("send-btn");
 const deliveryButton = document.getElementById("delivery-mode");
 let deliveryMode = "steer";
@@ -26,7 +30,7 @@ deliveryButton?.addEventListener("click", () => {
 });
 const mediaInput = globalThis.AsHubComposerMedia.mount({container:document.getElementById('composer-help'),input,form,
   owner:()=>activeSession.peek()?.id || '',
-  enabled:()=>!!activeSession.peek() && !state.isSubmitting,
+  enabled:()=>canCompose(activeSession.peek()) && !state.isSubmitting,
   request:async(sid,action,args,signal)=>{
     const route=`/${sid}/composer-inputs`+(action==='list'?'':`/${args.input}/${args.requestId}`);
     const response=await fetch(route,{method:({list:'GET',start:'POST',status:'GET',cancel:'DELETE'})[action],signal,
@@ -35,8 +39,12 @@ const mediaInput = globalThis.AsHubComposerMedia.mount({container:document.getEl
     if (!response.ok) throw Object.assign(Error(result.error || '语音输入暂不可用'), {status:response.status});
     return result;
   }});
-let mediaSession;
-effect(()=>{const s=activeSession.value;if(s!==mediaSession){mediaSession=s;mediaInput.cancel();void mediaInput.refresh();}});
+let mediaSession, mediaCanCompose;
+effect(()=>{
+  const session=activeSession.value, enabled=canCompose(session);
+  if(session===mediaSession && enabled===mediaCanCompose) return;
+  mediaSession=session;mediaCanCompose=enabled;mediaInput.cancel();void mediaInput.refresh();
+});
 features.subscribe(()=>void mediaInput.refresh());
 const imagePreviews = document.getElementById("image-previews");
 const visionIndicator = document.getElementById("vision-indicator");
@@ -58,9 +66,11 @@ input?.addEventListener("compositionend", () => {
 });
 
 const imageDrafts = new Map();
+const decodingImages = new Map();
 const textDrafts = new Map();
 const pendingSubmits = new Set();
 let attachedImages = [];
+const isAntigravity = () => activeSession.peek()?.kind === "antigravity";
 
 // ── Send button (submit when idle, cancel while busy) ─────────────
 
@@ -68,16 +78,23 @@ const updateSendBtn = () => {
   if (!sendBtn) return;
   const session = activeSession.peek();
   const busy = !!session?.state?.isProcessing;
-  const hasText = !!input?.value.trim() || attachedImages.length > 0;
-  sendBtn.classList.toggle("busy", busy && !hasText);
+  const writable = canCompose(session);
+  const hasText = writable && (!!input?.value.trim() || attachedImages.length > 0);
+  const cancel = busy && !hasText && !session?.backendUnavailable;
+  sendBtn.hidden = !!session && !writable && !cancel;
+  // The button's author display style overrides the default [hidden] rule.
+  sendBtn.style.display = sendBtn.hidden ? 'none' : '';
+  sendBtn.classList.toggle("busy", cancel);
   if (deliveryButton) {
-    deliveryButton.hidden = !busy || /^[!/]/.test(input?.value.trim() || '');
+    deliveryButton.hidden = !writable || !busy || isAntigravity() || /^[!/]/.test(input?.value.trim() || '');
     deliveryButton.textContent = t('delivery.' + deliveryMode);
     deliveryButton.title = t('delivery.' + deliveryMode + '.hint');
     deliveryButton.setAttribute('aria-label', deliveryButton.title);
   }
-  sendBtn.disabled = busy ? false : (!session || !hasText);
-  sendBtn.title = busy && !hasText ? t("interrupt") : t("send");
+  sendBtn.disabled = !!session?._backendSwitchPending || (!cancel && (!writable || !hasText));
+  const label = cancel ? 'interrupt' : 'send';
+  sendBtn.setAttribute('data-i18n-title', label);
+  sendBtn.title = t(label);
 };
 
 sendBtn?.addEventListener("click", (ev) => {
@@ -147,15 +164,21 @@ const compressImage = (file) => new Promise((resolve, reject) => {
 });
 
 const addImage = async (file, sid = currentSessionId()) => {
-  if (!sid) return;
+  const session = sessions.get(sid);
+  if (!canCompose(session) || session._backendSwitchPending) return;
   const draft = imageDrafts.get(sid) ?? [];
   imageDrafts.set(sid, draft);
+  decodingImages.set(sid, (decodingImages.get(sid) ?? 0) + 1);
   try {
     const data = await compressImage(file);
     draft.push({ data, mimeType: file.type || "image/png" });
     if (sid === currentSessionId()) { attachedImages = draft; renderImagePreviews(); updateSendBtn(); }
   } catch (e) {
     console.error("Failed to attach image:", e);
+  } finally {
+    const remaining = decodingImages.get(sid) - 1;
+    if (remaining) decodingImages.set(sid, remaining);
+    else decodingImages.delete(sid);
   }
 };
 
@@ -189,7 +212,7 @@ const renderImagePreviews = () => {
 // Paste handler for images
 document.addEventListener("paste", (ev) => {
   const session = activeSession.peek();
-  if (!session?.agentInfo?.modalities?.includes("image")) return;
+  if (!canCompose(session) || !session.agentInfo?.modalities?.includes("image")) return;
   if (document.activeElement !== input) return;
   const items = ev.clipboardData?.items;
   if (!items) return;
@@ -204,8 +227,9 @@ document.addEventListener("paste", (ev) => {
 
 // Upload button
 visionIndicator?.addEventListener("click", () => {
-  const sid = activeSession.peek()?.id;
-  if (!sid) return;
+  const session = activeSession.peek();
+  if (!canCompose(session)) return;
+  const sid = session.id;
   const inp = document.createElement("input");
   inp.type = "file";
   inp.accept = "image/png,image/jpeg,image/gif,image/webp";
@@ -228,14 +252,20 @@ effect(() => {
 // Show/hide upload button based on model capabilities
 effect(() => {
   const session = activeSession.value;
-  const hasVision = !!session?.agentInfo?.modalities?.includes("image");
+  const hasVision = canCompose(session) && !!session.agentInfo?.modalities?.includes("image");
   if (visionIndicator) visionIndicator.hidden = !hasVision;
 });
 
 effect(() => {
-  const hasSession = !!activeSession.value;
-  if (input) input.disabled = !hasSession;
-  if (form) form.style.opacity = hasSession ? "" : "0.5";
+  const session = activeSession.value;
+  if (input) input.disabled = !canCompose(session);
+  if (form) form.style.opacity = session ? "" : "0.5";
+  if (backendNotice) {
+    const message = session?.backendUnavailable;
+    backendNotice.hidden = !message;
+    backendNotice.textContent = message || "";
+  }
+  updateSendBtn();
 });
 
 let shellMode = false;
@@ -246,6 +276,27 @@ const setShellMode = (on) => {
 
 // Draft ownership is independent of the replayable SessionView state.
 let draftSessionId = currentSessionId();
+document.addEventListener("ash:prepare-backend-switch", event => {
+  const { id } = event.detail;
+  if (pendingSubmits.has(id)) {
+    event.preventDefault();
+    toast(t("submit.busy"), { type: "info" });
+    return;
+  }
+  if (!imageDrafts.get(id)?.length && !decodingImages.has(id)) return;
+  event.preventDefault();
+  toast(t("antigravity.switch.images"), { type: "info" });
+});
+document.addEventListener("ash:session-replaced", event => {
+  const { from, to } = event.detail;
+  const draft = from === draftSessionId
+    ? { text: input?.value ?? "", shell: shellMode }
+    : textDrafts.get(from);
+  if (draft) textDrafts.set(to, { text: draft.shell && draft.text ? "!" + draft.text : draft.text, shell: false });
+  if (draftSessionId === from) draftSessionId = null;
+  textDrafts.delete(from);
+  imageDrafts.delete(from);
+});
 effect(() => {
   const id = activeSession.value?.id;
   if (id === draftSessionId) return;
@@ -340,16 +391,25 @@ input?.addEventListener("keydown", async (ev) => {
 
 const shellSupported = document.documentElement.dataset.platform !== "win32";
 
-// No shell mode without a shell backend — advertise the placeholder variant
-// without "! shell". scanI18n re-reads the attribute on langchange.
-if (!shellSupported && input) {
-  input.setAttribute("data-i18n-placeholder", "ask.agent.noshell");
-  input.placeholder = t("ask.agent.noshell");
-}
+effect(() => {
+  const session = activeSession.value;
+  const worker = session?.projectWorker;
+  const pending = session?.projectWorkerPending;
+  const antigravity = session?.kind === 'antigravity';
+  const key = worker ? 'project.worker.placeholder' : pending ? 'project.worker.loading'
+    : antigravity ? 'ask.antigravity' : shellSupported ? 'ask.agent' : 'ask.agent.noshell';
+  input?.setAttribute('data-i18n-placeholder', key);
+  if (input) input.placeholder = t(key);
+  const hint = worker ? 'project.worker.description' : pending ? 'project.worker.loading'
+    : antigravity ? 'antigravity.model.hint' : 'composer.shortcuts';
+  shortcuts?.setAttribute('data-i18n', hint);
+  if (shortcuts) shortcuts.textContent = t(hint);
+  if (keyboardHelp) keyboardHelp.hidden = !!worker || !!pending;
+});
 
 // Also catches `!` from paste/IME, where keydown for the literal char never fires.
 input?.addEventListener("input", () => {
-  if (shellSupported && !shellMode && input.value.startsWith("!")) {
+  if (shellSupported && !isAntigravity() && !shellMode && input.value.startsWith("!")) {
     setShellMode(true);
     input.value = input.value.slice(1);
   }
@@ -357,7 +417,8 @@ input?.addEventListener("input", () => {
 
 const doShellSubmit = async (raw) => {
   const sid = currentSessionId();
-  if (!sid) return;
+  if (!sid || pendingSubmits.has(sid)) return;
+  pendingSubmits.add(sid);
   input.value = "";
   input.style.height = "";
   updateSendBtn();
@@ -371,6 +432,8 @@ const doShellSubmit = async (raw) => {
     console.error("pty-input failed", e);
     toast(String(e.message ?? e), { type: "error" });
     restoreDraft(sid, raw, true);
+  } finally {
+    pendingSubmits.delete(sid);
   }
 };
 
@@ -391,7 +454,7 @@ const slashAc = attachAutocomplete({
   listEl: document.getElementById("autocomplete"),
   shouldOpen: (b) => {
     const t = b.trimStart();
-    return t.startsWith("/") && !t.startsWith("//");
+    return !isAntigravity() && t.startsWith("/") && !t.startsWith("//");
   },
   fetcher: async (buffer, signal) => {
     const r = await fetch(`/${currentSessionId()}/autocomplete?buffer=${encodeURIComponent(buffer)}`, { signal });
@@ -476,15 +539,17 @@ const assertSubmitOk = async (res) => {
 };
 
 const doSubmit = async (query) => {
+  const sv = activeSession.peek();
+  if (!sv || !canCompose(sv) || sv._backendSwitchPending) return;
   mediaInput.cancel();
   if (!query && !attachedImages.length) return;
-  if (shellMode || (shellSupported && query.startsWith("!"))) {
+  const antigravity = isAntigravity();
+  const slash = !antigravity && query.startsWith("/");
+  if (!antigravity && (shellMode || (shellSupported && query.startsWith("!")))) {
     await doShellSubmit(query.startsWith("!") ? query.slice(1) : query);
     return;
   }
-  const sv = activeSession.peek();
-  if (!sv) return;
-  if (pendingSubmits.has(sv.id) || sv.state.isSubmitting) {
+  if (pendingSubmits.has(sv.id) || sv.state.isSubmitting || (antigravity && sv.state.isProcessing)) {
     toast(t("submit.busy"), { type: "info" });
     return;
   }
@@ -500,7 +565,7 @@ const doSubmit = async (query) => {
   atAc.close();
   let optimisticBox = null;
   let optimisticSep = null;
-  if (!query.startsWith("/")) {
+  if (!slash) {
     optimisticSep = document.createElement("div");
     optimisticSep.className = "turn-sep";
     optimisticSep.innerHTML =
@@ -522,7 +587,7 @@ const doSubmit = async (query) => {
   const sentImages = attachedImages.slice();
   const draft = attachedImages;
   try {
-    if (query.startsWith("/")) {
+    if (slash) {
       await submitSlash(query);
     } else if (sentImages.length > 0) {
       // Upload images first, then submit with server IDs.
@@ -576,7 +641,7 @@ const doSubmit = async (query) => {
 
 form?.addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  if (acceptAc()) return;
+  if (!canCompose(activeSession.peek()) || acceptAc()) return;
   const query = input.value.trim();
   await doSubmit(query);
 });
@@ -594,7 +659,7 @@ const killRange = (start, end) => {
 };
 
 input?.addEventListener("keydown", (ev) => {
-  if (ev.isComposing || ev.keyCode === 229) return;
+  if (ev.isComposing || ev.keyCode === 229 || !canCompose(activeSession.peek())) return;
   // Reset history navigation when user starts modifying the recalled text
   if (queryHistory._index !== -1 && ev.key !== "ArrowUp" && ev.key !== "ArrowDown"
       && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {

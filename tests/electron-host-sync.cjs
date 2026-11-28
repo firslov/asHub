@@ -17,7 +17,7 @@ const watchdog = setTimeout(() => { console.error('Host sync UI watchdog'); app.
 app.whenReady().then(async () => {
   const e = env(); e.context.process.env.ASHUB_TOKEN = 'host-sync-fixture-only';
   const headers = { Authorization: 'Bearer host-sync-fixture-only', 'Content-Type': 'application/json' };
-  let hub, proxy, win, coreBase = '', hostStreams = 0, snapshots = 0, snapshotStream = 0, held = null, delayNextSessions = false;
+  let hub, proxy, win, secondWin, coreBase = '', hostStreams = 0, snapshots = 0, snapshotStream = 0, held = null, delayNextSessions = false;
   const streams = new Set();
   const bridges = [];
   const boot = async () => {
@@ -46,7 +46,9 @@ app.whenReady().then(async () => {
       }
       if (pathname === '/api/host/snapshot') { snapshots++; snapshotStream = hostStreams; }
       const hold = pathname === '/sessions' && delayNextSessions; if (hold) delayNextSessions = false;
-      const upstream = http.request(coreBase + req.url, { method: req.method, headers: { ...req.headers, host: new URL(coreBase).host, authorization: headers.Authorization } }, upstreamResponse => {
+      // Preserve the loopback proxy's public authority for genuine same-origin
+      // renderer requests. The upstream connection still uses coreBase.
+      const upstream = http.request(coreBase + req.url, { method: req.method, headers: { ...req.headers, authorization: headers.Authorization } }, upstreamResponse => {
         if (hold) {
           let text = ''; upstreamResponse.setEncoding('utf8'); upstreamResponse.on('data', chunk => { text += chunk; });
           upstreamResponse.on('end', () => { held = () => { res.writeHead(upstreamResponse.statusCode, upstreamResponse.headers); res.end(text); }; });
@@ -66,9 +68,9 @@ app.whenReady().then(async () => {
     win.webContents.on('console-message', event => { if (event.level === 'error') console.error('renderer:', event.message); });
     await win.loadURL(`http://127.0.0.1:${proxy.address().port}`);
     const js = script => win.webContents.executeJavaScript(script);
-    const wait = async (script, attempts = 500) => {
-      for (let i = 0; i < attempts; i++) { if (await js(script)) return; await new Promise(resolve => setTimeout(resolve, 20)); }
-      const state = await js(`({sync:window.hostSync?.state,projectHidden:document.getElementById('projects').hidden,projects:document.getElementById('projects').textContent,sessionIds:[...document.querySelectorAll('#sessions li[data-session-id]')].map(n=>n.dataset.sessionId)})`);
+    const wait = async (script, attempts = 500, evaluate = js) => {
+      for (let i = 0; i < attempts; i++) { if (await evaluate(script)) return; await new Promise(resolve => setTimeout(resolve, 20)); }
+      const state = await evaluate(`({sync:window.hostSync?.state,projectHidden:document.getElementById('projects').hidden,projects:document.getElementById('projects').textContent,sessionIds:[...document.querySelectorAll('#sessions li[data-session-id]')].map(n=>n.dataset.sessionId)})`);
       throw Error('UI timeout: ' + script + '\n' + JSON.stringify({ state, hostStreams, snapshots }));
     };
     await js(`Object.defineProperty(document,'hidden',{get:()=>false});document.getElementById('page-loader')?.remove();localStorage.setItem('ash.lang','en');(async()=>{await import('/js/sidebar.js');const p=await import('/js/projects.js');p.showProjects(true);const h=await import('/js/host-sync.js');window.hostSync=h.initializeHostSync();window.sameHostSync=h.initializeHostSync()===window.hostSync;})()`);
@@ -81,14 +83,21 @@ app.whenReady().then(async () => {
       const chip = document.createElement('button');
       const wrap = document.createElement('div');
       wrap.className = 'terminal-wrap'; wrap.dataset.uiUsageModelShow = 'true';
+      // Leave room above the fixture chip, as the real composer does.
+      wrap.style.cssText = 'position:fixed;left:300px;bottom:80px';
       document.body.append(wrap); wrap.append(chip);
-      const target = {id:${JSON.stringify(b.instanceId)}, state:{}, agentInfo:{}, modelEl:chip, modelPickerEl:wrap};
+      const {signal} = await import('/vendor/signals-core.js');
+      const backendAvailability = signal(undefined);
+      const target = {id:${JSON.stringify(b.instanceId)}, state:{}, agentInfo:{}, modelEl:chip, modelPickerEl:wrap,
+        backendAvailability, get backendUnavailable() { return backendAvailability.value; }};
       m.sessions.set(target.id,target);
       sse.seedSessionInfo(target,{model:'fixture',provider:'deepseek'});
       sse.setModelCache({providers:[{name:'deepseek',models:[{id:'fixture'}]}]});
       m.activeSessionId.value = ${JSON.stringify(a.instanceId)};
       m.activeSessionId.value = target.id;
-      chip.click();
+      chip.focus(); chip.click();
+      // The cached picker opens in a microtask; sample focus before the queued frame.
+      await Promise.resolve();
       const search = document.querySelector('.model-dropdown:not([hidden]) .model-search-input');
       if (!search || document.activeElement !== search) throw Error('Fixture failed to focus the real picker');
       await new Promise(requestAnimationFrame);
@@ -228,7 +237,7 @@ app.whenReady().then(async () => {
     })()`);
     // Preserve both a project management draft and the active conversation's
     // composer/tab state while another client changes membership.
-    await js(`(async()=>{const m=await import('/js/session-manager.js');window.removes=0;window.conversation={id:${JSON.stringify(a.instanceId)},remove(){window.removes++}};m.sessions.set(window.conversation.id,window.conversation);m.openTabs.value=[window.conversation.id];m.activeSessionId.value=window.conversation.id;document.getElementById('query').value='unsent conversation draft';document.querySelector('.project-group .project-manage').click();window.draftDialog=document.querySelector('dialog');window.draftInput=window.draftDialog.querySelector('input');window.draftInput.value='unsaved project draft';})()`);
+    await js(`(async()=>{const m=await import('/js/session-manager.js');window.removes=0;window.conversation={id:${JSON.stringify(a.instanceId)},remove(){window.removes++}};m.sessions.set(window.conversation.id,window.conversation);m.openTabs.value=[window.conversation.id];m.activeSessionId.value=window.conversation.id;document.getElementById('query').value='unsent conversation draft';const toggle=document.querySelector('.project-toggle');if(toggle.getAttribute('aria-expanded')==='false')toggle.click();document.querySelector('.project-heading .project-more').click();document.querySelector('.project-group .project-manage').click();window.draftDialog=document.querySelector('dialog');window.draftInput=window.draftDialog.querySelector('input');window.draftInput.value='unsaved project draft';})()`);
     delayNextSessions = true; await js(`document.dispatchEvent(new CustomEvent('ash:sessions-changed'))`);
     for (let i = 0; i < 200 && !held; i++) await new Promise(resolve => setTimeout(resolve, 10));
     assert(held, 'failed to hold an actual stale /sessions response');
@@ -281,8 +290,35 @@ app.whenReady().then(async () => {
       assert(bounds.left >= 0 && bounds.right <= bounds.width && bounds.overflow <= 1, JSON.stringify(bounds));
     }
     console.log('PASS actual core HTTP host SSE -> native EventSource -> desktop membership/sidebar/metadata refresh; stale read rejection, drafts/focus/active view, reconnect snapshot, new epoch, bfcache and mobile layout');
+
+    // A live search in one renderer must reconcile a project edit made in a
+    // second renderer, without resetting the query or sending focus elsewhere.
+    const from = 'Window search original', to = 'Window search renamed';
+    const oldGroups = await api('/api/projects', { action: 'create', name: from, cwd: e.dir });
+    const updatedProject = oldGroups.find(p => p.name === from);
+    assert(updatedProject);
+    await js(`document.querySelector('dialog').close();`);
+    await wait(`!document.querySelector('dialog')`);
+    win.setContentSize(1180,850);
+    await wait(`innerWidth===1180`);
+    const searchInput = '#sidebar-find-input', option = '#sidebar-find [role="option"]';
+    await js(`(async()=>{(await import('/js/sidebar.js')).sidebarView.value='sessions';document.querySelector('#sidebar-search-toggle').click();const input=document.querySelector('${searchInput}');input.value='Window search';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await wait(`document.querySelector('${option}')?.textContent.includes(${JSON.stringify(from)})`);
+    secondWin = new BrowserWindow({show:false,width:1180,height:850,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
+    await secondWin.loadURL(`http://127.0.0.1:${proxy.address().port}`);
+    const jsSecond = code => secondWin.webContents.executeJavaScript(code);
+    await jsSecond(`(async()=>{document.getElementById('page-loader')?.remove();(await import('/js/sidebar.js')).sidebarView.value='projects';})()`);
+    const projectSel = JSON.stringify(`[data-project-group="${updatedProject.id}"]`);
+    await wait(`document.querySelector(${projectSel})?.textContent.includes(${JSON.stringify(from)})`,500,jsSecond);
+    await jsSecond(`(()=>{const group=document.querySelector(${projectSel}),toggle=group.querySelector('.project-toggle');if(toggle.getAttribute('aria-expanded')==='false')toggle.click();group.querySelector('.project-more').click();group.querySelector('.project-manage').click();const dialog=document.querySelector('dialog');dialog.querySelector('input').value=${JSON.stringify(to)};dialog.querySelector('.primary').click();})()`);
+    await wait(`!document.querySelector('dialog') && document.querySelector(${projectSel})?.textContent.includes(${JSON.stringify(to)})`,500,jsSecond);
+    await wait(`document.querySelector('${option}')?.textContent.includes(${JSON.stringify(to)})`);
+    assert.equal(await js(`document.activeElement.id`),'sidebar-find-input');
+    assert.equal(await js(`document.querySelector('${searchInput}').value`),'Window search');
+    assert.equal(await js(`document.querySelector('${option}').id === document.querySelector('${searchInput}').getAttribute('aria-activedescendant')`),true);
+    console.log('PASS second Electron window project edit reconciles an open search over real host SSE without losing its query, selection, or focus');
   } finally {
-    held?.(); win?.destroy();
+    held?.(); secondWin?.destroy(); win?.destroy();
     for (const response of streams) response.end();
     proxy?.closeAllConnections(); await new Promise(resolve => proxy ? proxy.close(resolve) : resolve());
     await hub?.shutdown(); clearTimeout(watchdog); fs.rmSync(tmp, { recursive: true, force: true });

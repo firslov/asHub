@@ -98,6 +98,7 @@ const setSidebarCollapsed = (on, persist = true) => {
   sidebarToggle?.setAttribute("data-i18n-title", label);
   if (sidebarToggle) sidebarToggle.title = t(label);
   if (persist) { try { localStorage.setItem(LS_SIDEBAR, on ? "1" : "0"); } catch {} }
+  if (on) document.dispatchEvent(new Event("ash:sidebar-collapsed"));
 };
 
 try {
@@ -123,10 +124,16 @@ document.getElementById("sidebar-backdrop")?.addEventListener("click", () => {
 });
 // On a narrow screen choosing a conversation should reveal it immediately.
 // Keep the desktop preference intact when merely navigating on mobile.
+// Creation keeps the sidebar open until navigation so a failure is retryable.
 document.getElementById("sidebar")?.addEventListener("click", (ev) => {
   if (!window.matchMedia?.("(max-width: 700px)").matches) return;
-  if (!ev.target.closest(".session-list a, .workspace-children a, .project-chat, .terminal-list a, .conversation-entry-open, #new-session, #new-terminal")) return;
+  if (!ev.target.closest(".session-list a, .project-chat, .terminal-list a, .conversation-entry-open")) return;
   setSidebarCollapsed(true, false);
+});
+document.addEventListener("ash:sidebar-conversation-opened", () => {
+  if (!window.matchMedia?.("(max-width: 700px)").matches) return;
+  setSidebarCollapsed(true, false);
+  sidebarToggle?.focus();
 });
 // The mobile navigation overlays the workspace, so Escape closes it before
 // the global Escape-to-cancel handler can interrupt a running conversation.
@@ -135,7 +142,8 @@ document.addEventListener("keydown", (ev) => {
       || app.classList.contains("sidebar-collapsed")) return;
   // Foreground overlays own Escape, including dialogs that may block closing
   // while saving. Do not consume their key in this capture-phase listener.
-  if (ev.target?.closest?.("#sidebar-view-menu:popover-open, dialog[open]")) return;
+  if (ev.target?.closest?.("#sidebar-view-menu:popover-open, dialog[open], [data-sidebar-action-menu]:popover-open, #sidebar-find:not([hidden]), #sidebar-search:not([hidden])")
+      || ev.target?.closest?.('#sidebar-search-toggle[aria-expanded="true"]')) return;
   setSidebarCollapsed(true, false);
   sidebarToggle?.focus();
   ev.preventDefault();

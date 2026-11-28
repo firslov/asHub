@@ -10,7 +10,13 @@ const server=http.createServer((req,res)=>{
   res.setHeader('Content-Type','application/json');
   if(u.pathname.endsWith('/me'))return res.end(JSON.stringify({username:'fixture'}));
   if(u.pathname.endsWith('/devices'))return res.end(JSON.stringify([{id:'desktop',name:'我的 Mac',online:true}]));
-  if(u.pathname.endsWith('/rpc')){let body='';req.on('data',d=>body+=d);return req.on('end',()=>{const {op}=JSON.parse(body);res.end(JSON.stringify(op==='sessions'?catalog:op==='capabilities'?{projects:true,tasks:true}:op==='project-groups'?groups:{}));})}
+  if(u.pathname.endsWith('/rpc')){let body='';req.on('data',d=>body+=d);return req.on('end',()=>{
+   const {op,args}=JSON.parse(body);
+   if(op==='project-tasks')return res.end(JSON.stringify(args.taskId ? {taskProfile:'inline-review',state:'completed',terminal:true,
+     review:{summary:'评审结论：'+('LongWord'.repeat(60)),unresolved:['核对资料']}}
+     : [{id:'review-1',sourceId:'leader',recipientId:'worker',taskProfile:'inline-review',state:'completed'}]));
+   res.end(JSON.stringify(op==='sessions'?catalog:op==='capabilities'?{projects:true,tasks:true}:op==='project-groups'?groups:{}));
+  })}
   res.writeHead(404);return res.end('{}');
  }
  const file=path.join(root,u.pathname.slice('/mobile/'.length)||'index.html');
@@ -21,16 +27,28 @@ const server=http.createServer((req,res)=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const browser=await (process.env.NAV_ENGINE==='chromium'?chromium:webkit).launch({headless:true,...(process.env.WEBKIT_EXECUTABLE && process.env.NAV_ENGINE!=='chromium'?{executablePath:process.env.WEBKIT_EXECUTABLE}:{})});
  try{
-  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,serviceWorkers:'block'}),errors=[];
+  const initialViewport={width:390,height:844};
+  const page=await browser.newPage({viewport:initialViewport,isMobile:true,hasTouch:true,serviceWorkers:'block'}),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
-  await page.addInitScript(()=>{
+  await page.addInitScript(size=>{
    Object.defineProperty(navigator,'standalone',{value:true});
+   // Own the viewport inputs, not the CSS output: native resize events can otherwise overwrite the simulated keyboard height.
+   const viewport=Object.assign(new EventTarget(),size,{offsetTop:0,offsetLeft:0,scale:1});
+   Object.defineProperty(window,'visualViewport',{value:viewport});
+   globalThis.resizeTestViewport=size=>{
+    Object.assign(viewport,size);
+    viewport.dispatchEvent(new Event('resize'));
+   };
    globalThis.testStreams=[];
    globalThis.EventSource=class{
     constructor(url){this.url=String(url);this.closed=false;testStreams.push(this);setTimeout(()=>{if(!this.closed){this.onmessage?.({data:JSON.stringify({meta:{name:'agent:response-segment'},payload:{text:'这里是已同步的工作内容\n\n'+Array.from({length:50},(_,i)=>'第 '+i+' 段进展').join('\n\n')}})});this.onmessage?.({data:JSON.stringify({meta:{name:'hub:replay-done'},payload:{}})})}},10)}
     addEventListener(){}close(){this.closed=true}
    };
-  });
+  },initialViewport);
+  const setViewportSize=async size=>{
+   await page.setViewportSize(size);
+   await page.evaluate(size=>resizeTestViewport(size),size);
+  };
   await page.goto(`http://127.0.0.1:${server.address().port}/mobile/`);
   await page.waitForSelector('[data-group-id="alpha"]');
   assert.equal(await page.locator('[data-group-id="alpha"] .nav-work-status').first().textContent(),'证据核查 · 等待成员交付');
@@ -39,6 +57,16 @@ const server=http.createServer((req,res)=>{
   await page.locator('[data-group-id="alpha"] .nav-group-toggle').tap();
   assert.deepEqual(await page.locator('[data-group-id="alpha"] .session-button').evaluateAll(es=>es.map(e=>e.dataset.sessionId)),['leader','research','executor']);
   await page.screenshot({path:'/tmp/ashub-navigation-home.png'});
+  for(const width of [320,390]) {
+   await setViewportSize({width,height:844});
+   await page.locator('[data-group-id="alpha"] .nav-project-tasks').click();
+   await page.getByRole('button',{name:/只读评审/}).click();
+   const review=page.locator('.review-summary'); await review.waitFor();
+   assert.match(await review.textContent(),/^评审结论：/);
+   assert.equal(await page.locator('.review-unresolved li').textContent(),'核对资料');
+   assert(await page.locator('#modal').evaluate(e=>e.scrollWidth<=e.clientWidth+1),'review text must wrap within the dialog at '+width);
+   await page.evaluate(()=>$('modal').close());
+  }
   // A scheduled catalog refresh between pointer-down and pointer-up must not eat a tap.
   const row=page.locator('[data-group-id="alpha"] [data-session-id="leader"]');
   const bounds=await row.boundingBox();await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
@@ -103,7 +131,7 @@ const server=http.createServer((req,res)=>{
    navigation={last:'',recent:[],expanded:['alpha'],collapsed:[]};viewFilter='browse';renderSessions();
   });
   for(const [width,height] of [[390,844],[320,568],[568,320],[1024,768]]){
-   await page.setViewportSize({width,height});
+   await setViewportSize({width,height});
    for(const home of [true,false]){
     await page.evaluate(home=>{session=home?'':'member2';renderSessions();menu(!home)},home);
     await page.waitForTimeout(250);
@@ -121,7 +149,7 @@ const server=http.createServer((req,res)=>{
   const visualDir=process.env.ASHUB_NAV_VISUAL_DIR;
   if(visualDir)fs.mkdirSync(visualDir,{recursive:true});
   for(const width of [390,320]){
-   await page.setViewportSize({width,height:844});
+   await setViewportSize({width,height:844});
    for(const theme of ['dark','light']){
     await page.evaluate(theme=>{
      document.documentElement.dataset.theme=theme;
@@ -155,10 +183,31 @@ const server=http.createServer((req,res)=>{
   assert.equal(await projectToggle.getAttribute('aria-expanded'),'true','Space reopens the project without losing focus');
   await page.evaluate(()=>{const activity=groups[0].activities[0];activity.label='项目状态已刷新 · '+activity.label;renderSessions()});
   assert(await projectToggle.evaluate(e=>e.matches(':focus-visible')),'updated catalog preserves visible keyboard focus');
-  await page.setViewportSize({width:390,height:844});
-  await page.evaluate(()=>{document.documentElement.style.setProperty('--viewport-height','360px');sessionSearchExpanded=true;renderSessions();$('sidebar').scrollTop=$('sidebar').scrollHeight});
-  assert(await page.evaluate(()=>$('account').getBoundingClientRect().bottom<=361),'keyboard does not trap footer');
-  await page.evaluate(()=>{document.documentElement.style.removeProperty('--viewport-height');sessionSearchExpanded=false;renderSessions();$('sidebar').scrollTop=0;document.documentElement.dataset.theme='dark'});
+  await setViewportSize(initialViewport);
+  await page.evaluate(()=>{
+   resizeTestViewport({height:360});sessionSearchExpanded=true;renderSessions();
+   $('sidebar').scrollTop=$('sidebar').scrollHeight;
+  });
+  const keyboardGeometry=()=>page.evaluate(()=>{
+   const side=$('sidebar'),sidebar=side.getBoundingClientRect(),footer=$('account').getBoundingClientRect();
+   return {height:visualViewport.height,appliedHeight:document.documentElement.style.getPropertyValue('--viewport-height'),
+    sidebarHeight:sidebar.height,footerTop:footer.top,footerBottom:footer.bottom,scrollTop:side.scrollTop};
+  });
+  const shrunk=await keyboardGeometry();
+  assert.equal(shrunk.height,360);
+  assert.equal(shrunk.appliedHeight,'360px');
+  assert(Math.abs(shrunk.sidebarHeight-360)<=1&&shrunk.scrollTop>0&&shrunk.footerTop>=0&&shrunk.footerBottom<=361,
+   'keyboard does not trap footer: '+JSON.stringify(shrunk));
+  await page.evaluate(height=>{
+   resizeTestViewport({height});sessionSearchExpanded=false;renderSessions();
+   $('sidebar').scrollTop=0;document.documentElement.dataset.theme='dark';
+  },initialViewport.height);
+  const restored=await keyboardGeometry();
+  assert.equal(restored.height,initialViewport.height);
+  assert.equal(restored.appliedHeight,initialViewport.height+'px');
+  assert(Math.abs(restored.sidebarHeight-initialViewport.height)<=1&&restored.scrollTop===0,
+   'sidebar restores after keyboard dismissal: '+JSON.stringify(restored));
+  console.log('PASS keyboard viewport '+(process.env.NAV_ENGINE==='chromium'?'Chromium':'WebKit')+': '+JSON.stringify({shrunk,restored}));
   await page.waitForTimeout(300);
   assert.equal(await page.locator('.session-name').first().evaluate(e=>getComputedStyle(e).color),'rgb(235, 231, 220)','dark text must remain legible');
   await page.screenshot({path:'/tmp/ashub-navigation-dark.png'});

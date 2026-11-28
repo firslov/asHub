@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme, screen, powerMonitor, safeStorage, net, Tray, nativeImage, powerSaveBlocker, session: electronSession, systemPreferences } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { createProjectReviewPolicy } = require("./antigravity-review-policy.cjs");
 
 process.env.ASHUB_UNDER = "1";
 // Legacy compat: extensions may still check the old variable name.
@@ -66,6 +67,7 @@ let background = null;
 let remoteStatusRef = () => ({});
 let remoteSettingsTargetRef = () => undefined;
 let resolveArtifactRef = async () => { throw Error('Application is not ready'); };
+let antigravityReviewPolicyRef = () => { throw Error('Application is not ready'); };
 const browserPages = require('./browser-pages.cjs').createBrowserPages({
   electron: require('electron'),
   notify(id) {
@@ -434,6 +436,10 @@ function setupIPC() {
     if (trustedDesktop(event)) browserPages.control(id, action, pageId);
   });
   ipcMain.handle('desktop:file', (event, request) => performFileAction({trusted:trustedDesktop, resolve:resolveArtifactRef, shell}, event, request));
+  ipcMain.handle('desktop:antigravity-review-policy', createProjectReviewPolicy({
+    trusted: trustedDesktop, owner: event => BrowserWindow.fromWebContents(event.sender),
+    policy: () => antigravityReviewPolicyRef,
+  }));
   ipcMain.handle('desktop:background:get', event => {
     if (!trustedDesktop(event)) throw new Error('Untrusted desktop sender');
     return background.snapshot();
@@ -722,7 +728,7 @@ async function startServer() {
   const webRoot = resolveWebRoot();
   const distRoot = path.join(__dirname, "..", "dist");
 
-  let startHub, AshBridge, TerminalBridge;
+  let startHub, AshBridge, TerminalBridge, conversationBackends;
   try {
     await import(pathToFileURL(path.join(distRoot, "windows-bootstrap.js")).href);
     await import(pathToFileURL(path.join(distRoot, "network-bootstrap.js")).href);
@@ -733,6 +739,8 @@ async function startServer() {
     startHub = hubMod.startHub;
     ({ AshBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "ash.js")).href));
     ({ TerminalBridge } = await import(pathToFileURL(path.join(distRoot, "bridges", "terminal.js")).href));
+    const { desktopConversationBackends } = await import(pathToFileURL(path.join(distRoot, "integrations.js")).href);
+    conversationBackends = await desktopConversationBackends(url => electronSession.defaultSession?.resolveProxy?.(url));
   } catch (err) {
     console.error("[electron] failed to import dist modules:", err);
     dialog.showErrorBox(
@@ -789,6 +797,7 @@ async function startServer() {
       port: HUB_PORT,
       host: "127.0.0.1",
       webRoot,
+      conversationBackends,
       makeBridge: (opts) => opts.kind === "terminal" ? new TerminalBridge(opts) : new AshBridge({
         ...opts, bindBrowserPages: opts.kind === 'agent' && opts.sessionId
           ? (plugin, approve) => browserPages.bind(opts.sessionId, plugin, approve, opts.cwd) : undefined,
@@ -802,6 +811,7 @@ async function startServer() {
       remoteStatusRef = recovered.remoteStatus;
       remoteSettingsTargetRef = recovered.remoteSettingsTarget;
       resolveArtifactRef = recovered.resolveArtifact;
+      antigravityReviewPolicyRef = recovered.antigravityReviewPolicy;
       shutdownPromise = null;
       _shuttingDown = false;
       server.on("error", err => dialog.showErrorBox("Server Error", String(err)));
@@ -814,6 +824,7 @@ async function startServer() {
     remoteStatusRef = hub.remoteStatus;
     remoteSettingsTargetRef = hub.remoteSettingsTarget;
     resolveArtifactRef = hub.resolveArtifact;
+    antigravityReviewPolicyRef = hub.antigravityReviewPolicy;
   } catch (err) {
     console.error("[electron] failed to start hub:", err);
     dialog.showErrorBox(

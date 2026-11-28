@@ -186,11 +186,61 @@ test('cancellation releases an in-flight operation and prevents queued input aft
  const work=service.call(a,'act',{snapshot:s.snapshot,action:'CLICK',element:'button1'});const rejected=assert.rejects(work,/cancelled/);
  await started;await service.stop();await rejected;assert(calls.some(c=>c.name==='release'));
 });
-function pluginContext(service,approved=true,image=true){
+function pluginContext(service,approved=true,image=true,hostApprove){
  const tools=new Map(),events=new Map(),disposers=[];let approvals=0;
- const ctx={agent:{registerTool:t=>tools.set(t.name,t),registerInstruction(){}},bus:{on:(e,f)=>events.set(e,f),emitPipeAsync:async (_event,payload)=>{approvals++;return typeof approved==='function'?approved(payload):{decision:{outcome:approved?'approved':'denied'}};}},onDispose:f=>disposers.push(f),call:name=>name==='agent:get-model'?{model:'test',provider:'fixture'}:[{id:'test',provider:'fixture',modalities:image?['text','image']:['text']}]};
+ const registerTool=t=>tools.set(t.name,t);
+ const ctx={agent:{registerTool,registerInstruction(){}},bus:{on:(e,f)=>events.set(e,f),emitPipeAsync:async (_event,payload)=>{approvals++;return typeof approved==='function'?approved(payload):{decision:{outcome:approved?'approved':'denied'}};}},onDispose:f=>disposers.push(f),call:name=>name==='agent:get-model'?{model:'test',provider:'fixture'}:[{id:'test',provider:'fixture',modalities:image?['text','image']:['text']}]};
+ if(hostApprove)ctx.services={desktopControl:{registerTool,approve:async request=>{approvals++;return hostApprove(request);}}};
  activateDesktopControl(ctx,service);return {tools,events,disposers,approvals:()=>approvals};
 }
+
+test('desktop consent persists across conversations and service restart, but not across apps or revocation',async t=>{
+ const {service,file,calls}=fixture(t);
+ const app='com.test.App', other='com.test.Other';
+ const start=(ctx,bundleId=app)=>ctx.tools.get('desktop_start').execute({bundleId,windowId:100,goal:'Test task'});
+ const finish=ctx=>ctx.tools.get('desktop_finish').execute({});
+ const once=pluginContext(service,false,true,()=>true);
+ assert.equal((await start(once)).isError,false);await finish(once);
+ assert.equal(service.desktopApproval(app).approved,false);
+ const grant=pluginContext(service,false,true,request=>{
+  assert.equal(request.application,app);assert.match(request.description,/Window 100/);
+  request.remember();return true;
+ });
+ assert.equal((await start(grant)).isError,false);await service.syncSettings();
+ assert.equal((await service.status()).busy,true);await finish(grant);
+ const next=pluginContext(service,false,true,()=>false);
+ assert.equal((await start(next)).isError,false);await finish(next);
+ assert.equal(next.approvals(),0);
+ assert.equal((await start(next,other)).isError,true);assert.equal(next.approvals(),1);
+ const restarted=new DesktopService(file);t.after(()=>restarted.close());
+ assert.equal(restarted.desktopApproval(app).approved,true);
+ assert.equal(restarted.desktopApproval(other).approved,false);
+ assert.equal((await start(next)).isError,false);
+ const old=readDesktopSettings(file);
+ await service.save({...old,approvedApps:[]},settingsRevision(old));
+ assert.equal((await service.status()).busy,false);
+ const observations=calls.filter(c=>c.name==='observe').length;
+ assert.equal((await start(next)).isError,true);
+ assert.equal(calls.filter(c=>c.name==='observe').length,observations);
+ assert.equal(restarted.desktopApproval(app).approved,false);
+});
+
+test('concurrent permanent approvals for two allowed apps both persist',t=>{
+ const {service,file}=fixture(t);
+ const first=service.desktopApproval('com.test.App');
+ const second=service.desktopApproval('com.test.Other');
+ first.remember();second.remember();
+ assert.deepEqual(readDesktopSettings(file).approvedApps,['com.test.App','com.test.Other']);
+});
+
+test('a desktop authorization from an outdated configuration cannot persist',async t=>{
+ const {service,file}=fixture(t);
+ const approval=service.desktopApproval('com.test.App');
+ const old=readDesktopSettings(file);
+ await service.save({...old,allowedApps:['com.test.Other']},settingsRevision(old));
+ assert.throws(approval.remember,/changed/);
+ assert.throws(()=>service.desktopApproval('com.test.App'),/no longer allowed/);
+});
 test('plugin requires approval before reading window contents and preserves screenshots',async t=>{
  const {service,calls}=fixture(t);const denied=pluginContext(service,false);
  assert.equal((await denied.tools.get('desktop_start').execute({bundleId:'com.test.App',windowId:100,goal:'Test'})).isError,true);

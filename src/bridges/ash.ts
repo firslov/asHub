@@ -21,6 +21,7 @@ import { guardImageContext } from "../image-context.js";
 import { RequestMonitor } from "../request-diagnostics.js";
 import { SessionThinking, reasoningProfile, nativeReasoningParams, type ReasoningModel, type ThinkingState } from "../providers/reasoning.js";
 import { configureDeepSeek } from "../providers/deepseek.js";
+import { configureIntegrationProviders, allowsProvider, reservedProvider } from "../integrations.js";
 import { guardCodexRetries, withSilentCodexRetries } from "../providers/codex-retry.js";
 import { retainSubagentHistory, sanitizeSubagentCompactionMarkers, type SubagentHistory } from "./subagent-history.js";
 import { EventEmitter } from "node:events";
@@ -486,6 +487,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     } catch {}
 
     this.assertOpen();
+    const selectedProvider = this.opts.provider ?? reservedProvider(this.opts.model);
+    if (selectedProvider && !allowsProvider(selectedProvider)) throw new Error(`Model provider "${selectedProvider}" is unavailable. Enable its integration and restart asHub.`);
     const core = createCore({ model: this.opts.model, provider: this.opts.provider });
     const defineOwned = prepareScopedHandlers(core.handlers);
     this.core = core;
@@ -555,6 +558,7 @@ export class AshBridge extends EventEmitter implements Bridge {
     const startupProviderGeneration = this.providerGeneration;
     activateAgent(extCtx, {
       canPublishOpenRouterCatalog: key => this.isCurrentOpenRouterCatalog(key, startupProviderGeneration),
+      includeProvider: allowsProvider,
     });
     preparePluginRegistrations(extCtx);
     if (this.opts.conversationAccess && this.opts.kind !== "ash-terminal") {
@@ -579,6 +583,8 @@ export class AshBridge extends EventEmitter implements Bridge {
     };
     guardClient(core.handlers.call("llm:get-client"));
     configureDeepSeek(extCtx);
+    await configureIntegrationProviders(extCtx);
+    this.assertOpen();
 
     // Clarify task authorization without changing the actual permission gate.
     (extCtx as unknown as { agent: { registerInstruction(name: string, text: string): void } }).agent.registerInstruction(
@@ -612,7 +618,10 @@ export class AshBridge extends EventEmitter implements Bridge {
 
     this.plugins = new PluginRuntime(path.join(CONFIG_DIR, "settings.json"), undefined, this.opts.bindBrowserPages
       ? id => this.opts.bindBrowserPages!(id, (preview, signal) => this.requestPluginApproval(preview, signal, id))
-      : undefined, defineOwned, this.opts.imageResources, this.opts.pluginConversation);
+      : undefined, defineOwned, this.opts.imageResources, this.opts.pluginConversation,
+      ({ application, description, signal, remember }) => this.explicitApprovals.request({
+        title: `Desktop control · ${application}`, description, scope: 'once', items: [],
+      }, signal, { application, remember }));
     const userNames = await this.plugins.load(extCtx);
     // Hot reload cannot safely replace tools in an in-flight turn. New kernels
     // load current settings; existing conversations apply changes after restart.
@@ -1626,7 +1635,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       const args = (ctx as { args?: Record<string, unknown> }).args || {};
       const tool = (ctx as { tool?: ToolDefinition }).tool;
       const name = (ctx as { name?: string }).name || "unknown";
-      if (!tool?.modifiesFiles) return next(ctx);
+      if (!tool?.modifiesFiles || this.plugins?.ownsDesktopTool(tool)) return next(ctx);
       if (this.autoApprove) return next(ctx);
 
       const metaPath = (args.path || args.command || "") as string;
@@ -1885,6 +1894,8 @@ export class AshBridge extends EventEmitter implements Bridge {
         getMessages: () => core.handlers.call("conversation:get-messages") as unknown[],
         replaceMessages: (msgs: unknown[]) => { core.handlers.call("conversation:replace-messages", msgs); },
         estimatePromptTokens: () => (core.handlers.call("conversation:estimate-prompt-tokens") as number) ?? 0,
+        toolCallsSettled: () => core.handlers.hasBase("conversation:tool-calls-settled")
+          ? core.handlers.call("conversation:tool-calls-settled") === true : !this.isProcessing(),
       };
       core.handlers.advise("conversation:compact", async (next: (o: unknown) => unknown, opts: unknown) => {
         const controller = new AbortController();
@@ -2159,7 +2170,7 @@ export class AshBridge extends EventEmitter implements Bridge {
       p.expiresAt = Date.now() + 30_000;
 
       // Forward to client for user approval
-      this.emit("event", { name: "permission:request", payload: { ...p, signal: undefined, scope: undefined, browser: undefined, sourceName: undefined, requiresDesktop: undefined, acpExtendedOption: undefined } });
+      this.emit("event", { name: "permission:request", payload: { ...p, signal: undefined, scope: undefined, browser: undefined, sourceName: undefined, requiresDesktop: undefined, acpExtendedOption: undefined, desktopApplication: undefined } });
 
       // Wait for user decision (30s timeout → auto-deny)
       const decision = await new Promise<{ outcome: string; reason?: string }>((resolve) => {
@@ -2193,7 +2204,7 @@ export class AshBridge extends EventEmitter implements Bridge {
 
   /** Called by hub when user clicks Approve/Deny/ApproveAll on permission prompt. */
   decidePermission(requestId: string, outcome: string, sessionWide?: boolean): void {
-    if (this.explicitApprovals?.decide(requestId, outcome)) return;
+    if (this.explicitApprovals?.decide(requestId, outcome, sessionWide)) return;
     const entry = this.pendingPermissions.get(requestId);
     if (!entry) return;
     clearTimeout(entry.timer);

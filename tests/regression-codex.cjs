@@ -54,14 +54,22 @@ test('model catalog merges runtime-only providers across sessions and invalidate
   let second=[{model:'chat-model',provider:'codex',modalities:['text','image']}];
   const sessions=new Map([['one',{kind:'agent',bridge:{getModels:async()=>({models:[{model:'first',provider:'custom'}]})}}],['two',{kind:'agent',bridge:{getModels:async()=>({models:second})}}]]);
   const get=async(url='/api/models')=>{const r=new Res();await h.getModels({url},r,sessions);return r;};
-  assert.deepEqual(JSON.parse((await get()).body).providers.map(p=>p.name),['custom','codex']);
+  const initial=(await get()).json().providers;
+  assert.deepEqual(initial.map(p=>p.name),['custom','codex','gemini']);
+  assert.equal(initial.find(p=>p.name==='custom').models[0].id,'first');
+  assert.equal(initial.find(p=>p.name==='codex').models[0].id,'chat-model');
+  assert(initial.find(p=>p.name==='gemini').models.length > 0, 'Gemini is available in the cold catalog');
   assert.equal((await get('/api/models/codex')).json().models[0].id,'chat-model');
   second=[];
+  assert((await get()).json().providers.some(p=>p.name==='codex'), 'the full catalog is cached before invalidation');
   // No replay needed: the closed guard is tested elsewhere. Use the normal
   // session event path so cache invalidation is exercised, not called directly.
   const session={id:'two',kind:'agent',segmentSeq:0,replay:[],sseClients:new Set(),_replayBuf:[],eventCount:0};
   h.routeEvent(session,{name:'agent:providers:changed',payload:{}});
-  assert(!(await get()).json().providers.some(p=>p.name==='codex'));
+  const refreshed=(await get()).json().providers;
+  assert.deepEqual(refreshed.map(p=>p.name),['custom','gemini']);
+  assert.equal(refreshed.find(p=>p.name==='custom').models[0].id,'first');
+  assert.deepEqual(refreshed.find(p=>p.name==='gemini'),initial.find(p=>p.name==='gemini'));
 });
 
 test('Codex resource lifetime closes late proxies and ignores late registrations', async () => {

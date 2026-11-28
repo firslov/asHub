@@ -66,6 +66,7 @@ export class ApplicationExtensionRegistry {
   private closing?: Promise<void>;
   private readonly httpController = new AbortController();
   private readonly timeout: number;
+  private readonly startupPolicyUnavailable: boolean;
   constructor(private options: {
     settingsFile: string;
     definitions: ApplicationExtensionDefinition[];
@@ -76,8 +77,21 @@ export class ApplicationExtensionRegistry {
   }) {
     this.timeout = options.timeoutMs ?? 10_000;
     if (!Number.isFinite(this.timeout) || this.timeout <= 0) throw new Error('Invalid extension timeout');
-    const disabled = this.disabled();
+    let disabled: Set<string>;
+    try {
+      disabled = this.disabled();
+      this.startupPolicyUnavailable = false;
+    } catch {
+      // Do not discover or activate extensions with unknown saved permissions.
+      // Keep the failure latched until a fresh Hub loads the repaired policy.
+      disabled = new Set(options.definitions.map(definition => definition.id));
+      this.startupPolicyUnavailable = true;
+      console.warn('[extensions] Could not read extension preferences from settings.json; repair the file and restart asHub to load extensions.');
+    }
     for (const definition of options.definitions) this.add(definition, disabled);
+  }
+  private requireStartupPolicy() {
+    if (this.startupPolicyUnavailable) throw failure('Repair settings.json and restart asHub before changing extensions', 503);
   }
   private disabled(): Set<string> {
     const disabled = readPluginSettings(this.options.settingsFile)[FEATURES_DISABLED] ?? [];
@@ -154,6 +168,7 @@ export class ApplicationExtensionRegistry {
   uninstallPlugin(pluginId: string, checkIdle: () => void, remove: () => void): Promise<void> {
     return this.queue(async () => {
       if (this.closed) throw failure('Application is shutting down', 503);
+      this.requireStartupPolicy();
       await this.reconcile();
       const plugin = pluginCatalog(this.options.settingsFile).find(item => item.id === pluginId);
       if (!plugin) throw failure('Installed plugin not found', 404);
@@ -184,6 +199,7 @@ export class ApplicationExtensionRegistry {
     return this.queue(async () => {
       if (this.closed) throw failure('Application is shutting down', 503);
       if (typeof enabled !== 'boolean') throw failure('enabled must be a boolean', 400);
+      this.requireStartupPolicy();
       await this.reconcile();
       const plugin = pluginCatalog(this.options.settingsFile).find(plugin => plugin.id === pluginId);
       if (!plugin) throw failure('Plugin no longer installed; refresh the list', 404);
@@ -323,7 +339,7 @@ export class ApplicationExtensionRegistry {
   }
   start(): Promise<void> {
     return this.queue(async () => {
-      if (this.closed || this.started) return;
+      if (this.closed || this.started || this.startupPolicyUnavailable) return;
       this.booting = true;
       try {
         // Discover before marking started: reconcile must not also activate first-boot entries.
@@ -427,7 +443,9 @@ export class ApplicationExtensionRegistry {
       for (const { entry, previous } of reservations) entry.admissionBlocked = previous;
     }
   }
-  refresh(): Promise<void> { return this.queue(() => this.reconcile()); }
+  refresh(): Promise<void> {
+    return this.queue(() => this.startupPolicyUnavailable ? Promise.resolve() : this.reconcile());
+  }
   private persist(id: string, enabled: boolean) {
     updateSettingsFile(this.options.settingsFile, data => {
       const value = data[FEATURES_DISABLED] ?? [];
@@ -441,6 +459,7 @@ export class ApplicationExtensionRegistry {
     return this.queue(async () => {
       if (this.closed) throw failure('Application is shutting down', 503);
       if (typeof enabled !== 'boolean') throw failure('enabled must be a boolean', 400);
+      this.requireStartupPolicy();
       const entry = this.entry(id);
       if (enabled) {
         if (entry.definition.initiallyEnabled === false) throw failure('Enable this installed plugin in the plugin manager first');

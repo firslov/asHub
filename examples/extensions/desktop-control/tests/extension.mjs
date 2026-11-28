@@ -88,7 +88,7 @@ test('unchanged asHub discovers and loads the installed extension through Plugin
  const core=createCore({});t.after(()=>core.kill());const ctx=core.extensionContext({quit(){}});
  preparePluginRegistrations(ctx);activateAgent(ctx);preparePluginRegistrations(ctx);
  await loadBuiltinExtensions(ctx,['codex-provider','file-autocomplete']);
- const runtime=new PluginRuntime(file);t.after(()=>runtime.close());
+ const runtime=new PluginRuntime(file,undefined,undefined,undefined,undefined,undefined,async()=>false);t.after(()=>runtime.close());
  assert.deepEqual(await runtime.load(ctx),['桌面控制']);
  const status=runtime.status[0];assert.equal(status.state,'loaded');assert.deepEqual(status.configNamespaces,['desktop-control']);
  const installed=pluginCatalog(file).filter(entry=>entry.manifest?.id==='ashub-desktop-control');
@@ -96,6 +96,10 @@ test('unchanged asHub discovers and loads the installed extension through Plugin
  const [plugin]=installed;
  assert.equal(plugin.packageRoot,path.join(home,'extensions','ashub-desktop-control'));
  const tools=ctx.agent.getTools().filter(t=>t.name.startsWith('desktop_'));assert.equal(tools.length,8);
+ for(const tool of tools) {
+  assert(runtime.ownsDesktopTool(tool));
+  assert(!runtime.ownsDesktopTool({...tool,execute:async()=>({content:'unrelated',exitCode:0})}));
+ }
  const info=[];ctx.bus.on('ui:info',p=>info.push(p.message));
  await ctx.call('command:/desktop','status');assert.match(info.at(-1),/"enabled": false/);
  await ctx.call('command:/desktop','allow com.apple.TextEdit');

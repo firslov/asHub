@@ -1,9 +1,9 @@
-import { effect } from '../vendor/signals-core.js';
+import { effect, signal } from '../vendor/signals-core.js';
 import { conversationEntries } from './extensions/entry-state.js';
 import { hydrateImages } from './stream/reply.js';
 import { resetActivity, disposeActivity, activityEvent, beginActivityFrame } from "./stream/activity.js";
 import { handlers, onReplayDone, hidePageLoader, seedSessionInfo, REPLAY_FLUSH_DELAY } from "./sse.js";
-import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession } from "./session-manager.js";
+import { registerSession, unregisterSession, subscribeSession, unsubscribeSession, resyncSession, sessionProjectWorker } from "./session-manager.js";
 import { compactReasoning } from "./stream/compact.js";
 import { forceScrollBottom } from "./stream/scroll.js";
 import { hideUsage } from "./stream/renderers.js";
@@ -18,6 +18,14 @@ const parseId = () =>
 const SCROLL_SLOP = 40;
 
 class SessionView extends HTMLElement {
+  workerMode = signal(undefined);
+  backendAvailability = signal(undefined);
+
+  get backendUnavailable() { return this.backendAvailability.value; }
+
+  get projectWorker() { return (this.workerMode.value ?? sessionProjectWorker(this.id)) === true; }
+  get projectWorkerPending() { return (this.workerMode.value ?? sessionProjectWorker(this.id)) === undefined; }
+
   connectedCallback() {
     this.id = this.getAttribute("session-id") || parseId();
     this.agentInfo = { name: "", model: "", provider: "", thinkingLevel: "", thinkingSupported: false };
@@ -72,7 +80,10 @@ class SessionView extends HTMLElement {
       if (!r.ok) return;
       const list = await r.json();
       const info = Array.isArray(list) ? list.find((s) => s.instanceId === this.id) : null;
-      if (info) seedSessionInfo(this, info);
+      if (info) {
+        this.workerMode.value = info.projectWorker === true;
+        seedSessionInfo(this, info);
+      }
     } catch {}
   }
 
@@ -87,11 +98,26 @@ class SessionView extends HTMLElement {
     scanI18n(this);
     this.streamEl = this.querySelector(".session-stream");
     this.emptyStateEl = this.querySelector(".stream-empty");
+    const prompt = this.querySelector('.stream-empty-prompt');
+    const hintsEl = this.querySelector('.stream-empty-hints');
+    const hintsReady = signal(false);
+    if (hintsEl) setTimeout(() => { hintsReady.value = true; }, 800);
     this.entryCopyDispose?.();
     this.entryCopyDispose=effect(()=>{
-      const entry=conversationEntries.value.find(e=>e.sessionId===this.id);
+      const worker = this.projectWorker;
+      const pending = this.projectWorkerPending;
+      const entry = worker ? null : conversationEntries.value.find(e=>e.sessionId===this.id);
       lang.value;
-      for(const [selector,key,value] of [['.welcome-title','welcome.title',entry?.label],['.welcome-description','welcome.description',entry?.description]]){
+      const antigravity = this.kind === "antigravity";
+      if (prompt) {
+        prompt.hidden = worker || pending;
+        prompt.style.display = prompt.hidden ? 'none' : '';
+      }
+      if (hintsEl) hintsEl.hidden = worker || pending || !hintsReady.value;
+      for(const [selector,key,value] of [
+        ['.welcome-title',worker ? 'project.worker.title' : antigravity ? 'new.antigravity' : 'welcome.title',entry?.label],
+        ['.welcome-description',worker ? 'project.worker.description' : pending ? 'project.worker.loading' : antigravity ? 'antigravity.session.hint' : 'welcome.description',entry?.description],
+      ]){
         const el=this.emptyStateEl?.querySelector(selector);if(!el)continue;
         if(value){el.removeAttribute('data-i18n');el.textContent=value;}
         else{el.setAttribute('data-i18n',key);el.textContent=t(key);}
@@ -132,16 +158,15 @@ class SessionView extends HTMLElement {
     const ac = this.controller.signal;
     this.streamEl.addEventListener("scroll", () => this.captureScrollPosition(), { signal: ac });
     this.pillEl?.addEventListener("click", () => forceScrollBottom(this), { signal: ac });
-    this.querySelector(".stream-empty-prompt")?.addEventListener("click", () => {
-      document.getElementById("query")?.focus();
+    prompt?.addEventListener("click", () => {
+      if (!this.projectWorker && !this.projectWorkerPending) document.getElementById("query")?.focus();
     }, { signal: ac });
 
     // Hint chips: click to fill input and submit
-    const hintsEl = this.querySelector(".stream-empty-hints");
     if (hintsEl) {
-      setTimeout(() => { if (hintsEl ) hintsEl.hidden = false; }, 800);
       hintsEl.querySelectorAll(".hint-chip").forEach((chip) => {
         chip.addEventListener("click", () => {
+          if (this.projectWorker || this.projectWorkerPending) return;
           // Localized query: prefer data-query-{lang}, fall back to data-query.
           const query = (lang.value === "zh" ? chip.dataset.queryZh : chip.dataset.queryEn) || chip.dataset.query;
           if (!query) return;

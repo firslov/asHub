@@ -3,7 +3,7 @@ import path from "node:path";
 
 export interface CompactionDiagnostic {
   outcome: "unchanged" | "applied" | "cancelled" | "stale" | "failed";
-  reason?: "below-target" | "insufficient-savings" | "summary-invalid" | "summary-unavailable" | "summary-too-large";
+  reason?: "below-target" | "unaligned-context" | "insufficient-savings" | "summary-invalid" | "summary-unavailable" | "summary-too-large";
   mode?: "semantic" | "fallback";
   sourceLeaf?: string;
   revision?: number;
@@ -19,7 +19,7 @@ export interface CompactionDiagnostic {
 export function logCompaction(directory: string, sessionId: string, event: CompactionDiagnostic): void {
   if (!/^[\w-]{1,80}$/.test(sessionId) || !["unchanged", "applied", "cancelled", "stale", "failed"].includes(event.outcome)) return;
   const row: Record<string, unknown> = { ts: new Date().toISOString(), sessionId, outcome: event.outcome };
-  if (event.reason && ["below-target", "insufficient-savings", "summary-invalid", "summary-unavailable", "summary-too-large"].includes(event.reason)) row.reason = event.reason;
+  if (event.reason && ["below-target", "unaligned-context", "insufficient-savings", "summary-invalid", "summary-unavailable", "summary-too-large"].includes(event.reason)) row.reason = event.reason;
   if (event.mode === "semantic" || event.mode === "fallback") row.mode = event.mode;
   if (event.sourceLeaf && /^[\w-]{1,80}$/.test(event.sourceLeaf)) row.sourceLeaf = event.sourceLeaf;
   for (const key of ["revision", "before", "after", "target", "inputTokens", "elapsedMs"] as const) {

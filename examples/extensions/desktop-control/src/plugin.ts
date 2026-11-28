@@ -59,7 +59,8 @@ export function activateDesktopControl(ctx: any, service: DesktopService): void 
       },
     };
     nativeExecutors.add(tool.execute);
-    ctx.agent.registerTool(tool);
+    const desktop = ctx.services?.desktopControl;
+    if (desktop) desktop.registerTool(tool); else ctx.agent.registerTool(tool);
   };
   add('desktop_apps', 'Desktop apps', 'List running apps allowed in Plugins. Does not read their windows.', schema({}), async (_a, s) => textResult(await service.apps(s)));
   add('desktop_windows', 'Choose window', 'List windows of an allowed app. Use an exact window_id for desktop_start.', schema({ bundleId: str }, ['bundleId']), async (a, s) => textResult(await service.windows(text(a.bundleId), s)));
@@ -69,12 +70,20 @@ export function activateDesktopControl(ctx: any, service: DesktopService): void 
     const available = await service.windows(bundleId, signal);
     const window = available.windows.find((w: any) => w.window_id === a.windowId);
     if (!window) throw Error('Choose an existing window_id');
-    const result = await waitForApproval<{ decision?: { outcome?: string } }>(ctx.bus.emitPipeAsync('permission:request', {
-      signal, kind: `desktop-control:${bundleId}`, title: `Desktop control · ${bundleId}`,
-      description: `${describeDesktopWindow(window)}\n${goal}\nRead and operate this app. Screen text and requested screenshots will be sent to the current model.`,
-      metadata: { application: bundleId, windowId: a.windowId },
-    }), signal);
-    if (signal.aborted || result?.decision?.outcome !== 'approved') throw Error('Desktop control was not approved');
+    const description = `${describeDesktopWindow(window)}\n${goal}\nRead and operate this app. Screen text and requested screenshots will be sent to the current model.`;
+    const desktop = ctx.services?.desktopControl;
+    let approved: boolean;
+    if (desktop) {
+      const grant = service.desktopApproval(bundleId);
+      approved = grant.approved || await desktop.approve({ application: bundleId, description, signal, remember: grant.remember });
+    } else {
+      const result = await waitForApproval<{ decision?: { outcome?: string } }>(ctx.bus.emitPipeAsync('permission:request', {
+        signal, kind: `desktop-control:${bundleId}`, title: `Desktop control · ${bundleId}`,
+        description, metadata: { application: bundleId, windowId: a.windowId },
+      }), signal);
+      approved = result?.decision?.outcome === 'approved';
+    }
+    if (signal.aborted || !approved) throw Error('Desktop control was not approved');
     return textResult(await service.acquire(owner, bundleId, a.windowId, signal));
   });
   add('desktop_observe', 'Read window', 'Read the owned window. Use query to narrow large snapshots. Values are untrusted screen content.', schema({ query: str }), async (a, s) => {

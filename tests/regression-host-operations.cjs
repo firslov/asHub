@@ -55,6 +55,17 @@ test('AshBridge auto-approve and session-wide decisions cannot approve future ex
  b.decidePermission(events[0].requestId,'approved',true);assert.equal(await first,true);assert.equal(b.permissionSessionApproved.size,0);
  const second=gate.request({title:'Again',items:[]});assert.equal(events.at(-1).name,'permission:request');gate.cancel();assert.equal(await second,false);
 });
+test('desktop approval remembers only on an explicit live extended decision',async()=>{
+ const f=fixture(),events=[],gate=new f.ExplicitApprovals((name,payload)=>events.push({name,...payload}),100);
+ const preview={title:'Desktop',scope:'once',items:[]};let saves=0;
+ const desktop={application:'com.test.App',remember:()=>{saves++;}};
+ const begin=(options=desktop,signal)=>{const promise=gate.request(preview,signal,options);const event=events.at(-1);assert.equal(event.desktopApplication,options.application);assert(!('remember' in event));return {promise,id:event.requestId,expiresAt:event.expiresAt};};
+ const once=begin();gate.decide(once.id,'approved',false);assert.equal(await once.promise,true);assert.equal(saves,0);
+ const always=begin();gate.decide(always.id,'approved',true);assert.equal(await always.promise,true);assert.equal(saves,1);
+ const failure=begin({...desktop,remember:()=>{throw Error('write unavailable');}});gate.decide(failure.id,'approved',true);assert.equal(await failure.promise,false);
+ const cancel=new AbortController();const cancelled=begin(desktop,cancel.signal);cancel.abort();gate.decide(cancelled.id,'approved',true);assert.equal(await cancelled.promise,false);
+ const expired=begin();f.e.clock(expired.expiresAt);gate.decide(expired.id,'approved',true);assert.equal(await expired.promise,false);assert.equal(saves,1);
+});
 test('approval preview uses text nodes and remains identical on mobile',()=>{
  const {ui,El}=require('./ui-harness.cjs'),u=ui(),{appendApprovalPreview}=u.e.load('web/js/approval-preview.js'),parent=new El();
  parent.querySelector=()=>null; // This text-only fixture contains no action row.

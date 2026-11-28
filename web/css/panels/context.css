@@ -34,6 +34,14 @@
   text-overflow: ellipsis;
 }
 #ctx-drop { margin-left: auto; flex-shrink: 0; }
+#ctx-drop[aria-busy="true"] { opacity: 0.55; cursor: wait; }
+#ctx-drop-status {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--error);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
 
 /* 5px semantic role dots inside the segment items */
 .ctx-dot {

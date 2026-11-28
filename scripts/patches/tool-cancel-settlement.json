@@ -1,0 +1,166 @@
+{
+  "files": [
+    {
+      "path": "src/agent/agent-loop.ts",
+      "hunks": [
+        {
+          "before": "  private acceptingSteer = false;",
+          "after": "  private acceptingSteer = false;\n  private pendingToolBatch: { conversation: LiveView; calls: PendingToolCall[]; results: ProtocolToolResult[]; entered: Set<string> } | undefined;\n  private unsettledToolHistory: LiveView | undefined;"
+        },
+        {
+          "before": "    h.define(\"conversation:get-messages\", () => this.conversation.get());",
+          "after": "    h.define(\"conversation:get-messages\", () => this.conversation.get());\n    // Runtime state only: stored history can still contain legacy gaps.\n    h.define(\"conversation:tool-calls-settled\", () => this.pendingToolBatch === undefined && this.unsettledToolHistory !== this.conversation);"
+        },
+        {
+          "before": "      let result: Awaited<ReturnType<typeof tool.execute>>;",
+          "after": "      let result: Awaited<ReturnType<typeof tool.execute>>;\n      let dispatched = false;"
+        },
+        {
+          "before": "          return this.handlers.call(\"tool:dispatch\", {\n            name, args, tool, onChunk, context: toolCtx,",
+          "after": "          dispatched = true;\n          return this.handlers.call(\"tool:dispatch\", {\n            name, args, tool, onChunk, context: toolCtx,"
+        },
+        {
+          "before": "        const message = err instanceof Error ? err.message : String(err);\n        result = { content: message, exitCode: 1, isError: true };",
+          "after": "        const message = signal.aborted\n          ? (dispatched ? \"Tool execution was interrupted; result not confirmed.\" : \"Tool was not started because the turn was cancelled.\")\n          : (err instanceof Error ? err.message : String(err));\n        result = { content: message, exitCode: 1, isError: true };"
+        },
+        {
+          "before": "      result.messages = this.wireHistory();",
+          "after": "      // A cancellation or exception can leave a committed batch before the regular record step.\n      try { this.recordToolBatch(); } catch (error) { console.error(\"[agent-sh] tool receipt settlement failed\", error); }\n      result.messages = this.wireHistory();"
+        },
+        {
+          "before": "  private async executeLoop(signal: AbortSignal): Promise<string> {",
+          "after": "  private recordToolBatch(): ProtocolToolResult[] {\n    const batch = this.pendingToolBatch;\n    if (!batch) return [];\n    const byId = new Map(batch.results.map(result => [result.callId, result]));\n    // Record once in assistant call order; late tool completions never update history.\n    const results = batch.calls.map(tc => byId.get(tc.id) ?? ({\n      callId: tc.id, toolName: tc.name, isError: true,\n      content: batch.entered.has(tc.id)\n        ? \"Tool execution was interrupted; result not confirmed.\"\n        : \"Tool was not started because the tool batch was interrupted.\",\n    }));\n    try {\n      this.toolProtocol.recordResults(batch.conversation, results);\n    } catch (error) {\n      // Do not retry a partially recorded batch or certify it as settled.\n      this.unsettledToolHistory = batch.conversation;\n      throw error;\n    } finally {\n      this.pendingToolBatch = undefined;\n    }\n    return batch.conversation === this.conversation ? results : [];\n  }\n\n  private async executeLoop(signal: AbortSignal): Promise<string> {"
+        },
+        {
+          "before": "      const toolCalls = this.handlers.call(\"tool-protocol:extract-calls\", {\n        text,\n        streamedCalls: streamedToolCalls,\n      }) as ProtocolPendingToolCall[];",
+          "after": "      const extractedToolCalls = this.handlers.call(\"tool-protocol:extract-calls\", {\n        text,\n        streamedCalls: streamedToolCalls,\n      }) as ProtocolPendingToolCall[];\n      // An interrupted stream can expose incomplete tool frames; keep only its text.\n      const toolCalls = signal.aborted ? [] : extractedToolCalls;"
+        },
+        {
+          "before": "      if (text || toolCalls.length > 0) {",
+          "after": "      if (text || toolCalls.length > 0) {\n        if (toolCalls.length) this.pendingToolBatch = { conversation: this.conversation, calls: toolCalls, results: [], entered: new Set() };"
+        },
+        {
+          "before": "      if (signal.aborted) break;\n\n      if (toolCalls.length === 0) {\n        if (this.steerQueue.length === 0) break;",
+          "after": "      if (toolCalls.length === 0) {\n        if (signal.aborted || this.steerQueue.length === 0) break;"
+        },
+        {
+          "before": "      // Emit batch info so the TUI can render group headers upfront\n      {",
+          "after": "      // Emit batch info so the TUI can render group headers upfront\n      if (!signal.aborted) {"
+        },
+        {
+          "before": "      const collectedResults: ProtocolToolResult[] = [];",
+          "after": "      const batch = this.pendingToolBatch!;\n      const collectedResults = batch.results;"
+        },
+        {
+          "before": "        const result = await this.handlers.call(",
+          "after": "        if (signal.aborted) return;\n        batch.entered.add(tc.id);\n        const result = await this.handlers.call("
+        },
+        {
+          "before": "      // Run read-only tools in parallel\n      let batchIdx = 0;",
+          "after": "      const runSingle = async (tc: PendingToolCall, idx: number) => {\n        try { await executeSingle(tc, idx); }\n        catch (error) { if (!signal.aborted) throw error; }\n      };\n      // Run read-only tools in parallel\n      let batchIdx = 0;"
+        },
+        {
+          "before": "          return signal.aborted ? Promise.resolve() : executeSingle(tc, idx);",
+          "after": "          return signal.aborted ? Promise.resolve() : runSingle(tc, idx);"
+        },
+        {
+          "before": "        await executeSingle(tc, ++batchIdx);",
+          "after": "        await runSingle(tc, ++batchIdx);"
+        },
+        {
+          "before": "      // Keep wire results in call order even when execution finished out of order.\n      collectedResults.sort((a, b) => toolCalls.findIndex(tc => tc.id === a.callId) - toolCalls.findIndex(tc => tc.id === b.callId));\n      this.toolProtocol.recordResults(this.conversation, collectedResults);",
+          "after": "      const recordedResults = this.recordToolBatch();"
+        },
+        {
+          "before": "      for (const r of collectedResults) options.onMessage?.({",
+          "after": "      for (const r of recordedResults) options.onMessage?.({"
+        },
+        {
+          "before": "      // structure.\n      for (const r of collectedResults) {",
+          "after": "      // structure.\n      for (const r of recordedResults) {"
+        }
+      ]
+    },
+    {
+      "path": "dist/agent/agent-loop.js",
+      "hunks": [
+        {
+          "before": "    acceptingSteer = false;",
+          "after": "    acceptingSteer = false;\n    pendingToolBatch;\n    unsettledToolHistory;"
+        },
+        {
+          "before": "        h.define(\"conversation:get-messages\", () => this.conversation.get());",
+          "after": "        h.define(\"conversation:get-messages\", () => this.conversation.get());\n        // Runtime state only: stored history can still contain legacy gaps.\n        h.define(\"conversation:tool-calls-settled\", () => this.pendingToolBatch === undefined && this.unsettledToolHistory !== this.conversation);"
+        },
+        {
+          "before": "            let result;",
+          "after": "            let result;\n            let dispatched = false;"
+        },
+        {
+          "before": "                    return this.handlers.call(\"tool:dispatch\", {\n                        name, args, tool, onChunk, context: toolCtx,",
+          "after": "                    dispatched = true;\n                    return this.handlers.call(\"tool:dispatch\", {\n                        name, args, tool, onChunk, context: toolCtx,"
+        },
+        {
+          "before": "                const message = err instanceof Error ? err.message : String(err);\n                result = { content: message, exitCode: 1, isError: true };",
+          "after": "                const message = signal.aborted\n                  ? (dispatched ? \"Tool execution was interrupted; result not confirmed.\" : \"Tool was not started because the turn was cancelled.\")\n                  : (err instanceof Error ? err.message : String(err));\n                result = { content: message, exitCode: 1, isError: true };"
+        },
+        {
+          "before": "            result.messages = this.wireHistory();",
+          "after": "            // A cancellation or exception can leave a committed batch before the regular record step.\n            try { this.recordToolBatch(); } catch (error) { console.error(\"[agent-sh] tool receipt settlement failed\", error); }\n            result.messages = this.wireHistory();"
+        },
+        {
+          "before": "    async executeLoop(signal) {",
+          "after": "    recordToolBatch() {\n        const batch = this.pendingToolBatch;\n        if (!batch) return [];\n        const byId = new Map(batch.results.map(result => [result.callId, result]));\n        // Record once in assistant call order; late tool completions never update history.\n        const results = batch.calls.map(tc => byId.get(tc.id) ?? ({\n            callId: tc.id, toolName: tc.name, isError: true,\n            content: batch.entered.has(tc.id)\n              ? \"Tool execution was interrupted; result not confirmed.\"\n              : \"Tool was not started because the tool batch was interrupted.\",\n        }));\n        try {\n            this.toolProtocol.recordResults(batch.conversation, results);\n        }\n        catch (error) {\n            this.unsettledToolHistory = batch.conversation;\n            throw error;\n        }\n        finally {\n            this.pendingToolBatch = undefined;\n        }\n        return batch.conversation === this.conversation ? results : [];\n    }\n\n    async executeLoop(signal) {"
+        },
+        {
+          "before": "            const toolCalls = this.handlers.call(\"tool-protocol:extract-calls\", {\n                text,\n                streamedCalls: streamedToolCalls,\n            });",
+          "after": "            const extractedToolCalls = this.handlers.call(\"tool-protocol:extract-calls\", {\n                text,\n                streamedCalls: streamedToolCalls,\n            });\n            // An interrupted stream can expose incomplete tool frames; keep only its text.\n            const toolCalls = signal.aborted ? [] : extractedToolCalls;"
+        },
+        {
+          "before": "            if (text || toolCalls.length > 0) {",
+          "after": "            if (text || toolCalls.length > 0) {\n                if (toolCalls.length) this.pendingToolBatch = { conversation: this.conversation, calls: toolCalls, results: [], entered: new Set() };"
+        },
+        {
+          "before": "            if (signal.aborted)\n                break;\n            if (toolCalls.length === 0) {\n                if (this.steerQueue.length === 0)\n                    break;",
+          "after": "            if (toolCalls.length === 0) {\n                if (signal.aborted || this.steerQueue.length === 0)\n                    break;"
+        },
+        {
+          "before": "            // Emit batch info so the TUI can render group headers upfront\n            {",
+          "after": "            // Emit batch info so the TUI can render group headers upfront\n            if (!signal.aborted) {"
+        },
+        {
+          "before": "            const collectedResults = [];",
+          "after": "            const batch = this.pendingToolBatch;\n            const collectedResults = batch.results;"
+        },
+        {
+          "before": "                const result = await this.handlers.call(\"tool:execute\", { name: tc.name, id: tc.id, args, tool, onChunk: defaultOnChunk,",
+          "after": "                if (signal.aborted) return;\n                batch.entered.add(tc.id);\n                const result = await this.handlers.call(\"tool:execute\", { name: tc.name, id: tc.id, args, tool, onChunk: defaultOnChunk,"
+        },
+        {
+          "before": "            // Run read-only tools in parallel\n            let batchIdx = 0;",
+          "after": "            const runSingle = async (tc, idx) => {\n                try { await executeSingle(tc, idx); }\n                catch (error) { if (!signal.aborted) throw error; }\n            };\n            // Run read-only tools in parallel\n            let batchIdx = 0;"
+        },
+        {
+          "before": "                    return signal.aborted ? Promise.resolve() : executeSingle(tc, idx);",
+          "after": "                    return signal.aborted ? Promise.resolve() : runSingle(tc, idx);"
+        },
+        {
+          "before": "                await executeSingle(tc, ++batchIdx);",
+          "after": "                await runSingle(tc, ++batchIdx);"
+        },
+        {
+          "before": "            // Keep wire results in call order even when execution finished out of order.\n            collectedResults.sort((a, b) => toolCalls.findIndex(tc => tc.id === a.callId) - toolCalls.findIndex(tc => tc.id === b.callId));\n            this.toolProtocol.recordResults(this.conversation, collectedResults);",
+          "after": "            const recordedResults = this.recordToolBatch();"
+        },
+        {
+          "before": "            for (const r of collectedResults)\n                options.onMessage?.({",
+          "after": "            for (const r of recordedResults)\n                options.onMessage?.({"
+        },
+        {
+          "before": "            // structure.\n            for (const r of collectedResults) {",
+          "after": "            // structure.\n            for (const r of recordedResults) {"
+        }
+      ]
+    }
+  ]
+}

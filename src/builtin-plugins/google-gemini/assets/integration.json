@@ -1,0 +1,12 @@
+{
+  "name": "Google Gemini",
+  "description": "plugins.descProvider",
+  "provider": {
+    "id": "gemini",
+    "reasoningFormat": "effort",
+    "models": [
+      { "id": "gemini-4-hydrogen", "modalities": ["text", "image"], "contextWindow": 1048576, "reasoning": true, "reasoningLevels": ["low", "medium", "high", "xhigh"] },
+      { "id": "gemini-4-neon", "modalities": ["text", "image"], "contextWindow": 1048576, "reasoning": true, "reasoningLevels": ["low", "medium", "high", "xhigh"] }
+    ]
+  }
+}

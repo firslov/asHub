@@ -102,6 +102,8 @@ export const toast = (message, { type = "info", duration, detail } = {}) => {
   el.appendChild(body);
   el.appendChild(close);
   host.appendChild(el);
+  // Keep the newest notification visible when the narrow-screen stack scrolls.
+  host.scrollTop = host.scrollHeight;
 
   const timer = setTimeout(() => dismiss(el), ms);
   // Pause auto-dismiss while hovered so the user can read/copy details.

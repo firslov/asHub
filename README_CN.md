@@ -109,6 +109,8 @@ chmod +x ./asHub-*.AppImage
 
 在「插件 → 本地扩展」启用随 asHub 安装的插件。首次安装默认关闭，已有手动安装的副本优先使用并保留原设置。卸载随附插件后，升级不会自动装回，可按需重新安装。其他插件可从可信来源导入 ZIP，详见[安装指南](docs/plugin-installation.md)。
 
+可在「插件 → 内置组件」分别禁用 **Google Gemini** 和 **Google Antigravity**，重启 asHub 后生效。现有对话保留历史和提供商标识，集成不可用时仅可阅读。禁用不会删除凭据。Antigravity 项目审查成员还需要单独启用实验功能。如需在构建时排除这两项集成，见[可选集成构建说明](docs/release-validation.md#build-without-optional-integrations)。
+
 | 提供方式 | 插件 |
 | --- | --- |
 | 随 macOS、Windows、Linux 版提供 | [Kimi Coding Plan](examples/extensions/kimi-coding-plan)、[项目管理](examples/extensions/project-management)、[会话浏览器](examples/extensions/browser-automation)、[图文展示](examples/extensions/image-display)、[设备互联](examples/extensions/multi-machine)、[定时任务](examples/extensions/scheduled-tasks)、[语音输入](examples/extensions/voice-input) |

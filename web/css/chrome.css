@@ -494,43 +494,61 @@
   transition-duration: var(--dur-fast);
 }
 
-/* ══ Onboarding form (js/no-session.js) — scoped to the empty page ══ */
-
-#no-session-empty .config-label {
-  color: var(--text-faint);
-  letter-spacing: var(--tracking-label-sm);
+/* First-run setup is a separate card, not part of the welcome headline. */
+#no-session-empty {
+  justify-content: flex-start;
+  padding: clamp(16px, 3.4vh, 36px) 24px;
 }
-
-#no-session-empty .config-hint { color: var(--text-dim); }
-
-#no-session-empty .config-select,
-#no-session-empty .config-input {
+#no-session-empty:not([hidden]) + .live-input { display: none; }
+.welcome-content {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  flex: none;
+  inline-size: min(100%, 36rem);
+  /* Center when there is room; leave both ends reachable when it scrolls. */
+  margin-block: auto;
+}
+.welcome-hero { display: grid; justify-items: center; gap: 8px; max-inline-size: 100%; }
+.welcome-hero .stream-empty-logo { opacity: 1; margin-block-end: 4px; }
+.welcome-hero .stream-empty-logo svg { display: block; inline-size: 68px; block-size: 68px; }
+.welcome-hero .welcome-description { margin: 0; }
+.welcome-setup:not([hidden]) {
+  display: grid;
+  gap: 12px;
+  inline-size: min(100%, 24rem);
+  margin-block-start: 6px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  text-align: start;
+}
+.welcome-setup-heading h2 { margin: 0 0 4px; color: var(--text); font-size: var(--fs-lg); font-weight: 650; }
+.welcome-setup-heading p { margin: 0; color: var(--text-dim); font-size: var(--fs-sm); line-height: 1.45; }
+.welcome-setup-field { display: grid; gap: 5px; min-inline-size: 0; }
+.welcome-setup-field label { color: var(--text-mid); font-size: var(--fs-sm); font-weight: 550; }
+.welcome-select-wrap { position: relative; }
+.welcome-select-wrap svg { position: absolute; inset-inline-end: 12px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; }
+.welcome-setup :is(.config-select, .config-input) {
+  inline-size: 100%;
+  min-block-size: 38px;
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   font-size: var(--fs-md);
-  transition: border-color var(--dur-fast) var(--ease-out-expo),
-              box-shadow var(--dur-fast) var(--ease-out-expo);
 }
-
-#no-session-empty .config-select:hover,
-#no-session-empty .config-input:hover { border-color: var(--border-mid); }
-
-#no-session-empty .config-select:focus,
-#no-session-empty .config-input:focus {
-  border-color: var(--accent-border);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+.welcome-setup :is(.config-select, .config-input):hover { border-color: var(--border-mid); }
+.welcome-setup :is(.config-select, .config-input):focus { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-glow); }
+.welcome-setup .welcome-save { inline-size: 100%; min-block-size: 40px; margin-block-start: 2px; }
+#no-session-empty #no-session-cta { margin: 0; min-block-size: 36px; }
+#no-session-empty .stream-empty-templates { margin: 0; }
+@media (max-height: 640px) {
+  .welcome-content { gap: 12px; }
+  .welcome-hero { gap: 6px; }
+  .welcome-hero .stream-empty-logo svg { inline-size: 56px; block-size: 56px; }
+  .welcome-setup:not([hidden]) { margin-block-start: 4px; padding: 14px 18px; gap: 10px; }
 }
-
-#no-session-empty .config-btn-save {
-  border-radius: var(--radius-md);
-  transition: background var(--dur-fast) var(--ease-out-expo),
-              transform var(--dur-fast) var(--ease-out-expo);
-}
-
-#no-session-empty .config-btn-save:hover { box-shadow: none; }
-
-#no-session-empty .config-btn-save:active { transform: scale(0.98); }
 
 /* ══ Quick-create overlay ═══════════════════════════════════════════ */
 
@@ -718,7 +736,7 @@
   .app:not(.sidebar-collapsed) { --sidebar-w: 240px; }
 }
 @media (max-width: 900px) {
-  .app:is(.ctx-open, .files-open, .tree-open, .sa-open) .live-wrap .terminal,
+  .app:is(.ctx-open, .files-open, .archive-open, .tree-open, .sa-open) .live-wrap .terminal,
   .app:has(:is(#config-overlay, #skills-overlay, #prompt-overlay):not([hidden])) .live-wrap .terminal { margin-right: 0; }
   .p-drawer { width: min(380px, calc(100vw - var(--toolbar-w) - 20px)); }
 }

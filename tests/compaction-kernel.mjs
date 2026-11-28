@@ -27,6 +27,8 @@ test('real bridge uses current provider, persists checkpoint, restores and cance
     const {createHistoryReader}=await import('../dist/history/history-reader.js');
     const file=path.join(dir,'tree.jsonl'),store=new SessionStore(file,{create:{sessionId:'fixture',cwd:dir}});
     const initial=Array.from({length:10},(_,i)=>[{role:'user',content:i===0?'背景。'.repeat(100)+'完成验证前不要停止，不能发布':'补充 '+i},{role:'assistant',content:'tool evidence '.repeat(2000)}]).flat();
+    const legacy={role:'assistant',content:null,tool_calls:[{id:'legacy-cancelled',type:'function',function:{name:'fixture',arguments:'{}'}}]};
+    initial.splice(2,0,legacy);
     let capture;let projections=0;
     const strategy=createCompactionStrategy(()=>store,()=>capture,undefined,async()=>projections++);
     bridge=new AshBridge({sessionId:'fixture',cwd:dir,provider:'fixture',model:'fixture-model',initialMessages:initial,compactionStrategy:strategy,historyAccess:createHistoryReader(()=>store)});
@@ -42,6 +44,7 @@ test('real bridge uses current provider, persists checkpoint, restores and cance
     assert.equal(store.getEntry(store.getActiveLeaf()).checkpoint.mode,'semantic');assert.equal(projections,1);
     const snap=await bridge.snapshot();assert(snap.messages[0].content.includes('完成验证前不要停止，不能发布'));
     assert.deepEqual(new SessionStore(file).buildMessages(),snap.messages);
+    assert.deepEqual(store.getHistoryEntries()[2].message,legacy,'legacy call remains in raw journal');
     assert(!events.some(e=>e.name==='agent:response-chunk'),'summary must not render as the assistant answer');
     await bridge.submit('继续');assert(requests.at(-1).tools.some(t=>t.function.name==='conversation_history'));
     assert(requests.at(-1).messages.some(m=>String(m.content).includes('验证尚未完成')));

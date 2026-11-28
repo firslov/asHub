@@ -73,8 +73,12 @@ export function presentApproval(card, p) {
   const all = card.querySelector('.approve-all');
   if (all) {
     const confirming = all.classList.contains('confirming');
-    all.title = p.acpExtendedOption || t('permission.approve_all_hint');
-    all.querySelector('span').textContent = p.acpExtendedOption
+    all.title = p.desktopApplication
+      ? t('permission.desktop_always_hint', { app: p.desktopApplication })
+      : p.acpExtendedOption || t('permission.approve_all_hint');
+    all.querySelector('span').textContent = p.desktopApplication
+      ? t(confirming ? 'permission.desktop_always_confirm' : 'permission.desktop_always')
+      : p.acpExtendedOption
       ? confirming ? t('permission.confirmOption', { name: p.acpExtendedOption }) : p.acpExtendedOption
       : t(confirming ? 'permission.approve_all_confirm' : 'permission.approve_all');
   }

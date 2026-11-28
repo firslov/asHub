@@ -1,6 +1,6 @@
 {
   "name": "ashub-desktop-control",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "description": "Optional macOS desktop control extension for asHub and agent-sh",
   "type": "module",

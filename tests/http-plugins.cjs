@@ -100,7 +100,61 @@ const { once } = require('node:events');
     assert.equal((await fetch(base + '/api/plugins/config?id=' + plugin.id + '&namespace=providers', { headers })).status, 400);
     assert.equal((await fetch(base + '/api/plugins/config', { method: 'PUT', headers, body: JSON.stringify({ id: plugin.id, namespace: 'sample', config: [], revision: config.revision }) })).status, 400);
     config = await (await fetch(configURL, { headers })).json(); assert.equal(config.config.limit, 3);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json')))['ashub.plugins.disabled'][0], plugin.id);
+    // The desktop namespace is shared settings; exercise it on every platform.
+    // On macOS use the actual bundled plugin's ID, elsewhere use the legacy fixture.
+    const desktopId = included.find(p => p.manifest.id === 'ashub-desktop-control')?.id ?? plugin.id;
+    const desktopNamespace = 'desktop-control';
+    const desktopURL = `${base}/api/plugins/config?id=${desktopId}&namespace=${desktopNamespace}`;
+    const A = 'dev.fixture.AppA', B = 'dev.fixture.AppB';
+    const file = path.join(configDir, 'settings.json');
+    const disk = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+    const initialDesktop = { enabled: true, allowedApps: [A, B], approvedApps: [A, B] };
+    fs.writeFileSync(file, JSON.stringify({ ...disk(), [desktopNamespace]: initialDesktop }));
+    const readDesktop = async () => {
+      const r = await fetch(desktopURL, { headers }); assert.equal(r.status, 200);
+      return r.json();
+    };
+    const putDesktop = (config, revision) => fetch(base + '/api/plugins/config', { method: 'PUT', headers,
+      body: JSON.stringify({ id: desktopId, namespace: desktopNamespace, config, revision }) });
+    const saveDesktop = async (requested, previous, expected) => {
+      const r = await putDesktop(requested, previous.revision);
+      assert.equal(r.status, 200, await r.clone().text());
+      const saved = await r.json();
+      assert.deepEqual(saved.config, expected, 'reply must contain only the approvals that remain valid');
+      assert.deepEqual(await readDesktop(), saved, 'GET must match the PUT response and its revision');
+      assert.deepEqual(disk()[desktopNamespace], expected, 'reply must match the stored settings');
+      return saved;
+    };
+    const originalDesktop = await readDesktop();
+    assert.deepEqual(originalDesktop.config, initialDesktop);
+    const limited = await saveDesktop({ ...originalDesktop.config, allowedApps: [B] }, originalDesktop,
+      { enabled: true, allowedApps: [B], approvedApps: [B] });
+    const beforeStaleDesktop = fs.readFileSync(file, 'utf8');
+    assert.equal((await putDesktop(originalDesktop.config, originalDesktop.revision)).status, 409);
+    assert.equal(fs.readFileSync(file, 'utf8'), beforeStaleDesktop, 'stale save must not write any settings');
+    // A saved settings draft can still contain the old list; it is not consent.
+    const expanded = await saveDesktop({ ...limited.config, allowedApps: [A, B], approvedApps: initialDesktop.approvedApps }, limited,
+      { enabled: true, allowedApps: [A, B], approvedApps: [B] });
+    const disabled = await saveDesktop({ ...expanded.config, enabled: false }, expanded,
+      { enabled: false, allowedApps: [A, B] });
+    await saveDesktop({ ...disabled.config, enabled: true }, disabled, { enabled: true, allowedApps: [A, B] });
+    // Simulate a fresh authorization through a separate desktop approval card.
+    fs.writeFileSync(file, JSON.stringify({ ...disk(), [desktopNamespace]: initialDesktop }));
+    const fresh = await readDesktop();
+    const revoked = await saveDesktop({ ...fresh.config, approvedApps: [] }, fresh,
+      { enabled: true, allowedApps: [A, B] });
+    assert.equal((await saveDesktop({ ...revoked.config, approvedApps: [A, B] }, revoked,
+      { enabled: true, allowedApps: [A, B] })).revision, revoked.revision);
+    console.log('PASS desktop config HTTP: scope, explicit revocation, disable/re-enable, normalized reply and revision conflict');
+    // Same field names in an ordinary plugin namespace remain ordinary plugin data.
+    const ordinary = { ...config.config, enabled: false, allowedApps: [B], approvedApps: [A] };
+    const ordinarySave = await fetch(base + '/api/plugins/config', { method: 'PUT', headers,
+      body: JSON.stringify({ id: plugin.id, namespace: 'sample', config: ordinary, revision: config.revision }) });
+    assert.equal(ordinarySave.status, 200);
+    assert.deepEqual((await ordinarySave.json()).config, ordinary);
+    assert.deepEqual((await (await fetch(configURL, { headers })).json()).config, ordinary);
+    assert.deepEqual(disk().sample, ordinary);
+    assert.equal(disk()['ashub.plugins.disabled'][0], plugin.id);
     const uninstall = (id, options = {}) => fetch(base + '/api/plugins', {
       method: 'DELETE', headers, body: JSON.stringify({ id }), ...options,
     });

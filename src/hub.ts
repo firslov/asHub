@@ -3,7 +3,7 @@ import { BackendConnections, type PluginSecretStore } from './extensions/backend
 import { ConversationEntries } from './extensions/conversation-entries.js';
 import { PluginBackground } from './extensions/background.js';
 import { replayEventName, subagentReplayState } from './history/replay-frame.js';
-import { ReplayWriter } from './history/replay-writer.js';
+import { committedReplay, ReplayWriter } from './history/replay-writer.js';
 import { getSseWriter } from './transport/sse-writer.js';
 import { PluginActivities } from './services/plugin-activities.js';
 import { ExtensionMessages } from './services/extension-messages.js';
@@ -47,11 +47,12 @@ import { ImageResources } from "./image-resources.js";
  */
 import { ProjectStore } from "./projects.js";
 import type { ConversationAccess } from "./bridges/types.js";
-import { SharedConversations } from './extensions/shared-conversations.js';
+import { SharedConversations, type ArchivedMessage, type ResolveArchiveCwd } from './extensions/shared-conversations.js';
 import { DeviceMigrationConflict, legacyMobileFeature, loadLegacyMobile, migrateDeviceInterconnect } from './remote/migration.js';
 import type { MobileAccessExtension } from "./remote/extension.js";
 import type { RemoteSecretStore } from "./remote/connector.js";
 import { DEEPSEEK_MODELS } from "./providers/deepseek.js";
+import { BackendUnavailable, allowsProvider, initializeIntegrations, integrationProviders, optionalProvider, reservedProvider, setIntegrationEnabled, INTEGRATIONS_DISABLED, type ConversationBackend, type ProjectWorkerBackend } from './integrations.js';
 import { codexCatalogVersion, codexStatus } from "./providers/codex.js";
 import * as http from "node:http";
 import { settingsValidationError } from "./config-validation.js";
@@ -67,9 +68,9 @@ import { isDeepStrictEqual } from "node:util";
 import { execFile } from "node:child_process";
 import { isIP, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
-import type { BackgroundModelSelection, Bridge, BridgeFactory, BusEvent, ContextSnapshot, SessionKind, PermissionOutcome } from "./bridges/types.js";
+import type { BackgroundModelSelection, Bridge, BridgeFactory, BusEvent, CollaborationTurn, ContextSnapshot, SessionKind, PermissionOutcome } from "./bridges/types.js";
 import { resolveProvider, getProviderNames, getSettings } from "agent-sh/settings";
-import { listAllProviders, resolveApiKey, anyProviderConfigured, reloadKeysFile, KEYS_PATH } from "agent-sh/auth";
+import { listAllProviders, resolveApiKey, reloadKeysFile, KEYS_PATH } from "agent-sh/auth";
 import { SessionStore, type AgentMessage, type HistoryWriterLifecycle } from "./history/session-store.js";
 import { createCapture, tagMessagesWithEntryIds, readEntryIdTags, type Capture } from "./history/capture.js";
 import { extractText, extractImages, snippet, stripContextWrappers, summarizeMessage, isSystemNoteMessage } from "./history/summarize.js";
@@ -92,6 +93,11 @@ export interface HubOpts {
   webRoot: string;
   /** Factory the hub uses to spawn one bridge per session. */
   makeBridge: BridgeFactory;
+  conversationBackends?: readonly ConversationBackend[];
+  backendUnavailable?: (target: { kind: SessionKind; provider?: string; model?: string; projectWorker?: boolean }) => string | undefined;
+  /** Legacy embedding hook. */
+  makeAntigravityBridge?: BridgeFactory;
+  projectSessionBackends?: readonly ProjectWorkerBackend[];
   /** Internal lifecycle signal: prevents late creation after shutdown. */
   signal?: AbortSignal;
   historyWriterLifecycle?: (id: string) => HistoryWriterLifecycle;
@@ -99,7 +105,7 @@ export interface HubOpts {
 
 
 const AUTO_APPROVE_KEY = "ashub.permissions.autoApprove";
-const independentlySavedSettings = [AUTO_APPROVE_KEY, "ashub.network", BUNDLED_REMOVED, BUNDLED_ENABLED, PLUGIN_DISABLED, PLUGIN_AUTO_APPROVE, "subagentModels", "subagentBudgets", "ashub.features.disabled"];
+const independentlySavedSettings = [AUTO_APPROVE_KEY, "ashub.network", BUNDLED_REMOVED, BUNDLED_ENABLED, PLUGIN_DISABLED, PLUGIN_AUTO_APPROVE, "subagentModels", "subagentBudgets", "ashub.features.disabled", INTEGRATIONS_DISABLED];
 
 let frameSeq = 0;
 const frameIdRe = /^id: (\d+)/;
@@ -316,7 +322,7 @@ function saveSessionMeta(session: Session, opts?: { allowClosed?: boolean; title
       return;
     }
     // Read live state inside the per-id transaction, never before waiting.
-    const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified, lastFrameSeq: session.lastFrameSeq, backendId: session.bridge?.backendId ?? session.backendId, backendState: session.bridge?.getRestoreState?.() ?? session.backendState };
+    const merged = { ...existing, id: session.id, title: session.title, kind: session.kind, projectWorker: session.projectWorker, cwd: session.cwd, model: session.model, provider: session.provider, startedAt: session.startedAt, firstQuery: session.firstQuery, userTitle: session.userTitle, lastModified: session.lastModified, lastFrameSeq: session.lastFrameSeq, backendId: session.bridge?.backendId ?? session.backendId, backendState: session.bridge?.getRestoreState?.() ?? session.backendState };
     if (opts?.titleChange) {
       Object.assign(merged, opts.titleChange);
       merged.lastModified = Math.max(session.lastModified ?? 0, opts.titleChange.lastModified);
@@ -471,7 +477,7 @@ export async function shutdownHub(server?: http.Server, sessions?: Map<string, S
   if (sessions) {
     await collectFailures(
       Array.from(sessions.values()).map(async (s) => {
-        try { s.bridge?.cancel?.(); } catch {}
+        try { requestTurnCancellation(s); } catch {}
         try {
           s.bridge?.settlePermissions?.();
           try { await withContextLock(s, async () => { await s.capture?.flush(); }); }
@@ -605,6 +611,7 @@ interface PersistedSession {
   id: string;
   title?: string;
   kind?: SessionKind;
+  projectWorker?: true;
   cwd: string;
   model?: string;
   provider?: string;
@@ -628,10 +635,12 @@ function invalidateModelProviders(): void {
 function modelToProviders(): Map<string, Set<string>> {
   if (modelProvidersCache) return modelProvidersCache;
   const m = new Map<string, Set<string>>();
-  for (const name of getProviderNames()) {
+  const plugins = integrationProviders();
+  for (const name of new Set([...getProviderNames(), ...plugins.map(p => p.id)])) {
+    if (!allowsProvider(name)) continue;
     const p = resolveProvider(name);
-    if (!p) continue;
-    const ids = [p.defaultModel, ...(p.models ?? [])].filter((x): x is string => !!x);
+    const defaults = !p?.modelsExplicit ? optionalProvider(name)?.models.map(m => m.id) ?? [] : [];
+    const ids = [p?.defaultModel, ...(p?.models ?? []), ...defaults].filter((x): x is string => !!x);
     for (const id of ids) {
       let set = m.get(id);
       if (!set) { set = new Set(); m.set(id, set); }
@@ -664,6 +673,7 @@ async function migrateLegacySessions(): Promise<void> {
     try {
       const metaRaw = await fs.promises.readFile(path.join(SESSIONS_DIR, file), "utf-8");
       const meta = JSON.parse(metaRaw);
+      if (meta.kind === "antigravity") continue;
       const cwd = meta.cwd ?? process.cwd();
       let messages: AgentMessage[] = [];
       try {
@@ -699,6 +709,7 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
           id: meta.id || id,
           title: meta.title,
           kind: meta.kind,
+          projectWorker: meta.projectWorker === true ? true : undefined,
           cwd: meta.cwd,
           model: meta.model,
           provider: meta.provider,
@@ -726,12 +737,12 @@ async function loadPersistedSessions(): Promise<PersistedSession[]> {
       const staticMatch = inferProviderForModel(s.model);
 
       if (!s.provider) {
-        const inferred = staticMatch ?? observed.get(s.model);
+        const inferred = reservedProvider(s.model) ?? staticMatch ?? observed.get(s.model);
         if (inferred) {
           s.provider = inferred;
           console.log(`[hub] backfilled provider="${inferred}" for session ${s.id} (model=${s.model})`);
         }
-      } else if (staticMatch && staticMatch !== s.provider && !providerHasModel(s.provider, s.model)) {
+      } else if (allowsProvider(s.provider) && !optionalProvider(s.provider) && staticMatch && staticMatch !== s.provider && !providerHasModel(s.provider, s.model)) {
         console.log(`[hub] corrected stale provider for session ${s.id}: "${s.provider}" → "${staticMatch}" (model=${s.model})`);
         s.provider = staticMatch;
       }
@@ -881,10 +892,23 @@ function unmaskApiKeys(parsed: Record<string, unknown>, old: Record<string, unkn
   }
 }
 
+function backendUnavailable(target: { kind: SessionKind; provider?: string; model?: string; projectWorker?: boolean }, opts: HubOpts): string | undefined {
+  if (target.kind === 'antigravity' || opts.conversationBackends?.some(b => b.kind === target.kind)) {
+    const backend = opts.conversationBackends?.find(b => b.kind === target.kind);
+    if (!backend || (target.projectWorker && !opts.projectSessionBackends?.some(b => b.kind === target.kind)))
+      return 'Conversation backend unavailable. Enable its integration and restart asHub.';
+  }
+  const provider = target.provider ?? reservedProvider(target.model);
+  if (provider && !allowsProvider(provider)) return `Model provider "${provider}" is unavailable. Enable its integration and restart asHub.`;
+  return undefined;
+}
+
 export function startHub(opts: HubOpts): {
   server: http.Server;
   shutdown: () => Promise<void>;
   resolveArtifact: (id: string, requested: string) => Promise<string>;
+  /** Native only. No HTTP, plugin, or conversation tool can change the grant. */
+  antigravityReviewPolicy: (id: string, enabled?: boolean) => { name: string; enabled: boolean; available: boolean };
   remoteStatus: () => ReturnType<SharedConversations['status']>;
   remoteSettingsTarget: () => { feature: string } | { plugin: string; resource: string } | undefined;
 } {
@@ -900,7 +924,22 @@ export function startHub(opts: HubOpts): {
     const settled = () => { pending.delete(operation); };
     void operation.then(settled, settled);
   };
-  opts = { ...opts, signal: lifecycle.signal, historyWriterLifecycle: id => ({
+  initializeIntegrations();
+  const { makeBridge, makeAntigravityBridge } = opts;
+  const conversationBackends = [...(opts.conversationBackends ?? [])];
+  if (makeAntigravityBridge && !conversationBackends.some(b => b.kind === 'antigravity')) {
+    conversationBackends.push({ kind: 'antigravity', label: 'Google Antigravity', providerLabel: 'Google', switchFromAgent: true, makeBridge: makeAntigravityBridge });
+  }
+  const chatBackends = new Map(conversationBackends.map(b => [b.kind, b]));
+  opts = { ...opts, conversationBackends,
+    backendUnavailable: target => backendUnavailable(target, opts),
+    projectSessionBackends: opts.projectSessionBackends ?? conversationBackends.flatMap(b => b.project ? [{ ...b.project, kind: b.kind }] : []),
+    makeBridge: bridgeOpts => {
+      const kind = bridgeOpts.kind ?? 'agent';
+      const unavailable = backendUnavailable({ ...bridgeOpts, kind }, opts);
+      if (unavailable) throw new BackendUnavailable(unavailable);
+      return (chatBackends.get(kind)?.makeBridge ?? makeBridge)(bridgeOpts);
+    }, signal: lifecycle.signal, historyWriterLifecycle: id => ({
     shutdownSignal: historyShutdown.signal,
     onRecoveryRequired: () => { historiesRequiringRecovery.add(id); },
     onCaptureResult: failure => {
@@ -911,7 +950,8 @@ export function startHub(opts: HubOpts): {
     onWritePending: write => trackHistory(pendingHistoryWrites, write),
   }) };
   const hostEvents = new HostEvents();
-  const sessionService = new SessionService({ events: hostEvents, busy: sessionBusy, thinking: sessionThinkingLevel });
+  const sessionService = new SessionService({ events: hostEvents, busy: sessionBusy, thinking: sessionThinkingLevel,
+    projectTaskProfile: kind => opts.projectSessionBackends?.find(backend => backend.kind === kind)?.taskProfile });
   const sessions = sessionService.sessions;
   sessionServices.set(sessions, sessionService);
   const projects = new ProjectService(path.join(SESSIONS_DIR, "projects.json"), {
@@ -923,7 +963,7 @@ export function startHub(opts: HubOpts): {
   const featureServices = createFeatureServices(hostEvents, lifecycle.signal);
   featureServicesBySessions.set(sessions, featureServices);
   opts.collaboration = new CollaborationTasks(path.join(SESSIONS_DIR, "collaboration"));
-  opts.conversationAccess = id => conversationAccess(id, sessions, projects, opts.collaboration);
+  opts.conversationAccess = id => conversationAccess(id, sessions, projects, opts.collaboration, opts.projectSessionBackends);
   opts.imageResources = id => imageResources.bind(id, () => {
     lifecycle.signal.throwIfAborted();
     const session = sessions.get(id);
@@ -948,7 +988,27 @@ export function startHub(opts: HubOpts): {
   opts.hostAccess = id => hostAccess(id, sessions, projects, opts, operations, projects.isDeleting);
 
   const access = createAccessGuard(opts.host);
-  const sharing = new SharedConversations(path.join(SESSIONS_DIR, 'sharing-grants.json'), access.token);
+  const sharing = new SharedConversations(path.join(SESSIONS_DIR, 'sharing-grants.json'), access.token, {
+    list: resolveCwd => {
+      const result = [];
+      for (const [id, archivedAt] of readScopedArchiveIndex()) {
+        const entry = scopedArchiveEntry(sessions, id, archivedAt, resolveCwd);
+        if (entry) result.push(entry.summary);
+      }
+      return result;
+    },
+    read: async (id, resolveCwd) => {
+      const archivedAt = readScopedArchiveIndex().get(id);
+      const before = scopedArchiveEntry(sessions, id, archivedAt, resolveCwd);
+      const unavailable = () => Object.assign(new Error('归档未共享或已不存在'), { status: 404 });
+      if (!before) throw unavailable();
+      const messages = await readArchivedMessages(id);
+      const after = scopedArchiveEntry(sessions, id, readScopedArchiveIndex().get(id), resolveCwd);
+      if (!after || after.realCwd !== before.realCwd || after.summary.cwd !== before.summary.cwd
+          || after.summary.archivedAt !== before.summary.archivedAt) throw unavailable();
+      return messages;
+    },
+  });
   let legacyMobile: MobileAccessExtension | undefined;
   let pendingLegacyMobile: Promise<MobileAccessExtension | undefined> | undefined;
   let suppressedMigrationPluginId: string | undefined;
@@ -1008,7 +1068,7 @@ export function startHub(opts: HubOpts): {
     },
   });
   const currentBackgroundBridge = (s: Session, cwd: string) =>
-    !lifecycle.signal.aborted && sessions.get(s.id) === s && s.kind === 'agent' && s.cwd === cwd && !s._closing && !s._closed && !s.bridge?.readOnlyContext;
+    !lifecycle.signal.aborted && sessions.get(s.id) === s && s.kind === 'agent' && !s.backendUnavailable && s.cwd === cwd && !s._closing && !s._closed && !s.bridge?.readOnlyContext;
   type SpecifiedBridge = Bridge & Required<Pick<Bridge,'backgroundModels'|'describeBackgroundModel'|'backgroundCompleteSpecified'>>;
   const supportsSpecified = (bridge: Bridge | null | undefined): bridge is SpecifiedBridge =>
     !!(bridge?.backgroundModels && bridge.describeBackgroundModel && bridge.backgroundCompleteSpecified);
@@ -1034,7 +1094,7 @@ export function startHub(opts: HubOpts): {
       return s.store;
     },
     complete: async (id, messages, signal, onUsage) => {
-      const s = sessions.get(id); if (!s || sessionBusy(s)) throw Error('Backend busy or unavailable');
+      const s = sessions.get(id); if (!s || s.backendUnavailable || sessionBusy(s)) throw Error('Backend busy or unavailable');
       const binding = JSON.stringify([s.cwd, s.provider, s.model]);
       await s._ensureBridge?.(); signal.throwIfAborted();
       if (sessions.get(id) !== s || s._closed || s._closing || sessionBusy(s) || binding !== JSON.stringify([s.cwd, s.provider, s.model]) || !s.bridge.backgroundComplete) throw Error('Backend changed or unsupported');
@@ -1175,7 +1235,9 @@ export function startHub(opts: HubOpts): {
     if (url === "/api/mobile" || url.startsWith("/api/mobile/")) { if(legacyMobile)return legacyMobile.handle(req,res); if(req.headers["x-ashub-local"]!=="1"){res.writeHead(403);res.end("Local application request required");return;} res.setHeader('Content-Type','application/json'); res.statusCode = req.method === 'GET' && url === '/api/mobile' ? 200 : 410; res.end(JSON.stringify(req.method === 'GET' && url === '/api/mobile' ? sharing.status() : {error:'请在设备互联插件中管理本机访问'})); return; }
 
     if (await handleProjectRequest(req, res, { sessions, projects, activities: id => pluginActivities.list(id), collaboration: opts.collaboration!, worktreesDirectory: path.join(SESSIONS_DIR, "worktrees"), readBody,
-      create: cwd => createSession(sessions, opts, cwd), saveSessionMetaDebounced, setSessionTitle })) return;
+      sessionBackends: opts.projectSessionBackends,
+      create: (cwd, workerKind) => createSession(sessions, opts, cwd, undefined, workerKind ?? "agent", undefined, workerKind ? true : undefined),
+      saveSessionMetaDebounced, setSessionTitle })) return;
     if (url.split('?')[0] === '/api/plugins/install') {
       res.setHeader('Cache-Control', 'no-store');
       try {
@@ -1258,7 +1320,7 @@ export function startHub(opts: HubOpts): {
           let saved = false;
           try {
             if (typeof input.autoApprove === "boolean") setPluginAutoApproval(settingsPath(), input.id, input.autoApprove);
-            else await extensions.setPluginEnabled(input.id, input.enabled);
+            else if (!setIntegrationEnabled(settingsPath(), input.id, input.enabled)) await extensions.setPluginEnabled(input.id, input.enabled);
             saved = true;
           }
           catch (error) {
@@ -1301,7 +1363,11 @@ export function startHub(opts: HubOpts): {
         res.writeHead(400); res.end("invalid network setting"); return;
       }
       try {
-        if (data.session && sessions.get(data.session)?._hostOperation) { res.writeHead(409); res.end("Conversation operation in progress"); return; }
+        const session = data.session ? sessions.get(data.session) : undefined;
+        if (session?.kind === "antigravity") {
+          res.writeHead(409); res.end("Antigravity uses the CLI's network configuration."); return;
+        }
+        if (session?._hostOperation) { res.writeHead(409); res.end("Conversation operation in progress"); return; }
         const policy = sessionService.writeNetworkPolicy(data.enabled, data.session);
         res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(policy));
       } catch { res.writeHead(500); res.end("network setting could not be saved"); }
@@ -1310,9 +1376,16 @@ export function startHub(opts: HubOpts): {
     if (req.method === "GET" && url === "/api/settings/auto-approve") return getAutoApprove(res);
     if (req.method === "PUT" && url === "/api/settings/auto-approve") return setAutoApprove(req, res, sessions);
     if (req.method === "GET" && url === "/api/version") return getVersion(res);
+    if (req.method === 'GET' && url === '/integrations') {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ conversationBackends: conversationBackends.map(({ kind, label, providerLabel, switchFromAgent }) => ({ kind, label, providerLabel, switchFromAgent })) }));
+      return;
+    }
     if (req.method === "GET" && url.startsWith("/api/models")) return getModels(req, res, sessions);
     if (req.method === "GET" && url === "/sessions") return listSessions(res, sessions, projects);
     if (req.method === "GET" && url === "/api/sessions/archived") return listArchivedSessions(res);
+    const archivedHistory = req.method === "GET" && url.match(/^\/api\/sessions\/archived\/([0-9a-f]{4,32})\/history$/);
+    if (archivedHistory) return readArchivedHistory(res, sessions, archivedHistory[1]!);
     if (req.method === "POST" && url === "/api/sessions/archive") return archiveSession(req, res, sessions);
     if (req.method === "POST" && url === "/api/sessions/unarchive") return unarchiveSession(req, res, sessions, opts);
     if (req.method === "POST" && url === "/api/sessions/unpin") return unpinSession(req, res);
@@ -1379,13 +1452,19 @@ export function startHub(opts: HubOpts): {
       try {
         await session._ensureBridge?.();
       } catch (err) {
-        console.error(`[hub] ensure bridge failed for ${id}:`, err);
+        if (!(err instanceof BackendUnavailable)) console.error(`[hub] ensure bridge failed for ${id}:`, err);
         if (req.method === "GET" && rest === "/context") return getContext(res, session);
-        res.writeHead(500, { "Content-Type": "application/json" });
+        res.writeHead(err instanceof BackendUnavailable ? 503 : 500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : "session bridge unavailable" }));
         return;
       }
 
+      if (req.method === 'POST' && (rest === '/backend' || rest === '/antigravity')) {
+        const kind = rest === '/antigravity' ? 'antigravity' : JSON.parse(await readBody(req))?.kind;
+        return switchConversationBackend(res, session, sessions, opts, kind, () =>
+          projects.list().some(project => project.sessionIds.includes(id)) ||
+          conversationEntries.list().some(entry => entry.sessionId === id));
+      }
       if (req.method === "POST" && rest === "/pty-input") return ptyInput(req, res, session);
       if (req.method === "POST" && rest === "/pty-resize") return ptyResize(req, res, session);
       if (req.method === "GET" && rest === "/queue") {
@@ -1470,7 +1549,10 @@ export function startHub(opts: HubOpts): {
       if (req.method === "POST" && rest === "/cancel") {
         try { extensionMessages.stopTarget(session.id); } catch (e) { console.error("[hub] message authorization persistence failed", e); }
         const wasProcessing = session.bridge.isProcessing?.() ?? false;
-        try { session.bridge.cancel(); } catch (err) { console.error("[hub] cancel:", err); }
+        // Record the user's intent before aborting. A worker that ignores
+        // session/cancel may reject on transport close rather than reply.
+        if (session.projectWorker && session._taskAbort) session._cancelled = true;
+        try { requestTurnCancellation(session); } catch (err) { console.error("[hub] cancel:", err); }
         // If the bridge was not actually processing (e.g. restored session
         // with a dangling processing-start in replay), force-push a cancel
         // frame so the UI exits the stuck "thinking" state.
@@ -1548,6 +1630,14 @@ export function startHub(opts: HubOpts): {
 
   return {
     server,
+    antigravityReviewPolicy(id, enabled) {
+      if (stopping) throw new Error('Application is shutting down');
+      const project = projects.list().find(p => p.id === id);
+      if (!project) throw new Error('Project no longer exists');
+      const available = opts.projectSessionBackends?.some(b => b.id === 'google-antigravity' && b.kind === 'antigravity') === true;
+      if (enabled === true && !available) throw new Error('Google Antigravity project reviews are unavailable');
+      return { name: project.name, available, enabled: enabled === undefined ? !!project.antigravityReviewEnabled : projects.setAntigravityReview(id, enabled) };
+    },
     remoteStatus: () => sharing.desktopStatus(legacyMobile?.status()),
     remoteSettingsTarget: () => {
       const { target } = sharing.desktopStatus(legacyMobile?.status());
@@ -1711,7 +1801,7 @@ async function getModels(
       try {
         const { models } = await s.bridge.getModels();
         for (const { model, provider, modalities, thinkingLevels } of models) {
-          if (!provider || !model) continue;
+          if (!provider || !model || !allowsProvider(provider)) continue;
           let entry = bridgeModels.get(provider);
           if (!entry) {
             entry = { defaultModel: model, models: new Set() };
@@ -1730,21 +1820,25 @@ async function getModels(
     if (generation !== _serverModelGeneration) return getModels(req, res, sessions);
 
     const byName = new Map(bridgeModels);
-    for (const { id } of listAllProviders()) {
+    const settingsProviders = new Set([...listAllProviders().map(({ id }) => id), ...integrationProviders().map(({id}) => id)]);
+    for (const id of settingsProviders) {
+      if (!allowsProvider(id)) continue;
       const bridged = bridgeModels.get(id);
       if (bridged) {
         byName.set(id, bridged);
         continue;
       }
       const resolved = resolveProvider(id);
-      const defaults = id === "deepseek" ? DEEPSEEK_MODELS : [];
+      const defaults = optionalProvider(id)?.models ?? (id === 'deepseek' ? DEEPSEEK_MODELS : []);
       const models = resolved?.modelsExplicit && resolved.models.length
         ? resolved.models
         : defaults.length ? defaults.map(m => m.id) : resolved?.models ?? [];
       const set = new Set<string>(models);
       if (resolved?.defaultModel) set.add(resolved.defaultModel);
-      for (const model of defaults) {
-        if (set.has(model.id)) modelModalities.set(`${id}:${model.id}`, resolved?.modelCapabilities?.get(model.id)?.modalities ?? model.modalities);
+      for (const model of set) {
+        const capabilities = resolved?.modelCapabilities?.get(model);
+        const modalities = capabilities?.modalities ?? defaults.find(entry => entry.id === model)?.modalities;
+        if (modalities) modelModalities.set(`${id}:${model}`, modalities);
       }
       byName.set(id, { defaultModel: resolved?.defaultModel ?? (defaults.length ? models[0] : undefined), models: set });
     }
@@ -1831,11 +1925,15 @@ function settingsPath(): string {
 function getConfig(res: http.ServerResponse): void {
   const fp = settingsPath();
   fs.readFile(fp, "utf-8", (err, raw) => {
-    // anyProviderConfigured() also counts env-var and keys-file sources, not
-    // just apiKey fields in settings.json — the frontend onboarding hint
-    // relies on it. Default to true on failure (never false-alarm).
+    // Keep all kernel credential sources and the keyless OpenAI-compatible
+    // endpoint, but only count credentials for providers available at launch.
+    // Default to true on failure to avoid a spurious onboarding hint.
     let anyConfigured = true;
-    try { anyConfigured = anyProviderConfigured() || codexStatus().configured; } catch { /* keep true */ }
+    try {
+      anyConfigured = !!process.env.OPENAI_BASE_URL
+        || listAllProviders().some(({ id }) => allowsProvider(id) && !!resolveApiKey(id).key)
+        || codexStatus().configured;
+    } catch { /* keep true */ }
     if (err) {
       // Only a missing file is an empty initial configuration. Read failures
       // must not let the editor replace existing settings with defaults.
@@ -2116,8 +2214,9 @@ async function createSession(
   sessions: Map<string, Session>, opts: HubOpts, cwd: string,
   existing?: RestoredSession, spawnKind: SessionKind = "agent",
   setup?: { instanceId?: string; instructions?: string; model?: string; provider?: string; proxyEnabled?: boolean | null },
+  projectWorker?: true,
 ): Promise<Session> {
-  return sessionLifecycle.create(sessions, opts, cwd, existing, spawnKind, setup);
+  return sessionLifecycle.create(sessions, opts, cwd, existing, spawnKind, setup, projectWorker);
 }
 async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): Promise<void> {
   return sessionLifecycle.restore(sessions, opts);
@@ -2135,6 +2234,16 @@ async function restoreSessions(sessions: Map<string, Session>, opts: HubOpts): P
 // is idempotent (timers never stack), and a stale stop(token) from a finished
 // turn can't kill a newer turn's watchdog.
 let idleWatchdogSeq = 0;
+
+function requestTurnCancellation(session: Session): void {
+  if (session.projectWorker) {
+    // submitTask owns backend cancellation through the turn signal. Calling
+    // bridge.cancel() as well would send a second ACP notification.
+    session._taskAbort?.abort();
+  } else {
+    session.bridge?.cancel?.();
+  }
+}
 
 function startIdleWatchdog(session: Session, onStuck: (err: Error) => void): number {
   stopIdleWatchdog(session);
@@ -2159,7 +2268,7 @@ function startIdleWatchdog(session: Session, onStuck: (err: Error) => void): num
         // indefinite hangs from stuck API calls.
         if (Date.now() - idleSince >= 30 * 60 * 1000) {
           session._idleToken = undefined;
-          try { session.bridge.cancel(); } catch {}
+          try { requestTurnCancellation(session); } catch {}
           onStuck(new Error("Request timed out after 30 minutes of inactivity — the agent may be stuck on an unresponsive API."));
           return;
         }
@@ -2167,7 +2276,7 @@ function startIdleWatchdog(session: Session, onStuck: (err: Error) => void): num
         return;
       }
       session._idleToken = undefined;
-      try { session.bridge.cancel(); } catch {}
+      try { requestTurnCancellation(session); } catch {}
       onStuck(new Error("Request timed out — the agent may be stuck."));
     } else {
       session._idleSince = 0; // activity resumed within the window, reset idle tracking
@@ -2644,6 +2753,34 @@ function listSessions(res: http.ServerResponse, sessions: Map<string, Session>, 
 
 // ── Archived sessions ───────────────────────────────────────────────────
 
+/** Unlike the local catalog, don't report a failed index read as an empty remote archive. */
+function readScopedArchiveIndex(): Map<string, number> {
+  try {
+    const data = JSON.parse(fs.readFileSync(ARCHIVED_PATH, 'utf-8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw Error('Invalid archive index');
+    return new Map(Object.entries<number>(data));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Map();
+    throw error;
+  }
+}
+
+function scopedArchiveEntry(sessions: Map<string, Session>, id: string, archivedAt: number | undefined, resolveCwd: ResolveArchiveCwd) {
+  if (typeof archivedAt !== 'number' || !Number.isFinite(archivedAt) || !/^[0-9a-f]{4,32}$/.test(id)
+      || sessions.has(id) || _pendingDeletes.has(id) || fs.existsSync(path.join(SESSIONS_DIR, `${id}.deleted`))) return null;
+  let meta;
+  try { meta = JSON.parse(fs.readFileSync(sessionMetaPath(id), 'utf-8')); }
+  catch { return null; }
+  if (meta?.kind !== 'agent' || typeof meta.cwd !== 'string' || (meta.id !== undefined && meta.id !== id)) return null;
+  const realCwd = resolveCwd(meta.cwd);
+  if (!realCwd) return null;
+  return { realCwd, summary: {
+    id, cwd: meta.cwd as string, archivedAt,
+    title: (typeof meta.title === 'string' && meta.title) || (typeof meta.firstQuery === 'string' ? meta.firstQuery.slice(0, 80) : ''),
+    startedAt: typeof meta.startedAt === 'number' && Number.isFinite(meta.startedAt) ? meta.startedAt : 0,
+  } };
+}
+
 async function listArchivedSessions(res: http.ServerResponse): Promise<void> {
   const archived = await loadArchivedSessions();
   const items: Array<{ id: string; title: string; cwd: string; startedAt: number; archivedAt: number }> = [];
@@ -2663,6 +2800,73 @@ async function listArchivedSessions(res: http.ServerResponse): Promise<void> {
   }
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify(items));
+}
+
+async function readArchivedHistory(res: http.ServerResponse, sessions: Map<string, Session>, id: string): Promise<void> {
+  const existsInArchive = async () => (await loadArchivedSessions()).has(id)
+    && !sessions.has(id) && !fs.existsSync(path.join(SESSIONS_DIR, `${id}.deleted`));
+  res.setHeader("Cache-Control", "no-store");
+  if (!await existsInArchive()) { res.writeHead(404); res.end(); return; }
+  try {
+    const messages = await readArchivedMessages(id);
+    if (!await existsInArchive()) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ messages }));
+  } catch {
+    res.writeHead(500); res.end();
+  }
+}
+
+async function readArchivedMessages(id: string): Promise<ArchivedMessage[]> {
+  const messages: ArchivedMessage[] = [];
+  const add = (role: "user" | "assistant", text: unknown) => {
+    if (typeof text === "string" && text.trim()) messages.push({ role, text });
+  };
+  const readOptional = async (file: string) => {
+    try { return await fs.promises.readFile(path.join(SESSIONS_DIR, id + file)); }
+    catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; return null; }
+  };
+  const checkpoint = await readOptional(".replay-state.json");
+  const bytes = await readOptional(".replay.jsonl");
+  let invalidReplay = false;
+  let compactedReplay = false;
+  if (bytes || checkpoint) {
+    let replay = "";
+    try {
+      // A checkpoint can prove that a missing replay file is not empty.
+      replay = checkpoint ? committedReplay(bytes ?? Buffer.alloc(0), JSON.parse(checkpoint.toString("utf-8"))) : bytes?.toString("utf-8") ?? "";
+    }
+    catch { invalidReplay = true; }
+    for (const frame of replay.split("\n\n")) {
+      const name = replayEventName(frame);
+      if (name === "hub:compaction-marker") compactedReplay = true;
+      if (name !== "agent:query" && name !== "agent:response-segment") continue;
+      try {
+        const { payload } = JSON.parse(frame.match(/^data: (.+)$/m)?.[1] ?? "null");
+        if (name === "agent:query" && !payload?.command) add("user", payload?.query);
+        if (name === "agent:response-segment") add("assistant", payload?.text);
+      } catch { /* Skip malformed legacy frames. */ }
+    }
+  }
+  if (compactedReplay || !messages.length) {
+    const tree = path.join(SESSIONS_DIR, `${id}.jsonl`);
+    if (fs.existsSync(tree)) {
+      // The live replay intentionally omits compacted turns; the read-only
+      // journal is the source for original messages on the active branch.
+      const store = new SessionStore(tree, { metaPath: sessionMetaPath(id), readOnly: true });
+      const originals: ArchivedMessage[] = [];
+      for (const { message } of store.getHistoryEntries()) {
+        // Context-drop summaries are internal markers, not original messages.
+        if ((message.role === "user" || message.role === "assistant") && !isSystemNoteMessage(message) && !isContextPlaceholder(message)) {
+          const raw = extractText(message.content);
+          const text = message.role === "user" ? stripContextWrappers(raw) : raw;
+          if (text.trim()) originals.push({ role: message.role, text });
+        }
+      }
+      if (originals.length) return originals;
+    } else if (invalidReplay) throw new Error("Invalid archived replay");
+  }
+  return messages;
 }
 
 async function archiveSession(
@@ -2690,7 +2894,7 @@ async function archiveSessionById(sessions: Map<string, Session>, id: string): P
     session._cancelRestore?.();
     await session._restorePromise?.catch(() => {});
     stopIdleWatchdog(session);
-    try { session.bridge?.cancel(); } catch {}
+    try { requestTurnCancellation(session); } catch {}
     session.bridge?.settlePermissions?.();
     try {
       await withContextLock(session, async () => { await session.capture?.flush(); });
@@ -2712,7 +2916,7 @@ async function archiveSessionById(sessions: Map<string, Session>, id: string): P
     // Persist terminal approvals received during the final history flush.
     session.bridge?.settlePermissions?.();
     session._closed = true;
-    try { session.bridge?.cancel(); } catch {}
+    try { requestTurnCancellation(session); } catch {}
     try { session.bridge?.close(); } catch {}
     // End + clear SSE clients so late bridge events (e.g. permission
     // timeout) can't write to ended responses.
@@ -2812,8 +3016,10 @@ async function spawnSession(
   try {
     const parsed = JSON.parse(body) as { cwd?: string; kind?: SessionKind };
     if (parsed.cwd) cwd = path.resolve(expandHome(parsed.cwd.trim()));
-    if (parsed.kind === "terminal" || parsed.kind === "agent" || parsed.kind === "ash-terminal") kind = parsed.kind;
+    if (parsed.kind === "terminal" || parsed.kind === "agent" || parsed.kind === "ash-terminal" || parsed.kind === "antigravity") kind = parsed.kind;
   } catch {}
+  const unavailable = opts.backendUnavailable?.({kind});
+  if (unavailable) { res.writeHead(403); res.end(unavailable); return; }
   if (!cwd) cwd = (kind === "terminal" || kind === "ash-terminal") ? os.homedir() : process.cwd();
   try {
     const stat = await fs.promises.stat(cwd);
@@ -2832,6 +3038,9 @@ async function spawnSession(
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ instanceId: s.id, cwd: s.cwd, kind: s.kind }));
   } catch (err) {
+    if (kind === "antigravity") {
+      res.writeHead(422); res.end(err instanceof Error ? err.message : String(err)); return;
+    }
     console.error("[hub] spawn failed:", err);
     res.statusCode = 500;
     res.end(`spawn failed: ${err instanceof Error ? err.stack ?? err.message : err}`);
@@ -2843,6 +3052,50 @@ function expandHome(input: string): string {
   if (input === "~") return os.homedir();
   if (input.startsWith("~/") || input.startsWith("~\\")) return os.homedir() + input.slice(1);
   return input;
+}
+
+async function switchConversationBackend(
+  res: http.ServerResponse, session: Session, sessions: Map<string, Session>,
+  opts: HubOpts, kind: unknown, isAssigned: () => boolean,
+): Promise<void> {
+  const target = opts.conversationBackends?.find(b => b.kind === kind && b.switchFromAgent);
+  if (!target) { res.writeHead(403); res.end('Conversation backend unavailable.'); return; }
+  const reserved = await withContextLock(session, async () => {
+    await pinLock.catch(() => {});
+    const pinned = (await loadPinnedSessions()).has(session.id);
+    if (sessions.get(session.id) !== session || session._closing || session._closed || session._hostOperation ||
+        session.kind !== "agent" || session.bridge?.backendId !== "ash" || session.firstQuery || session.firstTurnDone ||
+        session.userTitle || (session.store && session.store.getActiveLeaf() !== session.store.getRootId()) ||
+        session.replay.some(frame => {
+          const name = parseFrameName(frame);
+          return name === "agent:query" || name === "shell:command-start" || name === "shell:command-done";
+        }) ||
+        sessionBusy(session) || session._uploads?.size || pinned || isAssigned()) return false;
+    session._hostOperation = true;
+    return true;
+  });
+  if (!reserved) {
+    res.writeHead(409); res.end(`Only an unused independent conversation can switch to ${target.label}.`); return;
+  }
+  try {
+    let replacement: Session;
+    try { replacement = await createSession(sessions, opts, session.cwd, undefined, target.kind); }
+    catch (error) {
+      res.writeHead(422); res.end(error instanceof Error ? error.message : String(error)); return;
+    }
+    try { await deleteSession(sessions, session.id, true); }
+    catch (error) {
+      console.error(`[hub] retiring conversation ${session.id} for ${target.kind}:`, error);
+      if (sessions.has(session.id)) {
+        await deleteSession(sessions, replacement.id).catch(cleanup => console.error('[hub] Backend switch cleanup:', cleanup));
+        res.writeHead(500); res.end("Could not replace the unused conversation."); return;
+      }
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ instanceId: replacement.id, cwd: replacement.cwd, kind: replacement.kind }));
+  } finally {
+    session._hostOperation = false;
+  }
 }
 
 function pickDir(res: http.ServerResponse): void {
@@ -3134,9 +3387,11 @@ async function openSseMulti(
       await session._ensureBridge?.();
       if (disconnected || res.writableEnded) return;
     } catch (err) {
-      console.error(`[hub] _ensureBridge failed for ${id}:`, err);
-      const errFrame = `id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: err instanceof Error ? err.message : "Failed to restore session data." } })}\n\n`;
-      try { writer.write(errFrame); } catch {}
+      if (!(err instanceof BackendUnavailable)) {
+        console.error(`[hub] _ensureBridge failed for ${id}:`, err);
+        const errFrame = `id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta: { source: id, ts: Date.now(), name: "ui:error" }, payload: { message: err instanceof Error ? err.message : "Failed to restore session data." } })}\n\n`;
+        try { writer.write(errFrame); } catch {}
+      }
       // Keep persisted history readable even when the remote backend cannot resume.
     }
     if (disconnected || writer.closed || res.writableEnded || session._closed || session._closing) return;
@@ -3160,7 +3415,7 @@ async function openSseMulti(
         const meta = { source: id, ts: Date.now(), id: `hub:${id}:reemit:agent:info`, name: "agent:info" };
         try { writer.write(`id: ${nextFrameId()}\ndata: ${JSON.stringify({ meta, payload: session.lastAgentInfo })}\n\n`); } catch { return; }
       }
-      for (const [name, payload] of [["session:title", { title: session.title }], ["shell:cwd-change", { cwd: session.cwd }], ["hub:capabilities", { readOnlyContext: !session.bridge || !!session.bridge.readOnlyContext, supportsCwdChange: !!session.bridge?.supportsCwdChange }]] as const) {
+      for (const [name, payload] of [["session:title", { title: session.title }], ["shell:cwd-change", { cwd: session.cwd }], ["hub:capabilities", { readOnlyContext: !session.bridge || !!session.bridge.readOnlyContext, supportsCwdChange: !!session.bridge?.supportsCwdChange, backendUnavailable: session.backendUnavailable }]] as const) {
         try { writer.write(sseFrame({ source: id, ts: Date.now(), name }, payload)); } catch { return; }
       }
       try { writer.write(sseFrame({ source: id, ts: Date.now(), name: "agent:request-status" }, session.lastRequestStatus ?? { phase: "clear" })); } catch { return; }
@@ -3214,7 +3469,7 @@ async function ptyInput(req: http.IncomingMessage, res: http.ServerResponse, ses
     res.statusCode = 400; res.end("session has no PTY"); return;
   }
   const body = await readBody(req);
-  if (session._closed || session._closing) { res.statusCode = 409; res.end("session closed"); return; }
+  if (session._closed || session._closing || session._hostOperation) { res.statusCode = 409; res.end("session busy or closing"); return; }
   let data = "";
   try { data = (JSON.parse(body) as { data?: string }).data ?? ""; } catch {}
   if (typeof data !== "string") { res.statusCode = 400; res.end("invalid data"); return; }
@@ -3316,6 +3571,7 @@ async function submitQuery(session: Session, query: string,
   taskId?: string,
   delivery: "queue" | "steer" = "queue",
   settled?: (state: "completed" | "failed" | "cancelled", error?: string) => void,
+  taskPort?: (signal: AbortSignal) => CollaborationTurn,
 ) {
   const meta = (name: string) => ({
     source: session.id,
@@ -3326,6 +3582,9 @@ async function submitQuery(session: Session, query: string,
 
   return withContextLock(session, async () => {
     if (session._hostOperation) throw new Error("Conversation operation in progress");
+    if (session.projectWorker && (!taskId || !taskPort || !beforeSubmit || !session.bridge?.submitTask)) {
+      throw new Error("Project worker only accepts an authorized task");
+    }
     beforeSubmit?.();
     if (session._closed || session._closing) { throw new Error("session closed"); }
     if (session._contextBroken) { throw new Error("context recovery required; restart asHub before continuing this session"); }
@@ -3385,14 +3644,28 @@ async function submitQuery(session: Session, query: string,
     // submit returns immediately, and its watchdog starts on agent:queued-submit
     // (arming it here would clobber the currently-running turn's).
     const wdToken = queued ? undefined : startIdleWatchdog(session, (err) => rejectTimeout!(err));
-    const cleanup = () => { if (wdToken !== undefined) stopIdleWatchdog(session, wdToken); };
+    const taskAbort = session.projectWorker ? new AbortController() : undefined;
+    if (taskAbort) session._taskAbort = taskAbort;
+    const cleanup = () => {
+      if (wdToken !== undefined) stopIdleWatchdog(session, wdToken);
+      if (taskAbort) {
+        taskAbort.abort();
+        if (session._taskAbort === taskAbort) session._taskAbort = undefined;
+      }
+    };
 
     // Encode images into submit payload for multimodal models.
     const submitPayload = images && images.length > 0
       ? JSON.stringify({ query, images })
       : query;
 
-    Promise.race([session.bridge.submit(submitPayload, queueId, delivery), timeout])
+    const submitted = taskAbort
+      ? Promise.resolve().then(() => {
+        taskAbort.signal.throwIfAborted();
+        return session.bridge.submitTask!(taskPort!(taskAbort.signal));
+      })
+      : session.bridge.submit(submitPayload, queueId, delivery);
+    Promise.race([submitted, timeout])
       .then((result) => {
         cleanup();
         if (session._closed || session._closing) { settled?.("cancelled", "Conversation closed"); return; }
@@ -3432,8 +3705,11 @@ async function submitQuery(session: Session, query: string,
         }
       })
       .catch((err) => {
-        settled?.("failed", String(err));
-        if (taskId) session.collaboration?.finish(taskId, "failed", String(err));
+        const cancelled = !!taskAbort && (session._cancelled || session._closed || session._closing);
+        const state = cancelled ? "cancelled" : "failed";
+        const detail = cancelled ? undefined : String(err);
+        settled?.(state, detail);
+        if (taskId) session.collaboration?.finish(taskId, state, detail);
         cleanup();
         if (session._closed || session._closing) return;
         if (queueId) {
@@ -3449,7 +3725,8 @@ async function submitQuery(session: Session, query: string,
         // also bleed into the next turn's first flush (stale segment bug).
         flushSegment(session);
         session.isProcessing = false;
-        pushFrame(session, "agent:error", sseFrame(meta("agent:error"), { message: String(err) }));
+        if (cancelled) routeEvent(session, { name: "agent:cancelled", payload: {} });
+        else pushFrame(session, "agent:error", sseFrame(meta("agent:error"), { message: String(err) }));
         void withContextLock(session, async () => { await session.capture?.flush(); await tagLastQueryFrame(session); })
           .catch(e => console.error("[hub] error-turn capture failed:", e));
         _flushBuf(session.id);
@@ -4190,7 +4467,9 @@ function synthesizeBranchFrames(
       closeTurn();
       userEntryId = entryIds[idx] ?? null;
       const images = extractImages(m.content);
-      const payload: Record<string, unknown> = { query: extractText(m.content) };
+      // Rebuilt replay should show the same query as live replay, not the
+      // model-only context that the kernel freezes into the journal.
+      const payload: Record<string, unknown> = { query: stripContextWrappers(extractText(m.content)) };
       if (images.length > 0) payload.images = images;
       // Stable rewind address: the tree entry this message is persisted
       // under.  Clients prefer it over the volatile client-counted turn.
@@ -4825,6 +5104,7 @@ async function uploadImage(req: http.IncomingMessage, res: http.ServerResponse, 
 
   const session = typeof sessionId === "string" ? sessions.get(sessionId) : undefined;
   if (!session || session._closing || session._closed) { res.writeHead(404); res.end("session not found or closing"); return; }
+  if (session._hostOperation) { res.writeHead(409); res.end("Conversation operation in progress"); return; }
   if (typeof data !== "string" || typeof mimeType !== "string" || !/^image\/(png|jpe?g|gif|webp)$/i.test(mimeType)) { res.writeHead(400); res.end("invalid image"); return; }
   try {
     const id = await persistSessionImage(session, data, mimeType);
@@ -4903,6 +5183,7 @@ async function togglePin(req: http.IncomingMessage, res: http.ServerResponse, se
     try { await readBody(req); } catch {}
   }
   const pinned = await updatePinnedSessions(pinned => {
+    if (session._hostOperation || session._closing || session._closed) return;
     if (pinned.has(session.id)) pinned.delete(session.id);
     else pinned.add(session.id);
   });
@@ -4911,8 +5192,9 @@ async function togglePin(req: http.IncomingMessage, res: http.ServerResponse, se
 }
 
 /** Project membership is checked on every call, including after lazy restore. */
-function conversationAccess(sourceId: string, sessions: Map<string, Session>, projects: ProjectStore, tasks?: CollaborationTasks): ConversationAccess {
-  return createConversationAccess(sourceId, { sessions, projects, tasks, tasksDirectory: path.join(SESSIONS_DIR, "collaboration"), withContextLock, submitQuery,
+function conversationAccess(sourceId: string, sessions: Map<string, Session>, projects: ProjectStore, tasks?: CollaborationTasks,
+  projectSessionBackends?: readonly ProjectWorkerBackend[]): ConversationAccess {
+  return createConversationAccess(sourceId, { sessions, projects, tasks, projectSessionBackends, tasksDirectory: path.join(SESSIONS_DIR, "collaboration"), withContextLock, submitQuery,
     publishQueue(session, name, payload) {
       pushFrame(session, name, sseFrame({source: session.id, ts: Date.now(), name}, payload));
       session._onHostChange?.("queue-updated");
@@ -4927,6 +5209,8 @@ function hostAccess(sourceId: string, sessions: Map<string, Session>, projects: 
     busy: sessionBusy, describe: service.describe, version: () => service.events.version(), writeNetworkPolicy: service.writeNetworkPolicy,
     sessionThinkingLevel, expandHome, withContextLock, setSessionTitle, saveSessionMeta,
     create: (cwd, setup) => createSession(sessions, opts, cwd, undefined, 'agent', setup),
+    projectSessionBackends: opts.projectSessionBackends,
+    createProjectWorker: (cwd, kind) => createSession(sessions, opts, cwd, undefined, kind, undefined, true),
     archive: id => archiveSessionById(sessions, id), delete: (id, approved) => deleteSession(sessions, id, approved),
   });
 }

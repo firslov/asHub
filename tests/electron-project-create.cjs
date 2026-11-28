@@ -13,6 +13,8 @@ app.whenReady().then(async () => {
  const projects = [{ id:'project',name:'论文审阅',cwd:'/workspace/research',sessionIds:['fixture'] }];
  let policy={proxyEnabled:true,sessions:{}};
  const submissions = []; let deletes=0, failDelete=true; let pinned=[];
+ let archived = [{id:'a9ab01',title:'历史草稿',cwd:'/archive/papers'}, {id:'a9ab02',title:'项目旧记录',cwd:'/archive/projects'}];
+ let holdArchive = false, releaseArchive, rejectRestore = true, restoreCalls = 0;
  try {
   server=http.createServer(async(req,res)=>{
    const json = value => {res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value));};
@@ -53,33 +55,43 @@ app.whenReady().then(async () => {
   // The isolated window stays hidden, but exercise foreground polling as in
   // the desktop app while the user is viewing a project.
   await js(`Object.defineProperty(document,'hidden',{get:()=>false});document.getElementById('page-loader').remove();localStorage.setItem('ash.lang','zh');(async()=>{const s=await import('/js/store.js');s.setSessions(${JSON.stringify(sessions)});const p=await import('/js/projects.js');p.showProjects(true);})()`);
+  await wait(`!!document.querySelector('.project-toggle')`);
+  assert.equal(await js(`document.querySelector('.project-toggle').getAttribute('aria-expanded')`),'false');
+  await js(`document.querySelector('.project-toggle').click()`);
   await wait(`!!document.querySelector('.project-group-actions button')`);
-  assert.equal(await js(`document.querySelector('.project-group-actions button').textContent`),'新建对话');
-  assert.equal(await js(`document.querySelector('.project-directory').textContent`),'/workspace/research');
+  const openGroupMenu = `document.querySelector('.project-heading .project-more').click();`;
+  const openChatMenu = `document.querySelector('.project-chat-row .project-more').click();`;
+  await js(openGroupMenu);
+  await wait(`document.querySelector('.project-group-actions:popover-open .project-new-chat')?.textContent==='新建对话'`);
+  assert.equal(await js(`document.activeElement.classList.contains('project-new-chat')`),true);
+  await js(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`);
+  assert.equal(await js(`document.querySelector('#projects .project-directory').textContent`),'research');
+  assert.equal(await js(`document.querySelector('#projects .project-directory').title`),'/workspace/research');
   assert.equal(await js(`document.querySelector('.project-chat-location').textContent.includes('/workspace')`),false);
   assert.equal(await js(`document.querySelector('.project-chat-location').textContent.includes('high')`),true);
-  await js(`document.querySelector('.project-chat-action').click();document.querySelector('dialog input').value='研究计划';document.querySelector('dialog .primary').click()`);
+  await js(`${openChatMenu}document.querySelector('.project-chat-action').click();document.querySelector('dialog input').value='研究计划';document.querySelector('dialog .primary').click()`);
   await wait(`!document.querySelector('dialog')`);assert.equal(sessions[0].title,'研究计划');
   await wait(`!document.querySelector('.project-chat-proxy').disabled`);
-  await js(`document.querySelector('.project-chat-proxy').click()`);
+  await js(`${openChatMenu}document.querySelector('.project-chat-proxy').click()`);
   await wait(`document.querySelector('.project-chat-proxy').getAttribute('aria-pressed')==='false'`);assert.equal(policy.sessions.fixture,false);
   sessions.push({instanceId:'external',title:'补充资料',kind:'agent',cwd:'/workspace/references/外部文献',model:'gpt-6-astra',projectExternal:true});projects[0].sessionIds.push('external');
   // Simulate creation through a plugin/another client. No local store update,
   // tab switch or management dialog should be needed to see the new member.
-  await wait(`!!document.querySelector('.project-chat-directory')`,350);
-  assert.equal(await js(`document.querySelector('.project-chat-directory').textContent`),'其他目录 · 外部文献');
-  assert.equal(await js(`document.querySelector('.project-chat-directory').title`),'/workspace/references/外部文献');
+  await wait(`!!document.querySelector('.project-chat-directory:not([hidden])')`,350);
+  assert.equal(await js(`document.querySelector('.project-chat-directory:not([hidden])').textContent`),'其他目录 · 外部文献');
+  assert.equal(await js(`document.querySelector('.project-chat-directory:not([hidden])').title`),'/workspace/references/外部文献');
   await fs.promises.writeFile('/tmp/ashub-project-directory.png',(await win.webContents.capturePage()).toPNG());
   const initialOrder=await js(`Array.from(document.querySelectorAll('.project-chat'),a=>a.pathname)`);
   assert.deepEqual(initialOrder,['/fixture/','/external/']);
   const externalPin=`document.querySelector('.project-chat[href="/external/"]').closest('.project-chat-row').querySelector('.project-chat-pin')`;
-  await js(externalPin+'.click()');
+  await js(externalPin+`.closest('.project-chat-row').querySelector('.project-more').click();`+externalPin+'.click()');
   await wait(`document.querySelector('.project-chat').pathname==='/external/' && ${externalPin}.getAttribute('aria-pressed')==='true'`);
-  await js(externalPin+'.click()');
+  await js(externalPin+`.closest('.project-chat-row').querySelector('.project-more').click();`+externalPin+'.click()');
   await wait(`document.querySelector('.project-chat').pathname==='/fixture/' && ${externalPin}.getAttribute('aria-pressed')==='false'`);
   sessions.pop();projects[0].sessionIds.pop();
-  await wait(`!document.querySelector('.project-chat-directory') && !!document.querySelector('.project-group-actions button')`,350);
-  await js(`document.querySelector('.project-group-actions button').click()`);
+  await wait(`!document.querySelector('.project-chat-directory:not([hidden])') && !!document.querySelector('.project-group-actions button')`,350);
+  await js(`${openGroupMenu}document.querySelector('.project-group-actions:popover-open .project-new-chat').click()`);
+  await wait(`!!document.querySelector('dialog input[name=title]')`);
   assert.equal(await js(`document.querySelector('dialog .project-directory').textContent`),'/workspace/research');
   assert.equal(await js(`document.querySelector('dialog input[name=cwd]')===null`),true);
   assert.equal(await js(`document.querySelector('dialog input[type=checkbox]').checked`),false);
@@ -106,7 +118,7 @@ app.whenReady().then(async () => {
   }
   await js(`document.querySelector('dialog').close()`);
   await wait(`!document.querySelector('dialog')`);
-  await js(`document.querySelector('.project-add').click();document.querySelector('dialog input').value='新项目'`);
+  await js(`(async()=>{(await import('/js/projects.js')).createProject();document.querySelector('dialog input').value='新项目'})()`);
   assert.equal(await js(`document.querySelector('dialog input[name=cwd]').required`),true);
   assert.equal(await js(`document.querySelector('dialog form').checkValidity()`),false);
   await js(`document.querySelector('dialog input[name=cwd]').value='/workspace/new-project'`);
@@ -118,7 +130,7 @@ app.whenReady().then(async () => {
     await fs.promises.writeFile('/tmp/ashub-project-root-'+width+'.png',(await win.webContents.capturePage()).toPNG());
   }
   await js(`document.querySelector('dialog').close()`);await wait(`!document.querySelector('dialog')`);
-  await js(`document.querySelector('.project-group .project-manage').click();document.querySelector('dialog .project-delete').click()`);
+  await js(`${openGroupMenu}document.querySelector('.project-group .project-manage').click();document.querySelector('dialog .project-delete').click()`);
   assert.equal(await js(`document.querySelector('.project-delete-options').hidden`),false);
   assert.equal(await js(`document.querySelector('.project-delete-options input').checked`),true);
   for (const width of [1180,390]) {
@@ -129,7 +141,7 @@ app.whenReady().then(async () => {
   }
   await js(`document.querySelector('dialog').close()`);
   await wait(`!document.querySelector('dialog')`);
-  await js(`document.querySelector('.project-chat-delete').click()`);
+  await js(`${openChatMenu}document.querySelector('.project-chat-delete').click()`);
   assert.equal(deletes,0,'opening confirmation deleted the conversation');
   assert.equal(await js(`document.querySelector('dialog input[value=keep]').checked`),true);
   for(const width of [1180,390]) {
@@ -142,7 +154,7 @@ app.whenReady().then(async () => {
   await js(`document.querySelector('dialog').close()`);
   await wait(`!document.querySelector('dialog')`);
   assert.equal(deletes,0,'cancel deleted the conversation');
-  await js(`document.querySelector('.project-chat-delete').click();document.querySelector('dialog input[value=delete]').click();document.querySelector('dialog .project-chat-confirm').click()`);
+  await js(`${openChatMenu}document.querySelector('.project-chat-delete').click();document.querySelector('dialog input[value=delete]').click();document.querySelector('dialog .project-chat-confirm').click()`);
   await wait(`document.querySelector('dialog .project-error').textContent.includes('delete failed')`);
   assert.equal(await js(`!!document.querySelector('.project-chat')`),true,'failed delete hid the conversation');
   failDelete=false;
@@ -211,5 +223,157 @@ app.whenReady().then(async () => {
   sessions[1].projectId='project'; await refresh('bbbbbb');
   assert.equal(await js(`!!document.querySelector('#sessions .session-title-edit')`),false);
   console.log('PASS project creation, confirmed deletion/failure/retry/tab cleanup, sidebar creation/activity/buckets/pinning/rename order');
+
+  const countBefore = sessions.length;
+  for (let p = 0; p < 40; p++) {
+    const id = `scale-${p}`, cwd = `/fixture/group-${p}`, sessionIds = [];
+    for (let s = 0; s < (!p ? 120 : 8); s++) {
+      const instanceId = (0x40000 + p*120 + s).toString(16);
+      sessionIds.push(instanceId);
+      const title = p===0 && s===0 ? '调度中枢' : p===29 && s===1 ? '发布检查' : `用于检查窄栏标题显示的长对话 ${s}`;
+      sessions.push({instanceId,projectId:id,title,cwd,kind:'agent'});
+    }
+    projects.push({id,cwd,name:p===0 ? '发布准备' : `项目 ${p}`,sessionIds,...(p===0 || p===29 ? {pinnedSessionIds:[sessionIds[0]]} : {})});
+  }
+  sessions.push({instanceId:'abc999',title:'发布检查',cwd:'/standalone',kind:'agent'});
+  assert.equal(sessions.length-countBefore,433);
+  const target = projects.find(p=>p.id==='scale-29').sessionIds[1];
+  await js(`(async()=>{await import('/js/prefs.js');localStorage.setItem('ash.sidebar-width','260');document.querySelector('.app').style.setProperty('--sidebar-w','260px');(await import('/js/sidebar.js')).sidebarView.value='projects'})()`);
+  await wait(`document.querySelectorAll('.project-toggle').length===41`);
+  const result = await js(`(()=>{const list=document.querySelector('#projects');const headings=[...list.querySelectorAll('.project-toggle')];return {first:headings.filter(el=>el.getBoundingClientRect().bottom<=list.getBoundingClientRect().bottom).length,expanded:headings.filter(el=>el.getAttribute('aria-expanded')==='true').length};})()`);
+  assert(result.first>=10,JSON.stringify(result));assert.equal(result.expanded,1,'only the previously expanded fixture project should be open');
+  await js(`window.projectList=document.querySelector('#projects');projectList.scrollTop=projectList.scrollHeight;window.previousTop=projectList.scrollTop;document.querySelector('#sidebar-search-toggle').click()`);
+  await wait(`document.activeElement?.id==='sidebar-find-input'`);
+  const findKey = key => js(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:${JSON.stringify(key)}}))`);
+  await findKey('Escape');
+  assert.equal(await js(`document.querySelector('#sidebar-find').hidden && projectList.scrollTop===previousTop && document.activeElement.id==='sidebar-search-toggle'`),true);
+  const search = () => js(`(()=>{document.querySelector('#sidebar-search-toggle').click();const field=document.querySelector('#sidebar-find-input');field.value='发布检查';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await search();
+  await wait(`document.querySelectorAll('#sidebar-find [role=option]').length===2`);
+  const options=await js(`Array.from(document.querySelectorAll('#sidebar-find [role=option]'), el=>el.textContent)`);
+  assert(options.some(s=>s.includes('项目 29')) && options.some(s=>s.includes('未归入项目')));
+  if (!options[0].includes('项目 29')) await findKey('ArrowDown');
+  await findKey('Enter');
+  await wait(`location.pathname==='/'+${JSON.stringify(target)}+'/' && document.activeElement.classList.contains('project-chat')`);
+  assert(await js(`document.activeElement.getAttribute('aria-current')==='page'`));
+  assert(await js(`document.querySelector('[data-project-id="scale-29"]').getAttribute('aria-expanded')==='true'`));
+  assert(await js(`(() => {
+    const toggle = document.querySelector('[data-project-id="scale-29"]');
+    return toggle.getAttribute('aria-current') === 'true' &&
+      getComputedStyle(toggle).backgroundColor === 'rgba(0, 0, 0, 0)' &&
+      getComputedStyle(document.querySelector('.project-chat.current')).backgroundColor !== 'rgba(0, 0, 0, 0)';
+  })()`), 'expanded project is a location cue, not a second selected row');
+  await js(`window.focusedBefore=document.activeElement;window.topBefore=focusedBefore.getBoundingClientRect().top;`);
+  sessions.find(s=>s.projectId==='scale-10').waitingApproval=true;
+  await js(`document.dispatchEvent(new CustomEvent('ash:sessions-changed'))`);
+  await wait(`document.querySelector('[data-project-id="scale-10"] .project-summary:not([hidden])')!==null`);
+  assert(await js(`document.activeElement===focusedBefore && Math.abs(focusedBefore.getBoundingClientRect().top-topBefore)<=2`));
+  await js(`document.querySelector('.app').style.setProperty('--sidebar-w','200px');document.activeElement.closest('.project-chat-row').querySelector('.project-more').focus()`);
+  const titleWidth=await js(`document.querySelector('[data-project-group="scale-29"] .project-other-list .project-chat:not(.current) .project-chat-name').getBoundingClientRect().width`);
+  assert(titleWidth>100,`long title has only ${titleWidth}px at 200px sidebar width`);
+  await js(`document.activeElement.click()`);
+  assert(await js(`!!document.activeElement.closest('.project-menu:popover-open')`));
+  await findKey('Escape');
+  assert(await js(`!document.querySelector('.project-menu:popover-open') && document.activeElement.classList.contains('project-more')`));
+  win.setContentSize(390,850);
+  await wait(`innerWidth<=700`);
+  await search();
+  await wait(`document.activeElement?.id==='sidebar-find-input'`);
+  await findKey('Escape');
+  assert(await js(`document.querySelector('#sidebar-find').hidden && !document.querySelector('.app').classList.contains('sidebar-collapsed')`));
+  await search();
+  await wait(`document.querySelectorAll('#sidebar-find [role=option]').length===2`);
+  await js(`Array.from(document.querySelectorAll('#sidebar-find [role=option]')).find(o=>o.textContent.includes('未归入项目')).click()`);
+  await wait(`location.pathname==='/abc999/' && document.querySelector('.app').classList.contains('sidebar-collapsed')`);
+  await js(`document.querySelector('#sidebar-toggle').click()`);
+  await search();
+  await wait(`document.querySelectorAll('#sidebar-find [role=option]').length===2`);
+  await js(`Array.from(document.querySelectorAll('#sidebar-find [role=option]')).find(o=>o.textContent.includes('项目 29')).click()`);
+  await wait(`location.pathname==='/'+${JSON.stringify(target)}+'/' && document.querySelector('.app').classList.contains('sidebar-collapsed')`);
+  await js(`document.querySelector('#sidebar-toggle').click()`);
+  assert(await js(`document.querySelector('[data-project-id="scale-29"]').getAttribute('aria-expanded')==='true' && document.querySelector('.project-chat.current')?.pathname===location.pathname`));
+  console.log('PASS 40-project / 432-conversation directory, same-name navigation, Escape and scroll restoration, live focus, 200px and narrow layouts', JSON.stringify(result));
+
+  win.setContentSize(1180,850);
+  await wait(`innerWidth>700`);
+  assert(await js(`document.querySelector('[data-project-group="scale-29"] .project-other-toggle').getAttribute('aria-expanded')==='true'`), 'search must expand a folded match');
+  assert(await js(`!localStorage.getItem('ash.project-others-expanded')`), 'search must not change the saved disclosure');
+  const large = projects.find(p=>p.id==='scale-0'), [coordinator, approver, done] = large.sessionIds;
+  Object.assign(sessions.find(s=>s.instanceId===coordinator),{isProcessing:true,queuedCount:3});
+  Object.assign(sessions.find(s=>s.instanceId===approver),{waitingApproval:true,isProcessing:true});
+  Object.assign(sessions.find(s=>s.instanceId===done),{hasUnread:true});
+  await js(`document.dispatchEvent(new CustomEvent('ash:sessions-changed'));document.querySelector('[data-project-id="scale-0"]').click()`);
+  const group = `document.querySelector('[data-project-group="scale-0"]')`;
+  const disclosure = `${group}.querySelector('.project-other-toggle')`;
+  const metrics = `${group}.querySelector('.project-other-status')`;
+  const visibleRows = `Array.from(${group}.querySelectorAll('.project-chat')).filter(n=>n.getClientRects().length).length`;
+  await wait(`${metrics}?.textContent.includes('1 项执行中')`);
+  assert.equal(await js(`${disclosure}.getAttribute('aria-expanded')`),'false');
+  assert.equal(await js(`${metrics}.hidden`),false);
+  assert.equal(await js(`${group}.querySelector('.project-other-count').textContent`),'119');
+  assert.equal(await js(visibleRows),1);
+  assert.deepEqual(await js(`Array.from(${metrics}.querySelectorAll('.project-other-metric:not([hidden])'), n=>n.textContent)`),['1 项待处理','1 项执行中','1 个对话有排队','1 项新结果']);
+  assert(await js(`(() => {const button=${disclosure}, bounds=button.getBoundingClientRect();return bounds.width>120 && [...button.querySelectorAll('span:not([hidden])')].every(n=>n.getBoundingClientRect().right<=bounds.right+1);})()`), 'status must fit at the 200px sidebar width');
+  await js(`${disclosure}.scrollIntoView({block:'center'});${disclosure}.focus()`);
+  const debug = win.webContents.debugger;
+  debug.attach('1.3');
+  try {
+    const press = async (key, code, n) => {
+      await debug.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,text:key==='Enter'?'\r':key});
+      await debug.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n});
+    };
+    await press('Enter','Enter',13);
+    assert.equal(await js(visibleRows),120);
+    assert.equal(await js(`${metrics}.hidden`),true,'expanded list does not repeat the visual status summary');
+    assert.equal(await js(`localStorage.getItem('ash.project-others-expanded')`),'["scale-0"]');
+    await press(' ','Space',32);
+    assert.equal(await js(visibleRows),1);
+    assert(await js(`document.activeElement===${disclosure}`));
+  } finally { debug.detach(); }
+  if (process.env.ASHUB_PROJECT_PREVIEW) {
+    const clip = await js(`(async () => {
+      ${disclosure}.blur(); ${group}.scrollIntoView({block:'center'});
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const {left,top,right,bottom}=${group}.getBoundingClientRect();
+      return {x:Math.floor(left-8),y:Math.floor(top-8),width:Math.ceil(right-left+16),height:Math.ceil(bottom-top+16)};
+    })()`);
+    fs.writeFileSync(process.env.ASHUB_PROJECT_PREVIEW,(await win.webContents.capturePage(clip)).toPNG());
+  }
+  if (process.env.ASHUB_PROJECT_SIDEBAR_PREVIEW_DIR) {
+    await js(`(async () => {
+      const { switchTo } = await import('/js/session-manager.js');
+      await switchTo(${JSON.stringify(coordinator)});
+      document.activeElement?.blur();
+    })()`);
+    await wait(`${group}.querySelector('.project-chat.current')`);
+  }
+  for (const theme of ['light', 'dark']) {
+    const fits = await js(`(() => {
+      document.documentElement.dataset.theme = ${JSON.stringify(theme)};
+      document.querySelector('.app').style.setProperty('--sidebar-w','145px');
+      const list = document.querySelector('#projects'), group = ${group};
+      const header = group.querySelector('.project-toggle'), title = group.querySelector('.project-name');
+      const controls = group.querySelector('.project-heading .project-more');
+      const row = group.querySelector('.project-chat');
+      const style = getComputedStyle(group.querySelector('.project-details'));
+      return list.scrollWidth <= list.clientWidth + 1 && title.clientWidth >= 46 &&
+        header.getBoundingClientRect().right < controls.getBoundingClientRect().left &&
+        row.querySelector('.project-chat-name').clientWidth >= 48 && style.borderInlineStartWidth === '1px';
+    })()`);
+    assert(fits, `project title, row and fixed controls must fit at 145px in ${theme}`);
+    if (process.env.ASHUB_PROJECT_SIDEBAR_PREVIEW_DIR) {
+      const bounds = await js(`(async () => {
+        document.querySelector('.app').style.setProperty('--sidebar-w','256px');
+        document.querySelector('#projects').scrollTop = 0;
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await Promise.allSettled(document.querySelector('.sidebar').getAnimations({subtree:true})
+          .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime)).map(animation => animation.finished));
+        const {left, top, right, bottom} = document.querySelector('.sidebar').getBoundingClientRect();
+        return {x: Math.ceil(left), y: Math.ceil(top), width: Math.floor(right-left), height: Math.min(520, Math.floor(bottom-top))};
+      })()`);
+      fs.writeFileSync(path.join(process.env.ASHUB_PROJECT_SIDEBAR_PREVIEW_DIR, `project-sidebar-${theme}.png`), (await win.webContents.capturePage(bounds)).toPNG());
+    }
+  }
+  console.log('PASS pinned project folds 119 conversations, keyboard disclosure, selected hierarchy, and constrained light/dark layouts');
  }finally{win?.destroy();server?.closeAllConnections();await new Promise(r=>server?server.close(r):r());clearTimeout(watchdog);fs.rmSync(tmp,{recursive:true,force:true});}
 }).then(()=>app.exit(0),e=>{console.error(e);app.exit(1);});

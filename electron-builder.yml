@@ -13,6 +13,8 @@ files:
   - examples/extensions/scheduled-tasks/{*.mjs,ashub-plugin.json,package.json,README.md}
   - examples/extensions/voice-input/{*.mjs,ashub-plugin.json,package.json,README.md}
   - node_modules/**/*
+  - '!node_modules/.ashub-integration-kernel.json'
+  - '!node_modules/.ashub-integration-kernel.json.*.tmp'
   - package.json
 
 asar: false

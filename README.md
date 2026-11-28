@@ -109,6 +109,8 @@ Only conversations in authorized, existing directories are shared. Restore archi
 
 In **Plugins → Local extensions**, enable the extensions that ship with asHub. They start disabled on a fresh install. Existing manual installations take precedence and keep their settings. If you uninstall an included extension, it stays removed across upgrades until you choose to reinstall it. Other plugins can be installed from a trusted ZIP; see the [installation guide](docs/plugin-installation.md).
 
+You can disable **Google Gemini** and **Google Antigravity** independently under **Plugins → Built-in components**. Restart asHub to apply changes. Existing conversations retain their history and provider identity and are read-only while the integration is unavailable. Disabling an integration does not delete credentials. Antigravity project workers also require their separate experimental flag. See [Build without optional integrations](docs/release-validation.md#build-without-optional-integrations) to omit both integrations from a build.
+
 | Availability | Plugins |
 | --- | --- |
 | Included on macOS, Windows, and Linux | [Kimi Coding Plan](examples/extensions/kimi-coding-plan), [Project Management](examples/extensions/project-management), [Conversation Browser](examples/extensions/browser-automation), [Image Display](examples/extensions/image-display), [Device Interconnect](examples/extensions/multi-machine), [Scheduled Tasks](examples/extensions/scheduled-tasks), [Voice Input](examples/extensions/voice-input) |

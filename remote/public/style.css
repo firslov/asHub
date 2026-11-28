@@ -102,7 +102,7 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0}
 .empty h2{font-size:21px;color:var(--text);font-weight:450}
 .empty p{font-size:13px}
 .message{margin:0 0 26px;overflow-wrap:anywhere}
-.message.user{padding:16px 20px;border-radius:17px;background:var(--message);border:1px solid color-mix(in srgb,var(--line) 65%,transparent);white-space:pre-wrap}
+.message.user{inline-size:fit-content;max-inline-size:90%;margin-inline-start:auto;padding:12px 16px;border-radius:17px;background:var(--message);border:1px solid color-mix(in srgb,var(--line) 65%,transparent);white-space:pre-wrap;text-align:start}
 .message.reply{line-height:1.85}
 .message p{margin:0 0 14px}
 .message p:last-child{margin:0}
@@ -175,7 +175,6 @@ main{height:var(--viewport-height,100dvh)}
 .composer-wrap{padding-left:12px;padding-right:12px}
 .composer-note{font-size:9px}
 .message{font-size:15px}
-.message.user{padding:14px 16px}
 #notice{padding:9px 16px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
@@ -233,6 +232,7 @@ main{height:var(--viewport-height,100dvh)}
 .task-route,.task-choice small { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
 .task-error { color: var(--error); white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-output { font-size: 14px; }
+.review-summary,.review-unresolved li { white-space: pre-wrap; overflow-wrap: anywhere; }
 dialog #modal-body { min-width: 0; }
 dialog input { width: 100%; font-size: 16px; }
 dialog .choice { min-height: 44px; overflow-wrap: anywhere; }
@@ -241,7 +241,7 @@ dialog .choice { min-height: 44px; overflow-wrap: anywhere; }
   .chat-header { padding-top: max(10px,env(safe-area-inset-top)); }
   .view-tools .text-button { min-height: 44px; flex: none; }
   #messages { padding: 20px 16px; }
-  .message.user { border: 0; border-radius: 14px; }
+  .message.user { padding: 11px 14px; border: 0; border-radius: 14px; }
   .message pre { padding: 12px; max-width: 100%; }
   .composer-wrap { padding-top: 6px; }
   .composer-wrap form { padding: 9px 12px; border-radius: 16px; }
@@ -276,7 +276,35 @@ dialog.model-dialog { width: min(480px,calc(100vw - 24px)); height: min(650px,ca
 .model-dialog .picker-error { flex: none; font-size: 12px; color: var(--error); overflow-wrap: anywhere; margin: 0; }
 .picker-error:empty { display: none; }
 @media(max-width:760px) { dialog.model-dialog { padding: 18px; } }
+/* Archive history is a modal reader, independent of the live composer. */
+#archive-dialog { width: min(620px,calc(100vw - 24px)); height: min(720px,calc(var(--viewport-height,100dvh) - 24px)); max-height: calc(var(--viewport-height,100dvh) - 24px); padding: 16px; overflow: hidden; }
+#archive-dialog[open] { display: flex; flex-direction: column; }
+#archive-dialog > header { flex: none; gap: 8px; margin-bottom: 3px; }
+#archive-back, #archive-close { flex: none; min-height: 44px; }
+#archive-heading { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; }
+#archive-hint { flex: none; margin: 0 0 12px; }
+.archive-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+#archive-catalog { flex: 1; }
+#archive-search { padding: 10px 12px; }
+#archive-items { margin: 0; padding: 0; list-style: none; }
+#archive-items .archive-item { display: grid; gap: 4px; }
+.archive-item small { color: var(--muted); }
+#archive-reader:not([hidden]) { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.archive-page-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+.archive-page-actions button { flex: none; min-height: 44px; }
+.archive-page-actions [aria-disabled=true] { opacity: .55; }
+#archive-history-status { display: flex; align-items: center; min-height: 44px; margin: 0; font-size: 12px; line-height: 1.4; }
+#archive-list-status:empty, #archive-history-status:empty { display: none; }
+#archive-messages { flex: 1; overflow-anchor: none; padding: 0 4px 4px; }
+.archive-message { margin: 0 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.archive-message > h3 { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.archive-text { margin: 0; line-height: 1.65; overflow-wrap: anywhere; }
+.archive-text p { font-size: inherit; color: inherit; }
+.archive-text pre { white-space: pre; }
+.archive-plain { white-space: pre-wrap; }
 @media(max-height:480px) {
+  #archive-dialog { padding: 10px; }
+  #archive-hint { margin-bottom: 4px; }
   dialog.model-dialog { padding: 12px 16px; }
   .model-dialog > header { margin-bottom: 6px; }
   .model-dialog #modal-body { gap: 8px; }

@@ -22,6 +22,12 @@
 
 职责说明作为对话说明持久保存。创建不会自动开始模型回复、发送任务或继承当前对话历史。开展工作需用户授权，可复用 asHub 的同项目对话通信。加入新项目时，当前对话会从原项目移出，授权预览会列出该对话。
 
+### 创建 Antigravity 审查成员
+
+在已加入目标项目的普通对话中，可以说「为当前项目创建一个 Antigravity 审查成员，命名为验收审查」。插件从目录的 `projectSessionBackends` 发现后端，使用 `project_management_create_worker` 创建，不把 Antigravity 当作可调模型，不设置思考强度或 VPN。
+
+需要启用了 Antigravity 项目后端、支持 `conversation.createProjectWorker` 的桌面端，以及在「管理项目」中已开启该项目的 Antigravity 审查授权。创建仍遵循插件的宿主审批设置；只创建审查对话，不发起任务、不代开授权，也不授予文件操作权限。仅更新插件无法为旧桌面端补上宿主能力。
+
 ## 授权和失败处理
 
 - 默认由宿主展示目标及具体参数并等待本次确认。新版宿主支持在插件配置中开启自动批准；全局工具自动批准开关不决定本插件的授权。
@@ -86,7 +92,13 @@
 例如：“让数据成员和文稿成员分别核查表 2，等两份结果验收后再交给复核成员。返工只处理发现的缺口。”
 协调对话通过 project_work_plan 记录本次目标及 1–12 个步骤；每步有负责人、交付物、验收条件与依赖。可同时开展没有依赖的步骤。独立短任务可继续直接发送。
 
-project_work_brief 返回可直接交给 conversation_send 的参数。原样发送后，插件根据实际发送事件自动登记 taskId。状态记录本身不发送消息，不创建成员或提升权限。工作完成后先通过 conversation_wait 或 project_work_status 查看真实交付，再使用 project_work_review 写明验收依据。只有 accepted 可解锁下游；revise 或 blocked 保留此前成果，后续使用 previousTaskId 只补缺口。若下游需要文件，在验收理由中附上可用的路径。没有明确交付时应核对原始任务记录。
+project_work_brief 返回可直接交给 conversation_send 的参数。原样发送后，插件根据实际发送事件自动登记 taskId。状态记录本身不发送消息，不创建成员或提升权限。工作完成后先通过 conversation_wait 或 project_work_status 查看真实交付，再使用 project_work_review 写明验收依据。只有 accepted 可解锁下游；revise 或 blocked 保留此前成果，后续使用 previousTaskId 只补缺口。具备文件权限的下游可通过产物引用定位文件。没有明确交付时应核对原始任务记录。
+
+### 仅审阅提供的材料
+
+如果成员目录声明 `projectTaskProfile: "inline-review"`（例如 Antigravity 项目评审成员），协调者将该步骤登记为 `mode: "inline-review"`。这类成员只产出文字意见，不读取仓库、修改文件、运行测试或交付文件。示例：执行成员改动并测试 → 评审成员审阅必要的 diff 摘录与测试摘要 → 执行成员处理意见并复验。
+
+生成简报时，使用 `project_work_brief({work, step, reviewMaterial})` 提供明确允许发送的问题与材料。只有这段文字进入派发正文，计划目标、验收条件、历史、上游结论和文件引用均不自动附带；不能同时传 `artifactSelection`。缺材料时返回 `review_material_required`，不创建派发尝试。旧计划中还未准备派发的步骤也使用成员当前的能力判断。项目授权及回执校验仍然有效。
 
 工作按当前项目和协调对话隔离。重开同一协调对话后，可直接询问“上次还有哪些步骤待验收”。`receipt_pending` 表示已准备说明但没有登记发送回执，先用 `project_work_link` 核对原派发。无法确认时保留待核对状态。
 
@@ -140,3 +152,15 @@ project_work_brief 返回可直接交给 conversation_send 的参数。原样发
 - 新建步骤可把 `criteria` 写成逐项清单。通过时在 `checks` 中记录每项核对结果及证据。旧方案的单段验收文字仍可使用。交付有未决事项时，在 `unresolved` 中逐项说明处理；仍阻塞的事项不能通过。已接受的例外会随交接传给下游。
 - 通过时用 `artifactIndexes` 登记下游可用的产物。下游任务会收到原任务、验收时的任务版本、完整的已接受例外和选定的产物引用，剩余容量用于验收结论摘要。产物超出可用容量时，`project_work_brief` 返回 `handoff_selection_required` 和各项引用的长度，协调者可用 `artifactSelection` 重新组合。若步骤说明和完整例外本身超出容量，返回 `handoff_capacity_exceeded`，按原验收记录拆分后续工作。准备成功后，该次说明和选择固定。完整验收记录可从 `project_work_status` 按步骤查询。文件访问和版本核验由接收者按现有授权完成。
 - 单个接续通知被宿主明确拒绝时，仅暂停该工作流。共享消息服务故障会暂停接续，重启后需要核查并手动恢复。未确认受理的提交不会自动重放。
+
+### 结构化验收与文字评审（0.8.3，未发布）
+
+复杂步骤可以把 `criteria` 写成 1–8 个场景，每项含 `initialState`、`action`、`expected`。旧的单段文字、文字清单和已有工作记录仍可使用。成员在 `conversation_deliver` 的 `summary` 中提交按 1 起编号的 JSON，例如：
+
+```json
+{"checks":[{"criterion":1,"observation":"实际看到的结果","outcome":"met","evidence":"可复核的证据"}]}
+```
+
+不满足用 `unmet`，缺材料用 `unverified`（可留空 `evidence`）。协调者在 `project_work_status` 中查看成员自报，独立核对后传入实际检查的 `taskRevision` 与每项 `checks`。缺项、重复编号、版本过期或未验证都不能验收通过、放行下游；未决事项例外也不能替代验收条件。返工仍用原条件和编号。
+
+`inline-review` 仍只发送明确提供的 `reviewMaterial`。若评审步骤使用结构化验收，协调者须把获准发送的场景编号及 `checks` 交付要求明确写入材料；插件不会附加计划、上游证据、文件引用或上一轮验收内容。

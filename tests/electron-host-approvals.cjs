@@ -113,6 +113,17 @@ app.whenReady().then(async()=>{
   assert(await win.webContents.executeJavaScript(`(()=>{const card=document.querySelector('[data-request-id="acp-wide"]');
     return card.querySelector('[data-i18n="permission.unconfirmed"]') && !card.classList.contains('blocked') &&
       !card.classList.contains('allowed') && card.querySelector('.deny').disabled;})()`),'unknown delivery has an explicit, terminal status');
+  const desktopGrant={requestId:'desktop-app',kind:'operation',explicit:true,scope:'once',title:'Desktop control · com.test.App',desktopApplication:'com.test.App',expiresAt:Date.now()+30000,items:[]};
+  await win.webContents.executeJavaScript(`showRequest(${JSON.stringify(desktopGrant)});true`);
+  const grantButton='[data-request-id="desktop-app"] .approve-all';
+  const grantText=()=>win.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(grantButton+' span')}).textContent`);
+  const clickGrant=()=>win.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(grantButton)}).click()`);
+  assert.match(await grantText(),/始终允许此应用|Always allow this app/);
+  await clickGrant();
+  assert.match(await grantText(),/所有对话|all conversations/);
+  assert.equal(await win.webContents.executeJavaScript('decisions.length'),3,'persistent desktop consent needs explicit confirmation');
+  await clickGrant();
+  assert.deepEqual(await win.webContents.executeJavaScript('decisions.at(-1)'),{requestId:'desktop-app',outcome:'approved',sessionId:'source',sessionWide:true});
   if (fs.existsSync(path.join(root,'remote/public/index.html'))) {
   await win.loadURL(base+'/remote/');
   await win.webContents.executeJavaScript(`user='fixture';device='desktop';session='source';$('auth').hidden=true;$('workspace').hidden=false;frame({meta:{name:'permission:request'},payload:${JSON.stringify(payload)}})`);

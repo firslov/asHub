@@ -89,14 +89,17 @@ test('bundled plugin files are selected only on their supported platforms', () =
     const matchers = ['files', 'extraResources', 'extraFiles'].flatMap(name => getFileMatchers(config, name, path.join(root, 'release'), {
       defaultSrc: root, globalOutDir: path.join(root, 'release'), customBuildOptions: config[platform], macroExpander: value => value,
     }) || []);
-    const included = file => matchers.some(matcher => {
-      const absolute = path.join(pluginPath, file);
+    const matches = absolute => matchers.some(matcher => {
       const relative = path.relative(matcher.from, absolute);
       return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)
         && matcher.createFilter()(absolute, fileStat);
     });
+    const included = file => matches(path.join(pluginPath, file));
     for (const file of common) assert(included(file), `${platform} must bundle ${file}`);
     for (const file of macOnly) assert.equal(included(file), platform === 'mac', `${platform}: ${file}`);
+    assert(matches(path.join(root, 'dist/builtin-plugins/sample/assets/sample.txt')));
+    assert(!matches(path.join(root, 'src/builtin-plugins/sample/kernel-patches/patch.json')));
+    assert(!matches(path.join(root, 'node_modules/.ashub-integration-kernel.json')));
   }
 });
 
@@ -104,10 +107,15 @@ macTest('the builder compiles the desktop capture helper once for both macOS arc
   const f = fixture(t);
   f.install('arm64');
   f.install('x64');
-  for (const spec of require('../scripts/patches/codex-windows-login.json').files) {
-    const file = path.join(f.root, 'node_modules/agent-sh', spec.path);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, spec.after);
+  // beforePack now verifies all required hunks, not just the Codex login patch.
+  const kernel = path.resolve(__dirname, '../node_modules/agent-sh');
+  const patchDir = path.resolve(__dirname, '../scripts/patches');
+  for (const name of fs.readdirSync(patchDir).filter(name => name.endsWith('.json'))) {
+    for (const { path: relative } of require(path.join(patchDir, name)).files) {
+      const file = path.join(f.root, 'node_modules/agent-sh', relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.copyFileSync(path.join(kernel, relative), file);
+    }
   }
   const plugin = path.join(f.root, 'examples/extensions/desktop-control');
   fs.mkdirSync(path.join(plugin, 'scripts'), { recursive: true });

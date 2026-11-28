@@ -50,10 +50,34 @@ app.whenReady().then(async () => {
     await js('(async()=>{localStorage.setItem("ash.lang","zh");(await import("/js/i18n.js")).setLang("zh")})()');
     await wait('!!document.querySelector(".conversation-entry-open")');
     await wait('!document.querySelector(".extension-menu") || document.querySelector(".extension-menu").hidden===true');
+    const selectView = view => js(`(() => {
+      document.querySelector('#sidebar-view-select').click();
+      document.querySelector('.sidebar-view-option[data-view="${view}"]').click();
+    })()`);
+    await js('window.fixedAssistantEntry = document.querySelector(".conversation-entry-open")');
+    for (const view of ['projects', 'terminals', 'sessions']) {
+      await selectView(view);
+      assert(await js(`(() => {
+        const entry = document.querySelector('.conversation-entry-open');
+        const picker = document.querySelector('#sidebar-view-select');
+        return entry === window.fixedAssistantEntry && entry.getClientRects().length > 0 &&
+          entry.getBoundingClientRect().bottom <= picker.getBoundingClientRect().top;
+      })()`), `assistant stays above the selector in ${view}`);
+    }
     // Dedicated entries use the sidebar type scale, even when labels are long.
-    const entryStyle=await js(`(()=>{const b=document.querySelector('.conversation-entry-open'),row=b.parentElement,more=row.querySelector('.conversation-entry-control');const label=b.textContent;b.textContent='个人助手 · 很长的专属对话名称'.repeat(6);const style=getComputedStyle(b),r=row.getBoundingClientRect(),m=more.getBoundingClientRect();const result={size:style.fontSize,reference:getComputedStyle(document.querySelector('.sidebar-new-btn')).fontSize,weight:Number(style.fontWeight),fits:row.scrollWidth<=row.clientWidth+1,manageVisible:m.right<=r.right+1&&m.width>=32};b.textContent=label;return result;})()`);
+    const entryStyle=await js(`(()=>{
+      const b=document.querySelector('.conversation-entry-open'),row=b.parentElement,more=row.querySelector('.conversation-entry-control');
+      const probe=document.createElement('span');probe.style.fontSize='var(--fs-sm)';row.append(probe);
+      const reference=getComputedStyle(probe).fontSize;probe.remove();
+      const title=b.querySelector('.conversation-entry-label'),label=title.textContent;
+      title.textContent='个人助手 · 很长的专属对话名称'.repeat(6);
+      const style=getComputedStyle(b),r=row.getBoundingClientRect(),m=more.getBoundingClientRect();
+      const result={size:style.fontSize,reference,weight:Number(style.fontWeight),fits:row.scrollWidth<=row.clientWidth+1,
+        manageVisible:m.right<=r.right+1&&m.width>=32,ellipsized:title.scrollWidth>title.clientWidth};
+      title.textContent=label;return result;
+    })()`);
     assert.equal(entryStyle.size,entryStyle.reference,'entry matches sidebar typography');
-    assert(entryStyle.weight<=500&&entryStyle.fits&&entryStyle.manageVisible,JSON.stringify(entryStyle));
+    assert(entryStyle.weight<=500&&entryStyle.fits&&entryStyle.manageVisible&&entryStyle.ellipsized,JSON.stringify(entryStyle));
     if(process.env.ASHUB_UI_SCREENSHOTS){
       fs.mkdirSync(process.env.ASHUB_UI_SCREENSHOTS,{recursive:true});
       for(const theme of ['light','dark']){
@@ -75,6 +99,61 @@ app.whenReady().then(async () => {
     // Use the actual narrow-screen entry path rather than manually hiding the
     // sidebar after navigation; the workspace must be reachable immediately.
     win.setContentSize(320,800);await wait('innerWidth===320');
+    // Real hit-testing after repeated failures: alerts must not cover the pinned entry.
+    // The renderer's animation clock can lag behind timers in the main process.
+    const settleToasts=()=>js(`(async()=>{
+      await document.fonts.ready;
+      const host=document.querySelector('.toast-container');
+      await Promise.allSettled(host.getAnimations({subtree:true}).map(animation=>animation.finished));
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
+    })()`);
+    await js(`document.querySelector('.app').classList.remove('sidebar-collapsed')`);
+    await js(`(async()=>{document.querySelector('.toast-container')?.remove();const {toast}=await import('/js/toast.js');for(let i=0;i<5;i++)toast('合成错误 '+i,{type:'error',detail:'synthetic failure',duration:60000});})()`);
+    await settleToasts();
+    const toastLayout=await js(`(()=>{const entry=document.querySelector('.conversation-entry-open'),r=entry.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),alerts=[...document.querySelectorAll('.toast-error')],last=alerts.at(-1),close=last.querySelector('.toast-close'),c=close.getBoundingClientRect(),closeHit=document.elementFromPoint(c.x+c.width/2,c.y+c.height/2),stack=document.querySelector('.toast-container').getBoundingClientRect();return {entryClickable:entry.contains(hit),visible:last.getBoundingClientRect().height>0,closeClickable:close===closeHit,alerts:alerts.length,stackTop:stack.top};})()`);
+    assert(toastLayout.entryClickable&&toastLayout.visible&&toastLayout.closeClickable&&toastLayout.alerts===5,JSON.stringify(toastLayout));
+    // Exercise a short content viewport without depending on the runner's
+    // available screen height or how macOS constrains native resizing.
+    const originalViewport=await js('[innerWidth,innerHeight]');
+    const devtools=win.webContents.debugger;
+    devtools.attach('1.3');
+    try {
+      await devtools.sendCommand('Emulation.setDeviceMetricsOverride',{width:320,height:480,deviceScaleFactor:0,mobile:false});
+      await wait('innerWidth===320 && innerHeight===480');
+      await js(`(async()=>{const {toast}=await import('/js/toast.js');toast('最后的错误，包含足够长的说明以覆盖滚动布局。'.repeat(5),{type:'error',detail:'synthetic failure',duration:60000});})()`);
+      await settleToasts();
+      const shortLayout=await js(`(()=>{
+        const entry=document.querySelector('.conversation-entry-open'),host=document.querySelector('.toast-container');
+        const close=host.lastElementChild.querySelector('.toast-close');
+        const hit=el=>{const r=el.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);};
+        return {entryClickable:entry.contains(hit(entry)),closeClickable:close===hit(close),
+          viewport:[innerWidth,innerHeight],entryTop:entry.getBoundingClientRect().top,
+          closeTop:close.getBoundingClientRect().top,stackTop:host.getBoundingClientRect().top,
+          scroll:[host.scrollTop,host.scrollHeight,host.clientHeight],
+          entryHit:hit(entry)?.className,closeHit:hit(close)?.className};
+      })()`);
+      assert(shortLayout.scroll[1]>shortLayout.scroll[2],'short window fixture must overflow: '+JSON.stringify(shortLayout));
+      assert(shortLayout.entryClickable&&shortLayout.closeClickable,'short window keeps entry and newest error close reachable: '+JSON.stringify(shortLayout));
+      await js(`document.querySelector('.toast-container').scrollTop=0;void 0`);
+      assert(await js(`(()=>{const close=document.querySelector('.toast-error:not(.toast-exit) .toast-close'),r=close.getBoundingClientRect();return close===document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)})()`),'older notifications remain reachable by scrolling');
+      await js(`document.querySelector('.toast-container').scrollTop=document.querySelector('.toast-container').scrollHeight;void 0`);
+    } finally {
+      try { await devtools.sendCommand('Emulation.clearDeviceMetricsOverride'); }
+      finally { devtools.detach(); }
+    }
+    await wait(`innerWidth===${originalViewport[0]} && innerHeight===${originalViewport[1]}`);
+    await js(`document.querySelector('.toast-error:last-child .toast-close').click()`);
+    await wait(`document.querySelectorAll('.toast-error:not(.toast-exit)').length===4`);
+    for (const width of [390,1280]) {
+      win.setContentSize(width,800);await wait('innerWidth==='+width);await new Promise(r=>setTimeout(r,300));
+      const info=await js(`(()=>{const e=document.querySelector('.conversation-entry-open'),r=e.getBoundingClientRect(),stack=document.querySelector('.toast-container').getBoundingClientRect();return {clickable:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),top:Math.round(stack.top),alert:!!document.querySelector('.toast-error:not(.toast-exit)')}})()`);
+      assert(info.clickable&&info.alert,JSON.stringify({width,...info}));
+      if(width===1280)assert.equal(info.top,16,'desktop keeps ordinary toast placement');
+    }
+    win.setContentSize(320,800);await wait('innerWidth===320');
+    await js(`document.querySelector('.app').classList.add('sidebar-collapsed')`);
+    assert.equal(Math.round(await js(`document.querySelector('.toast-container').getBoundingClientRect().top`)),16,'collapsed sidebar keeps ordinary toast placement');
+    await js(`document.querySelector('.toast-container').remove();document.querySelector('.app').classList.remove('sidebar-collapsed')`);
     // Hold the fade open long enough to test interaction while the overlay still paints.
     await js('document.documentElement.style.setProperty("--dur-fast","10s");document.querySelector(".app").classList.remove("sidebar-collapsed")');
     await wait('getComputedStyle(document.getElementById("sidebar")).visibility==="visible"');
@@ -138,7 +217,14 @@ app.whenReady().then(async () => {
     assert.equal(await js('!!document.querySelector(".conversation-welcome")'),false);
     assert.equal(await js('document.querySelector(".terminal-wrap").inert'),false);
     await wait('document.querySelector("session-view[session-id="+CSS.escape('+JSON.stringify(assistantId)+')+"] .welcome-title")?.textContent === "个人助手"');
-    for(let i=0;i<3;i++)await js('document.querySelector(".conversation-entry-open").click()');
+    for (const view of ['projects', 'terminals', 'sessions']) {
+      await js(`window.__ash.switchTo(${JSON.stringify(id)})`);
+      assert.equal(await js('location.pathname'), `/${id}/`);
+      await selectView(view);
+      await js('document.querySelector(".conversation-entry-open").click()');
+      assert(await js(`location.pathname === "/${assistantId}/" && document.querySelector(".conversation-entry-open").getAttribute("aria-current") === "page" &&
+        document.querySelector('.sidebar-view-option[aria-checked="true"]').dataset.view === "${view}"`));
+    }
     assert.equal((await call('/sessions')).length,2,'repeated entry uses same assistant');
     await win.loadURL(base);await wait('!!document.querySelector(".conversation-entry-open")');
     win.setContentSize(320,800);await wait('innerWidth===320');

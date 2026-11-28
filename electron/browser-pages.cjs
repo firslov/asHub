@@ -183,8 +183,13 @@ function createBrowserPages({
     contents.on('did-navigate-in-page', (_event, _url, main) => {
       if (main) navigated();
     });
-    contents.once('destroyed', () => remove(p));
-    contents.once('render-process-gone', () => remove(p));
+    const lost = () => {
+      // Intentional replacement removes the old page before closing its contents.
+      // A late event from that guest must not cancel the replacement's operation.
+      if (pages.get(id) === p) owner.close();
+    };
+    contents.once('destroyed', lost);
+    contents.once('render-process-gone', lost);
     try {
       contents.debugger.attach('1.3');
     } catch (e) {

@@ -4,8 +4,10 @@ import { randomUUID } from "node:crypto";
 
 interface TimeRange { from: number; to: number }
 export interface ProjectNameInterval extends TimeRange { name: string }
-export interface Project { id: string; name: string; cwd?: string; sessionIds: string[]; pinnedSessionIds?: string[] }
+export interface Project { id: string; name: string; cwd?: string; sessionIds: string[]; pinnedSessionIds?: string[]; antigravityReviewEnabled?: true }
 interface StoredProject extends Project {
+  /** Private identity of this consent. Revoking and re-enabling creates a new grant. */
+  antigravityReviewGrant?: string;
   /** UTC milliseconds. An observation never attests to an earlier name. */
   nameSince?: number;
   nameHistory?: ProjectNameInterval[];
@@ -26,8 +28,11 @@ const timeRange = (value: unknown): value is TimeRange => {
   const span = value as Partial<TimeRange> | null;
   return !!span && time(span.from) && time(span.to) && span.from <= span.to;
 };
+const validReviewGrant = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
 const publicProjects = (projects: StoredProject[]): Project[] =>
-  projects.map(({nameSince: _since, nameHistory: _history, nameObserved: _observed, nameCoverage: _coverage, ...project}) => project);
+  projects.map(({nameSince: _since, nameHistory: _history, nameObserved: _observed, nameCoverage: _coverage,
+    antigravityReviewGrant, antigravityReviewEnabled: _enabled, ...project}) =>
+    validReviewGrant(antigravityReviewGrant) ? { ...project, antigravityReviewEnabled: true } : project);
 const firstNameObservation = (project: StoredProject) => project.nameHistory?.[0]?.from ?? project.nameSince!;
 const sameObservations = (a: NameCoverage["observations"], b: NameCoverage["observations"]) =>
   a.length === b.length && a.every((item, i) => item.id === b[i]!.id && item.from === b[i]!.from);
@@ -50,6 +55,24 @@ export class ProjectStore {
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   constructor(private file: string) {}
   list(): Project[] { return publicProjects(this.readProjects()); }
+  projectWorkerGrant(id: string, backendId: string): string | undefined {
+    // Preserve the existing consent on disk, bound to its original backend.
+    if (backendId !== 'google-antigravity') return undefined;
+    const value = this.readProjects().find(p => p.id === id)?.antigravityReviewGrant;
+    return validReviewGrant(value) ? value : undefined;
+  }
+  /** Only the native desktop policy handler can invoke this, not update(input). */
+  setAntigravityReview(id: string, enabled: boolean): boolean {
+    const projects = this.readProjects();
+    const project = projects.find(p => p.id === id);
+    if (!project) throw new Error('Project no longer exists');
+    if (enabled ? validReviewGrant(project.antigravityReviewGrant) : project.antigravityReviewGrant === undefined) return enabled;
+    if (enabled) project.antigravityReviewGrant = randomUUID();
+    else delete project.antigravityReviewGrant;
+    this.writeJSON(this.file, projects);
+    for (const listener of [...this.listeners]) listener();
+    return enabled;
+  }
   /** Record the earliest verified observation of legacy names at host startup. */
   observeNameHistory(): void {
     this.observedProjects();

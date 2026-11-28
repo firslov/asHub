@@ -27,8 +27,12 @@ function panelUi() {
 function pickerUi() {
  const c=cacheUi(),u=c.u,s=u.active.peek(),dropdown=new El();dropdown.hidden=true;
  s.modelEl=new El();s.modelEl.getBoundingClientRect=()=>({left:0,top:100});
- Object.assign(u.e.context,{activeSession:u.active,refreshThinkingDropdown:async()=>{},getSharedDropdown:()=>dropdown,hideModelDropdown:()=>{dropdown.hidden=true},_pendingModelMenu:null,_dropdownOwner:null,_dropdownBuiltFor:null,_dropdownAnchor:null,_dropdownObserver:null,
- buildModelDropdown(){},updateModelDropdownSelection(){},MutationObserver:class{observe(){}},toast:(...x)=>u.toasts.push(x),t:x=>x});
+ const source=fs.readFileSync(path.join(root,'web/js/sse.js'),'utf8');
+ const lifecycle=source.slice(source.indexOf('let _sharedDropdown'),source.indexOf('const getSharedDropdown'));
+ Object.assign(u.e.context,{activeSession:u.active,refreshThinkingDropdown:async()=>{},getSharedDropdown:()=>dropdown,
+  emptyModelCatalog:variable('web/js/sse.js','emptyModelCatalog',u.e.context),effect:u.modules['../vendor/signals-core.js'].effect,
+  buildModelDropdown(){},updateModelDropdownSelection(){},MutationObserver:class{observe(){} disconnect(){}},toast:(...x)=>u.toasts.push(x),t:x=>x});
+ vm.runInContext(lifecycle+'\n_sharedDropdown=getSharedDropdown();',u.e.context);
  const toggle=variable('web/js/sse.js','toggleModelDropdown',u.e.context);
  return {...c,dropdown,open:()=>toggle(s)};
 }

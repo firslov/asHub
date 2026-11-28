@@ -1,5 +1,5 @@
 import { signal, computed, effect } from "../vendor/signals-core.js";
-import { activeSessionId, openTabs } from "./store.js";
+import { activeSessionId, openTabs, getSession } from "./store.js";
 import { toast } from "./toast.js";
 import { forceScrollBottom } from "./stream/scroll.js";
 
@@ -7,6 +7,21 @@ export { activeSessionId, openTabs } from "./store.js";
 
 export const sessions = new Map();
 export const sessionKinds = new Map();
+const startupWorkerModes = new Map();
+export const sessionProjectWorker = id => {
+  const info = getSession(id);
+  return info ? info.projectWorker === true : startupWorkerModes.get(id);
+};
+// Replacements are local to this browser tab's history, including reloads.
+const replacementKey = 'ash.session-replacements';
+const replacedSessions = new Map();
+try {
+  const saved = JSON.parse(sessionStorage.getItem(replacementKey) || '[]');
+  if (Array.isArray(saved)) for (const pair of saved.slice(-128)) {
+    if (Array.isArray(pair) && pair.length === 2 && pair.every(id => typeof id === 'string' && /^[0-9a-f]{4,32}$/.test(id)))
+      replacedSessions.set(pair[0], pair[1]);
+  }
+} catch { /* Storage can be unavailable; in-memory navigation still works. */ }
 
 export const setSessionKind = (id, kind) => {
   if (!id || !kind) return;
@@ -111,10 +126,7 @@ effect(() => {
   let focusFrame;
   if (active) {
     const input = document.getElementById("query");
-    const form = document.getElementById("form");
-    if (input) input.disabled = false;
-    if (form) form.style.opacity = "";
-    if (input) {
+    if (input && !next?.projectWorker && !next?.projectWorkerPending) {
       // Ensure Electron window has OS focus on Windows
       if (!document.hasFocus() && window.electronAPI?.focusWindow) {
         window.electronAPI.focusWindow();
@@ -122,7 +134,10 @@ effect(() => {
       const previousFocus = document.activeElement;
       focusFrame = requestAnimationFrame(() => {
         const focused = document.activeElement;
-        if (focused !== input && (focused === previousFocus || focused === document.body)) input.focus();
+        // A dialog can reopen with the same DOM node (e.g. the shared model
+        // search). Even if it matches previousFocus, it owns focus now.
+        if (focused?.closest('dialog, [role="dialog"]')) return;
+        if (!input.disabled && focused !== input && (focused === previousFocus || focused === document.body)) input.focus();
       });
     }
   }
@@ -299,12 +314,13 @@ export const resumeSSE = () => {
 export const preloadSession = (id, kind, { defer = false } = {}) => {
   if (!id) throw new Error("preloadSession: id required");
   if (sessions.has(id)) return sessions.get(id);
-  const resolvedKind = kind ?? sessionKinds.get(id) ?? "agent";
+  const resolvedKind = kind ?? sessionKinds.get(id) ?? getSession(id)?.kind ?? "agent";
   const terminal = document.querySelector(".terminal");
   const form = terminal?.querySelector(".live-input");
   const parent = terminal ?? document.body;
   const tag = (resolvedKind === "terminal" || resolvedKind === "ash-terminal") ? "terminal-view" : "session-view";
   const el = document.createElement(tag);
+  el.kind = resolvedKind;
   el.setAttribute("session-id", id);
   el.hidden = true;
   // Startup-restore only: register the view shell without subscribing, so
@@ -323,9 +339,36 @@ export const switchTo = (id, { push = true } = {}) => {
   activeSessionId.value = id;
 };
 
+export const replaceSessionTab = (from, to, kind) => {
+  replacedSessions.set(from, to);
+  while (replacedSessions.size > 128) replacedSessions.delete(replacedSessions.keys().next().value);
+  try { sessionStorage.setItem(replacementKey, JSON.stringify([...replacedSessions])); } catch {}
+  setSessionKind(to, kind);
+  document.dispatchEvent(new CustomEvent("ash:session-replaced", { detail: { from, to } }));
+  const active = activeSessionId.peek() === from;
+  if (openTabs.peek().includes(from)) {
+    preloadSession(to, kind, { defer: !active });
+    openTabs.value = openTabs.peek().map(id => id === from ? to : id);
+  }
+  if (active) {
+    history.replaceState({ sessionId: to }, "", `/${to}/`);
+    switchTo(to, { push: false });
+  }
+  sessions.get(from)?.remove();
+  sessionKinds.delete(from);
+  document.dispatchEvent(new CustomEvent("ash:sessions-changed"));
+};
+
 window.addEventListener("popstate", (ev) => {
-  const id = ev.state?.sessionId
+  const original = ev.state?.sessionId
     ?? (location.pathname.match(/^\/([0-9a-f]{4,32})\/?$/) ?? [])[1];
+  let id = original;
+  const visited = new Set();
+  while (id && replacedSessions.has(id) && !visited.has(id)) {
+    visited.add(id);
+    id = replacedSessions.get(id);
+  }
+  if (id && id !== original) history.replaceState({ ...ev.state, sessionId: id }, "", `/${id}/`);
   if (id) switchTo(id, { push: false });
   else activeSessionId.value = "";
 });
@@ -346,7 +389,10 @@ const fetchSessionKinds = fetch("/sessions")
   .then((list) => {
     if (!Array.isArray(list)) return;
     for (const s of list) {
-      if (s?.instanceId) sessionKinds.set(s.instanceId, s.kind ?? "agent");
+      if (s?.instanceId) {
+        sessionKinds.set(s.instanceId, s.kind ?? "agent");
+        startupWorkerModes.set(s.instanceId, s.projectWorker === true);
+      }
     }
   })
   .catch(() => {});

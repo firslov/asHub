@@ -2,51 +2,68 @@
   "files": [
     {
       "path": "src/agent/index.ts",
-      "hunks": [{
-        "before": "export function activateAgent(ctx: ExtensionContext): void {\n  agentBackend(ctx);\n  const agentCtx = ctx as AgentContext;\n  activateOpenrouter(agentCtx);",
-        "after": "export function activateAgent(ctx: ExtensionContext, options?: { canPublishOpenRouterCatalog?: (apiKey: string) => boolean }): void {\n  agentBackend(ctx);\n  const agentCtx = ctx as AgentContext;\n  activateOpenrouter(agentCtx, options?.canPublishOpenRouterCatalog);"
-      }]
+      "hunks": [
+        {
+          "before": "export function activateAgent(ctx: ExtensionContext): void {\n  agentBackend(ctx);\n  const agentCtx = ctx as AgentContext;\n  activateOpenrouter(agentCtx);",
+          "after": "export function activateAgent(ctx: ExtensionContext, options?: { canPublishOpenRouterCatalog?: (apiKey: string) => boolean; includeProvider?: (id: string) => boolean }): void {\n  agentBackend(ctx, options?.includeProvider);\n  const agentCtx = ctx as AgentContext;\n  activateOpenrouter(agentCtx, options?.canPublishOpenRouterCatalog);",
+          "previous": "export function activateAgent(ctx: ExtensionContext, options?: { canPublishOpenRouterCatalog?: (apiKey: string) => boolean }): void {\n  agentBackend(ctx);\n  const agentCtx = ctx as AgentContext;\n  activateOpenrouter(agentCtx, options?.canPublishOpenRouterCatalog);"
+        }
+      ]
     },
     {
       "path": "dist/agent/index.js",
-      "hunks": [{
-        "before": "export function activateAgent(ctx) {\n    agentBackend(ctx);\n    const agentCtx = ctx;\n    activateOpenrouter(agentCtx);",
-        "after": "export function activateAgent(ctx, options) {\n    agentBackend(ctx);\n    const agentCtx = ctx;\n    activateOpenrouter(agentCtx, options?.canPublishOpenRouterCatalog);"
-      }]
+      "hunks": [
+        {
+          "before": "export function activateAgent(ctx) {\n    agentBackend(ctx);\n    const agentCtx = ctx;\n    activateOpenrouter(agentCtx);",
+          "after": "export function activateAgent(ctx, options) {\n    agentBackend(ctx, options?.includeProvider);\n    const agentCtx = ctx;\n    activateOpenrouter(agentCtx, options?.canPublishOpenRouterCatalog);",
+          "previous": "export function activateAgent(ctx, options) {\n    agentBackend(ctx);\n    const agentCtx = ctx;\n    activateOpenrouter(agentCtx, options?.canPublishOpenRouterCatalog);"
+        }
+      ]
     },
     {
       "path": "dist/agent/index.d.ts",
-      "hunks": [{
-        "before": "export declare function activateAgent(ctx: ExtensionContext): void;",
-        "after": "export declare function activateAgent(ctx: ExtensionContext, options?: {\n    canPublishOpenRouterCatalog?: (apiKey: string) => boolean;\n}): void;"
-      }]
+      "hunks": [
+        {
+          "before": "export declare function activateAgent(ctx: ExtensionContext): void;",
+          "after": "export declare function activateAgent(ctx: ExtensionContext, options?: {\n    canPublishOpenRouterCatalog?: (apiKey: string) => boolean;\n    includeProvider?: (id: string) => boolean;\n}): void;",
+          "previous": "export declare function activateAgent(ctx: ExtensionContext, options?: {\n    canPublishOpenRouterCatalog?: (apiKey: string) => boolean;\n}): void;"
+        }
+      ]
     },
     {
       "path": "src/agent/providers/openrouter.ts",
-      "hunks": [{
-        "before": "export default function activate(ctx: AgentContext): void {",
-        "after": "export default function activate(ctx: AgentContext, canPublishCatalog?: (apiKey: string) => boolean): void {"
-      }, {
-        "before": "  fetchModels(apiKey).then((models) => {\n    if (models.length === 0) return;",
-        "after": "  fetchModels(apiKey).then((models) => {\n    if (models.length === 0 || canPublishCatalog?.(apiKey) === false) return;"
-      }]
+      "hunks": [
+        {
+          "before": "export default function activate(ctx: AgentContext): void {",
+          "after": "export default function activate(ctx: AgentContext, canPublishCatalog?: (apiKey: string) => boolean): void {"
+        },
+        {
+          "before": "  fetchModels(apiKey).then((models) => {\n    if (models.length === 0) return;",
+          "after": "  fetchModels(apiKey).then((models) => {\n    if (models.length === 0 || canPublishCatalog?.(apiKey) === false) return;"
+        }
+      ]
     },
     {
       "path": "dist/agent/providers/openrouter.js",
-      "hunks": [{
-        "before": "export default function activate(ctx) {",
-        "after": "export default function activate(ctx, canPublishCatalog) {"
-      }, {
-        "before": "    fetchModels(apiKey).then((models) => {\n        if (models.length === 0)\n            return;",
-        "after": "    fetchModels(apiKey).then((models) => {\n        if (models.length === 0 || canPublishCatalog?.(apiKey) === false)\n            return;"
-      }]
+      "hunks": [
+        {
+          "before": "export default function activate(ctx) {",
+          "after": "export default function activate(ctx, canPublishCatalog) {"
+        },
+        {
+          "before": "    fetchModels(apiKey).then((models) => {\n        if (models.length === 0)\n            return;",
+          "after": "    fetchModels(apiKey).then((models) => {\n        if (models.length === 0 || canPublishCatalog?.(apiKey) === false)\n            return;"
+        }
+      ]
     },
     {
       "path": "dist/agent/providers/openrouter.d.ts",
-      "hunks": [{
-        "before": "export default function activate(ctx: AgentContext): void;",
-        "after": "export default function activate(ctx: AgentContext, canPublishCatalog?: (apiKey: string) => boolean): void;"
-      }]
+      "hunks": [
+        {
+          "before": "export default function activate(ctx: AgentContext): void;",
+          "after": "export default function activate(ctx: AgentContext, canPublishCatalog?: (apiKey: string) => boolean): void;"
+        }
+      ]
     }
   ]
 }

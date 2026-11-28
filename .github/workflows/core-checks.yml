@@ -56,6 +56,9 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:architecture:ui
+      - run: npm run test:google:ui
+      - run: npm run test:projects:ui
+      - run: npm run test:archive:ui
       - run: npm run test:steering:ui
       - run: npm run test:scheduled-tasks:ui
       - run: npm run test:personal-assistant:ui

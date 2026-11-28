@@ -19,6 +19,26 @@ function key(value) {
     throw Error("工作和步骤编号限 1–64 位字母、数字、横线或下划线");
   return value;
 }
+const scenarioFields = ["initialState", "action", "expected"];
+const isStructured = (criteria) => Array.isArray(criteria) && typeof criteria[0] === "object";
+const checkOutcomes = ["met", "unmet", "unverified"];
+function normalizeCriteria(input) {
+  if (!Array.isArray(input)) return text(input, 1200, "criteria");
+  if (!input.length || input.length > 8) throw Error("验收条件须为 1–8 项");
+  const structured = isStructured(input);
+  const criteria = Array.from(input, (value) => {
+    if (!structured) return text(value, 240, "criterion");
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).some((name) => !scenarioFields.includes(name)))
+      throw Error("结构化条件须统一提供 initialState、action、expected");
+    return Object.fromEntries(scenarioFields.map((name) => [name, text(value[name], 240, name)]));
+  });
+  const keys = structured ? criteria.map((criterion) => JSON.stringify(criterion)) : criteria;
+  const characters = structured ? criteria.flatMap((criterion) => Object.values(criterion)) : criteria;
+  if (characters.join("\n").length > 1200 || new Set(keys).size !== criteria.length)
+    throw Error("验收条件须互不重复，合计最多 1200 字符");
+  return criteria;
+}
 function normalize(args, members) {
   const goal = text(args.goal, 800, "goal");
   if (
@@ -36,17 +56,13 @@ function normalize(args, members) {
       new Set(deps).size !== deps.length
     )
       throw Error("依赖列表无效");
-    const criteria = Array.isArray(s.criteria)
-      ? s.criteria.map((value) => text(value, 240, "criterion"))
-      : text(s.criteria, 1200, "criteria");
-    if (Array.isArray(criteria) &&
-      (!criteria.length || criteria.length > 8 || criteria.join("\n").length > 1200 || new Set(criteria).size !== criteria.length))
-      throw Error("验收条件须为 1–8 项不同的条件，合计最多 1200 字符");
+    if (s.mode !== undefined && s.mode !== "inline-review") throw Error("无效字段：mode");
     return {
       id: key(s.id),
       member: s.member,
+      ...(s.mode ? { mode: s.mode } : {}),
       output: text(s.output, 1200, "output"),
-      criteria,
+      criteria: normalizeCriteria(s.criteria),
       dependsOn: deps.map(key).sort(),
     };
   });
@@ -94,6 +110,7 @@ function waiting(plan, step) {
 }
 const dispatchLimit = 8000;
 const handoffSummaryReserve = 128;
+const inlineReview = "inline-review";
 const artifactLine = ({ label, path }) => "产物引用（核对访问权限与当前版本）：" + JSON.stringify({ label, path });
 function handoffArtifacts(plan, step, requested) {
   const available = new Map(step.dependsOn.map((dependency) => [
@@ -114,17 +131,41 @@ function handoffArtifacts(plan, step, requested) {
   }
   return { available, selected };
 }
-function briefParts(work, plan, step, id, reworkReason, selected) {
+function briefParts(work, plan, step, id, previousAttempt, selected) {
+  const structured = isStructured(step.criteria);
+  const previousReview = previousAttempt?.review;
   const criteria = Array.isArray(step.criteria)
-    ? step.criteria.map((label, i) => (i + 1) + ". " + label).join("\n")
+    ? step.criteria.map((criterion, i) => {
+      const label = structured
+        ? "初始状态：" + JSON.stringify(criterion.initialState) + " · 操作：" + JSON.stringify(criterion.action) +
+          " · 预期结果：" + JSON.stringify(criterion.expected)
+        : criterion;
+      return (i + 1) + ". " + label;
+    }).join("\n")
     : step.criteria;
   const lines = [
     "[项目协作 " + work + "/" + step.id + " · " + id + "]",
     "目标：" + plan.goal,
     "交付：" + step.output,
-    "验收：" + criteria,
-    ...(reworkReason ? ["仅处理上一轮缺口：" + reworkReason] : []),
+    "验收：" + (structured ? "\n" : "") + criteria,
   ];
+  if (structured) lines.push(
+    '交付时将 conversation_deliver 的 summary 写为 JSON：{"checks":[{"criterion":1,"observation":"实际观察","outcome":"met","evidence":"证据或产物定位"}]}。',
+    "按原编号逐项提交。符合预期用 met，不符合用 unmet，材料不足用 unverified（在 observation 说明缺失，evidence 可留空）。较长证据放在 artifacts，summary 最多 2000 字符。",
+  );
+  if (previousReview) {
+    lines.push("仅处理上一轮缺口：" + previousReview.reason);
+    if (structured) {
+      const checks = previousReview.checks ?? [];
+      lines.push("上一轮任务：" + previousAttempt.taskId + " · 任务版本 " + previousReview.taskRevision);
+      for (const { criterion, outcome, evidence } of checks)
+        lines.push("上一轮核对 " + criterion + "（" + outcome + "）：" + JSON.stringify(evidence));
+      const confirmed = new Set(checks.filter((item) => item.outcome === "met").map((item) => item.criterion));
+      const remaining = step.criteria.map((_, i) => i + 1).filter((index) => !confirmed.has(index));
+      if (remaining.length) lines.push("上一轮未通过或未验证的编号：" + remaining.join("、"));
+      lines.push("返工沿用原条件及编号，仍提交各项结果。旧证据仅供参考，改动影响已核对项时须重验；需要核对原回复时，用 conversation_task 读取上一轮任务。");
+    }
+  }
   const summaries = [];
   let artifactChars = 0;
   for (const dependency of step.dependsOn) {
@@ -174,6 +215,30 @@ function indexed(items, size, indexOf, label) {
   }
   return [...items].sort((a, b) => indexOf(a) - indexOf(b));
 }
+function structuredDelivery(delivery, size) {
+  const checks = Array.from({ length: size }, (_, i) => ({
+    criterion: i + 1, outcome: "unverified", observation: "", evidence: "",
+  }));
+  if (!delivery) return { state: "missing", checks };
+  try {
+    const report = JSON.parse(text(delivery.summary, 2000, "summary"));
+    if (!report || Object.keys(report).length !== 1 || !Array.isArray(report.checks)) throw Error("无效交付");
+    const submitted = indexed(report.checks, size, (item) => item?.criterion, "summary.checks").map((item) => {
+      if (Object.keys(item).some((name) => !["criterion", "observation", "outcome", "evidence"].includes(name)) ||
+        !checkOutcomes.includes(item.outcome)) throw Error("无效交付");
+      return {
+        criterion: item.criterion,
+        outcome: item.outcome,
+        observation: text(item.observation, 2000, "observation"),
+        evidence: item.outcome === "unverified" && item.evidence === "" ? "" : text(item.evidence, 2000, "evidence"),
+      };
+    });
+    for (const item of submitted) checks[item.criterion - 1] = item;
+    return { state: submitted.length === size ? "complete" : "incomplete", checks };
+  } catch {
+    return { state: "invalid", checks };
+  }
+}
 function reviewEvidence(step, args, host) {
   const accepted = args.decision === "accepted";
   const delivery = host.result?.delivery;
@@ -182,12 +247,17 @@ function reviewEvidence(step, args, host) {
   const issues = delivery?.unresolved ?? [];
   const artifacts = delivery?.artifacts ?? [];
   const checks = indexed(args.checks, criteria.length, (item) => item?.criterion, "checks").map((item) => {
-    if (!["met", "unmet", "unverified"].includes(item.outcome)) throw Error("无效的条件核对结果");
+    if (!checkOutcomes.includes(item.outcome)) throw Error("无效的条件核对结果");
     return { criterion: item.criterion, outcome: item.outcome, evidence: text(item.evidence, 420, "evidence") };
   });
   if (accepted && (Array.isArray(step.criteria) || checks.length) &&
     (checks.length !== criteria.length || checks.some((item) => item.outcome !== "met")))
     throw Error("通过前必须逐项满足验收条件并记录证据");
+  if (accepted && isStructured(step.criteria)) {
+    const report = structuredDelivery(delivery, criteria.length);
+    if (report.state !== "complete" || report.checks.some((item) => item.outcome !== "met"))
+      throw Error("结构化交付仍有未通过或未验证的条件，请核对实际观察和证据");
+  }
   const unresolved = indexed(args.unresolved, issues.length, (item) => item?.item, "unresolved").map((item) => {
     if (!["resolved", "accepted_exception", "blocking"].includes(item.disposition)) throw Error("无效的未决事项处理决定");
     return { item: item.item, issue: issues[item.item - 1], disposition: item.disposition, reason: text(item.reason, 420, "reason") };
@@ -213,6 +283,7 @@ function snapshot(plan) {
       return {
         id: step.id,
         member: step.member,
+        ...(step.mode ? { mode: step.mode } : {}),
         output: step.output,
         criteria: step.criteria,
         dependsOn: step.dependsOn,
@@ -320,11 +391,12 @@ export function workflow(ctx) {
   // Observe only exact briefs issued by this coordinator activation, including recipient.
   const briefs = new Map(),
     calls = new Map();
+  const briefKey = (requestKey, message) => requestKey ? `key:${requestKey}` : `message:${message}`;
   ctx.bus.on("agent:tool-started", (event) => {
     if (event.name !== "conversation_send" || !event.toolCallId) return;
     const a = event.rawInput,
-      issued = briefs.get(a?.message);
-    if (issued && a.id === issued.member && a.requestKey === issued.requestKey)
+      issued = briefs.get(briefKey(a?.requestKey, a?.message));
+    if (issued && a.id === issued.member && a.requestKey === issued.requestKey && a.message === issued.message)
       calls.set(event.toolCallId, issued);
   });
   ctx.bus.on("agent:tool-completed", (event) => {
@@ -341,7 +413,7 @@ export function workflow(ctx) {
       )
         return;
       attach(issued.scope, issued.step, issued.id, receipt.taskId);
-      briefs.delete(issued.message);
+      briefs.delete(briefKey(issued.requestKey, issued.message));
     } catch {
       /* Keep receipt_pending. The original send receipt can be linked explicitly. */
     }
@@ -354,12 +426,10 @@ export function workflow(ctx) {
     return {
       owner: c.currentId,
       project: c.currentProjectId,
-      members: new Set(
+      members: new Map(
         c.conversations
-          .filter(
-            (s) => s.projectId === c.currentProjectId && s.id !== c.currentId,
-          )
-          .map((s) => s.id),
+          .filter((s) => s.projectId === c.currentProjectId && s.id !== c.currentId)
+          .map((s) => [s.id, s]),
       ),
     };
   }
@@ -397,6 +467,11 @@ export function workflow(ctx) {
         if (plan && JSON.stringify(plan.spec) !== JSON.stringify(spec))
           throw Error("工作编号已被另一方案使用");
         if (!plan) {
+          for (const step of spec.steps) {
+            const reviewOnly = c.members.get(step.member).projectTaskProfile === inlineReview;
+            if (reviewOnly !== (step.mode === inlineReview))
+              throw Error(`${step.id}：${reviewOnly ? '该成员仅审阅提供的文字，请改为 inline-review 步骤；文件操作、测试和文件交付须另行分配' : '该成员未声明 inline-review 能力'}`);
+          }
           plan = {
             spec,
             goal: spec.goal,
@@ -412,7 +487,9 @@ export function workflow(ctx) {
     if (action === "status") {
       const view = snapshot(plan);
       for (const item of view.steps) {
-        if (!c.members.has(item.member)) item.memberUnavailable = true;
+        const member = c.members.get(item.member);
+        if (!member) item.memberUnavailable = true;
+        else if (member.projectTaskProfile === inlineReview) item.projectTaskProfile = inlineReview;
       }
       async function inspect(action) {
         let value, error;
@@ -432,7 +509,7 @@ export function workflow(ctx) {
           id = latest(step)?.taskId;
         const pending = latest(step);
         if (!id && pending?.message)
-          briefs.set(pending.message, {
+          briefs.set(briefKey(pending.requestKey, pending.message), {
             scope,
             step: step.id,
             member: step.member,
@@ -448,9 +525,11 @@ export function workflow(ctx) {
           const result = await inspect(() =>
             hostTask(id, step.member, c, signal),
           );
-          if (result.value && result.members.has(step.member))
+          if (result.value && result.members.has(step.member)) {
             detail.host = result.value;
-          else detail.hostUnavailable = result.error ?? "成员已离开项目";
+            if (isStructured(step.criteria) && result.value.status.terminal)
+              detail.report = structuredDelivery(result.value.result?.delivery, step.criteria.length);
+          } else detail.hostUnavailable = result.error ?? "成员已离开项目";
         }
         return detail;
       }
@@ -507,36 +586,54 @@ export function workflow(ctx) {
           };
         }
         if (!last && args.previousTaskId) throw Error("没有可返工的上一轮任务");
+        const reviewOnly = c.members.get(s.member).projectTaskProfile === inlineReview;
+        if (s.mode === inlineReview && !reviewOnly) throw Error("成员的文字评审能力当前不可用");
+        if (!reviewOnly && args.reviewMaterial !== undefined) throw Error("该步骤不接收 reviewMaterial");
+        if (reviewOnly && args.artifactSelection !== undefined) throw Error("文字评审不接收产物引用，请改用 reviewMaterial");
+        if (reviewOnly && args.reviewMaterial === undefined) return {
+          state: "review_material_required",
+          note: "此成员只能评审明确允许发送的文字。请在 reviewMaterial 中提供评审问题和必要正文或摘录；文件路径、产物引用和历史不会自动交接。" +
+            (isStructured(s.criteria) ? "如获授权，请在 reviewMaterial 中明确提供场景编号和提交 checks 报告的要求。" : ""),
+        };
+        if (reviewOnly && !canVerifyDispatch) throw Error("宿主无法验证文字评审的派发回执，请升级后重试");
         const id = randomUUID();
-        const { available, selected } = handoffArtifacts(p, s, args.artifactSelection);
-        const parts = briefParts(scope[2], p, s, id, last?.review.reason, selected);
-        const requiredCharacters = parts.base.length - parts.artifactChars;
-        const remaining = dispatchLimit - requiredCharacters;
-        if (remaining < 0) return {
-          state: "handoff_capacity_exceeded",
-          note: "步骤说明和完整验收例外已超出单条派发容量。请按原验收记录拆分后续工作，分批交接所需例外。",
-          characterLimit: dispatchLimit,
-          requiredCharacters,
-        };
-        const artifactBudget = Math.max(0, remaining - parts.summaries.length * handoffSummaryReserve);
-        if (parts.artifactChars > artifactBudget) return {
-          state: "handoff_selection_required",
-          note: "所选产物超出交接可用容量。请在 artifactSelection 中减少或更换产物。",
-          artifactBudget,
-          selectedCharacters: parts.artifactChars,
-          inputs: [...available].map(([step, artifacts]) => ({
-            step,
-            artifacts: artifacts.map((a) => ({ index: a.index, label: a.label, characters: artifactLine(a).length + 1,
-              selected: selected.get(step).includes(a) })),
-          })),
-        };
-        const message = formatBrief(parts);
+        let message, artifactSelection;
+        if (reviewOnly) {
+          // Only explicit review material may be sent. Keep all plan text and handoffs local.
+          message = text(args.reviewMaterial, dispatchLimit, "reviewMaterial");
+        } else {
+          const { available, selected } = handoffArtifacts(p, s, args.artifactSelection);
+          const parts = briefParts(scope[2], p, s, id, last, selected);
+          const requiredCharacters = parts.base.length - parts.artifactChars;
+          const remaining = dispatchLimit - requiredCharacters;
+          if (remaining < 0) return {
+            state: "handoff_capacity_exceeded",
+            note: isStructured(s.criteria) && last?.review
+              ? "步骤说明、上一轮证据或完整验收例外超出单条派发容量。请按原验收记录拆分后续工作，核对所需证据和例外。"
+              : "步骤说明和完整验收例外已超出单条派发容量。请按原验收记录拆分后续工作，分批交接所需例外。",
+            characterLimit: dispatchLimit,
+            requiredCharacters,
+          };
+          const artifactBudget = Math.max(0, remaining - parts.summaries.length * handoffSummaryReserve);
+          if (parts.artifactChars > artifactBudget) return {
+            state: "handoff_selection_required",
+            note: "所选产物超出交接可用容量。请在 artifactSelection 中减少或更换产物。",
+            artifactBudget,
+            selectedCharacters: parts.artifactChars,
+            inputs: [...available].map(([step, artifacts]) => ({
+              step,
+              artifacts: artifacts.map((a) => ({ index: a.index, label: a.label, characters: artifactLine(a).length + 1,
+                selected: selected.get(step).includes(a) })),
+            })),
+          };
+          message = formatBrief(parts);
+          if (args.artifactSelection !== undefined)
+            artifactSelection = [...selected].map(([step, artifacts]) => ({ step, artifactIndexes: artifacts.map((artifact) => artifact.index) }));
+        }
         const requestKey = canVerifyDispatch ? id : undefined;
-        const artifactSelection = args.artifactSelection === undefined ? undefined
-          : [...selected].map(([step, artifacts]) => ({ step, artifactIndexes: artifacts.map((artifact) => artifact.index) }));
         s.attempts.push({ id, message, ...(requestKey ? { requestKey } : {}), ...(artifactSelection ? { artifactSelection } : {}) });
         save(conn, scope, p);
-        briefs.set(message, {
+        briefs.set(briefKey(requestKey, message), {
           scope,
           step: s.id,
           member: s.member,
@@ -570,7 +667,7 @@ export function workflow(ctx) {
         receipt.messageDigest !== createHash("sha256").update(attempt.message).digest("hex"))
         throw Error("回执与本次派发不匹配");
       const result = attach(scope, step.id, attempt.id, text(receipt.taskId, 160, "taskId"));
-      briefs.delete(attempt.message);
+      briefs.delete(briefKey(attempt.requestKey, attempt.message));
       return result;
     }
     const taskId = text(args.taskId, 160, "taskId");
@@ -604,6 +701,9 @@ export function workflow(ctx) {
       if (a.review && JSON.stringify(a.review) === JSON.stringify(coreReview) &&
         args.checks === undefined && args.unresolved === undefined && args.artifactIndexes === undefined)
         return snapshot(p);
+      if (isStructured(step.criteria) &&
+        (!Number.isSafeInteger(args.taskRevision) || args.taskRevision < 0 || args.taskRevision !== host.status.revision))
+        throw Error("结构化验收需要实际核对的 taskRevision，请重新查询交付版本后验收");
       const review = { ...coreReview, ...reviewEvidence(step, args, host) };
       if (a.review) {
         if (JSON.stringify(a.review) === JSON.stringify(review)) return snapshot(p);

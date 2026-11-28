@@ -1,4 +1,6 @@
 import "./conversation-presentation.js";
+import { conversationEntries } from "./extensions/entry-state.js";
+import { getSession, pinnedIds } from "./store.js";
 import { BALANCE_PROVIDERS, createProviderBalanceUI } from './extensions/provider-balance.js';
 import { directoryLabels } from './directory-labels.js';
 import { presentApproval, formatApprovalTime, showApprovalResult } from './approval-labels.js';
@@ -136,7 +138,7 @@ const saIdFromToolId = (id) => {
   return i > 0 ? id.slice(0, i) : "";
 };
 import { compactReasoning } from "./stream/compact.js";
-import { activeSession, activeSessionId, globalConnState, sessions, forceReconnect } from "./session-manager.js";
+import { activeSession, activeSessionId, globalConnState, sessions, forceReconnect, replaceSessionTab } from "./session-manager.js";
 
 // Shared page chrome — reflects the active session, not whatever frame just arrived.
 const conn = document.getElementById("conn");
@@ -375,6 +377,9 @@ export const handlers = {
 
   "hub:capabilities"(p) {
     this.state.readOnlyContext = !!p?.readOnlyContext;
+    this.backendAvailability.value = typeof p?.backendUnavailable === "string" && p.backendUnavailable.trim() ? p.backendUnavailable : null;
+    if (this.backendUnavailable && (_dropdownOwner === this || _pendingModelMenu?.session === this)) hideModelDropdown();
+    refreshModelChip(this);
   },
   "shell:cwd-change"(p) {
     const previous = this.state.cwd;
@@ -430,6 +435,7 @@ export const handlers = {
   },
 
   "agent:query"(p, meta) {
+    this.hasHistory = true;
     closeReply(this);
     finalizeThinking(this);
     finalizeLiveOutput(this);
@@ -695,7 +701,7 @@ export const handlers = {
   // usage UI yet.
   "subagent:usage"() {},
 
-  "shell:command-start"(p) { startShellBlock(this, p ?? {}); },
+  "shell:command-start"(p) { this.hasHistory = true; startShellBlock(this, p ?? {}); },
   "shell:command-done"(p) { finishShellBlock(this, p ?? {}); },
   "shell:queued"(p) { queueShellBlock(this, p ?? {}); },
 
@@ -1036,7 +1042,7 @@ export const handlers = {
         `</div>` +
       `</div>`;
 
-    if (p?.explicit || p?.acpExtendedOption === null) card.querySelector('.approve-all')?.remove();
+    if ((p?.explicit && !p.desktopApplication) || p?.acpExtendedOption === null) card.querySelector('.approve-all')?.remove();
     if (p?.requiresDesktop && p.acpExtendedOption !== undefined) card.querySelector('.approve')?.remove();
     if (Array.isArray(p?.items)) appendApprovalPreview(card.querySelector('.permission-main'), p.items);
 
@@ -1485,7 +1491,15 @@ export const onReplayDone = (session) => {
 
 export const seedSessionInfo = (session, info) => {
   if (!session || !info) return;
+  session.hasHistory ||= info.hasHistory === true;
+  session.hasCustomTitle = info.hasCustomTitle === true;
+  session.projectId = info.projectId ?? null;
   if (info.readOnlyContext) session.state.readOnlyContext = true;
+  // A late session-list response must not override the live capability snapshot.
+  if (session.backendAvailability.peek() === undefined && typeof info.backendUnavailable === "string" && info.backendUnavailable.trim()) {
+    session.backendAvailability.value = info.backendUnavailable;
+    if (_dropdownOwner === session || _pendingModelMenu?.session === session) hideModelDropdown();
+  }
   if (info.cwd && !session.state.cwd) session.state.cwd = info.cwd;
   if (info.model && !session.agentInfo.model) session.agentInfo.model = info.model;
   if (info.provider && !session.agentInfo.provider) session.agentInfo.provider = info.provider;
@@ -1499,6 +1513,13 @@ const refreshModelChip = (session) => {
   if (!session?.modelEl) return;
   const wrap = session.modelEl.closest(".terminal-wrap");
   if (wrap?.dataset.uiUsageModelShow !== "true") { session.modelEl.hidden = true; return; }
+  if (session.kind === "antigravity") {
+    session.modelEl.textContent = t("new.antigravity");
+    session.modelEl.title = t("antigravity.owns.session");
+    session.modelEl.disabled = true;
+    session.modelEl.hidden = false;
+    return;
+  }
   const ai = session.agentInfo;
   const showThink = ai?.thinkingSupported && ai?.thinkingLevel && ai.thinkingLevel !== "off" && ai.thinkingLevel !== "default";
   const modelLabel = ai?.model && ai?.provider ? `${ai.model}@${ai.provider}` : ai?.model;
@@ -1509,6 +1530,7 @@ const refreshModelChip = (session) => {
   const text = [modelText || t("model.choose"), balanceText].filter(Boolean).join(" · ");
   session.modelEl.title = text; // Keep the full label available when the chip is truncated.
   session.modelEl.textContent = text;
+  session.modelEl.disabled = !!(session.backendUnavailable || session._backendSwitchPending);
   session.modelEl.hidden = false;
 
   // Guard on the chip element itself, not the session: resync() rebuilds
@@ -1518,6 +1540,7 @@ const refreshModelChip = (session) => {
     session.modelEl._pickerBound = true;
     session.modelEl.addEventListener("click", (ev) => {
       ev.stopPropagation();
+      if (session.kind === "antigravity") return;
       toggleModelDropdown(session);
     });
   }
@@ -1526,6 +1549,7 @@ const refreshModelChip = (session) => {
 // ── Model picker dropdown ───────────────────────────────────────────
 
 let _allModelsCache = null;  // { providers: [{ name, models: [{id, modalities}] }] }
+const emptyModelCatalog = { providers: [] };
 let _modelCacheGeneration = 0;
 
 // Exposed for config panel to invalidate after provider changes.
@@ -1570,14 +1594,85 @@ let _dropdownOwner = null;    // session the open dropdown is anchored to
 let _dropdownAnchor = null;   // chip node the open dropdown was positioned on
 let _pendingModelMenu = null;
 let _dropdownObserver = null; // MutationObserver watching for anchor removal
+let _stopBackendVisibility = null;
+let _switchBackends = new Map();
 let _thinkingLoadSeq = 0;
 let _dropdownBuiltFor = null; // _allModelsCache reference the DOM was built from
+
+const canSwitchBackend = session => {
+  if (!session) return false;
+  const info = getSession(session.id);
+  const pinned = pinnedIds.value.has(session.id);
+  const dedicated = conversationEntries.value.some(entry => entry.sessionId === session.id);
+  if (session.kind !== "agent" || session.backendUnavailable ||
+      session.hasHistory !== false || session.state.replaying || session.state.lastQuery || session.state.isSubmitting ||
+      session.state.isProcessing || session._backendSwitchPending || session.state.readOnlyContext) return false;
+  return !((info ? info.projectId : session.projectId) || info?.hasHistory ||
+    info?.hasCustomTitle || session.hasCustomTitle || pinned || dedicated);
+};
+
+const loadSwitchBackends = async signal => {
+  try {
+    const response = await fetch("/integrations", { cache: "no-store", signal });
+    if (!response.ok) return new Map();
+    const data = await response.json();
+    const backends = Array.isArray(data?.conversationBackends) ? data.conversationBackends : [];
+    return new Map(backends.filter(backend => backend?.switchFromAgent === true &&
+      typeof backend.kind === "string" && /^[a-z0-9][a-z0-9-]*$/.test(backend.kind) &&
+      typeof backend.label === "string" && backend.label.trim() && typeof backend.providerLabel === "string")
+      .map(backend => [backend.kind, backend]));
+  } catch { return new Map(); }
+};
+
+const updateBackendVisibility = (dropdown, session) => {
+  const search = dropdown.querySelector(".model-search-input");
+  const query = search?.value.toLowerCase().trim() ?? "";
+  const eligible = canSwitchBackend(session);
+  for (const option of dropdown.querySelectorAll(".model-backend")) {
+    const backend = _switchBackends.get(option.dataset.backend);
+    const terms = backend && `${backend.label} ${backend.providerLabel} ${backend.kind}${backend.kind === "antigravity" ? " acp 谷歌" : ""}`;
+    const hidden = !eligible || !terms?.toLowerCase().includes(query);
+    const restoreFocus = hidden && !option.hidden && option === document.activeElement;
+    option.hidden = hidden;
+    if (restoreFocus) search?.focus({preventScroll:true});
+  }
+};
+
+const openBackend = async (session, targetKind) => {
+  if (!_switchBackends.has(targetKind) || !canSwitchBackend(session)) return;
+  const detail = { id: session.id };
+  if (!document.dispatchEvent(new CustomEvent("ash:prepare-backend-switch", { detail, cancelable: true }))) return;
+  session._backendSwitchPending = true;
+  session.modelEl.disabled = true;
+  document.dispatchEvent(new CustomEvent("ash:busy-change"));
+  hideModelDropdown();
+  try {
+    const response = await fetch(`/${session.id}/backend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: targetKind }),
+    });
+    if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+    const { instanceId, kind } = await response.json();
+    if (typeof instanceId !== "string" || !/^[0-9a-f]{4,32}$/.test(instanceId) || kind !== targetKind) throw new Error("Invalid session response");
+    replaceSessionTab(session.id, instanceId, kind);
+  } catch (error) {
+    toast(t("backend.switch.failed"), { type: "error", detail: String(error?.message ?? error) });
+  } finally {
+    session._backendSwitchPending = false;
+    refreshModelChip(session);
+    document.dispatchEvent(new CustomEvent("ash:busy-change"));
+  }
+};
 
 const hideModelDropdown = () => {
   const dd = _sharedDropdown;
   _pendingModelMenu?.controller.abort();
   _pendingModelMenu = null;
   _thinkingLoadSeq++;
+  _stopBackendVisibility?.();
+  _stopBackendVisibility = null;
+  _switchBackends.clear();
   _dropdownOwner = null;
   if (_dropdownAnchor) _dropdownAnchor.ariaExpanded = "false";
   _dropdownAnchor = null;
@@ -1608,7 +1703,9 @@ const getSharedDropdown = () => {
     // before the outside-click listener sees that now-detached target.
     ev.stopPropagation();
     const session = _dropdownOwner;
-    if (!session || session._modelSelectionPending || session._thinkingPending) return;
+    if (!session || session.backendUnavailable || session._modelSelectionPending || session._thinkingPending) return;
+    const backend = ev.target.closest(".model-backend:not([hidden])");
+    if (backend) { void openBackend(session, backend.dataset.backend); return; }
     if (ev.target.closest(".model-thinking-retry")) { void refreshThinkingDropdown(session); return; }
     const effort = ev.target.closest(".model-thinking-option");
     if (effort) {
@@ -1631,7 +1728,7 @@ const getSharedDropdown = () => {
     const modelId = opt.dataset.model, provider = opt.dataset.provider;
     if (!modelId) return;
     session._modelSelectionPending = true;
-    dd.querySelectorAll(".model-option").forEach(el => { el.disabled = true; });
+    dd.querySelectorAll(".model-option[data-model]").forEach(el => { el.disabled = true; });
     renderThinkingDropdown(session, "loading");
     try { await selectModel(session, modelId, provider); }
     finally {
@@ -1660,8 +1757,8 @@ effect(() => {
 });
 
 // Full DOM build — runs once per _allModelsCache version, not per open.
-const buildModelDropdown = (dropdown) => {
-  const providers = _allModelsCache.providers || [];
+const buildModelDropdown = (dropdown, catalog) => {
+  const providers = catalog.providers || [];
   dropdown.innerHTML =
     `<div class="model-dropdown-search">` +
       `<div class="model-search-wrap">` +
@@ -1670,6 +1767,7 @@ const buildModelDropdown = (dropdown) => {
       `</div>` +
     `</div>` +
     `<div class="model-dropdown-list">` +
+      `<div class="model-backends"></div>` +
       providers.map((p) => {
         const models = p.models || [];
         if (!models.length) return "";
@@ -1694,8 +1792,9 @@ const buildModelDropdown = (dropdown) => {
       });
       group.hidden = !visible;
     });
+    updateBackendVisibility(dropdown, _dropdownOwner);
   });
-  _dropdownBuiltFor = _allModelsCache;
+  _dropdownBuiltFor = catalog;
 };
 
 // Selection state (current-provider badge + selected option) updates in
@@ -1782,10 +1881,12 @@ const toggleModelDropdown = async (session) => {
   const needsRefresh = !_allModelsCache || (
     _allModelsCache.providers?.some((p) => p.name === "openrouter" && (p.models?.length || 0) <= 1)
   );
-  if (needsRefresh) {
-    const anchor = session.modelEl;
-    const controller = new AbortController();
+  const anchor = session.modelEl;
+  const controller = new AbortController();
+  let backends;
+  {
     _pendingModelMenu = {session, controller};
+    const pendingBackends = session.kind === "agent" ? loadSwitchBackends(controller.signal) : new Map();
     // Chromium may change activeElement without firing focusin in an unfocused window.
     const openingFocus = document.activeElement;
     const current = () => !controller.signal.aborted && document.activeElement === openingFocus &&
@@ -1799,30 +1900,35 @@ const toggleModelDropdown = async (session) => {
       if (ev.key === "Escape") hideModelDropdown();
     }, {signal:controller.signal});
     try {
-      // Another session can invalidate the shared catalog while this picker is loading.
-      // Keep the user's open intent, but never publish a stale response or retry indefinitely.
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const generation = _modelCacheGeneration;
-        let data;
+      if (needsRefresh) {
         try {
-          const r = await fetch("/api/models", {signal:controller.signal});
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          data = await r.json();
-        } catch (error) {
-          if (generation === _modelCacheGeneration) throw error;
+          // Keep the open intent if another session invalidates the catalog, but
+          // never publish a stale response or retry indefinitely.
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const generation = _modelCacheGeneration;
+            let data;
+            try {
+              const r = await fetch("/api/models", {signal:controller.signal});
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              data = await r.json();
+            } catch (error) {
+              if (generation === _modelCacheGeneration) throw error;
+            }
+            if (!current()) return;
+            if (generation === _modelCacheGeneration) {
+              if (!setModelCache(data, generation)) throw new Error("Invalid model catalog");
+              break;
+            }
+            if (_allModelsCache) break;
+          }
+          if (!_allModelsCache) throw new Error("Model catalog changed while loading");
+        } catch {
+          if (!current()) return;
+          toast(t("model.list.failed"), { type: "error" });
         }
-        if (!current()) return;
-        if (generation === _modelCacheGeneration) {
-          if (!setModelCache(data, generation)) throw new Error("Invalid model catalog");
-          break;
-        }
-        if (_allModelsCache) break; // Another reader already populated the new generation.
       }
-      if (!_allModelsCache) throw new Error("Model catalog changed while loading");
-    } catch {
+      backends = await pendingBackends;
       if (!current()) return;
-      toast(t("model.list.failed"), { type: "error" });
-      if (!_allModelsCache) return;
     } finally {
       if (_pendingModelMenu?.controller === controller) _pendingModelMenu = null;
       controller.abort();
@@ -1832,22 +1938,38 @@ const toggleModelDropdown = async (session) => {
   // The fetch above yields — the user may have switched sessions (or closed
   // this tab) while it was in flight.  Bail out instead of opening the
   // dropdown anchored to a detached/off-viewport chip and stealing focus.
-  if (activeSession.peek() !== session || !session.modelEl?.isConnected) return;
+  if (activeSession.peek() !== session || !session.modelEl?.isConnected || session.backendUnavailable) return;
 
-  const providers = _allModelsCache.providers || [];
-  if (!providers.length) return;
+  const catalog = _allModelsCache ?? emptyModelCatalog;
+  if (!catalog.providers.some(provider => provider.models.length) && !(backends.size && canSwitchBackend(session))) return;
 
-  if (_dropdownBuiltFor !== _allModelsCache) buildModelDropdown(dropdown);
+  if (_dropdownBuiltFor !== catalog) buildModelDropdown(dropdown, catalog);
+  _switchBackends = backends;
+  const backendOptions = dropdown.querySelector(".model-backends");
+  backendOptions.replaceChildren(...Array.from(backends.values(), backend => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "model-option model-backend";
+    // Retain the legacy styling/test hook without using it for availability.
+    if (backend.kind === "antigravity") button.classList.add("model-antigravity");
+    button.dataset.backend = backend.kind;
+    button.hidden = true;
+    const label = document.createElement("span");
+    label.textContent = backend.label;
+    const hint = document.createElement("small");
+    hint.textContent = backend.kind === "antigravity" ? t("antigravity.model.hint") : backend.providerLabel;
+    button.append(label, hint);
+    return button;
+  }));
   updateModelDropdownSelection(dropdown, session);
 
   // Reset any leftover search filter from the previous open
   const searchInput = dropdown.querySelector(".model-search-input");
   if (searchInput) {
     searchInput.value = "";
-    dropdown.querySelectorAll(".model-option").forEach((opt) => { opt.hidden = false; });
+    dropdown.querySelectorAll(".model-option[data-model]").forEach((opt) => { opt.hidden = false; });
     dropdown.querySelectorAll(".model-group").forEach((group) => { group.hidden = false; });
   }
-
   // Position dropdown above the model chip — the chip may have been
   // replaced by resync() while the dropdown was closed.
   if (!session.modelEl?.isConnected) return;
@@ -1863,6 +1985,7 @@ const toggleModelDropdown = async (session) => {
   _dropdownOwner = session;
   _dropdownAnchor = session.modelEl;
   _dropdownAnchor.ariaExpanded = "true";
+  if (backends.size) _stopBackendVisibility = effect(() => updateBackendVisibility(dropdown, session));
   searchInput?.focus({preventScroll:true});
   void refreshThinkingDropdown(session);
 

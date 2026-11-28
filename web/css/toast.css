@@ -129,3 +129,13 @@
 @media (prefers-reduced-motion: reduce) {
   .toast, .toast-exit { animation: none; }
 }
+
+/* Keep narrow navigation reachable while errors are visible. */
+@media (max-width: 700px) {
+  body:has(.app:not(.sidebar-collapsed)) .toast-container {
+    top: auto;
+    bottom: 16px;
+    max-height: calc(100dvh - max(145px, 20dvh) - 16px);
+    overflow-y: auto;
+  }
+}

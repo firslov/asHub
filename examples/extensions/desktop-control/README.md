@@ -44,7 +44,9 @@ node scripts/install.mjs
 
 默认关闭且无允许应用。范围配置保存后插件会检测变更、取消旧任务，通常在 250 ms 左右生效；操作前也会核对允许范围。通过 `/desktop` 修改范围会立即取消旧任务。已有集成预览的 `desktop-control` 配置与驱动目录可以继续使用。
 
-插件保留 asHub 原有审批策略。如果关闭了主程序的自动审批，主程序还可能对每次有副作用的工具调用显示通用审批；插件不会绕过这些审批。`desktop_start` 另行申请指定应用和窗口的桌面授权。
+支持全局桌面授权的 asHub 中，首次 `desktop_start` 会显示目标应用和窗口。选择「仅本次允许」只批准当前任务；选择并确认「始终允许此应用」后，本机所有对话（包括新对话和重启后）都不再为该应用重复请求桌面授权。批准不扩展到其他应用，也不会改变任务只能持有一个选定窗口的限制。应用仍需列在 `allowedApps` 中，macOS 系统权限仍然有效。
+
+用 `/desktop revoke <Bundle ID>` 撤销一个应用，或用 `/desktop revoke all` 撤销全部，同时停止现有桌面任务。`/desktop status` 可查看配置中的 `approvedApps`。其他插件的独立授权（例如微信发送）、文件/命令审批均不受影响。旧版宿主继续使用原有的单次或当前对话授权，单独升级插件不会增加全局授权。
 
 ## 常用命令
 
@@ -54,6 +56,7 @@ node scripts/install.mjs
 | `/desktop apps` | 检查系统权限，列出运行应用 |
 | `/desktop allow <Bundle IDs>` | 替换允许应用列表 |
 | `/desktop allow none` | 清空允许应用列表 |
+| `/desktop revoke <Bundle ID \| all>` | 撤销持久授权并停止现有桌面任务 |
 | `/desktop enable` / `/desktop disable` | 启用或关闭桌面控制 |
 | `/desktop stop` | 取消全部任务，包括待审批和排队任务 |
 | `/desktop install` | 检查、安装或修复固定版本的驱动 |

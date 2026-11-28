@@ -3,7 +3,7 @@ import type { ApplicationExtensionRegistry } from '../extensions/application.js'
 import type { HostVersion } from './host-events.js';
 import type { SessionService } from './session-service.js';
 
-export const HOST_OPERATION_TYPES = ['project.create', 'conversation.create', 'conversation.update', 'conversation.detach', 'conversation.archive', 'conversation.delete'] as const;
+export const HOST_OPERATION_TYPES = ['project.create', 'conversation.create', 'conversation.createProjectWorker', 'conversation.update', 'conversation.detach', 'conversation.archive', 'conversation.delete'] as const;
 export type HostOperationType = typeof HOST_OPERATION_TYPES[number];
 export interface ConversationConfiguration {
   title?: string;
@@ -15,6 +15,7 @@ export interface ConversationConfiguration {
 export type HostPlanOperation =
   | { type: 'project.create'; input: { name: string; cwd: string; members?: string[] } }
   | { type: 'conversation.create'; input: ConversationConfiguration & { title: string; projectId?: string | null; cwd?: string; instructions?: string } }
+  | { type: 'conversation.createProjectWorker'; input: { title: string; projectId: string; backend: string } }
   | { type: 'conversation.update'; input: ConversationConfiguration & { id: string } }
   | { type: 'conversation.detach' | 'conversation.archive' | 'conversation.delete'; input: { id: string } };
 export interface HostPlan { idempotencyKey: string; operations: HostPlanOperation[] }

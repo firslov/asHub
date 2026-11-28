@@ -112,26 +112,36 @@ app.whenReady().then(async () => {
     await settleToasts();
     const toastLayout=await js(`(()=>{const entry=document.querySelector('.conversation-entry-open'),r=entry.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2),alerts=[...document.querySelectorAll('.toast-error')],last=alerts.at(-1),close=last.querySelector('.toast-close'),c=close.getBoundingClientRect(),closeHit=document.elementFromPoint(c.x+c.width/2,c.y+c.height/2),stack=document.querySelector('.toast-container').getBoundingClientRect();return {entryClickable:entry.contains(hit),visible:last.getBoundingClientRect().height>0,closeClickable:close===closeHit,alerts:alerts.length,stackTop:stack.top};})()`);
     assert(toastLayout.entryClickable&&toastLayout.visible&&toastLayout.closeClickable&&toastLayout.alerts===5,JSON.stringify(toastLayout));
-    // Latest error stays reachable when the stack is taller than the viewport.
-    win.setContentSize(320,480);await wait('innerWidth===320 && innerHeight===480');
-    await js(`(async()=>{const {toast}=await import('/js/toast.js');toast('最后的错误，包含足够长的说明以覆盖滚动布局。'.repeat(5),{type:'error',detail:'synthetic failure',duration:60000});})()`);
-    await settleToasts();
-    const shortLayout=await js(`(()=>{
-      const entry=document.querySelector('.conversation-entry-open'),host=document.querySelector('.toast-container');
-      const close=host.lastElementChild.querySelector('.toast-close');
-      const hit=el=>{const r=el.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);};
-      return {entryClickable:entry.contains(hit(entry)),closeClickable:close===hit(close),
-        viewport:[innerWidth,innerHeight],entryTop:entry.getBoundingClientRect().top,
-        closeTop:close.getBoundingClientRect().top,stackTop:host.getBoundingClientRect().top,
-        scroll:[host.scrollTop,host.scrollHeight,host.clientHeight],
-        entryHit:hit(entry)?.className,closeHit:hit(close)?.className};
-    })()`);
-    assert(shortLayout.scroll[1]>shortLayout.scroll[2],'short window fixture must overflow: '+JSON.stringify(shortLayout));
-    assert(shortLayout.entryClickable&&shortLayout.closeClickable,'short window keeps entry and newest error close reachable: '+JSON.stringify(shortLayout));
-    await js(`document.querySelector('.toast-container').scrollTop=0;void 0`);
-    assert(await js(`(()=>{const close=document.querySelector('.toast-error:not(.toast-exit) .toast-close'),r=close.getBoundingClientRect();return close===document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)})()`),'older notifications remain reachable by scrolling');
-    await js(`document.querySelector('.toast-container').scrollTop=document.querySelector('.toast-container').scrollHeight;void 0`);
-    win.setContentSize(320,800);await wait('innerHeight===800');
+    // Exercise a short content viewport without depending on the runner's
+    // available screen height or how macOS constrains native resizing.
+    const originalViewport=await js('[innerWidth,innerHeight]');
+    const devtools=win.webContents.debugger;
+    devtools.attach('1.3');
+    try {
+      await devtools.sendCommand('Emulation.setDeviceMetricsOverride',{width:320,height:480,deviceScaleFactor:0,mobile:false});
+      await wait('innerWidth===320 && innerHeight===480');
+      await js(`(async()=>{const {toast}=await import('/js/toast.js');toast('最后的错误，包含足够长的说明以覆盖滚动布局。'.repeat(5),{type:'error',detail:'synthetic failure',duration:60000});})()`);
+      await settleToasts();
+      const shortLayout=await js(`(()=>{
+        const entry=document.querySelector('.conversation-entry-open'),host=document.querySelector('.toast-container');
+        const close=host.lastElementChild.querySelector('.toast-close');
+        const hit=el=>{const r=el.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);};
+        return {entryClickable:entry.contains(hit(entry)),closeClickable:close===hit(close),
+          viewport:[innerWidth,innerHeight],entryTop:entry.getBoundingClientRect().top,
+          closeTop:close.getBoundingClientRect().top,stackTop:host.getBoundingClientRect().top,
+          scroll:[host.scrollTop,host.scrollHeight,host.clientHeight],
+          entryHit:hit(entry)?.className,closeHit:hit(close)?.className};
+      })()`);
+      assert(shortLayout.scroll[1]>shortLayout.scroll[2],'short window fixture must overflow: '+JSON.stringify(shortLayout));
+      assert(shortLayout.entryClickable&&shortLayout.closeClickable,'short window keeps entry and newest error close reachable: '+JSON.stringify(shortLayout));
+      await js(`document.querySelector('.toast-container').scrollTop=0;void 0`);
+      assert(await js(`(()=>{const close=document.querySelector('.toast-error:not(.toast-exit) .toast-close'),r=close.getBoundingClientRect();return close===document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)})()`),'older notifications remain reachable by scrolling');
+      await js(`document.querySelector('.toast-container').scrollTop=document.querySelector('.toast-container').scrollHeight;void 0`);
+    } finally {
+      try { await devtools.sendCommand('Emulation.clearDeviceMetricsOverride'); }
+      finally { devtools.detach(); }
+    }
+    await wait(`innerWidth===${originalViewport[0]} && innerHeight===${originalViewport[1]}`);
     await js(`document.querySelector('.toast-error:last-child .toast-close').click()`);
     await wait(`document.querySelectorAll('.toast-error:not(.toast-exit)').length===4`);
     for (const width of [390,1280]) {

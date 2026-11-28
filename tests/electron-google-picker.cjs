@@ -138,7 +138,22 @@ app.whenReady().then(async () => {
       search.dispatchEvent(new Event('input', { bubbles: true }));
     `);
     assert(!await js(shown(special)));
-    await js(`window.__ash.openTab('${existing.instanceId}')`);
+    // Hold the tab switch's composer refocus until the reused picker search
+    // is focused again. A slow renderer can naturally deliver this ordering.
+    assert.equal(await js(`(() => {
+      const request = window.requestAnimationFrame;
+      const search = document.querySelector('${picker} .model-search-input');
+      search.focus();
+      const frames = [];
+      window.requestAnimationFrame = callback => {
+        if (!new Error().stack.includes('/js/session-manager.js')) return request.call(window, callback);
+        return frames.push(callback);
+      };
+      try { window.__ash.openTab('${existing.instanceId}'); }
+      finally { window.requestAnimationFrame = request; }
+      window.flushTabFocus = () => frames.splice(0).forEach(frame => frame(performance.now()));
+      return frames.length;
+    })()`), 1, 'captured one tab-switch focus frame');
     await openPicker(existing.instanceId);
     assert(!await js(shown(special)), 'the shared picker must hide Antigravity in a project conversation');
     await js(`window.currentPicker = document.querySelector('${picker}');`);
@@ -149,12 +164,15 @@ app.whenReady().then(async () => {
       search.setSelectionRange(0, 1);
       search.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
-    const checkSearch = query => js(`(() => {
-      const menu = document.querySelector('${picker}');
-      const search = menu?.querySelector('.model-search-input');
-      return menu === window.currentPicker && document.activeElement === search &&
-        search.value === ${JSON.stringify(query)} && search.selectionStart === 0 && search.selectionEnd === 1;
-    })()`);
+    const checkSearch = async (query, message) => {
+      const state = await js(`(() => {
+        const menu = document.querySelector('${picker}');
+        const search = menu?.querySelector('.model-search-input');
+        return { samePicker: menu === window.currentPicker, focused: document.activeElement === search,
+          value: search?.value, selection: [search?.selectionStart, search?.selectionEnd] };
+      })()`);
+      assert.deepEqual(state, { samePicker: true, focused: true, value: query, selection: [0, 1] }, message);
+    };
     const [project] = await api('/api/projects');
     const setProjectMember = async (attached) => {
       await api('/api/projects', {
@@ -163,22 +181,25 @@ app.whenReady().then(async () => {
       await wait(`(async () => (await import('/js/store.js')).getSession('${existing.instanceId}')?.projectId === ${JSON.stringify(attached ? project.id : null)})()`);
     };
     await searchModels('acp');
+    await checkSearch('acp', 'the reopened search is focused before the delayed frame');
+    await js('window.flushTabFocus()');
+    await checkSearch('acp', 'a delayed tab-switch frame must not take focus from the reopened search');
     await setProjectMember(false);
     assert(await js(shown(special)), 'detaching a project member updates the open picker');
-    assert(await checkSearch('acp'), 'detaching preserves the focused search and selection');
+    await checkSearch('acp', 'detaching preserves the focused search and selection');
     await setProjectMember(true);
     assert(!await js(shown(special)), 'attaching a project member hides the open picker option');
-    assert(await checkSearch('acp'), 'attaching preserves the focused search and selection');
+    await checkSearch('acp', 'attaching preserves the focused search and selection');
     await searchModels('gemini-fixture');
     await setProjectMember(false);
     assert(!await js(shown(special)), 'a non-matching search still hides the eligible option');
-    assert(await checkSearch('gemini-fixture'), 'refresh keeps a non-matching search and its focus');
+    await checkSearch('gemini-fixture', 'refresh keeps a non-matching search and its focus');
     await searchModels('acp');
     assert(await js(shown(special)));
     await js(`document.querySelector('${special}').focus()`);
     await setProjectMember(true);
     assert(!await js(shown(special)));
-    assert(await checkSearch('acp'), 'focus returns to the search when the focused option becomes ineligible');
+    await checkSearch('acp', 'focus returns to the search when the focused option becomes ineligible');
 
     await js(`window.__ash.switchTo('${empty.instanceId}'); document.getElementById('query').value = '保留这段草稿';`);
     await openPicker(empty.instanceId);

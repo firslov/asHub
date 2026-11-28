@@ -134,6 +134,9 @@ effect(() => {
       const previousFocus = document.activeElement;
       focusFrame = requestAnimationFrame(() => {
         const focused = document.activeElement;
+        // A dialog can reopen with the same DOM node (e.g. the shared model
+        // search). Even if it matches previousFocus, it owns focus now.
+        if (focused?.closest('dialog, [role="dialog"]')) return;
         if (!input.disabled && focused !== input && (focused === previousFocus || focused === document.body)) input.focus();
       });
     }
